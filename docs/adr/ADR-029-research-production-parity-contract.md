@@ -325,3 +325,65 @@ listed).
 
 **Revisit when:** a second incident needs an exclusion. The gate should then read the loss
 windows from `lake.audit.checks` itself, rather than a copy kept by hand in the pin.
+
+## Outcome (2026-11-26, a pin fails rather than falls back)
+
+**A pinned snapshot is used if it is on `main`'s lineage or a tag names it, and any other pin
+stops the run.** Terms: a *snapshot* is one version of an Iceberg table, named by a random
+64-bit id; each snapshot records its *parent*, the version it was committed on top of.
+*`main`* is the table's published line of versions, and its *lineage* is the chain of parents
+walked back from the snapshot `main` points at. A *branch* is another named line whose
+commits `main` readers never see. A *tag* is a named pointer to one snapshot that commits do
+not move. The nightly maintenance *expires* snapshots older than seven days, keeping the
+newest ten and every snapshot a tag points at; an expired snapshot and the files only it
+used are deleted. The parity gate (`make parity-ohlcv`, `make parity-bars`) reads each table
+at the snapshot id written in `tests/parity/pinned.json`, so a rerun reads the same rows.
+
+What went wrong: the "readers follow main" Outcome above made the scripts accept a pin only
+if the walk from `main`'s head reached it, and otherwise run at `main`'s current snapshot
+with one printed line, leaving the exit code to the comparison. The 2026-11-25 pins were
+tagged on 2026-11-26 so expiry would keep them. Expiry keeps the tagged snapshot but deletes
+the untagged ones after it, and the walk stops at the first deleted parent, so about a week
+after pinning (the first nightly run on or after 2026-12-03) the walk would no longer reach
+any pin: the gate would compare the engines on whatever was current, exit 0, and still be
+read as the pinned check. A phase audit found it on 2026-11-26 and reproduced it on a crafted
+table. The same audit found that a known gap's `audit_ref`, the reference to the row in
+`lake.audit.checks` that records the outage, was checked as text only, so an invented
+reference of the right shape was accepted.
+
+What the gate does now:
+
+- **Resolution.** `resolve_snapshot` in `scripts/parity_ohlcv.py`, used by both scripts for
+  every lake side (`gold.ohlcv_1m`, the three `silver.trades_<venue>` tables, `gold.bars`,
+  `gold.trades`), accepts a pin on `main`'s lineage or the target of a tag, reading both from
+  the catalog's `loadTable` answer the scripts already fetched (`refs` of `type: tag`). A
+  snapshot only a branch reaches is refused, as before. Anything else stops the run before
+  any side is read, naming the table, the id, and the two ways out: restore the tag if the
+  snapshot is still in the table, or re-pin. There is no fallback. The one way to run at the
+  current snapshot is `--pin-current`, which pins `main`'s head and writes it to the pin.
+- **The dbt side.** It has no pin of its own: it reads `gold.trades` at the newest of the
+  snapshots the day's lake candles were computed from. Once expiry has removed the older ones
+  it reads the newest the table still holds, which must pass the same rule. If an expired one
+  were newer, the buckets computed at it hold trades the one read lacks, their trade counts
+  differ and the run fails: this can fail a run, never pass one. None held stops the run.
+- **The audit row.** Before anything is compared, `confirm_audit_row` reads
+  `lake.audit.checks` through the gate's own DuckDB connection for exactly the job, check name
+  and scope the reference names, and stops unless the row exists, is an `operator` row, and
+  failed. A query that raises (catalog or storage unreachable) stops the run as "could not
+  read", distinct from "has no row"; neither passes. CI, which has no stack, keeps the
+  offline check of the reference's form.
+- **Notebooks.** `k2lake.pin()` always asks for `main`'s head, which expiry never removes, so
+  it cannot meet the stale-pin case. It now raises if the head is missing from the metadata,
+  instead of serving the table unpinned under an "(empty, unpinned)" label.
+
+Verified on 2026-11-26, read-only: Trino read every pinned snapshot by id and by tag name;
+Trino and DuckDB 1.4.4 each read a snapshot whose parent was already expired, by id, so
+reading a snapshot does not need its ancestors; DuckDB 1.4.4 does not read by tag name, and
+the scripts pass ids. `scripts/parity-ohlcv.sh` resolved every pin, found the 2026-11-25
+outage row, applied the one gap and ended `PARITY: ok (1 known gap applied, see above)`. Not
+verified: Spark reading a snapshot with expired ancestors; it resolves an id or a tag from the
+same metadata and reads that snapshot's own file list, so it is expected to.
+
+**Revisit when:** a pin's tag reaches its 180-day age (the 2026-11-25 tags lapse about
+2027-05-25), or when the dbt side first prints that source snapshots are expired and then
+fails on trade counts, which would mean the newest one was not tagged.

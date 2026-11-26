@@ -30,8 +30,10 @@ directly (`tests/test_notebooks_pinned.py` fails CI if one does). A number a not
 prints therefore names the snapshot it came from ([ADR-029](../docs/adr/ADR-029-research-production-parity-contract.md)).
 "Current" is the snapshot `main` points at, read from Lakekeeper's `loadTable`
 (`k2lake.main_lineage`), never the newest snapshot by commit time: once a table has a
-branch, that can be an unpublished commit. A pin the parity scripts are given is used only
-if it is on `main`'s lineage.
+branch, that can be an unpublished commit. `pin()` raises rather than serve a table unpinned
+when `main`'s snapshot is missing from the metadata. A pin the parity scripts are given is
+used only if it is on `main`'s lineage or a tag names it; otherwise the run stops
+([`tests/parity/README.md`](../tests/parity/README.md#keeping-the-pinned-snapshots-alive)).
 What this data can and cannot honestly support is written down before any of it is
 quoted: [replay-fidelity-limits](../docs/research/2026-08-28-replay-fidelity-limits.md).
 

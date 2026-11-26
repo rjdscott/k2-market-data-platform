@@ -355,6 +355,19 @@ table's snapshot list also holds a branch's unpublished commits and those of dro
 Branches are the mechanism for [write-audit-publish](#write-audit-publish).
 Where: `main_lineage` in [`docker/lake/offsets.py`](../../docker/lake/offsets.py).
 
+### Tag
+
+A tag is a named reference to one snapshot that no commit moves (unlike a
+[branch](#branch-and-main)), kept for a set age (`RETAIN 180 DAYS`). [Expiry](#snapshot-expiry-and-the-retention-floor) keeps every
+snapshot a tag points at and its files, but removes the untagged snapshots around it, so a walk
+from `main` along parent links stops short of an old tagged snapshot that is still readable.
+K2 tags each [parity](#parity-three-way-and-pinned) pin, and the parity scripts accept a pin
+only if it is on `main`'s lineage or a tag names it: the tag is what keeps an old pin valid.
+Readers find tags in the catalog's `loadTable` answer (`refs`, `type: tag`) or in Trino's
+`"<table>$refs"`.
+Where: `tags` in [`notebooks/k2lake.py`](../../notebooks/k2lake.py);
+[`tests/parity/README.md`](../../tests/parity/README.md#keeping-the-pinned-snapshots-alive).
+
 ### Fast-forward
 
 To fast-forward is to publish a branch by moving `main` to point at the branch's newest
@@ -616,8 +629,10 @@ Parity is computing a product again, independently, and requiring the answers to
 lake's stored `gold.ohlcv_1m`, and DuckDB's candles computed from silver; bars parity compares
 Spark, DuckDB and a Python reference. Each run reads the snapshot ids pinned in
 `tests/parity/pinned.json`, never the latest, which moves every 5 minutes, so a rerun reads the
-same data and a difference is a bug, not timing. Marts are held to dbt tests instead of three
-engines ([ADR-035](ADR-035-trino-and-dbt-for-marts.md)).
+same data and a difference is a bug, not timing. A pinned id is used only if it is on `main`'s
+lineage or a [tag](#tag) names it; any other stops the run, with no fallback to the current
+snapshot. Marts are held to dbt tests instead of three engines
+([ADR-035](ADR-035-trino-and-dbt-for-marts.md)).
 Where: [ADR-029](ADR-029-research-production-parity-contract.md); `scripts/parity-ohlcv.sh`,
 `scripts/parity-bars.sh`.
 
@@ -626,7 +641,8 @@ Where: [ADR-029](ADR-029-research-production-parity-contract.md); `scripts/parit
 A known gap is one window of the pinned day, at most 60 minutes, that the candle parity leaves
 out of ClickHouse against the lake, because a capture outage left the two stores with
 different trades there and they cannot be made equal without deleting some. It is allowed only
-inside an outage already recorded as a row in `audit.checks`, which its `audit_ref` names; at
+inside an outage already recorded as a row in `audit.checks`, which its `audit_ref` names and
+the run reads before comparing anything (a missing row, or a lake it cannot read, stops it); at
 most one may be listed, it is printed on every run, a run with it ends `PARITY: ok`, not
 `PARITY: PASS`, and a gap with no difference left in its window fails the run. Every other
 minute is still compared three ways at tolerance zero. It was built for minute 22:33 UTC of
