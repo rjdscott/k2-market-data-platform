@@ -1,8 +1,10 @@
 # K2 Market Data Platform - Prometheus Configuration
 # Scrapes the v3 capture tier plus the shared infrastructure (Redpanda, Grafana,
-# cAdvisor, the lake exporter, Airflow's statsd). The Kotlin feed-handler jobs
-# retired with the handlers (ADR-019); ClickHouse is not scraped while its hot
-# tier is paused (ADR-057), so no rule reads a target that is meant to be down.
+# cAdvisor, Airflow's statsd). The Kotlin feed-handler jobs retired with the
+# handlers (ADR-019); ClickHouse is not scraped while its hot tier is paused
+# (ADR-057), so no rule reads a target that is meant to be down. The lake
+# exporter's job retired with the old ingest pipeline (legacy/v3-lake-ingest/);
+# lake metrics return in phase 004.
 
 global:
   scrape_interval: 15s
@@ -77,19 +79,6 @@ scrape_configs:
   #   static_configs:
   #     - targets: ['k2-api:8081']
   #   metrics_path: '/actuator/prometheus'
-
-  # v3 lake metrics — the lake-metrics service runs docker/lake/metrics.py
-  # --serve, deriving every gauge from Iceberg snapshot summaries read over the
-  # Lakekeeper REST API. It replaced the v2 'iceberg-scheduler' job, which was
-  # deleted with docker/offload/ in Phase D.
-  - job_name: 'lake-metrics'
-    static_configs:
-      - targets: ['lake-metrics:8000']
-        labels:
-          service: 'lake-metrics'
-          tier: 'cold-storage'
-    metrics_path: '/metrics'
-    scrape_interval: 30s
 
   # Airflow 3 (ADR-034), through the statsd exporter. Airflow pushes statsd
   # over UDP to airflow-statsd:9125; this scrapes what the exporter holds.
