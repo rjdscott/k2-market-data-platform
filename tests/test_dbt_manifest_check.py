@@ -8,6 +8,7 @@ import sys
 from pathlib import Path
 
 import pytest
+import yaml
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
 
@@ -133,8 +134,15 @@ def test_a_model_outside_every_domain_catalog_fails(manifest):
     assert check(manifest, FENCES, MARTS) == ["models/market_analytics/staging/stg_gold__trades.sql: catalog lake is not a domain's in contracts/domains.yaml"]
 
 
-def test_the_contracts_declare_the_candles_mart_in_its_domain_catalog():
-    fences, marts = contracts()
-    assert "market_analytics" in fences
-    mart = marts["market_analytics.candles.ohlcv_1m"]
-    assert mart["grain"] == ["exchange", "canonical_symbol", "window_start"] and mart["reads"] == ["gold.trades"]
+def test_the_contracts_give_every_domain_its_fence_and_each_mart_its_product(tmp_path):
+    # No product has a contract in the repository today (ADR-056), so a tree with one.
+    root = Path(__file__).parent.parent
+    (tmp_path / "contracts").mkdir()
+    (tmp_path / "contracts/domains.yaml").write_text((root / "contracts/domains.yaml").read_text())
+    product = tmp_path / "contracts/market-analytics/candles/product.yaml"
+    product.parent.mkdir(parents=True)
+    mart = next(iter(MARTS))
+    product.write_text(yaml.safe_dump({"marts": [{"table": mart, "grain": MARTS[mart]["grain"], "reads": MARTS[mart]["reads"]}]}))
+    fences, marts = contracts(tmp_path)
+    assert {"market_analytics", "reference_data", "market_capture", "fx_reference", "governance"} == fences
+    assert marts == {mart: {"table": mart, **MARTS[mart], "product": "contracts/market-analytics/candles/product.yaml"}}
