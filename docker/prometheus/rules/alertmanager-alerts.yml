@@ -1,0 +1,57 @@
+# K2 Market Data Platform - Alertmanager alert rules
+# Purpose: an alert that fires and reaches nobody is the failure these two catch.
+# Metrics: up and alertmanager_notifications_failed_total, Alertmanager's /metrics
+# Scrape:  job alertmanager
+# Tests:   docker/prometheus/rules/tests/alertmanager-alerts_test.yml
+#
+# Both are about the path to Slack, so neither can count on arriving there: while
+# Alertmanager is down nothing is routed, and while Slack refuses nothing is
+# delivered. Each is seen in Prometheus (/alerts) and Grafana until then, and
+# AlertmanagerNotificationsFailing reaches Slack once the path works again.
+# Alertmanager initialises the failed counter at 0 for every reason at start, so
+# the first failure is an increase, not a new series.
+
+groups:
+  - name: alertmanager
+    rules:
+
+      # CRITICAL: Prometheus cannot scrape Alertmanager, so cannot reach it either.
+      - alert: AlertmanagerDown
+        expr: up{job="alertmanager"} == 0
+        for: 2m
+        labels:
+          severity: critical
+          component: alertmanager
+          tier: observability
+        annotations:
+          summary: "Alertmanager is down: no alert reaches Slack"
+          description: |
+            Prometheus has not reached alertmanager:9093 for 2 minutes. Alerts
+            still fire and show in Prometheus and Grafana, but none is routed to
+            Slack until Alertmanager answers again.
+
+            docker compose ps alertmanager
+            docker logs --tail 50 k2-alertmanager
+          runbook: docs/runbooks/where-an-alert-goes.md
+
+      # CRITICAL: Alertmanager gave up on a Slack notification, so an alert was lost.
+      - alert: AlertmanagerNotificationsFailing
+        expr: |
+          sum by (integration, reason) (
+            increase(alertmanager_notifications_failed_total{integration="slack"}[15m])
+          ) > 0
+        labels:
+          severity: critical
+          component: alertmanager
+          tier: observability
+        annotations:
+          summary: "Slack notifications are failing ({{ $labels.reason }}): alerts are not arriving"
+          description: |
+            Alertmanager gave up on {{ $value | humanize }} Slack notification(s)
+            in the last 15 minutes. The ERROR lines in its log say why: a missing
+            webhook file (make alerts-install-webhook), a revoked webhook (a 4xx
+            from Slack), or Slack itself.
+
+            docker logs --since 15m k2-alertmanager 2>&1 | grep 'Notify for alerts failed'
+            make alert-test
+          runbook: docs/runbooks/where-an-alert-goes.md

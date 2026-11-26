@@ -69,7 +69,7 @@ Secrets are generated locally and never committed. They live in
 |---|---|---|
 | `<principal>.password`, mode 600 | a service principal's password (`dbt_*`, `pub_*`, `svc.*`) | `make password` (S14) |
 | `tls/` | the local CA and Trino's server certificate; clients mount `ca.pem` | `make tls` (S13) |
-| the Slack webhook URL file | Alertmanager's `api_url_file` | S09 |
+| `alertmanager/slack-webhook-url`, mode 600, in a directory of mode 700 | the Slack webhook URL, Alertmanager's `api_url_file`; only `alertmanager/` is mounted into it | `make alerts-install-webhook` (S09) |
 
 Only hashes reach git (`contracts/access/principals.yaml`, S14); a release manifest may record
 that a secrets file exists and its checksum, never its content. A copy that lands inside a

@@ -1,0 +1,123 @@
+# promtool unit tests for docker/prometheus/rules/alertmanager-alerts.yml
+#
+#   docker run --rm --entrypoint sh -v "$PWD/docker/prometheus/rules:/r" \
+#     prom/prometheus:v3.2.0 -c 'promtool test rules /r/tests/*_test.yml'
+#
+# Run by `make check-alerts` and `make check-docs` gate (c2). The failed counter is
+# what Alertmanager v0.35.1 serves: one series per integration and reason, all at 0
+# from start. At a 1m interval the value at position i is the value at minute i.
+
+rule_files:
+  - ../alertmanager-alerts.yml
+
+evaluation_interval: 30s
+
+tests:
+  # ── AlertmanagerDown ─────────────────────────────────────────────────────
+  # Scraped throughout: never fires.
+  - interval: 1m
+    input_series:
+      - series: 'up{job="alertmanager", instance="alertmanager:9093"}'
+        values: '1x60'
+    alert_rule_test:
+      - eval_time: 60m
+        alertname: AlertmanagerDown
+        exp_alerts: []
+
+  # Down from minute 10: pending through the 2m `for`, firing after it, gone when
+  # it answers again at minute 20.
+  - interval: 1m
+    input_series:
+      - series: 'up{job="alertmanager", instance="alertmanager:9093"}'
+        values: '1x9 0x10 1x10'
+    alert_rule_test:
+      - eval_time: 11m
+        alertname: AlertmanagerDown
+        exp_alerts: []
+      - eval_time: 13m
+        alertname: AlertmanagerDown
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              component: alertmanager
+              tier: observability
+              job: alertmanager
+              instance: alertmanager:9093
+            exp_annotations:
+              summary: "Alertmanager is down: no alert reaches Slack"
+              description: |
+                Prometheus has not reached alertmanager:9093 for 2 minutes. Alerts
+                still fire and show in Prometheus and Grafana, but none is routed to
+                Slack until Alertmanager answers again.
+
+                docker compose ps alertmanager
+                docker logs --tail 50 k2-alertmanager
+              runbook: docs/runbooks/where-an-alert-goes.md
+      - eval_time: 25m
+        alertname: AlertmanagerDown
+        exp_alerts: []
+
+  # ── AlertmanagerNotificationsFailing ─────────────────────────────────────
+  # Every notification delivered: the failed counters stay at 0, and a sent
+  # counter rising is not a failure.
+  - interval: 1m
+    input_series:
+      - series: 'alertmanager_notifications_total{job="alertmanager", integration="slack"}'
+        values: '0+1x60'
+      - series: 'alertmanager_notifications_failed_total{job="alertmanager", integration="slack", reason="other"}'
+        values: '0x60'
+      - series: 'alertmanager_notifications_failed_total{job="alertmanager", integration="slack", reason="clientError"}'
+        values: '0x60'
+    alert_rule_test:
+      - eval_time: 60m
+        alertname: AlertmanagerNotificationsFailing
+        exp_alerts: []
+
+  # One notification given up at minute 20 (the webhook file missing is reason
+  # "other"): fires at once, no `for`, and clears when the failure leaves the
+  # 15-minute window. Another integration failing is not Slack's alert.
+  - interval: 1m
+    input_series:
+      - series: 'alertmanager_notifications_failed_total{job="alertmanager", integration="slack", reason="other"}'
+        values: '0x19 1x40'
+      - series: 'alertmanager_notifications_failed_total{job="alertmanager", integration="slack", reason="clientError"}'
+        values: '0x60'
+      - series: 'alertmanager_notifications_failed_total{job="alertmanager", integration="webhook", reason="other"}'
+        values: '0x19 5x40'
+    alert_rule_test:
+      - eval_time: 19m
+        alertname: AlertmanagerNotificationsFailing
+        exp_alerts: []
+      - eval_time: 25m
+        alertname: AlertmanagerNotificationsFailing
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              component: alertmanager
+              tier: observability
+              integration: slack
+              reason: other
+            exp_annotations:
+              summary: "Slack notifications are failing (other): alerts are not arriving"
+              description: |
+                Alertmanager gave up on 1 Slack notification(s)
+                in the last 15 minutes. The ERROR lines in its log say why: a missing
+                webhook file (make alerts-install-webhook), a revoked webhook (a 4xx
+                from Slack), or Slack itself.
+
+                docker logs --since 15m k2-alertmanager 2>&1 | grep 'Notify for alerts failed'
+                make alert-test
+              runbook: docs/runbooks/where-an-alert-goes.md
+      - eval_time: 40m
+        alertname: AlertmanagerNotificationsFailing
+        exp_alerts: []
+
+  # A restart resets the counter to 0: a reset is not a failure.
+  - interval: 1m
+    input_series:
+      - series: 'alertmanager_notifications_failed_total{job="alertmanager", integration="slack", reason="other"}'
+        values: '3x19 0x40'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: AlertmanagerNotificationsFailing
+        exp_alerts: []

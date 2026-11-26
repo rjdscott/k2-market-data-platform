@@ -10,7 +10,7 @@ import subprocess
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-SAMPLES = ["k2-secrets/svc.runs.password", "k2-secrets/tls/ca.pem", "k2-secrets/slack-webhook-url",
+SAMPLES = ["k2-secrets/svc.runs.password", "k2-secrets/tls/ca.pem", "k2-secrets/alertmanager/slack-webhook-url",
            "dbt/k2-secrets/tls/server.key", "pub_access_canary.password", "scripts/dbt_x.password"]
 
 

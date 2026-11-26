@@ -55,8 +55,8 @@ is [ADR-028](../adr/ADR-028-non-goals-and-honest-limits.md).
   ([16](16-failure-modes.md)); nothing survives a dead disk.
 - **Not full depth, not L3, not multi-asset.** Trades, and top-20 L2 at 1 Hz when book
   capture resumes, crypto only; no equities or futures path is designed.
-- **Not a query service.** Reads are SQL through Trino over the lake. There is no API, no
-  Alertmanager routing, and no load test above 1x.
+- **Not a query service.** Reads are SQL through Trino over the lake. There is no API and no
+  load test above 1x.
 
 ## Where it sits
 
@@ -105,8 +105,8 @@ Each rule names where it is enforced; a rule with no enforcement is a slogan.
    [ADR-008](../adr/ADR-008-eliminate-prefect-orchestration.md), whose `## Outcome`
    records the reversal on the record.
 6. **Instrument it, then say what is not instrumented.** Alert rules as code in
-   `docker/prometheus/rules/`, chaos results as files, and a stated list of gaps: no
-   Alertmanager, every rule carries a runbook annotation (gate (d2) of `scripts/check-docs.sh`),
+   `docker/prometheus/rules/`, chaos results as files, and a stated list of gaps: alerts
+   reach one Slack channel and page nobody, every rule carries a runbook annotation (gate (d2) of `scripts/check-docs.sh`),
    and not every rule has a unit test ([11](11-observability.md)).
 
 **Applied to a new component.** Declare its limits; make its writes idempotent; keep its

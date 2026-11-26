@@ -1,0 +1,51 @@
+# K2 Alertmanager: every alert Prometheus fires goes to one Slack channel.
+# Runbook: docs/runbooks/where-an-alert-goes.md
+#
+# The webhook URL is a secret and never in the repository: Alertmanager reads it
+# from ${K2_SECRETS}/alertmanager/slack-webhook-url, mounted read-only at
+# /run/k2-secrets/ (docker-compose.yml), and written by `make alerts-install-webhook`.
+# It reads the file on every notification, so installing or rotating the URL needs
+# no reload and no restart. While the file is absent Alertmanager still starts and
+# accepts alerts, and every notification fails visibly: an ERROR log line naming the
+# missing file, alertmanager_notifications_failed_total{integration="slack"} rising,
+# and the rule AlertmanagerNotificationsFailing (docker/prometheus/rules/alertmanager-alerts.yml).
+#
+# Reload after editing this file, no restart needed (the directory is mounted, so an
+# edit is seen): curl -s -X POST localhost:9093/-/reload
+
+route:
+  receiver: slack
+  # One message per rule per component: the three venues' CaptureDown arrive together.
+  group_by: [alertname, component]
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+  routes:
+    # `make alert-test` (scripts/alerts.sh): each test alert carries a unique test_id, and
+    # '...' makes every label set its own group, so a run never waits out another run's
+    # group_interval.
+    - matchers: ['alertname="K2TestAlert"']
+      group_by: ['...']
+      group_wait: 0s
+      group_interval: 30s
+
+# A critical silences its warning twin: the same signal past a higher threshold. Pairs
+# are named, not matched on severity alone, so a critical never hides an unrelated warning.
+inhibit_rules:
+  - source_matchers: ['alertname="DockerDiskUsageCritical"']
+    target_matchers: ['alertname="DockerDiskUsageHigh"']
+    equal: [job, instance]
+
+receivers:
+  - name: slack
+    slack_configs:
+      - api_url_file: /run/k2-secrets/slack-webhook-url
+        send_resolved: true
+        # Only the rule's own labels and annotations: its summary, and the runbook path
+        # as a link to the file on GitHub. No description, no other values.
+        title: '{{ .Status | toUpper }}: {{ .CommonLabels.alertname }} ({{ .CommonLabels.severity }})'
+        text: |-
+          {{ range .Alerts }}*{{ .Labels.alertname }}* ({{ .Labels.severity }}): {{ .Annotations.summary }}
+          {{ with .Annotations.runbook }}Runbook: <https://github.com/rjdscott/k2-market-data-platform/blob/main/{{ . }}|{{ . }}>
+          {{ end }}Started {{ .StartsAt.UTC.Format "2006-01-02 15:04:05 UTC" }}{{ if eq .Status "resolved" }}, resolved {{ .EndsAt.UTC.Format "2006-01-02 15:04:05 UTC" }}{{ end }}
+          {{ end }}

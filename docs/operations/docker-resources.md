@@ -15,21 +15,21 @@ so the desktop and everything else on the host must fit in the remaining 12.1 Gi
 2026-11-25 they did not, and the host killed the VM: ADR-045's 2026-11-26 Outcome, and the
 sizing rule in [docker-vm-oom-kill.md](../runbooks/docker-vm-oom-kill.md#2-size-the-vm-so-the-host-keeps-enough-memory).
 
-**As built, steady state: 15.20 CPU / 27.188 GiB across 17 long-running services.**
-**One-shots: 1.50 CPU / 1.500 GiB across 4.** **Bootstrap peak: 16.70 CPU / 28.688 GiB
-across 21**, the one-shots run concurrently with the steady state at `docker compose up`,
+**As built, steady state: 15.30 CPU / 27.250 GiB across 18 long-running services.**
+**One-shots: 1.50 CPU / 1.500 GiB across 4.** **Bootstrap peak: 16.80 CPU / 28.750 GiB
+across 22**, the one-shots run concurrently with the steady state at `docker compose up`,
 so that peak, not the steady state, is what the host has to absorb at boot, and it is the
-sum the ceiling gates. These figures were computed on 2026-11-26 from the compose file after the
-retirement of the v3 lake ingest pipeline removed `lake-ddl` and `lake-metrics`, both by
-`scripts/check-budget.py`'s own summing and by the command below; with those two, the file
-printed 15.30 / 27.312 across 18 and 17.30 / 29.812 across 23. The scheduler Airflow replaced, and the compose profile that kept it
+sum the ceiling gates. These figures were computed on 2026-11-26 from the compose file after
+`alertmanager` joined it (0.1 CPU / 64M), both by `scripts/check-budget.py`'s own summing and
+by the command below; before it the file printed 15.20 / 27.188 across 17 and 16.70 / 28.688
+across 21. The scheduler Airflow replaced, and the compose profile that kept it
 as a rollback, are gone from the compose file and archived in
 [`legacy/prefect/`](../../legacy/prefect/README.md) (ADR-034's 2026-11-26 Outcome).
 
 **ClickHouse is paused** behind the compose profile `hot-gold`
 ([ADR-057](../adr/ADR-057-clickhouse-hot-tier-paused-during-platform-build.md)), so none of these sums counts it: a plain `docker compose config` leaves out
 a service under a profile that is not named. With the profile running it adds its 4.0 CPU /
-8 GiB: steady 19.20 / 35.188 across 18, bootstrap peak 20.70 / 36.688 across 22, the
+8 GiB: steady 19.30 / 35.250 across 19, bootstrap peak 20.80 / 36.750 across 23, the
 `bootstrap hot-gold` line `python3 scripts/check-budget.py` prints.
 
 Both parallel runs are over. The three Kotlin `feed-handler-*` containers are gone from
@@ -62,16 +62,15 @@ for label, oneshot in (("steady", False), ("one-shot", True)):
     cpu = sum(float(l["cpus"]) for l in lim)
     gib = sum(int(l["memory"]) for l in lim) / 2**30
     print("%-9s %2d services  %5.2f CPU  %6.3f GiB" % (label, len(lim), cpu, gib))'
-steady    17 services  15.20 CPU  27.188 GiB
+steady    18 services  15.30 CPU  27.250 GiB
 one-shot   4 services   1.50 CPU   1.500 GiB
 ```
 
 `docker compose config` normalises every `memory:` to bytes, so **GiB is what the limits
 actually are**, `2g` in the compose file is 2 × 2³⁰, not 2 × 10⁹. Older figures on this
 branch were written "GB" for the same quantities; the numbers did not change, the unit
-label was wrong. Run on 2026-11-26 against the compose file without `lake-ddl` and
-`lake-metrics`, which is what the printed lines are; with those two it printed
-18 / 15.30 / 27.312 and 5 / 2.00 / 2.500.
+label was wrong. Run on 2026-11-26 against the compose file with `alertmanager`, which is
+what the printed lines are; before it the steady line read 17 / 15.20 / 27.188.
 `python3 scripts/check-budget.py` prints the same sums.
 
 ## Allocation
@@ -91,17 +90,18 @@ label was wrong. Run on 2026-11-26 against the compose file without `lake-ddl` a
 | `prometheus` | observability | 1.0 | 0.5 | 2 GB | 1 GB |
 | `grafana` | observability | 0.5 | 0.25 | 512 MB | 256 MB |
 | `cadvisor` | observability (per-container CPU and memory) | 0.1 |, | 128 MB |, |
+| `alertmanager` | observability (alerts to Slack) | 0.1 |, | 64 MB |, |
 | `capture-binance` | ingestion (v3) | 0.25 | 0.1 | 256 MB | 128 MB |
 | `capture-kraken` | ingestion (v3) | 0.25 | 0.1 | 256 MB | 128 MB |
 | `capture-coinbase` | ingestion (v3) | 0.25 | 0.1 | 512 MB | 128 MB |
 | `trino` | SQL over the lake and the domain catalogs ([ADR-035](../adr/ADR-035-trino-and-dbt-for-marts.md)) | 2.0 | 0.5 | 5 GB | 1 GB |
-| **Steady state (17 long-running services)** | | **15.20** | **5.60** | **27.188 GiB** | **8.625 GiB** |
+| **Steady state (18 long-running services)** | | **15.30** | **5.60** | **27.250 GiB** | **8.625 GiB** |
 | `redpanda-init` | init (one-shot) | 0.25 |, | 128 MB |, |
 | `lakekeeper-migrate` | init (one-shot) | 0.5 |, | 256 MB |, |
 | `lake-init` | init (one-shot) | 0.25 |, | 128 MB |, |
 | `airflow-migrate` | init (one-shot) | 0.5 |, | 1 GB |, |
 | **One-shot subtotal (4)** | | **1.50** | **, ** | **1.500 GiB** | **, ** |
-| **Bootstrap peak (21 containers)** | | **16.70** | **5.60** | **28.688 GiB** | **8.625 GiB** |
+| **Bootstrap peak (22 containers)** | | **16.80** | **5.60** | **28.750 GiB** | **8.625 GiB** |
 
 `capture-coinbase` gets twice the memory of the other two because Coinbase's `level2`
 channel is full depth, not top-20, its subscribe snapshot alone is 5.2 MB
@@ -117,7 +117,7 @@ steady state at `docker compose up`, so the bootstrap peak is the number the hos
 absorb.
 
 Headroom against the 25 CPU / 48 GiB ceiling at the bootstrap peak, where it is gated:
-**8.30 CPU and 19.312 GiB**; 4.30 and 11.312 with the `hot-gold` profile running. The
+**8.20 CPU and 19.250 GiB**; 4.20 and 11.250 with the `hot-gold` profile running. The
 Airflow limits are the plan's estimates until ADR-034's measured figures replace them.
 
 ## Where the budget goes
@@ -127,8 +127,8 @@ Airflow limits are the plan's estimates until ADR-034's measured figures replace
   views and every analytical query run against the hot tier.
 - **Spark is batch-only, but the container is never empty.** Its 3.0 CPU (2.0 until 2026-11-25) / 8 GiB (4 GiB until 2026-08-26) runs
   no job until phase 002: the 5-minute v3 lake ingest and nightly maintenance it was sized for
-  retired with the v3 lake, so the practical steady-state footprint is closer to 12.20 CPU /
-  19.188 GiB. The old tabulario base image's always-on Master, Worker, History Server, Thrift
+  retired with the v3 lake, so the practical steady-state footprint is closer to 12.30 CPU /
+  19.250 GiB. The old tabulario base image's always-on Master, Worker, History Server, Thrift
   Server and Jupyter idled at **633 MiB** before any driver started (`docker stats --no-stream
   k2-spark-iceberg`, 2026-08-26). The official-image rebuild (`k2-spark-iceberg:3.5.9_1.8.1`,
   2026-11-26) runs only the History Server between jobs: **167 MiB** idle in a throwaway
@@ -150,10 +150,11 @@ Airflow limits are the plan's estimates until ADR-034's measured figures replace
   That is half what the Kotlin handlers they replaced declared. RSS against these limits
   is **not yet measured** for the post-retirement stack ([ADR-010](../adr/ADR-010-resource-budget.md)
   Outcome); they are declared ceilings, not sizing from observation.
-- **Observability is 1.6 CPU / 2.625 GiB.** Prometheus and Grafana dominate it, and
+- **Observability is 1.7 CPU / 2.688 GiB.** Prometheus and Grafana dominate it,
   `cadvisor` (0.1 CPU / 128 MB)
   reads each container's CPU, memory and limits from its cgroup for the K2 Resources
-  dashboard. Standalone on this host, 2026-11-25, cAdvisor ran at 18 MiB RSS and under 0.3%
+  dashboard, and `alertmanager` (0.1 CPU / 64 MB) routes alerts to Slack: 19.5 MiB under
+  `make alert-test-standin` on 2026-11-26 (`docker stats --no-stream k2-alerttest-am`). Standalone on this host, 2026-11-25, cAdvisor ran at 18 MiB RSS and under 0.3%
   of a core with these flags (`docker stats --no-stream`). Drop retention if you need the
   RAM back.
 - **The Iceberg catalog costs 0.25 CPU / 256 MB.** Lakekeeper

@@ -294,7 +294,8 @@ curl -sG localhost:9090/api/v1/query --data-urlencode 'query=sum by (exchange) (
 ```
 
 Run 2026-11-26: the produce errors read `binance 0`, `coinbase 0`, `kraken 0`. The 12 alert rules
-that remained then (14 since the two disk rules, `platform-alerts.yml`; 30 until the 14 lake rules and four Airflow rules retired with the v3 lake, 36 before
+that remained then (14 since the two disk rules, `platform-alerts.yml`, 16 since the two
+Alertmanager rules, `alertmanager-alerts.yml`; 30 until the 14 lake rules and four Airflow rules retired with the v3 lake, 36 before
 the six ClickHouse rules left with the pause, ADR-057), what each means and its runbook:
 [observability.md](./observability.md#alert-rules).
 
@@ -319,6 +320,7 @@ Prometheus, which answer 302 (a redirect to their login and query pages), and th
 | Lakekeeper | http://localhost:18181/ui/ | Browse the Iceberg catalog: warehouse `k2` for the lake and one warehouse per data domain, empty since the v3 lake's namespaces were dropped | none (authorization is off) |
 | MinIO console | http://localhost:9001 | The objects under the lake, bucket `k2-lake` | `MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD` |
 | Prometheus | http://localhost:9090 | Metrics, scrape targets (`/targets`) and alert state (`/alerts`) | none |
+| Alertmanager | http://localhost:9093 | What is firing, grouped as Slack receives it; silences ([where-an-alert-goes.md](../runbooks/where-an-alert-goes.md)) | none |
 | ClickHouse | http://localhost:8123/play | **Paused** (ADR-057): answers only while the `hot-gold` profile runs. A query box over the hot tier, `SELECT count() FROM gold.trades FINAL` | user `default`, `CLICKHOUSE_PASSWORD`; read-only research user `quant`, `K2_QUANT_PASSWORD` |
 | Spark History Server | http://localhost:18080 | Finished Spark jobs, newest first, two days of them (its event-log cleaner deletes older ones); open one for its stages. The only process the Spark container runs between jobs. No job runs until phase 002 | none |
 | Spark job UI | http://localhost:4040 | The Spark job running now, while it runs: `000` between jobs. A second driver running at the same time gets 4041 inside the container, not published: `docker exec k2-spark-iceberg curl -s localhost:4041/api/v1/applications` | none |
@@ -404,7 +406,7 @@ than waiting for it; the phase that adds DAGs adds their pause to this pattern.
 
 | Service | When it is safe | What a restart costs | As run 2026-11-25, 23:50 to 23:54 UTC |
 |---|---|---|---|
-| `prometheus`, `grafana`, `redpanda-console`, `cadvisor` | any time | a gap of seconds in scrapes or dashboards; alerts re-evaluate after it | `prometheus`, `grafana`, `redpanda-console`: seconds each |
+| `prometheus`, `grafana`, `redpanda-console`, `cadvisor`, `alertmanager` | any time | a gap of seconds in scrapes or dashboards; alerts re-evaluate after it | `prometheus`, `grafana`, `redpanda-console`: seconds each |
 | `clickhouse` | **paused** (ADR-057): stop and start it only through [pause-and-resume-a-serving-product.md](../runbooks/pause-and-resume-a-serving-product.md). While `hot-gold` runs: any time, with `-t 60`: its Kafka consumers resume from their committed offsets, and duplicates collapse under `FINAL` | hot-tier queries fail while it restarts | `-t 60`, healthy in 8 s |
 | `capture-binance`, `capture-kraken`, `capture-coinbase` | any time for correctness, one venue at a time | **that venue's market data while it is down, for good**; a book resync on reconnect | not restarted |
 | `redpanda` | any time, with `-t 30`: nothing reads its topics until phase 004 while ClickHouse is paused | capture holds its records in its producer queue for the restart | `-t 30`, healthy in 13 s; `k2_capture_produce_errors_total` 0 on all three venues before and after |
@@ -693,6 +695,7 @@ Then, for each path that changed. *When idle* means section 6's step 1 before th
 | `docker/airflow/statsd-mapping.yml` | file mount | section 6, the `airflow-statsd` row |
 | `docker/prometheus/rules/` | read at start and on SIGHUP (the hang-up signal, which Prometheus takes as "reload your configuration") | `docker kill -s HUP k2-prometheus`, then check http://localhost:9090/rules lists the change |
 | `docker/prometheus/prometheus.yml` | file mount | `docker compose up -d --force-recreate --no-deps prometheus` |
+| `docker/alertmanager/alertmanager.yml` | directory mount, read at start and on reload | `curl -s -X POST localhost:9093/-/reload`, then `docker logs --tail 3 k2-alertmanager` shows `Completed loading of configuration file` |
 | `docker/grafana/dashboards/` | polled every 30 s | nothing |
 | `docker/grafana/provisioning/` | read at start | `docker compose up -d --force-recreate --no-deps grafana` |
 | `docker/trino/etc/` (including the catalogs `make generate` writes) | read at start | when idle (section 6, the `trino` row): `docker compose up -d --force-recreate --no-deps trino` |
@@ -777,10 +780,10 @@ it never deletes a table copy, nor anything under `~/k2-backup/drop/` (the copie
 | [quick-reference.md](./quick-reference.md) | The per-component commands: Redpanda, ClickHouse (paused), capture, the lake catalog, Trino |
 | [data-catalog.md](./data-catalog.md) | **Archived** with the v3 lake ingest pipeline: what replaces it, and where it is kept |
 | [data-inspection.md](./data-inspection.md) | **Archived** with the v3 lake ingest pipeline: what replaces it, and where it is kept |
-| [observability.md](./observability.md) | Grafana dashboards, capture-tier metrics, the 14 Prometheus alert rules |
+| [observability.md](./observability.md) | Grafana dashboards, capture-tier metrics, the 16 Prometheus alert rules and where an alert goes |
 | [dashboards.md](./dashboards.md) | Every dashboard and console as a screenshot of a live run, in the order the data moves, with what to read from each and the runbook it leads to. Written by `make screenshots` |
 | [latency-budgets.md](./latency-budgets.md) | 7-segment latency budget plus the measured 2026-02-19 p50/p99 numbers |
-| [docker-resources.md](./docker-resources.md) | Per-service CPU/RAM limits, 15.20 CPU / 27.188 GiB across 17 long-running services, +4 one-shot (1.50 / 1.500 GiB), bootstrap peak 16.70 / 28.688 GiB against the 25 / 48 GiB ceiling, ClickHouse paused and outside them |
+| [docker-resources.md](./docker-resources.md) | Per-service CPU/RAM limits, 15.30 CPU / 27.250 GiB across 18 long-running services, +4 one-shot (1.50 / 1.500 GiB), bootstrap peak 16.80 / 28.750 GiB against the 25 / 48 GiB ceiling, ClickHouse paused and outside them |
 | [airflow-schedules.md](./airflow-schedules.md) | **Archived** with the v3 lake ingest pipeline, whose four DAGs it listed |
 | [clickhouse-database-standard.md](./clickhouse-database-standard.md) | Why everything served lives in the `gold` database (`k2` was dropped at the Phase E cutover) and how to keep it that way |
 | [adding-new-exchanges.md](./adding-new-exchanges.md) | End-to-end checklist for wiring up a 4th exchange |
