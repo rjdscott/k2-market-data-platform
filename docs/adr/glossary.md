@@ -679,7 +679,7 @@ Where: [`docker/airflow/dags/dbt_marts.py`](../../docker/airflow/dags/dbt_marts.
 `k2gen` is K2's contract tool. `k2gen validate` checks every product descriptor and ODCS v3
 table contract under `contracts/` against the standard and against `lake.sql`; `make generate`
 writes the files the contracts imply (the domain catalogs, `rules.json`, `warehouses.txt`,
-`selectors.yml`, `_sources.yml`, the product pages). The drift gate is CI running
+`selectors.yml`, `_sources.yml`, `contract_schemas.json`, the product pages). The drift gate is CI running
 `make generate` and failing on any difference, so a generated file cannot be edited by hand or
 left stale.
 Where: [`platform/k2gen/`](../../platform/k2gen/); [ADR-032](ADR-032-odcs-contracts-and-k2gen.md).
@@ -701,9 +701,10 @@ Where: `contracts/schema/k2.schema.json` once built.
 
 `lake.audit.checks` is the lake's one table of check results: one row per check per run, with
 `run_ts`, `job`, `check_name`, `scope`, `passed`, `observed` and `detail`. The nightly
-maintenance job (03:00 UTC) writes its audits there, such as `offset_continuity` (every
-partition's offsets in `raw.messages` contiguous, except holes already recorded as
-`offset_gap`) and `duplicate_identifiers`; the ingest writes its own findings there too. A
+maintenance job (03:00 UTC) writes its audits there, such as
+[`contract_schema`](#contract-schema-audit), `offset_continuity` (every partition's offsets in
+`raw.messages` contiguous, except holes already recorded as `offset_gap`) and
+`duplicate_identifiers`; the ingest writes its own findings there too. A
 failed nightly audit exits non-zero and fires `LakeAuditFailed`.
 Where: `AUDITS` in [`docker/lake/maintenance.py`](../../docker/lake/maintenance.py);
 [chapter 08](../architecture/08-lake-ingest.md#proof).
@@ -728,6 +729,18 @@ a mismatch means a lost or misapplied update. The capture checks it live
 `silver.book_kraken`, the nightly `kraken_checksum` audit). Binance and Coinbase publish no
 checksum, so their `checksum_ok` is NULL, meaning "not measurable".
 Where: [ADR-027](ADR-027-book-snapshot-and-sequencing.md); `docker/lake/book.py`.
+### Contract schema audit
+
+`contract_schema` is the nightly audit that holds each live lake table to its data contract,
+where `k2gen validate` holds the contract only to the DDL file. It compares the table's columns
+(names, Spark SQL types with nested fields, `NOT NULL`, order), its partition spec, sort order
+and identifier fields, as the Iceberg catalog holds them, with what `k2gen generate` wrote to
+`docker/lake/generated/contract_schemas.json`, and files one `audit.checks` row per table. A
+table with no contract fails too, in any namespace but a `scratch_` one, which is not read. It finds a drifted table up to a day after the drift; nothing refuses a bad write when
+it is made.
+Where: [`docker/lake/contract_schema.py`](../../docker/lake/contract_schema.py);
+[runbook](../runbooks/lake-audit-failed.md#15-contract_schema-a-live-table-is-not-what-its-contract-states) section 15;
+[chapter 18](../architecture/18-data-mesh.md#where-a-contract-is-enforced-and-when).
 
 ### Parity, three-way and pinned
 

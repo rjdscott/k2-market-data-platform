@@ -16,9 +16,10 @@
    lake and Trino already use (`RESERVED`); and each mart's name against its
    place, `<domain catalog>.<product schema>.<table>` (ADR-044).
 3. Each contract against docker/lake/ddl/lake.sql: the table exists, and its
-   partitioning and sort order are the ones declared there. Every table outside
-   `audit` has exactly one contract, and an `audit` table may have one (a mart
-   that reads it needs it). A contract with inline columns is a table
+   partitioning and sort order are the ones declared there. Every table has
+   exactly one contract, `audit` tables included: the nightly contract_schema
+   audit (docker/lake/contract_schema.py) fails a table without one in any
+   namespace the contracts own. A contract with inline columns is a table
    lake.sql does not create, and its partitioning and sort name its own columns.
    A latency service level names a column of its own table.
 4. Three rules across products: a table another table reads keeps snapshots for
@@ -174,7 +175,7 @@ def validate(root: Path = ROOT) -> list[str]:
             declared = list(getattr(lake[table], key))
             if props[key] != declared:
                 errors.append(f"{where}: {key} {props[key]}, but {LAKE_SQL} declares {declared}")
-    errors += [f"{LAKE_SQL}: {t} has no contract under contracts/" for t in lake if t not in home and not t.startswith("audit.")]
+    errors += [f"{LAKE_SQL}: {t} has no contract under contracts/" for t in lake if t not in home]
 
     # 4. across products.
     for pdir, product in products.items():
@@ -239,13 +240,13 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     if args.command == "generate":
         files = generate.generate(ROOT)
-        print(f"k2gen generate: {len(files)} files: {generate.RETENTION}, {generate.WAREHOUSES}, {generate.TRINO_RULES}, "
+        print(f"k2gen generate: {len(files)} files: {generate.RETENTION}, {generate.CONTRACT_SCHEMAS}, {generate.WAREHOUSES}, {generate.TRINO_RULES}, "
               f"{generate.DBT_SOURCES}, {generate.DBT_SELECTORS}, "
               f"the domain catalogs in {generate.CATALOGS} and {generate.TEST_CATALOGS}, and under {', '.join(generate.OWNED)}")
         return 0
     products = len(list((ROOT / "contracts").glob("*/*/product.yaml")))
     contracts = len(list((ROOT / "contracts").glob(f"*/*/*{SUFFIX}")))
-    print(f"k2gen validate: {products} products, {contracts} contracts, every lake table outside audit covered")
+    print(f"k2gen validate: {products} products, {contracts} contracts, every lake table covered")
     return 0
 
 
