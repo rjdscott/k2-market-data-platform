@@ -151,3 +151,85 @@ Python test count, LOW above).
 ## Resolutions
 
 Appended after publication; the table above is never edited.
+
+Each line was checked by reading the cited code on `origin/main` at `1feaa1a`, 2026-11-26.
+
+- **Resolved in #226 (`86504fd`):** HIGH `scripts/parity_ohlcv.py:97-125`, the resolver
+  never read tags. `resolve_snapshot` (`scripts/parity_ohlcv.py:110-143`) takes a pin that is on
+  main's lineage or under its own tag `parity_<day>`, and stops the run otherwise;
+  `scripts/parity_bars.py:141-142` calls the same function.
+- **Resolved in #226 (`86504fd`):** HIGH `scripts/parity_ohlcv.py:311-339`, the known gap's
+  audit row was never queried. `confirm_audit_row` (`scripts/parity_ohlcv.py:357-377`) reads
+  `lake.audit.checks` for the job, check and scope, and stops the run when the row is absent,
+  is not a failed operator row, or cannot be read; `main()` calls it before a gap is applied
+  (`:500`). The fix's CODEOWNERS line is not on main (below).
+- **Resolved in #228 (`410cc13`):** HIGH `scripts/check-docs.sh:227-234`, the synthetic-data
+  gate was a name filter. Gate (i) is `data_problems` in `scripts/check_docs.py`: every tracked
+  file is checked by extension and by content, a `synthetic-*` file must match its hash in
+  `tests/fixtures/SHA256SUMS`, which the generator writes, and a notebook with outputs or
+  execution counts fails. `make notebooks-run` writes to `notebooks/.executed/`
+  (`Makefile:170-171`).
+- **Resolved in #228 (`410cc13`):** HIGH `README.md:124` and the other mutable documents,
+  counts of captured data. Gate (j) (`scripts/check-docs.sh:246-258`, rule in
+  `scripts/check_docs.py`) fails such a count in any editable Markdown file; `make check-docs`
+  passes it on this branch.
+- **Resolved in #228 (`410cc13`), the `check()` half:** HIGH `scripts/check-env.py:1-3`.
+  `CREDENTIALS` and `check()` (`scripts/check-env.py:39-79`) cover all nine secrets and refuse
+  one equal to its user, a known default, a value `.env.example` ships, or one shorter than 16
+  characters. Lakekeeper's own Postgres role is not on main (below).
+- **Resolved in #228 (`410cc13`):** MED `scripts/check-budget.py:56-60`, replicas and profiles.
+  Limits are multiplied by `deploy.replicas` (`scripts/check-budget.py:67-78`), and limits and
+  pins are checked on the `--profile '*'` resolve (`:133-139`, `:270`).
+- **Resolved in #228 (`410cc13`):** MED `scripts/check-budget.py:63-68`, floating tags.
+  `unpinned()` (`scripts/check-budget.py:86-104`) rejects a bare major and a word, `COPY --from`
+  is checked (`:123`), every tracked Dockerfile is read (`:264-265`), every `uv run --with` is
+  pinned, and every Action in `.github/workflows/ci.yml` is pinned by commit. A major.minor tag
+  (`clickhouse/clickhouse-server:24.3-alpine`) passes as the stated floor.
+- **Resolved in #228 (`410cc13`):** MED `Makefile:40-46`, `make gates` omitted gates. `gates`
+  runs `make lint` and `scripts/check-budget.py` first (`Makefile:42-50`), and on a push gate
+  (h) diffs from `K2_DIFF_BASE`, set to `github.event.before` (`scripts/check-docs.sh:198-207`,
+  `.github/workflows/ci.yml:252`).
+- **Resolved in #228 (`410cc13`):** LOW `NOTICE:20`, gate (h) for (i). `NOTICE:41`, `:105` and
+  `scripts/make-synthetic-fixtures.py:15` say gate (i).
+- **Resolved in #221 (`f14aae6`):** LOW `SECURITY.md:88-91`, checks 1 and 2 not run.
+  `SECURITY.md:91-96` records both, run after the rollout; check 3 keeps its VERIFY marker.
+- **Resolved in #226 (`86504fd`):** LOW `tests/parity/README.md:98`, the tag lapse.
+  `tests/parity/README.md:139-140` states that the tags lapse about 2027-05-25.
+- **Resolved in #229 (`4cd4569`):** LOW `docker-compose.yml`, no log caps. The `x-logging`
+  anchor (`docker-compose.yml:58-63`, `max-size` 50m, `max-file` 5) is on every service, and
+  `tests/test_compose_logging.py` fails a service without it.
+
+## Deferred to the hardening sprint
+
+Owner's decision, 2026-11-26: a phase audit fixes its critical and high findings at the time,
+and the rest goes to the hardening sprint that runs after plan phase P5. These MED and LOW
+findings are open on `origin/main` at `1feaa1a` and are scheduled for that sprint:
+
+- MED `docker-compose.yml:856-858`: Spark's sample Jupyter still starts; `spark-iceberg` has
+  no `command:` override (`docker-compose.yml:872-925`).
+- MED `.github/workflows/ci.yml:262-278`: the compose images and `docker-compose.yml` are
+  scanned by nothing. #228 made the lockfile scan fail on a fixable CRITICAL (`ci.yml:294-305`).
+- MED `NOTICE:33-60`: the three legacy files and the six further reference-value files are
+  not listed.
+- MED `SECURITY.md:53-54`: the research note is on a remote branch, not on main;
+  `SECURITY.md:62-64` still omits cAdvisor's socket.
+- LOW `docs/adr/ADR-022-exactly-once-via-snapshot-offsets.md:114`: still "exits 2".
+- LOW `README.md:122`: the count moved to `README.md:201` (708, #228); `make test-python` on
+  this branch prints 766 passed.
+- LOW `scripts/check-docs.sh:19-23`: gates (a) and (b) still read the same set; the broken
+  link in `notebooks/README.md` is fixed.
+- LOW GitHub code scanning: the four stale alerts on the old root `uv.lock` are still open.
+- LOW `k2-airflow-api-server` log: no change to how the UI admin password is set.
+
+Open BLOCKER and HIGH, which that decision does not defer:
+
+- BLOCKER `SECURITY.md:41-56`: no copy of `raw` outside the engine and no `soft` delete
+  profile on main (`git grep -i delete-profile` and `backup` find neither); MinIO root
+  rotation is not recorded on main.
+- HIGH `CLAUDE.md:29`: `enforce_admins` is now `true` (`gh api .../branches/main/protection`,
+  a repository setting with no commit), but `CLAUDE.md:29` and `.github/CODEOWNERS:4-7` still
+  say main is unprotected.
+- HIGH `scripts/parity_ohlcv.py:311-339`, the remainder: `tests/parity/` and `scripts/parity*`
+  are not in `.github/CODEOWNERS`.
+- HIGH `scripts/check-env.py:1-3`, the remainder: Lakekeeper still connects as the Postgres
+  superuser (`docker-compose.yml:958-959`).
