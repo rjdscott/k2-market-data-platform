@@ -1,0 +1,18 @@
+{
+  "dags": [
+    {
+      "dagId": "access_canary",
+      "pipeline": "compiled/products/governance.access-canary/pipeline.json",
+      "product": "governance.access-canary",
+      "schedule": "*/10 * * * *",
+      "status": "active",
+      "tasks": [
+        "resolve",
+        "build",
+        "expire",
+        "record",
+        "maintain"
+      ]
+    }
+  ]
+}

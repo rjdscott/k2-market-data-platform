@@ -1,0 +1,62 @@
+{
+  "bronze": [
+    {
+      "audits": [
+        "value_parses"
+      ],
+      "branch": "audit",
+      "checks": "lake.station_readings.audit_checks",
+      "decimal": [],
+      "key": [
+        "station_id",
+        "read_at",
+        "source_file_sha256"
+      ],
+      "patterns": {
+        "station_id": "^s-[0-9]+$"
+      },
+      "table": "lake.station_readings.bronze_readings",
+      "values": [
+        "value_text",
+        "region",
+        "operator_note"
+      ]
+    }
+  ],
+  "build": {
+    "engine": "dbt",
+    "outputs": [
+      "sensor_net_build.station_readings__base.silver_readings"
+    ],
+    "publisher": "pub_station_readings",
+    "selector": "station_readings",
+    "writer": "dbt_station_readings"
+  },
+  "connector": {
+    "allowHosts": [
+      "data.example.org"
+    ],
+    "format": "csv",
+    "kind": "https-file",
+    "parser": "station_csv",
+    "url": "https://data.example.org/readings/{{ds}}.csv"
+  },
+  "dagId": "station_readings",
+  "domain": "sensor-net",
+  "fence": "station_readings",
+  "inputs": [],
+  "landing": {
+    "bucket": "k2-landing",
+    "log": "lake.station_readings.landing_files",
+    "prefix": "sensor-net/station-readings/"
+  },
+  "maintain": {
+    "cron": "7 2 * * *"
+  },
+  "product": "sensor-net.station-readings",
+  "schedule": {
+    "cron": "15 * * * *",
+    "timeoutMinutes": 10
+  },
+  "status": "active"
+}
