@@ -63,7 +63,7 @@ jobs:
       - uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
 
       - name: Ruff
-        run: uv run --no-project --with ruff==0.17.6 ruff check docker/lake docker/airflow scripts/airflow_shadow_check.py scripts/screenshots scripts/check_docs.py scripts/check-budget.py scripts/check-env.py scripts/make-synthetic-fixtures.py tests
+        run: uv run --no-project --with ruff==0.17.6 ruff check docker/lake docker/airflow scripts/screenshots scripts/check_docs.py scripts/check-budget.py scripts/check-env.py scripts/make-synthetic-fixtures.py tests
 
       - name: Pytest
         run: uv run --no-project --with pytest==9.2.0 --with pyyaml==6.0.4 --with fastavro==1.12.2 --with duckdb==1.4.4 pytest tests -q
@@ -151,8 +151,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: prefect
-            dockerfile: docker/prefect/Dockerfile
           # load + tag: the step after the build runs a check inside the image.
           - name: airflow
             dockerfile: docker/airflow/Dockerfile
@@ -223,8 +221,8 @@ jobs:
         run: docker compose --env-file .env.example config -q
 
       # Prints the steady default, the bootstrap default and, for each profile a
-      # service names (today legacy, the Prefect rollback), the default plus that
-      # profile: limit sums, each service's limits times its replicas, and fails when the
+      # service names (none today), the default plus that profile: limit sums,
+      # each service's limits times its replicas, and fails when the
       # bootstrap default is over the 25 CPU / 48 GiB ADR-045 states. Also fails
       # a service under any profile with no CPU or memory limit (it would escape the budget and
       # nothing else would notice), an untagged or `latest` image, an
