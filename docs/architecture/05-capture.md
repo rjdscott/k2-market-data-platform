@@ -50,6 +50,15 @@ The cost: anything on the frame path is now Rust, and each venue is a hand-writt
 
 One binary ([`services/capture-rust/`](../../services/capture-rust/README.md)), one container per venue, one WebSocket carrying trades and the L2 [order book](02-market-data-concepts.md#order-books).
 
+**The book is switchable per venue, and paused on all three today** ([ADR-050](../adr/ADR-050-order-book-capture-paused-during-platform-build.md)).
+`book_capture` in `config/instruments.yaml` is a required `true` or `false` per venue; the
+capture reads it once at start and reports what it read as `k2_capture_book_capture`. With it
+`false` the capture does not subscribe to the venue's book channel, neither seeds nor watches the
+book stream, and skips the 1 Hz book sampling; trades are unchanged, and `handle_frame` and
+replay never read the switch, so archived book frames replay byte for byte as before. Binance,
+which has no heartbeat channel, gets a WebSocket Ping every 15 s instead, its Pong watched as the
+`pong` stream at 60 s, with books on or off ([chapter 06](06-capture-venues.md)).
+
 ```mermaid
 flowchart TB
   WS["WebSocket frame"] --> TS["recv_ts_ns = now()<br/>first statement, before parse"]

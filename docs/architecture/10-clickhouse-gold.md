@@ -46,6 +46,10 @@ start. DDL: [`docker/clickhouse/ddl/`](../../docker/clickhouse/README.md).
 
 ## How it works
 
+`gold.book_top20` and `gold.bbo_1s` hold the book up to the pause of order-book capture and
+nothing after it: the `book.*` topics are idle, their consumer reads nothing, and `gold.bbo_live`'s
+newest second is the last one before the pause ([ADR-050](../adr/ADR-050-order-book-capture-paused-during-platform-build.md)).
+
 ```mermaid
 flowchart TB
   T[("trades.* topics")] --> QT["gold.q_trades<br/>Kafka · AvroConfluent<br/>2 consumers · flush 5 s"]

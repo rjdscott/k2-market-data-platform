@@ -14,7 +14,9 @@ SQL over the lake. It runs on one host inside a declared ceiling of 25 CPU / 48 
 bootstrap peak ([ADR-045](../adr/ADR-045-ceiling-25-cpu-48-gib.md)): as deployed, 19
 long-running services at 19.30 CPU / 35.312 GiB of limits, plus five one-shot init
 containers, scheduled by Airflow 3
-([docker-resources.md](../operations/docker-resources.md)).
+([docker-resources.md](../operations/docker-resources.md)). While the platform is built, the
+order books are paused on every venue and K2 captures trades only; the book tables keep what
+they held up to the pause ([ADR-050](../adr/ADR-050-order-book-capture-paused-during-platform-build.md)).
 
 Three properties define it, and the rest of the book is their consequences:
 

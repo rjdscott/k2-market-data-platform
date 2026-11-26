@@ -17,6 +17,12 @@ make notebooks-run        # execute all five headless (nbconvert) into .executed
 | `05_bars.ipynb` | the event-bar catalogue (`gold.bars`: tick/volume/dollar at one canonical threshold per symbol) and `k2lake.bars()` for any other threshold; bar duration vs activity; the function reproduces the catalogue row for row | `gold.bars`, `gold.trades` |
 | `04_completeness_audit.ipynb` | what the archive is missing and why: trade-id holes, venue replays, checksum failures by hour, offset gaps | `silver.trades_*`, `silver.book_kraken`, `audit.checks` |
 
+Notebooks 02, 03 and 04 read the book tables, which hold nothing after order-book capture
+was paused ([ADR-050](../docs/adr/ADR-050-order-book-capture-paused-during-platform-build.md)):
+pin them to a window before the pause. `k2lake.trades(book=True)` pairs a trade inside the
+pause with the last quote before it, however old, so its quote columns are not evidence of a
+live book there.
+
 What each table holds — grain, time columns and their units, symbol conventions, the
 `+1 SECOND` book rule, and where the lake and ClickHouse disagree — is
 [`docs/operations/data-catalog.md`](../docs/operations/data-catalog.md). Read it before

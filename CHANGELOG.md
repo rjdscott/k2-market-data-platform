@@ -12,6 +12,11 @@ layouts and commands, without notice. `3.0.0` is reserved for the end of
 
 ## [Unreleased]
 
+### Changed
+
+- Order-book capture is paused on every venue while the platform is built; trades are
+  unaffected and the nine order-book tables keep their history (#232; ADR-050).
+
 ## [3.0.0-alpha.1] - 2026-11-26
 
 First numbered version. It covers the work of phases P0 to P3 of the plan above, on top of the

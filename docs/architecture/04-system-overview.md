@@ -106,7 +106,8 @@ One trade, from the venue's socket to a candle in ClickHouse and a row in lake g
 
 1. **The frame arrives.** `k2-capture` holds one WebSocket per venue carrying trades and L2 book
    together, and stamps `recv_ts_ns` as the first statement after the frame leaves the socket, before
-   anything is parsed ([capture.md](05-capture.md)).
+   anything is parsed ([capture.md](05-capture.md)). The L2 book is paused on every venue while the
+   platform is built, so today the socket carries trades only ([ADR-050](../adr/ADR-050-order-book-capture-paused-during-platform-build.md)).
 2. **Continuity is checked in the venue's own terms.** Binance's `lastUpdateId`, Kraken's CRC32,
    Coinbase's connection-wide `sequence_num`; a broken signal drops that book and resubscribes rather
    than publishing a stale one ([capture-venues.md](06-capture-venues.md)).

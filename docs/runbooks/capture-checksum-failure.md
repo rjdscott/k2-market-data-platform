@@ -24,6 +24,11 @@ dead container see [capture-down.md](./capture-down.md).
 
 ---
 
+While Kraken's `book_capture` is false (paused on every venue by
+[ADR-050](../adr/ADR-050-order-book-capture-paused-during-platform-build.md)), sections 1 and 2 cannot fire: `CaptureChecksumFailure` and
+`CaptureBookDepthDegraded` are conditioned on `k2_capture_book_capture == 1`, and no book is
+kept. Section 3, precision loss, still applies to trades.
+
 ## 1. Kraken book checksum mismatch
 
 **Symptom**, nothing visible in throughput. Book snapshots for one or more Kraken
