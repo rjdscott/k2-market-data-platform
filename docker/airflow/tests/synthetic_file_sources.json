@@ -1,0 +1,8 @@
+{
+  "bronze.synthetic_rates": {
+    "dag_id": "synthetic_rates_ingest",
+    "domain": "fx-reference",
+    "owner": "fx-reference-team",
+    "schedule": "0 6 * * *"
+  }
+}

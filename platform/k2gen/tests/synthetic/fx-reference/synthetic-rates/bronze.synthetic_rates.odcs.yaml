@@ -1,0 +1,70 @@
+# Synthetic: see product.yaml beside it. The parser is docker/lake/sources/synthetic_rates.py.
+apiVersion: v3.2.0
+kind: DataContract
+id: lake.bronze.synthetic_rates
+name: bronze.synthetic_rates
+version: 0.1.0
+domain: fx-reference
+description:
+  purpose: >-
+    One row per date and code as the synthetic file lists them, the value as the string the
+    file wrote. Synthetic, for tests only.
+team:
+  name: fx-reference-team
+schema:
+  - name: synthetic_rates
+    physicalName: bronze.synthetic_rates
+    physicalType: table
+    properties:
+      - name: rate_date
+        logicalType: date
+        physicalType: DATE
+        required: true
+        primaryKey: true
+        primaryKeyPosition: 1
+        description: The day the rate is for.
+      - name: code
+        logicalType: string
+        logicalTypeOptions:
+          pattern: "^[A-Z]{3}$"
+        physicalType: STRING
+        required: true
+        primaryKey: true
+        primaryKeyPosition: 2
+        description: An invented three-letter code.
+      - name: value
+        logicalType: number
+        physicalType: STRING
+        required: true
+        description: The rate as the file wrote it; compared as a decimal, so 1.20 and 1.2 are one value.
+      - name: source_file_sha256
+        logicalType: string
+        physicalType: STRING
+        required: true
+        description: The sha256 of the landed file the row came from.
+customProperties:
+  - property: layer
+    value: bronze
+  - property: format
+    value: iceberg
+  - property: partitioning
+    value: []
+  - property: sort
+    value: []
+  - property: classification
+    value: public
+  - property: entitlement
+    value: none
+  - property: retention
+    value: 7
+  - property: upstreams
+    value: ["https://example.invalid/synthetic-rates.xml"]
+  - property: schedule
+    value: "0 6 * * *"
+  - property: fileSource
+    value:
+      url: https://example.invalid/synthetic-rates.xml
+      format: xml
+      calendar: none
+      parser: synthetic_rates
+      audits: [positive_values]

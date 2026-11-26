@@ -1,0 +1,31 @@
+{
+  "bronze.synthetic_rates": {
+    "audits": [
+      "positive_values"
+    ],
+    "columns": [
+      "rate_date",
+      "code",
+      "value",
+      "source_file_sha256"
+    ],
+    "decimal": [
+      "value"
+    ],
+    "domain": "fx-reference",
+    "format": "xml",
+    "key": [
+      "rate_date",
+      "code"
+    ],
+    "parser": "synthetic_rates",
+    "patterns": {
+      "code": "^[A-Z]{3}$"
+    },
+    "product": "synthetic-rates",
+    "url": "https://example.invalid/synthetic-rates.xml",
+    "values": [
+      "value"
+    ]
+  }
+}

@@ -23,7 +23,10 @@
    lake.sql does not create, and its partitioning and sort name its own columns.
    A latency service level names a column of its own table. A paused table
    (ADR-050) names a real day and an ADR file that exists, and promises no
-   latency: nothing may promise freshness for a table nothing feeds.
+   latency: nothing may promise freshness for a table nothing feeds. A file
+   source (ADR-036) is a new bronze table with the lineage column, a declared
+   key, column types its audits can compare, patterns Python compiles, a cron
+   schedule, its url among its upstreams, and a DAG id no hand-written DAG has.
 4. Three rules across products: a table another table reads keeps snapshots for
    at least the seven-day floor; a table is at least as restricted as anything
    it reads; and every input resolves to a declared output or a declared
@@ -32,6 +35,7 @@
 
 import argparse
 import json
+import re
 import sys
 from datetime import date
 from pathlib import Path
@@ -70,6 +74,13 @@ LAYER_SCHEMAS = {
     "intermediate": "the schema dbt keeps every domain's intermediate models in (dbt/macros/naming.sql)",
     "dq": "the schema every domain's dbt run records its test results in (dbt/macros/record_test_results.sql)",
 }
+
+
+# A file source (ADR-036): its lineage column, the column types its audits compare, and the
+# hand-written DAGs a generated one cannot take the id of.
+LINEAGE = "source_file_sha256"
+COMPARABLE = r"STRING|DATE|INT|BIGINT|DECIMAL\(\d+,\s*\d+\)"
+DAGS = {d: "a hand-written DAG in docker/airflow/dags/" for d in ("lake_ingest", "lake_maintenance", "lake_rebuild", "dbt_marts")}
 
 
 def fence(domain: str) -> str:
@@ -167,11 +178,17 @@ def validate(root: Path = ROOT) -> list[str]:
             if sla["property"] == "latency" and sla["element"] not in {f"{table}.{c}" for c in names}:
                 errors.append(f"{where}: latency element {sla['element']} is not a column of {table}")
         errors += _paused_errors(root, where, doc, props.get("paused"))
+        if "fileSource" in props:
+            errors += _file_source_errors(where, table, inline, props)
         if inline:  # a new table: generate writes its DDL, lake.sql never holds it
             if table in lake:
                 errors.append(f"{where}: {table} is created by {LAKE_SQL}, so the contract references it, not inline columns")
             for key in ("partitioning", "sort"):
                 errors += [f"{where}: {key} {f} reads no column the contract declares" for f in props[key] if ddl.column_of(f) not in names]
+            # The generated DDL quotes these as COMMENTs, and Spark SQL has no '' escape: the
+            # first table generated from a contract failed to parse on one (2026-11-26).
+            texts = [("description.purpose", doc["description"]["purpose"])] + [(f"column {c['name']}", c["description"]) for c in inline]
+            errors += [f"{where}: {what} holds a single quote, which the generated DDL cannot quote for Spark" for what, text in texts if "'" in text]
             continue
         if table not in lake:
             errors.append(f"{where}: {table} is not a table in {LAKE_SQL}, and the contract declares no inline columns")
@@ -217,6 +234,44 @@ def validate(root: Path = ROOT) -> list[str]:
                 if up not in set(tables) | set(product["outputs"]) or up not in home:
                     errors.append(f"{where}: mart {mart['table']} reads {up}, which is neither one of its outputs nor a resolved input")
         errors += [f"{where}: input {name} is read by none of its outputs" for name in sorted(set(external) | set(tables)) if name not in read]
+    return errors
+
+
+def file_source_dag(table: str) -> str:
+    """The DAG docker/airflow/dags/factory.py builds for a file source: bronze.ecb_fx_daily -> ecb_fx_daily_ingest."""
+    return f"{table.split('.')[1]}_ingest"
+
+
+def _file_source_errors(where: str, table: str, columns: list[dict[str, Any]] | None, props: dict[str, Any]) -> list[str]:
+    """A file source's table as docker/lake/file_source.py reads it (ADR-036)."""
+    if not columns:
+        return [f"{where}: a file source's table is a new one, so its columns are inline"]
+    errors = []
+    if table.split(".")[0] != "bronze":
+        errors.append(f"{where}: a file source lands in bronze, not {table.split('.')[0]}")
+    by_name = {c["name"]: c for c in columns}
+    lineage = by_name.get(LINEAGE)
+    if lineage is None or lineage["physicalType"] != "STRING" or not lineage.get("required"):
+        errors.append(f"{where}: a file source's table has column {LINEAGE} STRING, required: the sha256 of the file each row came from")
+    keys = [c for c in columns if c.get("primaryKey")]
+    if not keys:
+        errors.append(f"{where}: a file source declares its key, primaryKey on one or more columns; the audits need it")
+    errors += [f"{where}: key column {c['name']} must be required" for c in keys if not c.get("required")]
+    for c in columns:
+        if c["name"] != LINEAGE and not re.fullmatch(COMPARABLE, c["physicalType"]):
+            errors.append(f"{where}: column {c['name']} is {c['physicalType']}; a file source's audits compare only STRING, DATE, INT, BIGINT and DECIMAL")
+        pattern = c.get("logicalTypeOptions", {}).get("pattern")
+        if pattern is not None:
+            try:
+                re.compile(pattern)
+            except re.error as exc:
+                errors.append(f"{where}: column {c['name']}'s pattern does not compile in Python: {exc}")
+    if len(props["schedule"].split()) != 5:
+        errors.append(f"{where}: a file source's schedule is the cron its DAG runs on, five fields, not {props['schedule']!r}")
+    if props["fileSource"]["url"] not in props["upstreams"]:
+        errors.append(f"{where}: a file source reads its url, so upstreams lists {props['fileSource']['url']}")
+    if file_source_dag(table) in DAGS:
+        errors.append(f"{where}: its DAG would be {file_source_dag(table)}, which is {DAGS[file_source_dag(table)]}")
     return errors
 
 
@@ -266,7 +321,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "generate":
         files = generate.generate(ROOT)
         print(f"k2gen generate: {len(files)} files: {generate.RETENTION}, {generate.CONTRACT_SCHEMAS}, {generate.WAREHOUSES}, {generate.TRINO_RULES}, "
-              f"{generate.DBT_SOURCES}, {generate.DBT_SELECTORS}, "
+              f"{generate.DBT_SOURCES}, {generate.DBT_SELECTORS}, {generate.FILE_SOURCES}, {generate.DAG_SOURCES}, "
               f"the domain catalogs in {generate.CATALOGS} and {generate.TEST_CATALOGS}, and under {', '.join(generate.OWNED)}")
         return 0
     products = len(list((ROOT / "contracts").glob("*/*/product.yaml")))

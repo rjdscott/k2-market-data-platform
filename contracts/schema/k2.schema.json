@@ -229,6 +229,28 @@
           "description": "Cron of the job that writes the table.",
           "type": "string"
         },
+        "fileSource": {
+          "description": "The table is loaded from a file a publisher serves, by docker/lake/file_source.py under the DAG docker/airflow/dags/factory.py builds from it (ADR-036). Its key is the columns marked primaryKey, its numbers the columns of logicalType number or integer, compared as decimals, and its domain each column's logicalTypeOptions.pattern; the schedule is the contract's own.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["url", "format", "calendar", "parser", "audits"],
+          "properties": {
+            "url": {"description": "Where the file is fetched from. TLS only. Also an upstream of the table, so its product declares it as an external input.", "type": "string", "pattern": "^https://[^\\s]+$"},
+            "format": {"description": "The landed file's extension. XML only today: the parsers read it with the standard library's expat. A format is added with its first source.", "enum": ["xml"]},
+            "calendar": {"description": "The days the publisher publishes on. none: every scheduled run fetches. A publication calendar is added with its first source (plan P4, pull request 2).", "enum": ["none"]},
+            "parser": {"description": "The module docker/lake/sources/<parser>.py: parse(bytes) to rows.", "type": "string", "pattern": "^[a-z][a-z0-9_]*$"},
+            "audits": {
+              "description": "The product's own checks, run after the generic ones: functions of that module, each from the parsed rows to a list of problems.",
+              "type": "array",
+              "uniqueItems": true,
+              "items": {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9_]*$",
+                "not": {"description": "The generic checks' names (docker/lake/file_source.py GENERIC).", "enum": ["parses", "non_empty", "keys_unique", "in_domain", "values_unchanged", "staged"]}
+              }
+            }
+          }
+        },
         "paused": {
           "description": "The table receives no new data by decision; its rows stay readable. since is the day it stopped, adr the decision. Removed on resume (ADR-050).",
           "type": "object",

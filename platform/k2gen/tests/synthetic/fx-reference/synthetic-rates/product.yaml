@@ -1,0 +1,21 @@
+# A synthetic file source, used only by tests (ADR-036). Never under contracts/: there it
+# would be a production DAG and a lake table. platform/k2gen/tests/test_file_source.py
+# copies this directory into a temporary contracts/ tree, validates and generates it, and
+# holds what it generates to docker/airflow/tests/synthetic_file_sources.json and
+# tests/synthetic_file_sources.json, which the DAG factory's and the lake job's tests read.
+name: synthetic-rates
+domain: fx-reference
+owner: fx-reference-team
+purpose: >-
+  Synthetic test source for the file-source pattern: invented rates for invented
+  three-letter codes, used only by tests and the pattern's integration proof.
+kind: source-aligned
+lifecycle: draft
+inputs:
+  - external: https://example.invalid/synthetic-rates.xml
+    classification: public
+    description: >-
+      Invented. The .invalid domain is reserved and never resolves, and no test fetches it.
+outputs:
+  - bronze.synthetic_rates
+consumers: []
