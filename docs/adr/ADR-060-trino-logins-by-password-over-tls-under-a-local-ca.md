@@ -60,7 +60,8 @@ mechanisms.
 - **Files change under running containers.** Through Docker Desktop's file sharing, a container keeps reading the
   old file after a file is renamed over it, and sees an in-place write at once (S09, S14,
   [`CLAUDE.md`](../../CLAUDE.md)'s bind-mount note). Editors and `mv` rename; a rotation must not.
-- **Trino rereads its own certificate.** Its HTTP server reloads the keystore file on a timer,
+- **Trino rereads its own certificate.** Its HTTP server reloads its keystore (the file holding its key and
+  certificate) on a timer,
   `http-server.https.ssl-context.refresh-time`, default `1.00m` (Trino 484's start-up log).
 
 ---
@@ -97,7 +98,8 @@ mounts; the arrow between client and Trino is the only network path, and it is e
    type `PASSWORD` (S11's `config.properties`); the file authenticator reads
    `/run/k2-secrets/trino/password.db` every 5 s (`compiled/trino/etc/password-authenticator.properties`, S13's
    `emit/trino_identity.py`). No password, no hash and no principal name is compiled into a release.
-2. **A local CA** (`scripts/tls.sh`, `make tls-init`). ECDSA P-256 keys. The CA lives 1826 days, may sign no other
+2. **A local CA** (`scripts/tls.sh`, `make tls-init`). ECDSA P-256 keys (elliptic-curve signature keys on the
+   NIST P-256 curve). The CA lives 1826 days, may sign no other
    CA (`pathlen:0`) and carries a critical **name constraint**: it may sign only `trino` and `localhost`, so its
    key, if stolen, signs nothing else a client would accept. Trino's certificate lives 90 days and names exactly
    `trino` and `localhost`; no IP address, since Trino can never show it to a client that connects by one. A
