@@ -56,8 +56,9 @@ none fires for a resumed one.
   `docker/clickhouse/ddl/`, which `make test-clickhouse` and CI apply to a throwaway server.
 - **Unaffected:** capture and Redpanda. Nothing else reads the topics until phase 004: the v3
   lake ingest that did retired in phase 000 ([`legacy/v3-lake-ingest/`](../../legacy/v3-lake-ingest/)).
-- **Stood down with it** (ADR-057, decision 2), each in its own change of phase 000: `make gates`
-  runs the parity check with `--skip-clickhouse` and prints a SKIP line naming ADR-057; the six
+- **Stood down with it** (ADR-057, decision 2), each in its own change of phase 000: the parity
+  check's ClickHouse leg, a SKIP line naming ADR-057 until the whole check was archived with the
+  v3 lake ingest (`make parity-ohlcv` now prints one SKIP naming phase 004); the six
   rules in `docker/prometheus/rules/clickhouse-alerts.yml` and their tests, and the `clickhouse`
   scrape job; the dashboard `clickhouse-overview.json` and the ClickHouse panels of
   `k2-pipeline-overview.json`; the ClickHouse half of `make health` step (2); the chaos scripts
@@ -103,15 +104,17 @@ nothing, on 2026-11-26: `stop -t 60` printed `Container k2-clickhouse Stopping` 
 `rm --stop --force` printed `Stopping`, `Stopped`, `Going to remove k2-clickhouse`, `Removing` and
 `Removed`. The `rm --force` of step 3 alone, rendered against the running container, prints
 `No stopped containers`, which is why the stop comes first. After step 3 the state of a group with
-no members and stored offsets should read `Empty`; that is the broker's documented state, not yet
-seen on this host.
+no members and stored offsets reads `Empty`: both groups printed `STATE Empty` and `MEMBERS 0`
+after the pause of 2026-11-26.
 
 **Why not `make down` or a plain stop.** A stop without the profile line in the compose file is
 undone by the next `make up`. And `docker compose down` without `--profile hot-gold` does not touch
 a container under a profile: on a scratch project with one service under a profile, `down` removed
 the other service and left that one running.
 
-**Measured**, not yet performed.
+**Measured**, performed once, on 2026-11-26: the container stopped at 14:21 UTC (the ADR-057
+Outcome, which says how the minute was read); step 4's checks, run later the same UTC day,
+printed no container, both volumes and both groups `Empty`. The stop was not timed.
 
 ---
 
@@ -148,9 +151,9 @@ over the 72 partition rows of the two groups (an empty partition shows `-` and i
 synthetic line whose committed offset was below its log start, the filter of check 2 printed
 `behind log start: market.crypto.v3.trades.kraken 0 5 9`. A group with no stored offsets describes
 as `STATE Dead` with `MEMBERS 0`: run 2026-11-26 against a group name that never existed. With
-the profile running, the bootstrap is 21.30 CPU / 37.812 GiB against the ceiling of 25 / 48
-(`docker compose --profile hot-gold --env-file .env.example config`, summed as in
-[docker-resources.md](../operations/docker-resources.md#how-these-numbers-are-produced), 2026-11-26).
+the profile running, the bootstrap is 20.70 CPU / 36.688 GiB against the ceiling of 25 / 48
+(the `bootstrap hot-gold` line of `python3 scripts/check-budget.py`, 2026-11-26, after the v3 lake
+ingest's two services retired; it was 21.30 / 37.812 with them).
 
 **Recovery**
 
@@ -280,6 +283,7 @@ against the live stack with ClickHouse still running: every `rpk` command on thi
 volume ls`, `docker ps -a`, `docker compose --profile hot-gold config --services`, the
 `system.kafka_consumers` read and `SHOW SCHEMAS FROM lake`. Run on a scratch compose project: a
 profiled service's absence from `config --services` without the profile, its start by name with
-`up -d`, and `down` leaving it running. Not run: the stop, the remove and the start of
-`k2-clickhouse`, and every check after them. Run again read-only after the pause, 2026-11-26:
+`up -d`, and `down` leaving it running. Not run from this page: the stop and the remove (done by
+the phase's operator), the start of `k2-clickhouse` and every check after a start. Section 1
+step 4's checks were run after the pause, 2026-11-26. Run again read-only after the pause, 2026-11-26:
 section 0's five commands and section 4's `SHOW SCHEMAS FROM lake`.

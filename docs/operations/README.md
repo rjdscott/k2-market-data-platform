@@ -176,8 +176,9 @@ benign start-up noise); that lake is retired, so a fresh clone now stops at an e
 
 - `K2_CAPTURE_CPUSET` and `K2_HEAVY_CPUSET` ship empty: no CPU pinning, starts on any host.
   Set the 15-core layout from `.env.example` only on a host that has those cores, or the
-  six containers that take a cpuset (the three captures on `K2_CAPTURE_CPUSET`; ClickHouse,
-  Spark and Trino on `K2_HEAVY_CPUSET`) fail at start with `invalid argument`.
+  five containers that take a cpuset (the three captures on `K2_CAPTURE_CPUSET`; Spark and
+  Trino on `K2_HEAVY_CPUSET`, and the paused ClickHouse with `hot-gold`) fail at start with
+  `invalid argument`.
 - `K2_AIRFLOW_PORT` (8090) and `K2_TRINO_PORT` (8088) move those two consoles if something
   else on the host owns the port. `K2_DOCKER_GID` is the group that owns the Docker socket, `0`
   on Docker Desktop.

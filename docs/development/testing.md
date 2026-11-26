@@ -17,19 +17,21 @@ make test-airflow  # inside the Airflow image: every dbt package at the version 
 
 ## Inventory
 
-The Python counts are left out (`n/a`) while phase 000 moves the v3 lake's suites, the parity
-comparator's among them, to [`legacy/v3-lake-ingest/`](../../legacy/v3-lake-ingest/);
-`pytest --collect-only -q tests` prints them. The Rust counts are from 2026-11-24.
+Counted on 2026-11-26, after phase 000 moved the v3 lake's suites, the parity comparator's among
+them, to [`legacy/v3-lake-ingest/`](../../legacy/v3-lake-ingest/): the Python counts are what
+`pytest --collect-only -q tests` prints per file (499 in all), the Rust counts are `#[test]`
+functions per file.
 
 | Suite | Count | Location | What it covers |
 |-------|------:|----------|----------------|
-| Rust, capture lib unit | 52 | [`services/capture-rust/src/`](../../services/capture-rust/src/) | `decimal`, `record`, `config`, `ws`, `book`, `sink`, `metrics`, `exchanges/{binance,kraken,coinbase}`, fixed-point conversion, book state, per-exchange framing |
-| Rust, capture binary unit | 4 | [`services/capture-rust/src/main.rs`](../../services/capture-rust/src/main.rs) | The healthcheck's staleness parsing and per-stream bounds, the "green while the primary feed is dead" bug and its opposite |
+| Rust, capture lib unit | 54 | [`services/capture-rust/src/`](../../services/capture-rust/src/) | `decimal`, `record`, `config`, `ws`, `book`, `resync`, `sink`, `metrics`, `exchanges/{binance,kraken,coinbase}`, fixed-point conversion, book state, per-exchange framing |
+| Rust, capture binary unit | 9 | [`services/capture-rust/src/main.rs`](../../services/capture-rust/src/main.rs) | The healthcheck's staleness parsing and per-stream bounds, the "green while the primary feed is dead" bug and its opposite; the book switch's streams and series, Binance's ping and pong watchdog, the scheduled reconnect |
+| Rust, book switch integration | 4 | [`services/capture-rust/tests/book_switch.rs`](../../services/capture-rust/tests/book_switch.rs) | The `book_capture` switch through the public API ([ADR-050](../adr/ADR-050-order-book-capture-paused-during-platform-build.md)): each venue's subscriptions with it off and on, and every synthetic fixture replaying to its golden hash either way |
 | Rust, capture replay integration | 12 | [`services/capture-rust/tests/`](../../services/capture-rust/tests/) | `replay.rs` (2), `replay_binance.rs` (2), `replay_coinbase.rs` (2), `replay_failures.rs` (3), `replay_cli.rs` (3), synthetic golden-fixture replay through the same `handle_frame()` path live capture runs; `make record-fixtures` runs the first three over real sessions recorded locally |
-| Python, v3 data contracts | n/a | [`tests/test_contracts.py`](../../tests/test_contracts.py) | Structural checks on `schemas/avro/*.avsc` and `config/instruments.yaml`, sibling `logicalType`, fixed-point prices, nullable defaults, duplicate/malformed canonical symbols |
-| Python, lake offsets | 60 | [`tests/test_lake_offsets.py`](../../tests/test_lake_offsets.py) | `docker/lake/offsets.py`: the exactly-once bookkeeping written into the Iceberg snapshot summary, encode/decode round-trips, next-offset arithmetic, gap detection (ADR-022) |
-| Python, wire format | n/a | [`tests/test_wire_format.py`](../../tests/test_wire_format.py) | `docker/lake/wire.py`'s framing, and the contract between `schemas/avro/*.avsc` and the ClickHouse DDL, CLAUDE.md's schema-change rule, executable |
-| Python, everything else | n/a | [`tests/`](../../tests/) | bars, the lake's book, instruments and empty batch, the gate scripts (`check-budget`, `check-docs`, `check-env`, `health`, `drop`, `backup-lake`, the chaos library), and `test_synthetic_fixtures.py` (the committed fixtures are what the generator writes) |
+| Python, v3 data contracts | 41 | [`tests/test_contracts.py`](../../tests/test_contracts.py) | Structural checks on `schemas/avro/*.avsc` and `config/instruments.yaml`, sibling `logicalType`, fixed-point prices, nullable defaults, duplicate/malformed canonical symbols |
+| Python, lake offsets | 66 | [`tests/test_lake_offsets.py`](../../tests/test_lake_offsets.py) | `docker/lake/offsets.py`: the exactly-once bookkeeping written into the Iceberg snapshot summary, encode/decode round-trips, next-offset arithmetic, gap detection (ADR-022) |
+| Python, wire format | 20 | [`tests/test_wire_format.py`](../../tests/test_wire_format.py) | `docker/lake/wire.py`'s framing, and the contract between `schemas/avro/*.avsc` and the ClickHouse DDL, CLAUDE.md's schema-change rule, executable |
+| Python, everything else | 372 | [`tests/`](../../tests/) | bars, the lake's book, instruments and empty batch, the gate scripts (`check-budget`, `check-docs`, `check-env`, `health`, `drop`, `backup-lake`), and `test_synthetic_fixtures.py` (the committed fixtures are what the generator writes) |
 | Airflow image | 2 | [`docker/airflow/tests/`](../../docker/airflow/tests/) | every package in the dbt virtualenv at the version `dbt/uv.lock` pins, and the dbt packages installed from this `dbt/package-lock.yml`. Not in the Rust and Python counts |
 | dbt | none | [`dbt/`](../../dbt/) | No models: the v3 marts and their unit and data tests are archived in [`legacy/v3-lake-ingest/`](../../legacy/v3-lake-ingest/); the next models arrive in [phase 002](../plans/2026-11-26-unified-product-platform/002-run-spine-through-ecb-fx.md) |
 | Archived v2 Kotlin | 20 | [`legacy/v2-kotlin/`](../../legacy/v2-kotlin/README.md) | `TradeNormalizerTest` (7), `InstrumentsLoaderTest` (13). `make test-legacy-kotlin` runs them; deliberately **not** part of `make test` and not run in CI |
@@ -40,7 +42,7 @@ comparator's among them, to [`legacy/v3-lake-ingest/`](../../legacy/v3-lake-inge
 ### Rust
 
 ```bash
-make test-rust      # cargo test --locked in rust:1.100.0-bookworm, 68 tests
+make test-rust      # cargo test --locked in rust:1.100.0-bookworm, 79 tests
 ```
 
 No local toolchain needed. For a tight loop use the pre-built builder image and the named
@@ -77,7 +79,7 @@ tests `legacy/v2-kotlin/`.
 
 | Job | What it does |
 |-----|--------------|
-| **Rust (capture)** | `cargo fmt --check`, `cargo clippy --locked --all-targets -- -D warnings`, `cargo test --locked` on a pinned 1.98.0 toolchain, runs the 68 tests |
+| **Rust (capture)** | `cargo fmt --check`, `cargo clippy --locked --all-targets -- -D warnings`, `cargo test --locked` on a pinned 1.98.0 toolchain, runs the 79 tests |
 | **Python (lake + tests)** | `ruff check` then `pytest tests -q` under `uv` |
 | **Docker build** | matrix: Airflow, lake-metrics, Spark, capture, with GHA layer caching. Every leg builds from the repo root. The Airflow leg then runs `make test-airflow`'s tests in the image it built, with `dbt/` mounted; the lake-metrics leg builds the retired exporter's Dockerfile at its archived path in `legacy/v3-lake-ingest/`, so the archive stays buildable and the leg's required name keeps reporting |
 | **Trino (access rules)** | `bash scripts/trino-rules-test.sh` (`make test-trino`): the pinned `trinodb/trino` with `docker/trino/etc`, no network, two starts. The real `etc/`: a misspelt property fails the start, the catalogs must be `lake`, `system` and one per domain in `contracts/domains.yaml`, only `lake` is on warehouse `k2` and it is `read_only`. Then local Iceberg catalogs from the same generator: each domain's writer creates, inserts and drops in its own catalog; the next domain's writer and an unnamed user are denied every SQL write there and in `lake`; `optimize`, `rollback_to_snapshot`, `expire_snapshots`, `remove_orphan_files` and `CALL` through `lake` denied, and `CALL` through a domain catalog; nobody may set the two retention-floor session properties, so an expire at `0s` fails; a user sees only its own queries; the known table-procedure gap between domains asserted (ADR-044) |

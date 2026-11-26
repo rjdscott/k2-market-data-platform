@@ -146,7 +146,7 @@ considered before committing*.
 ```bash
 make test          # everything CI runs: python + rust + clickhouse + trino + dbt
 make test-python   # uv run --no-project --with pytest==9.2.0 --with pyyaml==6.0.4 --with fastavro==1.12.2 --with duckdb==1.4.4 pytest tests -q
-make test-rust     # rust:1-bookworm container; no local cargo needed
+make test-rust     # rust:1.100.0-bookworm container; no local cargo needed
 make test-clickhouse  # the gold DDL + assertions on a throwaway 24.3 server
 make test-trino    # docker/trino/etc starts; lake refuses every commit; only a domain's writer changes its catalog
 make test-dbt      # dbt/ (its own uv project): lint, parse and compile; no marts until phase 002
