@@ -14,7 +14,7 @@ layouts and commands, without notice. `3.0.0` is reserved for the end of
 
 ## [3.0.0-alpha.1] - 2026-11-26
 
-First numbered version. It covers phases P0 to P3 of the plan above, on top of the
+First numbered version. It covers the work of phases P0 to P3 of the plan above, on top of the
 v3 lake-first stack (tag `v3-phase-e`).
 
 ### Added
@@ -43,7 +43,6 @@ v3 lake-first stack (tag `v3-phase-e`).
 - Resource ceiling is 25 CPU / 48 GiB at the bootstrap peak, checked in CI
   (#180, #200; ADR-045).
 - Readers resolve the snapshot `main` points at (#214).
-- The gold candle and bar step reads only touched data (ADR-048, #215).
 - Branch protection on `main` requires CI to pass before merge.
 
 ### Fixed
@@ -71,7 +70,8 @@ v3 lake-first stack (tag `v3-phase-e`).
   sprint (`docs/runbooks/lake-backup-and-restore.md`).
 - The candle parity pin carries one recorded gap, a host out-of-memory kill, listed in
   `tests/parity/README.md` (ADR-029 Outcome).
-- ADR-049 (event bars extended, not recomputed) is Proposed and not built.
+- ADR-048 (the gold step reads only touched data and writes bars once) is Accepted and
+  not built; ADR-049 (event bars extended, not recomputed) is Proposed.
 - The plan's later phases (P4 to P7) are not done, so the contracts, marts and gates
   may still change.
 
