@@ -8,6 +8,7 @@ Archived components of earlier K2 generations. Each directory is kept so the mig
 | [`v2-kotlin/`](v2-kotlin/README.md) | three Kotlin/Ktor exchange feed handlers | 2026-08-27 (`2b20804`; ADR-019 dates it 2026-08-26) | [ADR-019](../docs/adr/ADR-019-rust-capture-tier.md) | [`services/capture-rust/`](../services/capture-rust/) |
 | [`v2-offload/`](v2-offload/README.md) | the ClickHouse to Iceberg offload (runbooks only) | 2026-08-27 (`e2a2651`) | [ADR-014](../docs/adr/ADR-014-spark-based-iceberg-offload.md) and [ADR-017](../docs/adr/ADR-017-iceberg-maintenance-pipeline.md) Outcomes, [ADR-022](../docs/adr/ADR-022-exactly-once-via-snapshot-offsets.md) | [`docker/lake/`](../docker/lake/) |
 | [`v2-clickhouse/`](v2-clickhouse/README.md) | the `k2` ClickHouse medallion DDL | 2026-08-27 (`9011d94`) | [ADR-025](../docs/adr/ADR-025-clickhouse-derived-hot-tier.md), [ADR-026](../docs/adr/ADR-026-four-layer-lake-and-gold-served-from-clickhouse.md) | [`docker/clickhouse/ddl/`](../docker/clickhouse/ddl/) (`gold`) |
+| [`prefect/`](prefect/README.md) | the Prefect 3 worker image and the two lake flows that scheduled ingest and maintenance | 2026-11-26 (the cutover before it: 2026-11-25, #195 `c572727`) | [ADR-034](../docs/adr/ADR-034-airflow-3-replaces-prefect.md) (and its Outcome), [ADR-008](../docs/adr/ADR-008-eliminate-prefect-orchestration.md) Outcome for why it was kept first | [`docker/airflow/`](../docker/airflow/) (Airflow 3) |
 
 ## Adding an archive
 
