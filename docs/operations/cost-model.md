@@ -48,10 +48,10 @@ Replacing each component with its managed counterpart, for comparison:
 | Streaming | Redpanda (2 CPU / 2 GB) | MSK / Redpanda Cloud, smallest production tier | $250–400 |
 | Warm OLAP | ClickHouse (4 CPU / 8 GB) | ClickHouse Cloud, smallest always-on service | $200–400 |
 | Object storage | MinIO (1 CPU / 1 GB) | S3, ~50 GB compressed | <$5 |
-| Orchestration | Prefect server + worker + DB (2.5 CPU / 2.5 GB) | Prefect Cloud free tier + a small worker | $0–50 |
+| Orchestration | Airflow api-server, scheduler, dag-processor and statsd exporter beside the shared database (3.1 CPU / 5.56 GiB of limits, `docker-compose.yml`) | a managed Airflow, not priced here | not priced |
 | Batch compute | Spark, idle 22h/day | EMR Serverless, ~2h/day of actual work | $30–80 |
 | Observability | Prometheus + Grafana (1.5 CPU / 2.5 GB) | Grafana Cloud free tier | $0–50 |
-| **Total** | | | **≈$500–1,000** |
+| **Total** | | | **≈$500–1,000**, orchestration not included |
 
 Managed costs **more** than the single VM at this scale and only starts winning once
 operational effort, patching, scaling, on-call, exceeds the delta. That crossover is

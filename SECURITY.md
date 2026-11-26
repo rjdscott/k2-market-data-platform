@@ -60,8 +60,8 @@ hardened for production use. What is protected, and what is not, plainly:
   snapshots, outside the CI gate, and publish on every interface. Run one only on a trusted
   network, or bind its `ports:` to `127.0.0.1` in your copy first.
 - Secrets live in plain text in `.env` and in each container's environment, which
-  `docker inspect` shows to anyone with the Docker socket. The Airflow scheduler and the
-  Prefect worker hold that socket.
+  `docker inspect` shows to anyone with the Docker socket. The Airflow scheduler and cAdvisor
+  hold that socket (cAdvisor read-only, which does not narrow it).
 - Container images are pinned but not rebuilt on a schedule; Dependabot and a Trivy scan in
   CI surface known CVEs but nothing auto-patches. Trivy scans the repository's lockfiles and
   fails CI on a CRITICAL with a fix available unless `.trivyignore.yaml` accepts it with a

@@ -8,7 +8,7 @@ rolling out a change) is the [operator guide](../operations/README.md).
 
 | Tool | Needed for | Notes |
 |------|-----------|-------|
-| Docker Engine + Compose v2 | everything | A Docker engine with ≥ 38 GiB memory so every `deploy.resources.limits` can be honoured, the 37.812 GiB bootstrap peak included (39.312 GiB with the Prefect rollback's `--profile legacy`) (`docker info --format '{{.MemTotal}}'`, **Docker Desktop defaults far lower and silently clips every limit above the VM size**; Settings → Resources → Memory); measured steady-state usage is far lower (see [../operations/docker-resources.md](../operations/docker-resources.md)), so the stack runs on less, but limits then exceed the engine and ClickHouse's 8 GB cap is not real. Steady state declares 19.30 CPU / 35.312 GiB of limits across 19 long-running services and peaks at 21.30 CPU / 37.812 GiB across 24 while the five one-shot init containers run, under the 25 CPU / 48 GiB ceiling of [ADR-045](../adr/ADR-045-ceiling-25-cpu-48-gib.md) (v2 alone: 15.1 CPU / 21.875 GB). The engine requirement follows the declared sum, not the ceiling: 38 GiB today, 48 GiB if a later phase fills the ceiling. On Docker Desktop the host has a requirement of its own: the VM grows to its whole memory setting, so host RAM must exceed that setting plus everything else the host runs ([sizing](../runbooks/docker-vm-oom-kill.md#2-size-the-vm-so-the-host-keeps-enough-memory)) |
+| Docker Engine + Compose v2 | everything | A Docker engine with ≥ 38 GiB memory so every `deploy.resources.limits` can be honoured, the 37.812 GiB bootstrap peak included (`docker info --format '{{.MemTotal}}'`, **Docker Desktop defaults far lower and silently clips every limit above the VM size**; Settings → Resources → Memory); measured steady-state usage is far lower (see [../operations/docker-resources.md](../operations/docker-resources.md)), so the stack runs on less, but limits then exceed the engine and ClickHouse's 8 GB cap is not real. Steady state declares 19.30 CPU / 35.312 GiB of limits across 19 long-running services and peaks at 21.30 CPU / 37.812 GiB across 24 while the five one-shot init containers run, under the 25 CPU / 48 GiB ceiling of [ADR-045](../adr/ADR-045-ceiling-25-cpu-48-gib.md) (v2 alone: 15.1 CPU / 21.875 GB). The engine requirement follows the declared sum, not the ceiling: 38 GiB today, 48 GiB if a later phase fills the ceiling. On Docker Desktop the host has a requirement of its own: the VM grows to its whole memory setting, so host RAM must exceed that setting plus everything else the host runs ([sizing](../runbooks/docker-vm-oom-kill.md#2-size-the-vm-so-the-host-keeps-enough-memory)) |
 | [`uv`](https://docs.astral.sh/uv/) | the Python unit tests and ruff | Nothing else uses Python locally |
 | `jq`, `psql` | the diagnostic one-liners in the ops docs | optional |
 
@@ -30,8 +30,6 @@ Two values in `.env` are host-specific, not secrets:
 - `K2_AIRFLOW_PORT` (default `8090`) and `K2_TRINO_PORT` (default `8088`) are the Airflow
   and Trino host ports. `K2_AIRFLOW_PORT` also feeds Airflow's own base URL, so moving it
   moves the links its UI builds; set either if something else on the host owns the port.
-  (`K2_PREFECT_PORT`, default `4200`, matters only for the Prefect rollback behind the
-  `legacy` profile.)
 
 `make up` builds four images on the first run: the Rust `k2-capture` binary, `k2-airflow`,
 `k2-lake-metrics`, and the Spark image (which bakes the Kafka and Avro jars, each pinned by
@@ -48,7 +46,7 @@ password.
 
 `make up` is `scripts/check-env.py`, then the raw `docker compose up -d`. For everyday use,
 `make dev-up` runs the maintainer's bring-up checklist instead: the same `.env` check, then
-it sets `K2_PREFECT_PORT` when host port 4200 is busy, recreates any service holding a
+it recreates any service holding a
 directory bind mount that changed in the last commit
 (see the [bind-mount gotcha](../../docker/README.md#troubleshooting)), then runs
 `scripts/health.sh` — the same checks as `make health` — before declaring success.

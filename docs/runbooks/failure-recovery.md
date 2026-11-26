@@ -126,8 +126,7 @@ and until it runs this is an inherited number, not a measurement of what is depl
 
 ## 4. Spark batch-job failure (the lake ingest)
 
-**Symptom**, a `lake_ingest` run is marked failed in Airflow (Prefect's `lake-ingest-5min`
-until the 2026-11-25 cutover); lake row counts stop advancing.
+**Symptom**, a `lake_ingest` run is marked failed in Airflow; lake row counts stop advancing.
 
 **Detection**, `LakeIngestFailed`, then `LakeIngestLagHigh` from
 [`docker/prometheus/rules/lake-alerts.yml`](../../docker/prometheus/rules/lake-alerts.yml)

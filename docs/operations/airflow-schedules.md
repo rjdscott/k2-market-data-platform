@@ -35,5 +35,5 @@ docker exec -e PYTHONWARNINGS=ignore k2-airflow-scheduler airflow dags details d
 
 The DAG files are a read-only directory bind mount in the scheduler and the dag-processor, and
 so is `dbt/` for `dbt_marts`: after a checkout switch, recreate both (CLAUDE.md, bind-mount
-gotcha). The Prefect schedules these replaced are kept for the rollback in
-[prefect-schedules.md](./prefect-schedules.md).
+gotcha). The scheduler these replaced is archived in
+[`legacy/prefect/`](../../legacy/prefect/README.md).

@@ -13,7 +13,7 @@ serves the canonical layer from ClickHouse for dashboards and fast queries, with
 SQL over the lake. It runs on one host inside a declared ceiling of 25 CPU / 48 GiB at the
 bootstrap peak ([ADR-045](../adr/ADR-045-ceiling-25-cpu-48-gib.md)): as deployed, 19
 long-running services at 19.30 CPU / 35.312 GiB of limits, plus five one-shot init
-containers, with Prefect kept behind `--profile legacy` as the rollback
+containers, scheduled by Airflow 3
 ([docker-resources.md](../operations/docker-resources.md)).
 
 Three properties define it, and the rest of the book is their consequences:
@@ -85,7 +85,7 @@ Each rule names where it is enforced; a rule with no enforcement is a slogan.
    container. Enforced by the compose topology and `scripts/chaos/capture-kill.sh`
    (`CaptureDown` fired at 119 s under a 150 s kill, `scripts/chaos/results/2026-08-26.tsv`).
 5. **Use what is running before adding something.** ClickHouse consumes the topics itself;
-   Spark is batch only; Prefect is the one scheduler. Enforced by
+   Spark is batch only; Airflow is the one scheduler. Enforced by
    [ADR-004](../adr/ADR-004-eliminate-spark-streaming.md) and
    [ADR-008](../adr/ADR-008-eliminate-prefect-orchestration.md), whose `## Outcome`
    records the reversal on the record.

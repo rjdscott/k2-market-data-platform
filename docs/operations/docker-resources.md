@@ -19,11 +19,9 @@ sizing rule in [docker-vm-oom-kill.md](../runbooks/docker-vm-oom-kill.md#2-size-
 **One-shots: 2.00 CPU / 2.500 GiB across 5.** **Bootstrap peak: 21.30 CPU / 37.812 GiB
 across 24**, the one-shots run concurrently with the steady state at `docker compose up`,
 so that peak, not the steady state, is what the host has to absorb at boot, and it is the
-sum the ceiling gates. Since the Airflow cutover, `prefect-server` and `prefect-worker`
-sit behind the compose `legacy` profile, which a plain `docker compose up -d` does not
-start. They are the rollback ([airflow-scheduling.md](../runbooks/airflow-scheduling.md#rollback-to-prefect)):
-with them the peak is 22.80 CPU / 39.312 GiB across 26, inside the ceiling (reported, not gated), until
-the archive pull request of plan phase P2 deletes them.
+sum the ceiling gates. The scheduler Airflow replaced, and the compose profile that kept it
+as a rollback, are gone from the compose file and archived in
+[`legacy/prefect/`](../../legacy/prefect/README.md) (ADR-034's 2026-11-26 Outcome).
 
 Both parallel runs are over. The three Kotlin `feed-handler-*` containers are gone from
 `docker-compose.yml` ([ADR-019](../adr/ADR-019-rust-capture-tier.md); code archived at
@@ -56,9 +54,6 @@ steady    19 services  19.30 CPU  35.312 GiB
 one-shot   5 services   2.00 CPU   2.500 GiB
 ```
 
-Add `--profile legacy` after `compose` for the rollback's sums: the two Prefect services
-join the steady line.
-
 `docker compose config` normalises every `memory:` to bytes, so **GiB is what the limits
 actually are**, `2g` in the compose file is 2 × 2³⁰, not 2 × 10⁹. Older figures on this
 branch were written "GB" for the same quantities; the numbers did not change, the unit
@@ -73,7 +68,7 @@ label was wrong. Run on 2026-11-26, after Trino went to 5G. `python3 scripts/che
 | `clickhouse` | warm storage | 4.0 | 2.0 | 8 GB | 4 GB |
 | `minio` | cold storage | 1.0 | 0.5 | 1 GB | 512 MB |
 | `spark-iceberg` | lake batch engine | 3.0 | 1.0 | 8 GB | 2 GB |
-| `prefect-db` | orchestration (Prefect, Airflow, Lakekeeper metadata) | 1.0 | 0.5 | 1.5 GB | 512 MB |
+| `prefect-db` | orchestration (Airflow and Lakekeeper metadata; the name is historical, kept by ADR-034) | 1.0 | 0.5 | 1.5 GB | 512 MB |
 | `airflow-api-server` | orchestration (Airflow 3) | 1.0 | 0.25 | 1.5 GB | 512 MB |
 | `airflow-scheduler` | orchestration (Airflow 3, LocalExecutor); runs `dbt_marts`' dbt commands, two at a time | 1.5 | 0.5 | 3 GB | 1 GB |
 | `airflow-dag-processor` | orchestration (Airflow 3) | 0.5 | 0.1 | 1 GB | 256 MB |
@@ -94,9 +89,6 @@ label was wrong. Run on 2026-11-26, after Trino went to 5G. `python3 scripts/che
 | `airflow-migrate` | init (one-shot) | 0.5 |, | 1 GB |, |
 | **One-shot subtotal (5)** | | **2.00** | **, ** | **2.500 GiB** | **, ** |
 | **Bootstrap peak (24 containers)** | | **21.30** | **7.60** | **37.812 GiB** | **12.625 GiB** |
-| `prefect-server` | `legacy` profile, the rollback | 1.0 | 0.5 | 1 GB | 512 MB |
-| `prefect-worker` | `legacy` profile, the rollback | 0.5 | 0.25 | 512 MB | 256 MB |
-| **With `--profile legacy` (26 containers)** | | **22.80** | **8.35** | **39.312 GiB** | **13.375 GiB** |
 
 `capture-coinbase` gets twice the memory of the other two because Coinbase's `level2`
 channel is full depth, not top-20, its subscribe snapshot alone is 5.2 MB
@@ -112,7 +104,7 @@ steady state at `docker compose up`, so the bootstrap peak is the number the hos
 absorb.
 
 Headroom against the 25 CPU / 48 GiB ceiling at the bootstrap peak, where it is gated:
-**3.70 CPU and 10.188 GiB** (2.20 CPU and 8.688 GiB with the `legacy` profile up). The
+**3.70 CPU and 10.188 GiB**. The
 Airflow limits are the plan's estimates until ADR-034's measured figures replace them.
 
 ## Where the budget goes
@@ -203,8 +195,6 @@ the bootstrap peak gated above.
 
 Two known behaviours to expect when comparing declared vs. actual:
 
-- `prefect-worker` spikes to ~488 MiB during startup before settling near 100 MiB. The
-  limit is 512 MiB, raise it to 768 MiB if you ever see it OOM-killed.
 - Redpanda is started with `--smp 1 --memory 1500M`, i.e. it self-limits below its
   2 GB container limit. That is deliberate: the container limit is the safety net.
 
