@@ -4,7 +4,7 @@
 (`ecb-fx-rates`, `currency-master`, `calendars`); the owner's answer on FX content at 3.0. Before
 this phase starts, the signature of `k2_as_of` and the rules for `relationships` and `asOf` are
 frozen as an interface, as the interfaces pull request froze the rest (plan review section 4).
-**Decision it implements:** `docs/adr/ADR-056-unified-data-product-platform.md`: joins across
+**Decision it implements:** [`ADR-056-unified-data-product-platform.md`](../../adr/ADR-056-unified-data-product-platform.md): joins across
 domains are governed. A contract declares which columns are keys of which reference product,
 the checks fail a reference that does not resolve, an enriched product is never less restricted
 than its inputs, and every join to history states its point in time.

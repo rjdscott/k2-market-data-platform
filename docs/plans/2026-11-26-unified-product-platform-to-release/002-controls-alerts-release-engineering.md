@@ -2,7 +2,7 @@
 
 **Depends on:** `001` (tag `v3.0.0-beta.3`: every product of 3.0 exists and records evidence);
 Alertmanager delivering to Slack since the first plan's release spine.
-**Decision it implements:** `docs/adr/ADR-056-unified-data-product-platform.md`. New ADRs, each
+**Decision it implements:** [`ADR-056-unified-data-product-platform.md`](../../adr/ADR-056-unified-data-product-platform.md). New ADRs, each
 in the pull request that builds it: objectives and error budgets, which lift section 10 of
 [ADR-028](../../adr/ADR-028-non-goals-and-honest-limits.md) (its trigger is a recorded window of
 24 hours or more) and append an Outcome there; the controls catalogue as code. ADR-042, accepted

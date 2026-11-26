@@ -3,7 +3,7 @@
 **Depends on:** `001` (tag `v3.0.0-alpha.3`: releases, the document model, catalogs, rules,
 identity, the reader side of the tested-data marker); the owner's answers on committing the
 published files as fixtures and on rotating the MinIO root credential.
-**Decision it implements:** `docs/adr/ADR-056-unified-data-product-platform.md`; ADR-036 as
+**Decision it implements:** [`ADR-056-unified-data-product-platform.md`](../../adr/ADR-056-unified-data-product-platform.md); ADR-036 as
 accepted in `001`. New ADR, in the pull request that builds it: dbt builds silver and gold per
 product, which supersedes the boundary row of
 [ADR-035](../../adr/ADR-035-trino-and-dbt-for-marts.md) (status line only). ADR-054 (scoped
@@ -25,7 +25,7 @@ the ECB landing; tag `v3.0.0-alpha.4`.
 ## Scope
 
 The steps, their files and proofs are in section B of
-`docs/research/2026-11-26-unified-platform-architecture/IMPLEMENTATION-N0-N1.md`, against the
+[`IMPLEMENTATION-N0-N1.md`](../../research/2026-11-26-unified-platform-architecture/IMPLEMENTATION-N0-N1.md), against the
 interfaces frozen in `001`. Three of the plan review's riskiest unknowns are this phase's first
 pull requests: one MinIO key per engine while Lakekeeper vends no credentials; the fetch
 allow-list enforced in-process; Airflow starting one-shot containers through the Docker socket,
@@ -64,7 +64,7 @@ and the conditional write that never overwrites a landed object.
   counts, parse errors and the declared checks, and fast-forwards. Bronze publishes in order: a
   failed batch blocks later ones, never the landing. Audits are scoped to the batch, since a
   whole-branch uniqueness check grew from 0.47 s to 4.40 s on the spike's larger synthetic table
-  (`SPIKE-RUNCOST.md`, F12); whole-table checks run in maintenance.
+  ([`SPIKE-RUNCOST.md`](../../research/2026-11-26-unified-platform-architecture/SPIKE-RUNCOST.md), F12); whole-table checks run in maintenance.
 - **Run records**: the `governance.run-records` product and the one client module every writer
   of it uses.
 - **`k2_input` and the dbt wrapper**: `k2_input` renders `FOR VERSION AS OF` the input's newest

@@ -27,8 +27,8 @@ permissions and serves it, whatever the source.
 
 **How it was answered.** Three independent agents each wrote a competing architecture and plan from
 one brief, unseen by each other (entries A, B, C). A judge scored them against the owner's five
-criteria and wrote a synthesis (`VERDICT.md`); a reviewer attacked it, re-checking 23 facts and
-testing claims in throwaway containers (`REVIEW.md`). The last requirement change came after the entries.
+criteria and wrote a synthesis ([`VERDICT.md`](2026-11-26-unified-platform-architecture/VERDICT.md)); a reviewer attacked it, re-checking 23 facts and
+testing claims in throwaway containers ([`REVIEW.md`](2026-11-26-unified-platform-architecture/REVIEW.md)). The last requirement change came after the entries.
 
 **The outcome.** The judge chose a synthesis with entry A as its spine: a product is a directory of
 YAML in a pull request, `k2gen` compiles it into committed files, and every runtime reads those
@@ -189,7 +189,7 @@ flowchart LR
 | Judge: best practice, modern yet tried | 4, **5** | 4, 3 | 4, 4 |
 | Judge: completeness, migration realism, honesty, fit | 4, 4, 4.5, 4 | 3, 3, 4, 3.5 | 3.5, 4.5, 4.5, 4 |
 
-Scores 1 to 5 (`VERDICT.md` 7.1); peaks from `docker-compose.yml` limits (today 21.30 / 37.812).
+Scores 1 to 5 ([`VERDICT.md`](2026-11-26-unified-platform-architecture/VERDICT.md) 7.1); peaks from `docker-compose.yml` limits (today 21.30 / 37.812).
 
 ## 5. The verdict
 
@@ -595,9 +595,9 @@ accepted as design inputs, and dbt-core on Trino replaced the judge's own transf
 
 ### 11.3 The revision
 
-One architect rewrote the architecture (`ARCHITECTURE-V2.md`, 13 Mermaid diagrams). Three diagram
+One architect rewrote the architecture ([`ARCHITECTURE-V2.md`](2026-11-26-unified-platform-architecture/ARCHITECTURE-V2.md), 13 Mermaid diagrams). Three diagram
 checkers and two adversaries raised 96 findings: 3 critical, 24 high, 45 medium, 24 low. All were
-acted on, some fixed another way for a stated reason; none was rejected. `V2-CHANGELOG.md` gives
+acted on, some fixed another way for a stated reason; none was rejected. [`V2-CHANGELOG.md`](2026-11-26-unified-platform-architecture/V2-CHANGELOG.md) gives
 each one. The most important changes:
 
 | Finding | Change |
@@ -614,9 +614,9 @@ Run on the live stack, synthetic data, scratch schemas dropped afterwards.
 
 | Spike | Measured |
 |---|---|
-| dbt-core 1.12.7 on Trino 484 through Lakekeeper (`SPIKE-DBT.md`) | Incremental merge, new columns and type-2 snapshots work. An enforced contract fails before the table changes, but a contracted table is rebuilt in two commits and was empty for about 0.1 s. A failing test followed by a rollback to the previous snapshot restores the rows; bad rows were visible for 2.6 s. One build with two tests took 3.0 to 3.9 s |
-| Masks and row filters on Iceberg (`SPIKE-ACCESS.md`) | Masks, filters and a delay rule hold under joins and `SELECT *`. Definer views skip the reader's rules. Iceberg metadata tables leak bounds of hidden and masked columns. A plain reader could run table procedures, including a rollback, on a writable catalog; a read-only catalog refuses them. A changed rules file needs a refresh period to take effect |
-| Fixed cost of one product run (`SPIKE-RUNCOST.md`) | A run on a small table took 6.5 s; with 200 snapshots and 200k rows, 10.5 s, of which the uniqueness audit grew from 0.5 s to 4.4 s. Session start plus the first append is about 65 percent of a small run. Arithmetic, not measured: about 46 small runs fit in five minutes on one Spark slot |
+| dbt-core 1.12.7 on Trino 484 through Lakekeeper ([`SPIKE-DBT.md`](2026-11-26-unified-platform-architecture/SPIKE-DBT.md)) | Incremental merge, new columns and type-2 snapshots work. An enforced contract fails before the table changes, but a contracted table is rebuilt in two commits and was empty for about 0.1 s. A failing test followed by a rollback to the previous snapshot restores the rows; bad rows were visible for 2.6 s. One build with two tests took 3.0 to 3.9 s |
+| Masks and row filters on Iceberg ([`SPIKE-ACCESS.md`](2026-11-26-unified-platform-architecture/SPIKE-ACCESS.md)) | Masks, filters and a delay rule hold under joins and `SELECT *`. Definer views skip the reader's rules. Iceberg metadata tables leak bounds of hidden and masked columns. A plain reader could run table procedures, including a rollback, on a writable catalog; a read-only catalog refuses them. A changed rules file needs a refresh period to take effect |
+| Fixed cost of one product run ([`SPIKE-RUNCOST.md`](2026-11-26-unified-platform-architecture/SPIKE-RUNCOST.md)) | A run on a small table took 6.5 s; with 200 snapshots and 200k rows, 10.5 s, of which the uniqueness audit grew from 0.5 s to 4.4 s. Session start plus the first append is about 65 percent of a small run. Arithmetic, not measured: about 46 small runs fit in five minutes on one Spark slot |
 
 The risks they found (definer views, metadata tables, table procedures) became checks in the plan.
 
@@ -645,11 +645,11 @@ changes, pinning image digests early, and a proving command for everything a pha
 
 ### 11.7 The final decisions
 
-`DECISIONS-FINAL.md` records them. In short:
+[`DECISIONS-FINAL.md`](2026-11-26-unified-platform-architecture/DECISIONS-FINAL.md) records them. In short:
 
 | Subject | Decision |
 |---|---|
-| Architecture, scope | `ARCHITECTURE-V2.md`, amended by these decisions, accepted; the full plan, nothing cut; if late, the date moves, not quality or order; every critical and high finding of the plan review accepted |
+| Architecture, scope | [`ARCHITECTURE-V2.md`](2026-11-26-unified-platform-architecture/ARCHITECTURE-V2.md), amended by these decisions, accepted; the full plan, nothing cut; if late, the date moves, not quality or order; every critical and high finding of the plan review accepted |
 | Order | Clear the ground; release and rules spine; run spine through ECB FX; serving and teaching; Kraken trades and security master; enriched product; catalog, metadata, lineage; REST API and demo readiness; the demo tag `v3.0.0-beta.1`; then remaining connector kinds, wider crypto, controls and release engineering, infrastructure as code, hardening, release gate and `v3.0.0`; after that the definition registry, then the AI interface |
 | Roles, catalog | At most one role per principal per product; a generated, read-only static catalog site at the demo and at 3.0, no off-the-shelf tool |
 | Identity | Passwords over TLS for SQL, keys for REST; built in the first spine phase; no single sign-on in 3.0 |
@@ -661,7 +661,7 @@ changes, pinning image digests early, and a proving command for everything a pha
 
 ### 11.8 Where the decision and the plan now live
 
-- Decision: `../adr/ADR-056-unified-data-product-platform.md`
-- Architecture chapter, labelled as the target: `../architecture/20-target-data-product-platform.md`
-- Plan to the demo tag: `../plans/2026-11-26-unified-product-platform/README.md`
-- Plan from the demo tag to `v3.0.0`: `../plans/2026-11-26-unified-product-platform-to-release/README.md`
+- Decision: [`ADR-056-unified-data-product-platform.md`](../adr/ADR-056-unified-data-product-platform.md)
+- Architecture chapter, labelled as the target: [`20-target-data-product-platform.md`](../architecture/20-target-data-product-platform.md)
+- Plan to the demo tag: [`README.md`](../plans/2026-11-26-unified-product-platform/README.md)
+- Plan from the demo tag to `v3.0.0`: [`README.md`](../plans/2026-11-26-unified-product-platform-to-release/README.md)

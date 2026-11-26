@@ -2,7 +2,7 @@
 
 **Depends on:** `002` (tag `v3.0.0-alpha.4`: the ECB products published, run records, audited
 snapshots, the key map in the release).
-**Decision it implements:** `docs/adr/ADR-056-unified-data-product-platform.md`: one new service,
+**Decision it implements:** [`ADR-056-unified-data-product-platform.md`](../../adr/ADR-056-unified-data-product-platform.md): one new service,
 `k2-api`, serves the product catalog and the data routes, and queries Trino as the caller;
 the owner's decisions on the catalog site and on a REST data route in the ECB slice.
 **Delivers:** `k2-api` with the metadata routes, the data route and API keys; the catalog site's
@@ -17,7 +17,7 @@ catalog page exists for every product in the release and links to the dbt docs; 
 ## Scope
 
 The steps are in section B of
-`docs/research/2026-11-26-unified-platform-architecture/IMPLEMENTATION-N0-N1.md`; the routes and
+[`IMPLEMENTATION-N0-N1.md`](../../research/2026-11-26-unified-platform-architecture/IMPLEMENTATION-N0-N1.md); the routes and
 the catalog JSON are the ones frozen in `001`.
 
 **`k2-api`** (FastAPI 0.162.5, uvicorn 0.54.0, `trino` 0.340.0, on `127.0.0.1:8095`, 0.5 CPU and

@@ -1,7 +1,7 @@
 # 20. The target: a data product platform
 
 > **This chapter is the TARGET, not what runs today.** It describes the platform the owner decided on
-> 2026-11-26 UTC, recorded in ADR-056 (`../adr/ADR-056-unified-data-product-platform.md`). Chapters
+> 2026-11-26 UTC, recorded in ADR-056 ([`ADR-056-unified-data-product-platform.md`](../adr/ADR-056-unified-data-product-platform.md)). Chapters
 > 04 to 19 describe the system that runs today, and they stay true to it. Each phase of the plan moves
 > one piece from this chapter into those chapters, in the same pull request that makes the piece real.
 > Where this chapter and chapters 04 to 19 disagree, those chapters say what runs and this one says
@@ -111,7 +111,7 @@ sit in labelled boxes when a diagram holds more than one.
 Each diagram is one idea in its own section, and its reading guide names every node and arrow. Phases of the plan are
 named in plain words; section 6.2 lists them in order. Field-by-field tables, connector settings and the full list of
 checks are in the architecture this chapter summarises:
-`../research/2026-11-26-unified-platform-architecture/ARCHITECTURE-V2.md`.
+[`ARCHITECTURE-V2.md`](../research/2026-11-26-unified-platform-architecture/ARCHITECTURE-V2.md).
 
 ### 4.1 The platform on one page, with the catalog at the centre
 
@@ -708,7 +708,7 @@ Trino.
 
 ## 5. Three worked examples, in short
 
-Full files and proofs: the first plan, `../plans/2026-11-26-unified-product-platform/README.md`.
+Full files and proofs: the first plan, [`README.md`](../plans/2026-11-26-unified-product-platform/README.md).
 
 **One venue's trades, with instruments and the security master.** *A person writes*
 `contracts/market-capture/kraken-trades/`: a product file naming a Kafka connector (the venue's raw topic, the
@@ -784,11 +784,11 @@ interface.
 
 | Document | What it holds |
 |---|---|
-| ADR-056, `../adr/ADR-056-unified-data-product-platform.md` | the decision, the options weighed, its consequences |
-| The plan to the demo tag, `../plans/2026-11-26-unified-product-platform/README.md` | phases 1 to 8, each with its exit commands |
-| The plan to the release, `../plans/2026-11-26-unified-product-platform-to-release/README.md` | phases 9 to 14 and the `v3.0.0` gate |
-| The research note, `../research/2026-11-26-unified-platform-architecture.md` | how the architecture was chosen, the reviews, the spikes and their figures |
-| The full architecture, `../research/2026-11-26-unified-platform-architecture/ARCHITECTURE-V2.md` | field tables, connector settings, the checks, the worked examples' files |
+| ADR-056, [`ADR-056-unified-data-product-platform.md`](../adr/ADR-056-unified-data-product-platform.md) | the decision, the options weighed, its consequences |
+| The plan to the demo tag, [`README.md`](../plans/2026-11-26-unified-product-platform/README.md) | phases 1 to 8, each with its exit commands |
+| The plan to the release, [`README.md`](../plans/2026-11-26-unified-product-platform-to-release/README.md) | phases 9 to 14 and the `v3.0.0` gate |
+| The research note, [`2026-11-26-unified-platform-architecture.md`](../research/2026-11-26-unified-platform-architecture.md) | how the architecture was chosen, the reviews, the spikes and their figures |
+| The full architecture, [`ARCHITECTURE-V2.md`](../research/2026-11-26-unified-platform-architecture/ARCHITECTURE-V2.md) | field tables, connector settings, the checks, the worked examples' files |
 | [Chapters 04](04-system-overview.md), [18](18-data-mesh.md), [19](19-lakehouse-and-domain-warehouses.md); [ADR-044](../adr/ADR-044-producer-lake-and-domain-mart-warehouses.md), [ADR-047](../adr/ADR-047-ingest-batch-audit-after-publish.md), [ADR-030](../adr/ADR-030-scd2-security-master.md) | today's system, products and storage; the storage layout being replaced, the landing rule kept, the history convention reused |
 
 ## Key points

@@ -2,7 +2,7 @@
 
 **Depends on:** `000` (tag `v3.0.0-alpha.2`: one contract format, nothing live reads the old
 tables, the spike findings written up).
-**Decision it implements:** `docs/adr/ADR-056-unified-data-product-platform.md`. ADR-055
+**Decision it implements:** [`ADR-056-unified-data-product-platform.md`](../../adr/ADR-056-unified-data-product-platform.md). ADR-055
 (product definition, #240) is revised to ODPS and ODCS and accepted; ADR-036 (file connector,
 #239) is revised for per-product landings and the fetch container and accepted, its connector
 interface frozen here and built in `002`; ADR-042 (#225) is revised and accepted with the
@@ -30,7 +30,7 @@ sees rows past the marker; a test alert reaches Slack; tag `v3.0.0-alpha.3`.
 ## Scope
 
 The build order and every step's files, dependencies and proof are in sections A to E of
-`docs/research/2026-11-26-unified-platform-architecture/IMPLEMENTATION-N0-N1.md`. This phase
+[`IMPLEMENTATION-N0-N1.md`](../../research/2026-11-26-unified-platform-architecture/IMPLEMENTATION-N0-N1.md). This phase
 takes the steps that make the release, the definitions and the rules; `002` takes the run path
 and `003` the serving path. Because the old pipeline retired in `000`, the compiler carries no
 emitter for the old layout and nothing here has to keep `lake_ingest` running.
@@ -135,7 +135,7 @@ Schemas, stubs and fixtures only, no behaviour, reviewed once:
 - **The tested-data marker** (owner decision: readers see only tested data). A small spike
   settles how a reader catalog resolves the marker: an Iceberg tag that only the build moves is
   the candidate, read through invoker views if Trino cannot make a tag the reader's default (an
-  invoker view applies the reader's own rules, `SPIKE-ACCESS.md`). This phase builds the reader
+  invoker view applies the reader's own rules, [`SPIKE-ACCESS.md`](../../research/2026-11-26-unified-platform-architecture/SPIKE-ACCESS.md)). This phase builds the reader
   side and proves it by moving the marker by hand on the fixture product; the dbt wrapper in
   `002` moves it after tests pass.
 - **`hot-gold`** declared paused in ODPS, with `serves` naming the paused ClickHouse copy (F20).

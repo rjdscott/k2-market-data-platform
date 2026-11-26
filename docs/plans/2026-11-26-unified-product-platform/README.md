@@ -14,18 +14,18 @@ product as the unit: one fault stops every venue, consumers query catalogs they 
 the live stack reads the working tree, and nothing is catalogued, permissioned or served per
 product.
 
-The owner accepted `docs/adr/ADR-056-unified-data-product-platform.md` on 2026-11-26: K2
+The owner accepted [`ADR-056-unified-data-product-platform.md`](../../adr/ADR-056-unified-data-product-platform.md) on 2026-11-26: K2
 becomes a domain-agnostic data product platform on one host. A team defines a product once, as
 standard documents; the platform ingests it, stores it in layers, catalogues it, enforces who
 may read it, and serves it through SQL and REST. Market data is the first tenant, not the
 definition, and the value is in governed joins across domains. The target is
-`docs/architecture/20-target-data-product-platform.md`; the reasoning, the alternatives and the
-spikes are in `docs/research/2026-11-26-unified-platform-architecture.md` and its directory.
+[`20-target-data-product-platform.md`](../../architecture/20-target-data-product-platform.md); the reasoning, the alternatives and the
+spikes are in [`2026-11-26-unified-platform-architecture.md`](../../research/2026-11-26-unified-platform-architecture.md) and its directory.
 This plan does not restate them. Review findings cited as F*n* are from the independent review
-of this plan, `docs/research/2026-11-26-unified-platform-architecture/FULL-PLAN-REVIEW.md`;
+of this plan, [`FULL-PLAN-REVIEW.md`](../../research/2026-11-26-unified-platform-architecture/FULL-PLAN-REVIEW.md);
 every critical and high finding is designed into the phases. The build breakdown of the first
 three phases, step by step, is
-`docs/research/2026-11-26-unified-platform-architecture/IMPLEMENTATION-N0-N1.md`.
+[`IMPLEMENTATION-N0-N1.md`](../../research/2026-11-26-unified-platform-architecture/IMPLEMENTATION-N0-N1.md).
 
 This plan builds the platform as far as the demo tag `v3.0.0-beta.1`. The
 [follow-on plan](../2026-11-26-unified-product-platform-to-release/README.md) takes it to
@@ -172,7 +172,7 @@ Verified against `main` at `64a07c2`, 2026-11-26.
   MinIO on `:9000` and `:9001` (`:290-291`). Notebooks read with DuckDB and the root key
   (`notebooks/k2lake.py:10-13,33-34,107`).
 - dbt staging models are definer views (`dbt/dbt_project.yml:37-38`), which do not apply the
-  reader's masks (`SPIKE-ACCESS.md`, below).
+  reader's masks ([`SPIKE-ACCESS.md`](../../research/2026-11-26-unified-platform-architecture/SPIKE-ACCESS.md), below).
 - Airflow runs four LocalExecutor slots (`docker-compose.yml:91-92`) in a scheduler limited to
   1.5 CPU and 3G (`:665-666`), whose environment holds the signing secrets (`:94`, `:99-100`).
 
@@ -185,7 +185,7 @@ Verified against `main` at `64a07c2`, 2026-11-26.
   (`docker/grafana/dashboards/clickhouse-overview.json`), step (2) of `scripts/health.sh`
   (`:84-92`) and two chaos targets (`Makefile:222-223`) read it. `parity_ohlcv.py` already has
   `--skip-clickhouse` (`scripts/parity_ohlcv.py:480`). The full list is
-  `docs/research/2026-11-26-unified-platform-architecture/CLICKHOUSE-INVENTORY.md`.
+  [`CLICKHOUSE-INVENTORY.md`](../../research/2026-11-26-unified-platform-architecture/CLICKHOUSE-INVENTORY.md).
 
 **Budget and images**
 
@@ -208,17 +208,17 @@ Verified against `main` at `64a07c2`, 2026-11-26.
   (auth, phase `001`), section 4 (crypto only, `002`), section 6 for REST (`003`) and section 12
   (retention, `004` or `006`); each phase that lifts one appends the Outcome.
 
-**Already measured** (`docs/research/2026-11-26-unified-platform-architecture/`, files named):
+**Already measured** ([`2026-11-26-unified-platform-architecture`](../../research/2026-11-26-unified-platform-architecture), files named):
 
-- `SPIKE-DBT.md`: dbt-core 1.12.7 with dbt-trino 1.12.0 through Lakekeeper merges, adds
+- [`SPIKE-DBT.md`](../../research/2026-11-26-unified-platform-architecture/SPIKE-DBT.md): dbt-core 1.12.7 with dbt-trino 1.12.0 through Lakekeeper merges, adds
   columns, enforces a model contract, builds type-2 snapshots, and rolls back a failed test
   with `rollback_to_snapshot` as the writer. A contracted table is rebuilt as create-or-replace
   plus insert, two commits.
-- `SPIKE-ACCESS.md`: Trino masks and row filters hold on Iceberg tables when readers use a
+- [`SPIKE-ACCESS.md`](../../research/2026-11-26-unified-platform-architecture/SPIKE-ACCESS.md): Trino masks and row filters hold on Iceberg tables when readers use a
   read-only catalog, Iceberg metadata tables are denied to them, and no definer view sits over
   restricted data; `t$files` leaks column bounds; a read-only catalog refuses every table
   procedure; with `security.refresh-period=5s` a changed rule was live within 12 s.
-- `SPIKE-RUNCOST.md`: one small product run on Spark takes 6.5 s wall clock (10.5 s on a table
+- [`SPIKE-RUNCOST.md`](../../research/2026-11-26-unified-platform-architecture/SPIKE-RUNCOST.md): one small product run on Spark takes 6.5 s wall clock (10.5 s on a table
   with 200 snapshots); one dbt model with two tests builds in 3.0 to 4.7 s.
 
 ## Target architecture
@@ -390,7 +390,7 @@ commands only; phase `007` lists what each step prints.
 | `k2_input`'s `FOR VERSION AS OF` beside a mocked source in one `dbt build` | Phase `000` | Unit tests in a first dbt invocation with no variables |
 | Spark expires a Trino-written snapshot by id with a scoped key | Phase `000` | Trino `expire_snapshots` as `svc.platform`, with the retention floor lowered for that session only |
 | A rollback restores a contracted table across its create-or-replace | Phase `000` | Contracted outputs are always incremental merges, never create-or-replace |
-| A merge with `incremental_predicates` prunes to the partition | Phase `000` | Merge without it, which already worked (`SPIKE-DBT.md`), at the measured cost |
+| A merge with `incremental_predicates` prunes to the partition | Phase `000` | Merge without it, which already worked ([`SPIKE-DBT.md`](../../research/2026-11-26-unified-platform-architecture/SPIKE-DBT.md)), at the measured cost |
 | One MinIO key per engine while Lakekeeper vends no credentials | First pull request of phase `002` | An engine that needs a wider key is listed among the trusted paths with its reason |
 | The fetch allow-list holds in-process: connect only to resolved public addresses, redirects only to `https://` on an allowed host | First pull requests of phase `002`, with no network | A forward proxy with its own allow-list in front of the fetch container |
 | Airflow starts one-shot containers through the socket, with `on_kill`, inside four slots while a continuous consumer holds one | Phase `002` | Five-minute runs only, no continuous consumer, until the slots are raised within the budget |

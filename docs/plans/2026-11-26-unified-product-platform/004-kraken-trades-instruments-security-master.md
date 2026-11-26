@@ -3,7 +3,7 @@
 **Depends on:** `003` (tag `v3.0.0-alpha.5`); the owner's answers on landing retention and on
 where `LAKEKEEPER_ENCRYPTION_KEY` is kept off the host; the nightly backup timer installed by
 the owner (`make backup-install`) before the restore drill.
-**Decision it implements:** `docs/adr/ADR-056-unified-data-product-platform.md`. New ADRs, each
+**Decision it implements:** [`ADR-056-unified-data-product-platform.md`](../../adr/ADR-056-unified-data-product-platform.md). New ADRs, each
 in the pull request that builds it: the Kafka connector with a landing per product, which gives
 up the shared archive of [ADR-021](../../adr/ADR-021-raw-first-archive-and-lineage.md)
 (Proposed) while keeping exactly-once resume from the snapshot

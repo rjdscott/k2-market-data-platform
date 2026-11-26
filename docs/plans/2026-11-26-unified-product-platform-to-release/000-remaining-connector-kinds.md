@@ -2,7 +2,7 @@
 
 **Depends on:** the demo tag `v3.0.0-beta.1` (the fetch container, the `https-file` and
 public-API connectors, the redirect and address proofs, `make test-connectors`).
-**Decision it implements:** `docs/adr/ADR-056-unified-data-product-platform.md`: the platform
+**Decision it implements:** [`ADR-056-unified-data-product-platform.md`](../../adr/ADR-056-unified-data-product-platform.md): the platform
 starts at the topic, the file or the API, and all four connector kinds are proven before the
 crypto venues widen. ADR-036, accepted in the first plan, gains the three kinds in an Outcome
 if their shape differs from it.

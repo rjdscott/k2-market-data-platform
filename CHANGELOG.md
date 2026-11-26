@@ -12,6 +12,15 @@ layouts and commands, without notice. `3.0.0` is reserved for the end of
 
 ## [Unreleased]
 
+### Decided
+
+- K2 will be rebuilt as a domain-agnostic data product platform: products defined once in
+  contracts, one ingestion framework with connectors, dbt for silver and gold, one catalog,
+  one enforcement point for SQL and REST (ADR-056, #245). The plan to the demo tag and to
+  release (#246) supersedes phases P4 to P7 of the earlier plan; the target is drawn in
+  architecture chapter 20 (#247) and the reasoning is kept in the research note (#244).
+  Nothing in the running system changes with these documents.
+
 ### Changed
 
 - Order-book capture is paused on every venue while the platform is built; trades are

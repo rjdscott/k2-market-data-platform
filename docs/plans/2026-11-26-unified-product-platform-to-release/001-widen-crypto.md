@@ -3,7 +3,7 @@
 **Depends on:** `000` (tag `v3.0.0-beta.2`); from the first plan, the Kafka and public-API
 connectors, `kraken-trades`, `kraken-instruments`, the security master, `canonical-trades` as a
 union over declared venue ports, and `candles` at every timeframe.
-**Decision it implements:** `docs/adr/ADR-056-unified-data-product-platform.md`: each venue has
+**Decision it implements:** [`ADR-056-unified-data-product-platform.md`](../../adr/ADR-056-unified-data-product-platform.md): each venue has
 a trades product and an instruments product, and a new venue differs only in documents. The
 event-bars transform decides [ADR-049](../../adr/ADR-049-event-bars-extended-not-recomputed.md):
 accepted, revised or withdrawn in the pull request that builds it.
