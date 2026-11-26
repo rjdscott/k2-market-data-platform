@@ -172,7 +172,7 @@
       "user": "pub_daily_load",
       "catalog": "ops_insight",
       "schema": "daily_load__base",
-      "table": "gold_daily_load",
+      "table": "gold_daily_load|gold_daily_load\\$refs",
       "privileges": [
         "SELECT",
         "GRANT_SELECT"
@@ -213,7 +213,7 @@
       "user": "pub_station_readings",
       "catalog": "sensor_net",
       "schema": "station_readings__base",
-      "table": "silver_readings",
+      "table": "silver_readings|silver_readings\\$refs",
       "privileges": [
         "SELECT",
         "GRANT_SELECT"
@@ -308,7 +308,7 @@
       ]
     },
     {
-      "user": "dbt_daily_load|dbt_station_readings|k2_release_7f402b05919e|p\\.analyst\\-delayed|p\\.analyst\\-full|pub_daily_load|pub_station_readings|svc\\.api|svc\\.catalog|svc\\.load\\-dashboard|svc\\.runs",
+      "user": "dbt_daily_load|dbt_station_readings|k2_release_9770905272de|p\\.analyst\\-delayed|p\\.analyst\\-full|pub_daily_load|pub_station_readings|svc\\.api|svc\\.catalog|svc\\.load\\-dashboard|svc\\.runs",
       "allow": [
         "execute"
       ]

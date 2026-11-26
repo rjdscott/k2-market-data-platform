@@ -8,11 +8,23 @@ declared roles (`access.role-undeclared`); its `policies` name only roles it off
 (`access.policy-role-not-offered`: a misspelt role would leave the real one with no policy) and
 only its own columns (`access.policy-column-unknown`: a misspelt mask leaves the column shown); a
 role's `requires` are set for it on every table offering it (`access.role-requirement-unmet`).
+A delay's column is `timestamp(6) with time zone` (`access.delay-type`): Trino compares any other
+time type with `current_timestamp` in the reader's own session time zone, which a reader may set,
+so a `timestamp(6)` or `date` delay moves with it, and a `time(6)` one fails every read. A row
+scope's column is an identity partition field of its table (`access.row-scope-unpartitioned`):
+Trino prunes files by the reader's predicates too, and the processed-row count it reports shows
+what a file not pruned holds, so an out-of-scope row sharing a file with visible ones gives its
+values away to a binary search; partitioned by that column, its files are pruned by the scope
+alone (ADR-061's Outcome of 2026-11-26). A connector (bronze) table offers no role
+(`access.connector-role`): SELECT on an Iceberg table reads every ref and snapshot of it, the
+write-audit-publish branch's unaudited rows included, so readers reach bronze through a dbt
+output.
 
 **Grants.** A grant names a declared principal (`access.grant-unknown-principal`) and a declared
 role (`access.grant-unknown-role`) that a table of the product offers
 (`access.grant-role-not-offered`); a principal holds at most one role per product
-(`access.grant-two-roles`, DECISIONS-FINAL O1a). A grantee is a consumer, so it is never a
+(`access.grant-two-roles`, DECISIONS-FINAL O1a). A deprecated product takes no grant the previous
+release did not hold (`access.grant-new-on-deprecated`, ADR-055 part 4: no new reader). A grantee is a consumer, so it is never a
 principal the platform's patterns match (`model.PIPELINE_PRINCIPALS`, `BUILD_CATALOG_PRINCIPALS`,
 `READER_CATALOG_ALL`, `READER_NAMESPACE_OWNERS`, `RETENTION_PROPERTY_PRINCIPALS`, `REFS_READERS`):
 those hold writer rights, CALL or the statistics property (`access.grant-to-platform`). And no
@@ -80,6 +92,9 @@ from k2gen import model
 from k2gen.model import DocumentSet, Finding
 
 _KINDS = {"roles", "principals", "grants", "contract", "product", "expectations"}
+# The one type a delay's filter compares as an instant, whatever the reader's time zone (the
+# rules suite's c1 rows; emit/trino_rules.DELAY_TYPE refuses the rest again).
+_DELAY_TYPE = "timestamp(6) with time zone"
 _PLATFORM = (*model.PIPELINE_PRINCIPALS, *model.BUILD_CATALOG_PRINCIPALS, *model.READER_CATALOG_ALL,
              *model.READER_NAMESPACE_OWNERS, *model.RETENTION_PROPERTY_PRINCIPALS,
              *(re.escape(p) for p in model.REFS_READERS))
@@ -152,7 +167,7 @@ def check(docs: DocumentSet, previous: DocumentSet | None) -> list[Finding]:
         elif product and model.document_kind(path) == "grants":
             product.grants = list(doc.get("grants", []))
     return [*_declarations(roles, principals, products), *_grants(roles, principals, products),
-            *_inheritance(products), *_coverage(principals, products, rows)]
+            *_deprecated(products, previous), *_inheritance(products), *_coverage(principals, products, rows)]
 
 
 def _declarations(roles: dict[str, Any], principals: list[str], products: dict[str, _Product]) -> list[Finding]:
@@ -183,6 +198,22 @@ def _declarations(roles: dict[str, Any], principals: list[str], products: dict[s
                     out.append(_err("policy-column-unknown", path,
                                     f"{t['id']}'s policy for {role} names column {column}, which the table does not have; "
                                     f"a misspelt column leaves the real one unprotected"))
+                types = {c["name"]: c["physicalType"] for c in _columns(t)}
+                if "delay" in policy and types.get(column := policy["delay"]["column"], _DELAY_TYPE) != _DELAY_TYPE:
+                    out.append(_err("delay-type", path,
+                                    f"{t['id']}'s delay for {role} is on {column}, a {types[column]}: Trino compares it with "
+                                    f"current_timestamp in the reader's own session time zone, which the reader sets, so the delay "
+                                    f"moves with it; delay on a {_DELAY_TYPE} column"))
+                partitioning = _props(t).get("partitioning", [])
+                if "rowScope" in policy and (column := policy["rowScope"]["column"]) in columns and column not in partitioning:
+                    out.append(_err("row-scope-unpartitioned", path,
+                                    f"{t['id']}'s row scope for {role} is on {column}, which is not an identity partition field "
+                                    f"(partitioning: {partitioning or 'none'}): an out-of-scope row in a file with visible ones "
+                                    f"shows its values through the processed-row count; add {column} to partitioning"))
+            if _build(t) == "connector" and offered:
+                out.append(_err("connector-role", path,
+                                f"{t['id']} is a connector table offering {', '.join(offered)}: SELECT on it reads every ref and "
+                                f"snapshot, the audit branch's unaudited rows included; offer the role on a dbt output built from it"))
             for role in offered:
                 missing = [k for k in roles.get(role, {}).get("requires", []) if k not in _policies(t).get(role, {})]
                 if missing:
@@ -217,6 +248,26 @@ def _grants(roles: dict[str, Any], principals: list[str], products: dict[str, _P
             if len(held_roles) > 1:
                 out.append(_err("grant-two-roles", path,
                                 f"{principal} holds {', '.join(held_roles)} on {product.name}; a principal holds one role per product"))
+    return out
+
+
+def _deprecated(products: dict[str, _Product], previous: DocumentSet | None) -> list[Finding]:
+    """A grant on a deprecated product that the previous release did not hold. No previous
+    release: every product is new there, so none is deprecated yet in a release."""
+    if previous is None:
+        return []
+    out = []
+    for product in products.values():
+        if product.doc["status"] != "deprecated":
+            continue
+        path = f"{product.path}/grants.yaml"
+        before = previous.documents.get(path)
+        held = {(g["principal"], g["role"]) for g in (model.parse(path, before).get("grants", []) if before else [])}
+        for g in product.grants:
+            if (g["principal"], g["role"]) not in held:
+                out.append(_err("grant-new-on-deprecated", path,
+                                f"{product.name} is deprecated and takes no new reader (ADR-055 part 4), but {g['principal']} is "
+                                f"granted {g['role']}, which the previous release did not hold; grant its successor instead"))
     return out
 
 

@@ -38,6 +38,9 @@ schema:
             value: degree Celsius
       - name: region
         physicalType: varchar
+        required: true
+        primaryKey: true
+        primaryKeyPosition: 3
         description: The station's region.
       - name: operator_note
         physicalType: varchar
@@ -62,7 +65,7 @@ customProperties:
   - property: retention
     value: 7
   - property: partitioning
-    value: [day(read_at)]
+    value: [day(read_at), region]  # region: the delayed reader's row scope (access.row-scope-unpartitioned)
   - property: sort
     value: [station_id]
   - property: policies

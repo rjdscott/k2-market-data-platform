@@ -33,12 +33,14 @@ BRONZE = "contracts/sensor-net/station-readings/bronze_readings.odcs.yaml"
 CANARY = "contracts/governance/access-canary/product.odps.yaml"
 
 IDENT = r'"(?:[^"]|"")+"'
-VIEW = re.compile(rf"SELECT ({IDENT}(?:, {IDENT})*) FROM ({IDENT})\.({IDENT})\.({IDENT}) FOR VERSION AS OF 'audited'")
+# The base twice: read at the tag, and its `$refs` named in the guard (ADR-061's Outcome of 2026-11-26).
+VIEW = re.compile(rf"SELECT ({IDENT}(?:, {IDENT})*) FROM ({IDENT})\.({IDENT})\.({IDENT}) FOR VERSION AS OF 'audited' "
+                  rf"WHERE EXISTS \(SELECT 1 FROM \2\.\3\.({IDENT}) WHERE \"name\" = 'audited' AND \"type\" = 'TAG'\)")
 CREATE = re.compile(rf"CREATE OR REPLACE VIEW ({IDENT})\.({IDENT})\.({IDENT}) SECURITY DEFINER AS (.+)")
 TOKEN = re.compile(r"""\s+|"(?:[^"]|"")*"|'(?:[^']|'')*'|[0-9]+|[A-Za-z_][A-Za-z0-9_]*|[(),.<>;=]""")
 # The only bare words each kind of emitted SQL may hold: keywords, types, transforms. A name is
 # never bare, so a name the quoting missed shows up as a word outside these.
-VIEW_WORDS = {"SELECT", "FROM", "FOR", "VERSION", "AS", "OF"}
+VIEW_WORDS = {"SELECT", "FROM", "FOR", "VERSION", "AS", "OF", "WHERE", "EXISTS", "AND"}
 SPARK_WORDS = {"CREATE", "TABLE", "NOT", "NULL", "USING", "iceberg", "PARTITIONED", "BY", "TBLPROPERTIES",
                "BOOLEAN", "INT", "BIGINT", "FLOAT", "DOUBLE", "DECIMAL", "STRING", "BINARY", "DATE", "TIMESTAMP_LTZ",
                "TIMESTAMP_NTZ", "ARRAY", "MAP", "years", "months", "days", "hours", "bucket", "truncate"}
@@ -101,7 +103,8 @@ def view_parts(sql: str) -> tuple[list[str], str]:
     assert m, sql
     cols = re.findall(IDENT, m[1])
     assert ", ".join(cols) == m[1], sql  # the column list splits back into exactly those names
-    return [unquote(c) for c in cols], ".".join(unquote(p) for p in m.groups()[1:])
+    assert unquote(m[5]) == unquote(m[4]) + "$refs", sql  # the guard reads the base's own refs
+    return [unquote(c) for c in cols], ".".join(unquote(p) for p in m.groups()[1:4])
 
 
 def held_to_their_shape(out: dict[str, str], m: Model) -> None:
@@ -110,7 +113,8 @@ def held_to_their_shape(out: dict[str, str], m: Model) -> None:
     names = {model.LAKE, *model.PLATFORM_TABLES, *(c.name for pt in model.PLATFORM_TABLES.values() for c in pt.columns)}
     for p in m.products:
         names |= {model.reader_catalog(p.domain), model.fence(p.name), model.base_namespace(p.name)}
-        names |= {n for t in p.tables for n in (t.name, *(c.name for c in t.columns))}
+        names |= {n for t in p.tables for n in (t.name, t.name + "$refs", *(c.name for c in t.columns))}
+    names |= {"name", "type"}  # the columns of `$refs` the guard reads
     tables = {model.reader_relation(t): t for p in m.products for t in p.tables if t.build.kind in model.LAKE_BUILDS}
     for path, text in out.items():
         if path.startswith("compiled/trino/views/"):
@@ -119,7 +123,7 @@ def held_to_their_shape(out: dict[str, str], m: Model) -> None:
             cols, base = view_parts(text.removesuffix("\n"))
             domain, product, table = t.contract_id.split(".")  # spelt out here, not through the emitter's helpers
             assert cols == [c.name for c in t.columns] and base == f"{domain.replace('-', '_')}.{product.replace('-', '_')}__base.{table}", path
-            sql, words, literals = text, VIEW_WORDS, {"'audited'"}
+            sql, words, literals = text, VIEW_WORDS, {"'audited'", "'TAG'"}
         elif path.startswith("compiled/lake/ddl/spark/"):
             head = "\n".join(lake.SPARK_SESSION) + "\n"
             assert text.startswith(head + "CREATE TABLE "), path
@@ -166,7 +170,8 @@ def test_the_repository_set_with_the_canary_compiles_to_its_golden_files() -> No
     out = lake.emit(m)
     held_to_their_shape(out, m)
     assert out[model.view_sql_path("governance.access_canary.events")] == (
-        'SELECT "id", "region", "note", "event_ts" FROM "governance"."access_canary__base"."events" FOR VERSION AS OF \'audited\'\n')
+        'SELECT "id", "region", "note", "event_ts" FROM "governance"."access_canary__base"."events" FOR VERSION AS OF \'audited\' '
+        'WHERE EXISTS (SELECT 1 FROM "governance"."access_canary__base"."events$refs" WHERE "name" = \'audited\' AND "type" = \'TAG\')\n')
     compare_with_golden(out, REPOSITORY)
 
 

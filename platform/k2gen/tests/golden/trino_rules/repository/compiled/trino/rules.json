@@ -169,7 +169,7 @@
       "user": "pub_access_canary",
       "catalog": "governance",
       "schema": "access_canary__base",
-      "table": "events",
+      "table": "events|events\\$refs",
       "privileges": [
         "SELECT",
         "GRANT_SELECT"
