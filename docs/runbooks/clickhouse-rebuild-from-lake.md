@@ -1,5 +1,11 @@
 # Runbook: Rebuild ClickHouse gold from the lake
 
+> **Applies only while the compose profile `hot-gold` runs, and only while the old lake `gold`
+> exists.** ClickHouse is paused behind that profile ([ADR-057](../adr/ADR-057-clickhouse-hot-tier-paused-during-platform-build.md)), and phase 000 drops the
+> lake's old `gold` namespace, this runbook's only source, at its end. Starting ClickHouse, the
+> 7-day limit on it, and how to tell whether this page still applies:
+> [pause-and-resume-a-serving-product.md](./pause-and-resume-a-serving-product.md).
+
 ClickHouse's `gold` database is derived (ADR-026): the lake's `gold.*` tables are the
 record, the Avro topics are the head start. This is how the served tier is reloaded , 
 after a volume loss, a bad reload, or simply to make it agree with the lake, and how

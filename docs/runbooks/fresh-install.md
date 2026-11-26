@@ -15,11 +15,13 @@ upgrading a stack that already holds data, and it does not cover restoring the l
 
 ## Prerequisites
 
-- A Docker engine with **at least 38 GiB of memory** so every declared limit is honoured,
-  including the 37.812 GiB bootstrap peak while the one-shots run
-  ([docker-resources.md](../operations/docker-resources.md)).
+- A Docker engine with **at least 30 GiB of memory** so every declared limit is honoured,
+  including the 29.812 GiB bootstrap peak while the one-shots run
+  ([docker-resources.md](../operations/docker-resources.md)). ClickHouse is paused behind the
+  compose profile `hot-gold` ([ADR-057](../adr/ADR-057-clickhouse-hot-tier-paused-during-platform-build.md)) and a fresh install does not start it; with
+  that profile running the peak is 37.812 GiB, so 38 GiB.
   Measured usage on a fresh install is far lower (~4.5 GiB RSS total; largest single
-  container ClickHouse at 1.13 GiB).
+  container ClickHouse at 1.13 GiB, on 2026-08-28, when it still started).
 - **Any core count.** `.env.example` ships `K2_CAPTURE_CPUSET=` and `K2_HEAVY_CPUSET=`
   empty, which is no CPU pinning and starts on every host. The 15-core layout (capture on
   `12-14`, the heavy tier ClickHouse/Spark/lake-ddl on `0-11`) is commented out beside
@@ -71,7 +73,8 @@ Measured 2026-08-28 on a 28-core host, 40 GB Docker VM, 648 GB free, fast networ
 **not re-measured since 2026-08-28**: the stack then had 19 containers and no Airflow,
 cAdvisor or Trino, and the lake was scheduled by the scheduler Airflow replaced
 ([`legacy/prefect/`](../../legacy/prefect/README.md)). Elapsed is from the start of the
-first `docker compose up -d`.
+first `docker compose up -d`. ClickHouse, in two rows below, is paused since (ADR-057): a fresh
+install today does not start it.
 
 | Elapsed | What happens | Duration |
 |---|---|---|
@@ -103,16 +106,16 @@ held rows in both `gold.trades` and `gold.book_top20`.
 venue in the last 2 minutes, last lake commit age, last ingest run state).
 
 Underneath it,
-`docker compose ps -a` shows **24 containers: 19 long-running and 5 one-shots** (plain
-`docker compose ps` hides the exited one-shots). Only 17 of
-the 19 ever report `healthy`; two have no healthcheck defined and stay at plain `Up`,
+`docker compose ps -a` shows **23 containers: 18 long-running and 5 one-shots** (plain
+`docker compose ps` hides the exited one-shots). Only 16 of
+the 18 ever report `healthy`; two have no healthcheck defined and stay at plain `Up`,
 which is correct and not a degraded state. Read from `docker ps -a` on the live stack on
-2026-11-26, not from a fresh install; it agrees with the healthchecks and `restart: "no"`
-in `docker compose config`.
+2026-11-26, not from a fresh install, less `clickhouse`, which the ClickHouse pause removes
+(ADR-057); it agrees with the healthchecks and `restart: "no"` in `docker compose config`.
 
 | State | Count | Containers |
 |---|---|---|
-| `Up (healthy)` | 17 | `redpanda`, `redpanda-console`, `clickhouse`, `minio`, `prometheus`, `grafana`, `cadvisor`, `prefect-db`, `lakekeeper`, `trino`, `capture-binance`, `capture-kraken`, `capture-coinbase`, `airflow-api-server`, `airflow-scheduler`, `airflow-dag-processor`, `airflow-statsd` |
+| `Up (healthy)` | 16 | `redpanda`, `redpanda-console`, `minio`, `prometheus`, `grafana`, `cadvisor`, `prefect-db`, `lakekeeper`, `trino`, `capture-binance`, `capture-kraken`, `capture-coinbase`, `airflow-api-server`, `airflow-scheduler`, `airflow-dag-processor`, `airflow-statsd` |
 | `Up`, no healthcheck | 2 | `lake-metrics`, `spark-iceberg` |
 | `Exited (0)` | 5 | `lakekeeper-migrate`, `redpanda-init`, `lake-init`, `lake-ddl`, `airflow-migrate` |
 
@@ -126,7 +129,7 @@ up empty.
   `WARNING cannot read <table>: HTTP Error 404` in the first seconds, because the exporter
   starts scraping before `lake-ddl` has created the tables. None appear after `lake-ddl`
   completes. Cosmetic startup race, no action.
-- **jemalloc CPU message from `clickhouse-client`.**
+- **jemalloc CPU message from `clickhouse-client`**, while the `hot-gold` profile runs.
   `<jemalloc>: Number of CPUs detected is not deterministic` on every client invocation, a
   side effect of the `cpuset` pin. Harmless.
 
