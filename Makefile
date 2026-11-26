@@ -224,3 +224,7 @@ chaos:  ## Inject each capture and lake failure, wait for its alert, measure rec
 	scripts/chaos/lake-corrupt-payload.sh
 	@echo "results: scripts/chaos/results/$$(date -u +%F).tsv"
 	@echo "copy the measured recovery times into docs/architecture/16-failure-modes.md by hand, with the date"
+
+.PHONY: drop
+drop:  ## Copy, compare, then drop TARGET=<warehouse>.<namespace>[.<table>] or TARGET=bucket:<name>; DRY_RUN=1 lists only (docs/runbooks/drop-and-rebuild.md)
+	bash scripts/drop.sh
