@@ -1332,7 +1332,10 @@ def compile_release(ctx: Ctx, tag: str, images: Path | None) -> str:
               "-e", f"K2_IMAGES={json.dumps(refs)}", refs["tools"], "sh", "-c",
               'printf %s "$K2_IMAGES" > /tmp/images.json && k2gen docset --tag "$1" --repo /repo.git --out /tmp/set && '
               'k2gen release --set /tmp/set --previous "$2" --images /tmp/images.json --out /k2/releases',
-              "sh", tag, f"{model.RELEASES_MOUNT}/{good.id}" if good else "none")
+              "sh", tag, f"{model.RELEASES_MOUNT}/{good.id}" if good else "none", check=False)
+    if out.returncode:  # the checks library's findings come first on stderr: name them, not the traceback
+        found = [x for x in out.stderr.splitlines() if x.startswith(("error ", "warning "))]
+        raise Refused(f"{tag} does not compile: " + ("; ".join(found) or tail(out, 6)))
     for line in out.stderr.strip().splitlines():
         ctx.say(f"  {line}")
     rid = out.stdout.strip().splitlines()[-1]

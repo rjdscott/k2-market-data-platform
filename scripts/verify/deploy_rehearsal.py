@@ -77,7 +77,7 @@ RUN_RECORD = "governance_build.run_records.run_record"
 RESULTS: list[tuple[str, bool, str]] = []
 CODE = ("platform/k2gen/k2gen", "platform/k2gen/pyproject.toml", "platform/k2gen/uv.lock", "platform/runs",
         "contracts", "dbt", "docker/tools", "scripts/deploy.py", "scripts/principal-secret.py",
-        "scripts/tls.sh", "scripts/lib", "scripts/access_verify.py", "scripts/verify", "tests/access", "mk")
+        "scripts/tls.sh", "scripts/check-env.py", "scripts/lib", "scripts/access_verify.py", "scripts/verify", "tests/access", "mk")
 
 COMPOSE = """\
 # The rehearsal's compose file, release-shaped (scripts/verify/deploy_rehearsal.py): what S22 makes live.
@@ -618,9 +618,11 @@ def rehearse() -> int:
 
     # 9. the backup-set refusal (review M4) on a real table: restore, then rebuild while the table holds rows
     edit(EVENTS, "  - property: backup\n    value: rebuild", "  - property: backup\n    value: restore")
+    bump("3.0.0", "3.0.1")
     r6 = cut("v0.0.1-rehearsal.6", "R6: the canary's events kept by restore")
     out6 = make("deploy", f"RELEASE={r6}", check=False)
     edit(EVENTS, "  - property: backup\n    value: restore", "  - property: backup\n    value: rebuild")
+    bump("3.0.1", "3.0.2")
     r7 = cut("v0.0.1-rehearsal.7", "R7: back to rebuild while the table still holds its rows")
     out7 = make("deploy", f"RELEASE={r7}", check=False)
     check("M4: a release dropping a restore entry while the table holds rows is refused, naming make drop",
