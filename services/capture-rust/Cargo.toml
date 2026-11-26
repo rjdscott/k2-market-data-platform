@@ -55,6 +55,9 @@ sha2 = "0.10"
 
 [dev-dependencies]
 proptest = "1"
+# `start_paused`: the connect-timeout test runs on tokio's paused clock, so an
+# hour-long hang is a failed assertion in milliseconds, not a stuck CI job.
+tokio = { version = "1.48", default-features = false, features = ["test-util"] }
 
 [profile.release]
 lto = "thin"
