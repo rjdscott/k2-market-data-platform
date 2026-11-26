@@ -281,7 +281,8 @@ def emit(model: Model) -> dict[str, str]:
             put(k2.ddl_path("trino", k2.warehouse(d), run_namespace, run_table), run_record)
             keep((k2.warehouse(d), run_namespace, run_table), RETENTION_FLOOR_DAYS, PLATFORM_BACKUP, "main", PLATFORM_OWNER)
 
-    audited = [t for t in tables if k2.tested_ref(t) == k2.AUDITED_TAG]
+    retired = {p.name for p in model.products if p.status == "retired"}  # no rules (ADR-055 part 4), so no view
+    audited = [t for t in tables if k2.tested_ref(t) == k2.AUDITED_TAG and _parts(t)[1] not in retired]
     for t in audited:
         if (location := _in_warehouse(k2.reader_relation(t), _parts(t)[0])) in lake:
             raise ValueError(f"{'.'.join(location)}: a view and a table at one name")

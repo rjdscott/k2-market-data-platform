@@ -663,6 +663,15 @@ def test_the_storage_plan_lists_every_domain_and_both_namespaces_of_each_built_p
     }
 
 
+def test_a_retired_product_has_no_reader_view() -> None:
+    m = load(good())
+    gone = dataclasses.replace(m, products=tuple(
+        dataclasses.replace(p, status="retired") if p.name == "daily-load" else p for p in m.products))
+    out = lake.emit(gone)
+    assert [v["relation"] for v in json.loads(out[model.VIEWS])["views"]] == ["sensor_net.station_readings.silver_readings"]
+    assert model.view_sql_path("ops_insight.daily_load.gold_daily_load") not in out
+
+
 def test_a_seeds_table_is_retained_at_the_floor() -> None:
     m = load(good())
     seeded = dataclasses.replace(m, products=tuple(
