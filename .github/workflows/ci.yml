@@ -222,9 +222,9 @@ jobs:
       - name: docker compose config
         run: docker compose --env-file .env.example config -q
 
-      # Prints the steady default, bootstrap default and bootstrap with
-      # --profile governance and with --profile legacy (the Prefect rollback)
-      # limit sums, each service's limits times its replicas, and fails when the
+      # Prints the steady default, the bootstrap default and, for each profile a
+      # service names (today legacy, the Prefect rollback), the default plus that
+      # profile: limit sums, each service's limits times its replicas, and fails when the
       # bootstrap default is over the 25 CPU / 48 GiB ADR-045 states. Also fails
       # a service under any profile with no CPU or memory limit (it would escape the budget and
       # nothing else would notice), an untagged or `latest` image, an

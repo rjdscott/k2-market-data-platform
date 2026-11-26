@@ -3,18 +3,18 @@
 
     python3 scripts/check-budget.py
 
-Resolves the compose file plain, with `--profile governance`, with
-`--profile legacy` and with `--profile '*'` (every service of every profile),
-prints four limit sums and exits 1 on any of:
+Resolves the compose file plain, with `--profile '*'` (every service of every
+profile), and with `--profile <name>` for each profile a service names; prints
+the steady default, the bootstrap default and each profile's bootstrap (the
+default plus that profile's services) and exits 1 on any of:
 
 - the bootstrap default (every default-profile service, one-shots included,
   because they run beside the rest at `docker compose up`; each service's
   limits times its `deploy.replicas`, which compose also sets from `scale`) above 25 CPU /
   48 GiB, the ceiling ADR-045 sets in place of ADR-034's 20 CPU / 36 GiB
-  (which replaced ADR-010's 16 CPU / 40 GB). The steady default and the two
-  profiled bootstraps are reported only: no service has the governance profile
-  today, so its line equals the default, and legacy is the Prefect rollback,
-  run only in place of Airflow's writes.
+  (which replaced ADR-010's 16 CPU / 40 GB). The steady default and the
+  profiled bootstraps are reported only: today the one profile is legacy, the
+  Prefect rollback, run only in place of Airflow's writes.
 - a service under any profile that does not declare both a CPU and a memory
   limit, so a service behind a profile cannot ship without one.
 - an image that is not pinned (see `unpinned`): a compose image in any
@@ -131,18 +131,18 @@ def dockerfile_problems(path: str, text: str) -> list[str]:
 
 
 def check(
-    default: dict, governance: dict, legacy: dict, every: dict, dockerfiles: list[tuple[str, str]]
+    default: dict, profiles: dict[str, dict], every: dict, dockerfiles: list[tuple[str, str]]
 ) -> tuple[list[str], list[str]]:
-    """(report lines, failures). Pure, so a test can hand it dicts. `every` is
-    the `--profile '*'` resolve: limits and pins are held there, so a service
-    behind a profile nobody names here is still checked."""
+    """(report lines, failures). Pure, so a test can hand it dicts. `profiles`
+    maps each profile name to its `--profile <name>` resolve, reported in that
+    order; `every` is the `--profile '*'` resolve, where limits and pins are
+    held, so a service behind any profile is checked."""
     steady = {n: s for n, s in default.items() if s.get("restart") != "no"}
     report = []
     for label, services in (
         ("steady default", steady),
         ("bootstrap default", default),
-        ("bootstrap governance", governance),
-        ("bootstrap legacy", legacy),
+        *((f"bootstrap {name}", services) for name, services in profiles.items()),
     ):
         cpu, mem = total(services)
         report.append(f"{label:<21} {len(services):>3} services  {cpu:6.2f} CPU  {mem / GIB:7.3f} GiB")
@@ -268,13 +268,9 @@ def main() -> int:
     sources = [p for p in files if p == "Makefile" or p.endswith(".sh") or p.startswith(".github/workflows/")
                or (p.startswith("scripts/") and p.endswith(".py"))]
     every = compose_services("--profile", "*")
+    names = sorted({name for svc in every.values() for name in svc.get("profiles") or []})
     report, failures = check(
-        compose_services(),
-        compose_services("--profile", "governance"),
-        compose_services("--profile", "legacy"),
-        every,
-        dockerfiles,
-    )
+        compose_services(), {name: compose_services("--profile", name) for name in names}, every, dockerfiles)
     failures += exposure_problems(every)
     for p in sources:
         failures += source_pin_problems(p, (ROOT / p).read_text(), frozenset(built(every)))

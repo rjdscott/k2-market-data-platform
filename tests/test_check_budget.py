@@ -24,7 +24,8 @@ def svc(cpus, gib, image="k2-thing:1.0.0", restart="unless-stopped"):
 
 def check(default, governance=None, legacy=None, every=None, dockerfiles=()):
     governance, legacy = governance or default, legacy or default
-    return budget.check(default, governance, legacy, every or {**default, **governance, **legacy}, list(dockerfiles))
+    profiles = {"governance": governance, "legacy": legacy}
+    return budget.check(default, profiles, every or {**default, **governance, **legacy}, list(dockerfiles))
 
 
 def failures(default, governance=None, dockerfiles=(), legacy=None, every=None):
@@ -253,3 +254,22 @@ def test_main_gates_every_profile_not_only_the_three_it_sums(monkeypatch, capsys
     out = capsys.readouterr().out
     assert "service tools: port 9009:9009 is published on every interface" in out
     assert "limits: tools" in out and "service tools: image 'busybox:latest'" in out
+
+
+def test_main_reports_the_default_plus_each_profile_a_service_names(monkeypatch, capsys):
+    base = {"a": svc(1.0, 1)}
+    extra = {"rollback": {**svc(2.0, 2), "profiles": ["legacy"]}, "lab": {**svc(4.0, 4), "profiles": ["research"]}}
+
+    def fake(*profile):
+        if profile == ("--profile", "*"):
+            return {**base, **extra}
+        name = profile[1] if profile else None
+        return {**base, **{n: s for n, s in extra.items() if name in s["profiles"]}}
+
+    monkeypatch.setattr(budget, "compose_services", fake)
+    monkeypatch.setattr(budget, "tracked", lambda: [])
+    assert budget.main() == 0
+    out = capsys.readouterr().out.splitlines()
+    assert [line.split("  ")[0] for line in out[:4]] == [
+        "steady default", "bootstrap default", "bootstrap legacy", "bootstrap research"]
+    assert "3.00 CPU" in out[2] and "5.00 CPU" in out[3]
