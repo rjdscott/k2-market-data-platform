@@ -236,7 +236,8 @@ RUN_RECORD_SQL = REPO / "platform" / "runs" / "run_record.sql"  # S15 emits it a
 # - READER_NAMESPACE_OWNERS alone hold a privilege in a dbt or code product's reader namespace,
 #   through <domain>_build: svc.platform holds none (gate h1.33);
 # - RETENTION_PROPERTY_PRINCIPALS alone may set RETENTION_PROPERTIES;
-# - REFS_READERS alone read `t$refs`; svc.api reads it and no other metadata of a base.
+# - REFS_READERS, and each product's publisher (SELECT and GRANT_SELECT on exactly `<t>$refs`, for
+#   its views' guard), alone read `t$refs`; svc.api reads it and no other metadata of a base.
 PIPELINE_PRINCIPALS = (r"dbt_.*", r"pub_.*", r"svc\.runs", r"svc\.platform", r"svc\.catalog")
 BUILD_CATALOG_PRINCIPALS = (r"dbt_.*", r"pub_.*", r"svc\.runs", r"svc\.platform")
 READER_CATALOG_ALL = (r"pub_.*",)
@@ -1143,7 +1144,9 @@ class Release:
 class View:
     """One reader view, as VIEWS lists it: S15 writes it, the drift check (S20) and the dbt
     wrapper (phase 002) read it. Its SQL is exactly `SELECT <columns> FROM <base> FOR
-    VERSION AS OF 'audited'`, every name through quote_ident (ADR-061 part 1)."""
+    VERSION AS OF 'audited' WHERE EXISTS (SELECT 1 FROM "<base>$refs" WHERE "name" = 'audited' AND
+    "type" = 'TAG')`, every name through quote_ident (ADR-061 part 1 and its Outcome): the guard
+    fails the read when the base is not an Iceberg table, since only a table has `$refs`."""
 
     relation: str  # view_relation(): the reader name
     base: str  # base_relation(): read through the reader catalog
