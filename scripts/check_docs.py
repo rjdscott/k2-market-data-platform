@@ -3,6 +3,7 @@
 
     python3 scripts/check_docs.py words FILE...   # gate (b): forbidden words
     python3 scripts/check_docs.py hash            # print the entry for a new forbidden term
+    python3 scripts/check_docs.py data            # gate (i): data files, notebooks, images
 
 Each gate prints one line per problem and exits 1 on any, 0 on none; a crash
 exits with Python's own non-zero code, which check-docs.sh also counts as a
@@ -28,8 +29,13 @@ TERMS. Nothing prints an existing term.
 
 import getpass
 import hashlib
+import json
 import re
+import subprocess
 import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
 
 SALT = bytes.fromhex("0975cf9f1b96ab1000e115fc9b29b344")
 # (words in the term, sha256 of SALT + the term lower-cased, words joined by one space)
@@ -93,6 +99,120 @@ def words(paths: list[str], terms=TERMS) -> list[str]:
     return problems
 
 
+# ── gate (i): data files, notebooks, images ────────────────────────────────
+#
+# The repository ships no venue market data (NOTICE). A tracked data file, by
+# extension or by its content whatever its name, passes only when it is
+#
+# - in tests/fixtures/SHA256SUMS, the manifest scripts/make-synthetic-fixtures.py
+#   writes beside its output, with the hash it has there; or
+# - listed by its exact path in NOTICE, with its source and terms.
+#
+# Every tracked synthetic-* file is in that manifest too, except the replay
+# tests' golden digests (synthetic-*.sha256), which must be one digest and
+# nothing else: a name is not evidence, the generator's hash is. A committed
+# notebook carries no outputs and no execution counts; under legacy/ (archived
+# unmodified) one that does must be listed in NOTICE. Raster images, by
+# extension or by content, live only under docs/images/ (NOTICE, Screenshots).
+
+DATA_EXT = {".jsonl", ".ndjson", ".csv", ".tsv", ".parquet", ".avro", ".pcap", ".pcapng",
+            ".arrow", ".feather", ".orc", ".gz", ".zst", ".xz", ".bz2"}
+DATA_MAGIC = {b"PAR1": "parquet", b"Obj\x01": "avro", b"\xd4\xc3\xb2\xa1": "pcap", b"\xa1\xb2\xc3\xd4": "pcap",
+              b"\x4d\x3c\xb2\xa1": "pcap", b"\xa1\xb2\x3c\x4d": "pcap", b"\x0a\x0d\x0d\x0a": "pcapng",
+              b"\x1f\x8b": "gzip", b"\x28\xb5\x2f\xfd": "zstd", b"\xfd7zXZ\x00": "xz", b"BZh": "bzip2",
+              b"ORC": "orc", b"ARROW1": "arrow"}
+IMAGE_EXT = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tif", ".tiff"}
+IMAGE_MAGIC = (b"\x89PNG", b"\xff\xd8\xff", b"GIF8", b"BM", b"II*\x00", b"MM\x00*")
+MANIFEST = "tests/fixtures/SHA256SUMS"
+DIGEST = re.compile(rb"[0-9a-f]{64}\n?")
+
+
+def binary(head: bytes) -> bool:
+    try:
+        text = head.decode("utf-8")
+    except UnicodeDecodeError:
+        return True
+    return any(c < "\t" or "\r" < c < " " for c in text)
+
+
+def sniff(head: bytes) -> str | None:
+    """The data format the first bytes of a file are in, or None: binary magic,
+    or text whose first five non-blank lines are each a JSON object or array
+    (JSON lines), or carry the same non-zero count of commas or tabs (CSV, TSV)."""
+    if binary(head):
+        return next((fmt for magic, fmt in DATA_MAGIC.items() if head.startswith(magic)), None)
+    lines = [x for x in head.decode("utf-8").splitlines() if x.strip()][:5]
+
+    def json_value(x):
+        try:
+            return isinstance(json.loads(x), (dict, list))
+        except ValueError:
+            return False
+
+    if len(lines) >= 2 and all(json_value(x) for x in lines):
+        return "json lines"
+    for delim, fmt in ((",", "csv"), ("\t", "tsv")):
+        if len(lines) >= 3 and lines[0].count(delim) and len({x.count(delim) for x in lines}) == 1:
+            return fmt
+    return None
+
+
+def image(path: str, head: bytes) -> bool:
+    return Path(path).suffix.lower() in IMAGE_EXT or head.startswith(IMAGE_MAGIC) or (
+        head[:4] == b"RIFF" and head[8:12] == b"WEBP")
+
+
+def notebook_problem(content: bytes) -> str | None:
+    try:
+        cells = json.loads(content)["cells"]
+    except (ValueError, KeyError, TypeError):
+        return "not a notebook JSON document"
+    code = [c for c in cells if c.get("cell_type") == "code"]
+    dirty = sum(bool(c.get("outputs")) or c.get("execution_count") is not None for c in code)
+    return f"{dirty} code cells carry outputs or an execution count" if dirty else None
+
+
+def data_problems(tracked: dict[str, bytes], notice: str) -> list[str]:
+    """Pure: every tracked path and its bytes, and NOTICE's text."""
+    listed = set(notice.split())
+    manifest = {}
+    for row in tracked.get(MANIFEST, b"").decode().splitlines():
+        digest, _, path = row.partition("  ")
+        manifest[path] = digest
+    problems = []
+    for path, content in sorted(tracked.items()):
+        name, head = Path(path).name, content[:65536]
+        if path in manifest:
+            if hashlib.sha256(content).hexdigest() != manifest[path]:
+                problems.append(f"{path}: differs from its hash in {MANIFEST}; run python3 scripts/make-synthetic-fixtures.py")
+            continue
+        if name.startswith("synthetic-"):
+            if not (name.endswith(".sha256") and DIGEST.fullmatch(content)):
+                problems.append(f"{path}: named synthetic-* but not in {MANIFEST}, which only the generator writes")
+            continue
+        if path.endswith(".ipynb"):
+            problem = notebook_problem(content)
+            if problem and not (path.startswith("legacy/") and path in listed):
+                problems.append(f"{path}: {problem}; clear them (Jupyter: Clear All Outputs)")
+            continue
+        if image(path, head):
+            if not path.startswith("docs/images/"):
+                problems.append(f"{path}: a raster image outside docs/images/")
+            continue
+        fmt = "extension" if Path(path).suffix.lower() in DATA_EXT else sniff(head)
+        if fmt and path not in listed:
+            problems.append(f"{path}: a data file ({fmt}) neither in {MANIFEST} nor listed by path in NOTICE")
+    problems += [f"{MANIFEST}: lists {path}, which is not tracked" for path in sorted(manifest.keys() - tracked.keys())]
+    return problems
+
+
+def tracked_files() -> dict[str, bytes]:
+    out = subprocess.run(["git", "ls-files", "-z"], cwd=ROOT, check=True, capture_output=True).stdout
+    paths = [p for p in out.decode().split("\0") if p]
+    # ponytail: a tracked path deleted in the working tree is skipped, as git diff would show it.
+    return {p: (ROOT / p).read_bytes() for p in paths if (ROOT / p).is_file()}
+
+
 def read_term() -> str:
     if sys.stdin.isatty():
         return getpass.getpass("term (not echoed): ")
@@ -106,6 +226,8 @@ def main(argv: list[str], terms=TERMS) -> int:
         return 0
     if argv[:1] == ["words"]:
         problems = words(argv[1:], terms)
+    elif argv[:1] == ["data"]:
+        problems = data_problems(tracked_files(), (ROOT / "NOTICE").read_text())
     else:
         print(__doc__, file=sys.stderr)
         return 2

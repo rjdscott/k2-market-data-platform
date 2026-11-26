@@ -51,9 +51,12 @@ in it, and what does not.
 | `services/` | the Rust capture crate, its tests and synthetic fixtures | recorded venue frames (`tests/recorded/` is git-ignored) |
 | `tests/` | Python unit tests, ClickHouse assertions, synthetic fixtures, parity pins | real venue frames, tests that need a live stack |
 
-A data file under any `fixtures/` or `samples/` directory is named `synthetic-*` or is
-listed in [`NOTICE`](NOTICE) with its source and terms; `scripts/check-docs.sh` gate (h)
-fails CI otherwise.
+A data file anywhere in the tree (JSON lines, CSV, Parquet, Avro, pcap and the like, by
+extension or by content) is written by `scripts/make-synthetic-fixtures.py` and listed at
+its hash in `tests/fixtures/SHA256SUMS`, or is listed by path in [`NOTICE`](NOTICE) with
+its source and terms. Notebooks are committed without outputs (`make notebooks-run` writes
+executed copies to the git-ignored `notebooks/.executed/`). `scripts/check-docs.sh` gate
+(i) fails CI otherwise.
 
 ## Conventions
 

@@ -217,29 +217,21 @@ else
   note "(h) origin/main not found (no remote, or a shallow clone): skipping the added-line em-dash gate"
 fi
 
-# (i) fixture and sample data is synthetic or declared
+# (i) data files are generated synthetic or declared; notebooks carry no output
 # The repository ships no real venue market data (README, "What this is, and
-# data terms"). A tracked data file under a fixtures/ or samples/ directory, or
-# named *sample*, is either named synthetic-* (scripts/make-synthetic-fixtures.py
-# writes those) or listed by path in NOTICE with its source and terms. Code
-# files (*.py and the like) are not data and are not checked.
-#
-# Screenshots are NOTICE's one named exception: pictures of a live run, under
-# docs/images/ and nowhere else. A raster image anywhere else is not covered by
-# it and fails here too.
+# data terms"). Every tracked file, wherever it is and whatever its name: a data
+# file (by extension, or by content: JSON lines, CSV, TSV, Parquet, Avro, pcap, a
+# compressed stream) is in tests/fixtures/SHA256SUMS at its hash (written by
+# scripts/make-synthetic-fixtures.py) or listed by exact path in NOTICE; a
+# synthetic-* file is in that manifest; a notebook has no outputs; a raster image
+# is under docs/images/ (NOTICE's one named exception). scripts/check_docs.py
+# holds the rules.
 out=$(mktemp)
-git ls-files | grep -iE '(^|/)(fixtures|samples)/|sample[^/]*$' \
-  | grep -iE '\.(json|jsonl|ndjson|csv|tsv|txt|parquet|avro|pcap|pcapng|bin|gz|zst|sha256)$' \
-  | while IFS= read -r f; do
-      case "$(basename "$f")" in synthetic-*) continue ;; esac
-      grep -qF "$f" NOTICE 2>/dev/null || echo "$f"
-    done > "$out" || true
-git ls-files | grep -iE '\.(png|jpe?g|gif|webp)$' | grep -v '^docs/images/' >> "$out" || true
-if [ -s "$out" ]; then
-  bad "(i) fixture/sample data neither named synthetic-* nor listed in NOTICE, or an image outside docs/images/:"
-  sed 's/^/  /' "$out"
+if python3 scripts/check_docs.py data > "$out"; then
+  pass "(i) data files generated or listed in NOTICE, notebooks without outputs, images only under docs/images/"
 else
-  pass "(i) fixture and sample data is synthetic or listed in NOTICE; images only under docs/images/"
+  bad "(i) undeclared data, an unlisted synthetic-* file, a notebook with outputs, or an image outside docs/images/:"
+  sed 's/^/  /' "$out"
 fi
 rm -f "$out"
 

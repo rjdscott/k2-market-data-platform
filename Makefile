@@ -159,8 +159,12 @@ generate:  ## Validate contracts/, then rewrite docker/lake/ddl/generated/, dock
 new-product:  ## Scaffold contracts/DOMAIN/NAME/: a descriptor and one contract with inline columns that validates (DOMAIN=x NAME=y)
 	cd platform/k2gen && uv run --locked -q k2gen new "$(DOMAIN)" "$(NAME)"
 
-notebooks-run:  ## Execute the five notebooks headless — the runnable check (needs the stack up)
-	cd notebooks && uv sync -q && for nb in 0*.ipynb; do uv run jupyter nbconvert --to notebook --execute --inplace --ExecutePreprocessor.timeout=600 $$nb || exit 1; done
+# Executed copies go to notebooks/.executed/ (git-ignored), never over the tracked
+# files: an executed notebook holds lake rows, and check-docs gate (i) fails a
+# committed one with outputs. The kernel still runs in notebooks/, so k2lake and
+# ../.env resolve as they do in JupyterLab.
+notebooks-run:  ## Execute the five notebooks headless into notebooks/.executed/ (git-ignored), the runnable check (needs the stack up)
+	cd notebooks && uv sync -q && for nb in 0*.ipynb; do uv run jupyter nbconvert --to notebook --execute --output-dir .executed --ExecutePreprocessor.timeout=600 $$nb || exit 1; done
 
 # Read-only against the LIVE stack: logs in, opens pages, runs one SELECT as
 # ClickHouse's read-only quant user (scripts/screenshots/capture.py). Secrets

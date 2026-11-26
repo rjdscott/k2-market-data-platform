@@ -6,7 +6,7 @@ notebooks read the same Iceberg tables the audits do (ADR-018, ADR-026).
 
 ```bash
 make notebooks            # uv sync, then JupyterLab on http://localhost:8889
-make notebooks-run        # execute all five headless (nbconvert), the runnable check
+make notebooks-run        # execute all five headless (nbconvert) into .executed/, git-ignored
 ```
 
 | Notebook | Question it answers | Tables |

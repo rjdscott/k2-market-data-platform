@@ -11,15 +11,36 @@ None. This repository contains no market data files from any venue.
 
 Every venue-format frame in the tree is synthetic: invented prices, sizes, ids
 and timestamps, written in each venue's wire format by
-scripts/make-synthetic-fixtures.py from a fixed seed, and named synthetic-*:
+scripts/make-synthetic-fixtures.py from a fixed seed, named synthetic-*, and
+listed with its sha256 in tests/fixtures/SHA256SUMS, which the same script
+writes:
 
-  services/capture-rust/tests/fixtures/synthetic-*    replay test sessions and their golden hashes
+  services/capture-rust/tests/fixtures/synthetic-*    replay test sessions (their golden
+                                                      hashes, synthetic-*.sha256, are pinned
+                                                      from the replay output, not generated)
   tests/fixtures/bronze/synthetic-*                   one frame per bronze table
   docs/research/2026-08-26-v3-spikes/*/synthetic-*    the S2 and S5 spike samples
 
-tests/clickhouse/*.jsonl are hand-written synthetic rows. Gate (h) of
-scripts/check-docs.sh fails CI on a fixture or sample data file that is neither
-named synthetic-* nor listed by path in this section with its source and terms.
+Hand-written synthetic rows, invented values on round numbers, for the
+ClickHouse schema test (scripts/clickhouse-schema-test.sh):
+
+  tests/clickhouse/bars.jsonl
+  tests/clickhouse/book.jsonl
+  tests/clickhouse/trades_block1.jsonl
+  tests/clickhouse/trades_block2.jsonl
+
+The platform's own measurements, no venue data: recovery times written by
+`make chaos` (scripts/chaos/):
+
+  scripts/chaos/results/2026-08-26.tsv
+  scripts/chaos/results/2026-08-27.tsv
+
+Gate (i) of scripts/check-docs.sh (scripts/check_docs.py) fails CI on a data
+file, found by extension or by content (JSON lines, CSV, TSV, Parquet, Avro,
+pcap, a compressed stream) whatever its name or path, that is neither in
+tests/fixtures/SHA256SUMS at its hash nor listed by exact path in this file
+with its source and terms; on a synthetic-* file the manifest does not list;
+and on a committed notebook with outputs (under legacy/, unless listed below).
 
 Market data is fetched by a user's own running stack from each venue's public
 endpoints, stays on that user's machine, and is subject to that provider's
