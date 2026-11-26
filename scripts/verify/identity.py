@@ -6,6 +6,9 @@ nothing else of ${K2_SECRETS}: tls/ca.pem and the login principal's password fil
 trino/ read-write (the probe's line). K2_IDENTITY_FIXTURES holds identity.sh's test
 certificates; none is Trino's, and the CA that signed `other-*` is not the platform's.
 
+Besides identity.sh's I01 to I13, this file adds I19: the Web UI is off, so its form login gives
+no session (a session outlived a password's removal, ADR-060's Outcome).
+
 The probe, `identity-probe`, is a user no document can declare (a principal id is p.*, svc.*,
 dbt_* or pub_*), so no rule names it and it can run nothing; its password.db line is written as
 scripts/principal-secret.py writes one (in place, under the file's lock, by that script's own
@@ -84,6 +87,25 @@ def statement(auth: str | None, user: str, sql: str = "SELECT current_user", ctx
                 doc = json.load(r)
     except urllib.error.HTTPError as e:
         return e.code, e.read().decode(errors="replace")[:120], []
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *args: object, **kwargs: object) -> None:
+        return None
+
+
+def web_ui_login(user: str, password: str) -> str:
+    """What the Web UI's form login answers: `<status> -> <Location>`, and `session` when it sets
+    the UI's session cookie."""
+    opener = urllib.request.build_opener(_NoRedirect, urllib.request.HTTPSHandler(context=CTX))
+    body = urllib.parse.urlencode({"username": user, "password": password, "redirectPath": ""}).encode()
+    req = urllib.request.Request(f"{URL}/ui/legacy/login", body, {"Content-Type": "application/x-www-form-urlencoded"})
+    try:
+        r = opener.open(req, timeout=15)
+    except urllib.error.HTTPError as e:
+        r = e
+    session = "Trino-UI-Token" in (r.headers.get("Set-Cookie") or "")
+    return f"{r.status} -> {r.headers.get('Location')}" + (", session" if session else "")
 
 
 def handshake(address: tuple[str, int], name: str, ctx: ssl.SSLContext = CTX) -> str:
@@ -174,6 +196,10 @@ def main() -> int:
     st, err, data = statement(basic(USER, password), USER)
     record("I04.login", st == 200 and err is None and data == [[USER]],
            f"{USER} with its own password, by name, verified against the CA: current_user is {USER}", f"HTTP {st}, {err or data}")
+    ui = web_ui_login(USER, password)
+    record("I19.web-ui-off", ui.endswith("/ui/static/disabled.html"),
+           f"the Web UI is off: its form login, with {USER}'s right password, sends to Trino's disabled page and gives no session",
+           ui)
 
     probe = secrets.token_urlsafe(32)
     probe_line(None)

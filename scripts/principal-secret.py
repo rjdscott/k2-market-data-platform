@@ -8,16 +8,20 @@
 
 The procedure around it: docs/runbooks/create-or-rotate-a-principal.md. Every file is under
 ${K2_SECRETS:-$HOME/k2-secrets}, laid out as k2gen.model.SECRET_FILES says, outside any git
-checkout (refused inside one), and nothing here is ever committed, compiled or hashed into a
-release:
+checkout (refused inside one, found by a `.git` above it, never by asking git), and nothing here
+is ever committed, compiled or hashed into a release. Every run puts ${K2_SECRETS} and its
+trino/, api/ and principals/ back to mode 700, and each file it writes to 600.
 
 - `password`: a 32-byte random secret (secrets.token_urlsafe, 43 characters). Its bcrypt, cost
   10 and spelt `$2y$` as Trino's file authenticator requires, replaces or appends the one line
   `<id>:<hash>` of trino/password.db; every other line, the release canary's included, is kept
   byte for byte and in place. The secret is printed once on stdout, which must be a terminal.
-  With TO_FILE=1, for a service principal only (dbt_*, pub_*, svc.*), it is instead written to
-  principals/<id>.password, mode 600, for the containers that mount it
-  (model.password_mount), and printed nowhere.
+  With TO_FILE=1 it is instead written to principals/<id>.password, mode 600, and printed
+  nowhere: for a service principal (dbt_*, pub_*, svc.*), for the containers that mount it
+  (model.password_mount), and for a test principal, a person granted a role on the access
+  canary and on no other product (access_verify.platform_held), whose password the platform
+  holds so that `make access-verify LIVE=1` can run its rows. A person with a grant on any
+  other product is refused: their password is theirs, printed once.
 - `api-key`: `k2_` and a 32-byte random secret, printed once on stdout, which must be a
   terminal. api/keys.json maps the sha256 hex of the whole key, `k2_` included, to the
   principal; a rotation drops the principal's old key. Only a principal k2-api may act as
@@ -29,7 +33,9 @@ release:
   rerun is not an error. Refused for a principal still known unless FORCE=1, and always for the
   release canary.
 - `status`: each known principal's id and which of the three it has, then a `STALE` line for
-  each principal holding any of the three that is not known; never a hash or a secret.
+  each principal holding any of the three that is not known, and a `MALFORMED` line for each
+  line of password.db Trino would refuse (by line number and reason, never its content); never
+  a hash or a secret. Exit 1 when any STALE or MALFORMED line is printed.
 
 A principal is known when contracts/access/principals.yaml declares it or it is the builder or
 publisher of a dbt or code product (model.builder, model.publisher): anything else is refused,
@@ -41,12 +47,23 @@ Files are rewritten in place, never renamed over: through Docker Desktop's file 
 container keeps reading the old file after a rename, even under a directory mount, and sees an
 in-place write at once (measured by step S09, scripts/alerts.sh, and again here on a throwaway
 Trino 484). Every change holds an exclusive flock on the file it rewrites (password.db for the
-whole of `password`), so concurrent runs serialise; deploy's canary line (S19) must take the
-same lock and write in place too. The new text is written by one pwrite, padded with newlines
-to the old length (Trino 484 skips a blank line, measured; JSON skips whitespace), then
-truncated, so a reader never meets a half-old line.
-# ponytail: one pwrite is seen whole only within a page (4 KiB, about 50 password lines); past
-# that, a reader racing the write could fail one parse and retry at Trino's next refresh.
+whole of `password`), so concurrent runs serialise; deploy's canary line (S19) takes the same
+lock and the same write() (scripts/deploy.py).
+
+password.db is the one file a reader rereads while it is written (Trino, every 5 s), and one bad
+line makes Trino answer every login HTTP 500. So write() never shifts it: each line is a fixed
+slot of SLOT bytes, `<user>:<hash>` padded with spaces (Trino 484 trims a line and skips an
+empty one: blank, space, tab and NUL lines measured; a `#` line is refused), 32 slots to a
+4 KiB page so none straddles one. A rotation rewrites its own slot at the same offset, a removal
+overwrites it with spaces, an addition takes a free slot or extends the file by one blank slot
+and then fills it: every change is one aligned pwrite of one slot, the file never shrinks, and
+no other line moves. A reader that races a write sees each slot old or new, never another
+user's hash beside a name. Before writing it checks the whole current file and the whole new
+one (each line `<user>:$2y$10$<53>`, each user once, problems()) and refuses either, naming the
+line and the reason, unless the bad lines are the ones being removed; after writing it reads the
+file back and checks it again. A file not yet in slots (written by hand, or before this layout)
+is rewritten into slots once: one pwrite padded to the old length, then a truncate. The other
+files are small and read at start or per request: the same one padded pwrite and truncate.
 """
 
 from __future__ import annotations
@@ -58,7 +75,6 @@ import json
 import os
 import re
 import secrets
-import subprocess
 import sys
 from collections.abc import Iterator
 from contextlib import contextmanager, nullcontext
@@ -71,27 +87,62 @@ from k2gen.emit import api
 PASSWORD_DB = "trino/password.db"
 API_KEYS = "api/keys.json"
 assert {PASSWORD_DB, API_KEYS} <= {f.path for f in model.SECRET_FILES}
+MANAGED_DIRS = ("trino", "api", "principals")  # under ${K2_SECRETS}, kept at mode 700 on every run
 BCRYPT_COST = 10  # the secrets table's cost; Trino refuses below 8
+SLOT = 128  # bytes per password.db line, its newline included: 32 to a 4 KiB page
+USER = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
+HASH = re.compile(r"\$2y\$10\$[./A-Za-z0-9]{53}")  # what this script and deploy write
+MAX_USER = SLOT - 1 - len(":") - 60  # a user name longer than this fits no slot
+TRIM = "".join(map(chr, range(33)))  # what Java's String.trim() strips, NUL to space: Trino trims each line
+BLANK = " " * (SLOT - 1) + "\n"  # a free slot, which Trino skips
 
 
 def die(message: str) -> None:
     sys.exit(f"principal-secret: {message}")
 
 
+def checkout_above(path: Path) -> Path | None:
+    """The first directory at or above `path` holding `.git` (a checkout's directory or a
+    worktree's file), found without calling git: git refuses a repository another uid owns
+    ("dubious ownership") and prints nothing, which must not read as "not a checkout". A
+    directory that cannot be looked into counts as a checkout: the caller refuses."""
+    probe = path
+    try:
+        while not probe.exists():
+            probe = probe.parent
+        probe = probe.resolve(strict=True)
+    except OSError:
+        return probe
+    for d in (probe, *probe.parents):
+        try:
+            (d / ".git").lstat()
+            return d
+        except (FileNotFoundError, NotADirectoryError):
+            continue
+        except OSError:
+            return d
+    return None
+
+
 def secrets_root() -> Path:
     root = Path(os.environ.get(model.SECRETS_ENV) or Path.home() / "k2-secrets").absolute()
-    probe = root
-    while not probe.is_dir():
-        probe = probe.parent
-    git = subprocess.run(["git", "-C", str(probe), "rev-parse", "--is-inside-work-tree"],
-                         capture_output=True, text=True)
-    if git.stdout.strip() == "true":
-        die(f"{root} is inside a git checkout; {model.SECRETS_ENV} must name a directory outside any")
+    if (checkout := checkout_above(root)) is not None:
+        die(f"{root} is inside a git checkout ({checkout}), or a directory above it cannot be looked into; "
+            f"{model.SECRETS_ENV} must name a directory outside any")
     return root
 
 
-def known() -> tuple[set[str], set[str]]:
-    """(every known principal, those k2-api may act as), from the working tree's documents."""
+def keep_modes(root: Path) -> None:
+    """${K2_SECRETS} and the directories this script manages back to mode 700, on every run: a
+    directory loosened by hand, or made by Docker for a mount (mode 755), does not stay so."""
+    for d in (root, *(root / name for name in MANAGED_DIRS)):
+        if d.is_dir() and not d.is_symlink():
+            os.chmod(d, 0o700)
+
+
+def known() -> tuple[set[str], set[str], set[str]]:
+    """(every known principal, those k2-api may act as, the test principals whose password the
+    platform holds), from the working tree's documents."""
     documents: dict[str, bytes] = {}
     for root in model.DOCUMENT_ROOTS:
         base = model.REPO / root
@@ -104,7 +155,10 @@ def known() -> tuple[set[str], set[str]]:
     ids |= {name(p.name) for p in m.products for name in (model.builder, model.publisher)
             if any(t.build.kind in ("dbt", "code") for t in p.tables)}
     callers = set(json.loads(api.emit(m)[model.API_PRINCIPALS])["principals"])
-    return ids, callers
+    # The live suite's own rule for whose password the platform holds, so the two cannot differ.
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from access_verify import platform_held
+    return ids, callers, platform_held(m)
 
 
 def directory(path: Path) -> Path:
@@ -117,6 +171,9 @@ def directory(path: Path) -> Path:
     return path
 
 
+_OPEN: dict[int, Path] = {}  # each fd locked() holds open, to its path: write() knows password.db by it
+
+
 @contextmanager
 def locked(path: Path) -> Iterator[int]:
     """`path` open read-write, created at mode 600, under an exclusive flock until the block ends."""
@@ -124,8 +181,10 @@ def locked(path: Path) -> Iterator[int]:
     try:
         fcntl.flock(fd, fcntl.LOCK_EX)
         os.fchmod(fd, 0o600)
+        _OPEN[fd] = path
         yield fd
     finally:
+        _OPEN.pop(fd, None)
         os.close(fd)
 
 
@@ -134,13 +193,111 @@ def read(fd: int) -> str:
 
 
 def write(fd: int, text: str) -> None:
-    """Replace the content in place: one pwrite padded to the old length, then truncate."""
-    new, old = text.encode(), os.fstat(fd).st_size
-    padded = new.ljust(old, b"\n")
+    """Replace the content in place. password.db (by its name, from locked()) slot by slot,
+    checked before and after (write_db); any other file by one pwrite padded to the old length,
+    then a truncate."""
+    if fd in _OPEN and _OPEN[fd].name == Path(PASSWORD_DB).name:
+        return write_db(fd, text)
+    rewrite(fd, text.encode())
+
+
+def rewrite(fd: int, new: bytes) -> None:
+    padded = new.ljust(os.fstat(fd).st_size, b"\n")
     if os.pwrite(fd, padded, 0) != len(padded):
         die("a short write; rerun with ROTATE=1")
     os.ftruncate(fd, len(new))
     os.fsync(fd)
+
+
+def lines_of(text: str) -> list[str]:
+    """The lines as Java's readAllLines splits them (at LF, CRLF or CR), each trimmed as Trino trims it."""
+    return [x.strip(TRIM) for x in text.replace("\r\n", "\n").replace("\r", "\n").split("\n")]
+
+
+def problems(text: str) -> list[tuple[int, str | None, str]]:
+    """Each line of a password.db that Trino 484 would refuse, making every login HTTP 500, as
+    (line number, its user when that is a well-formed name, why). Never the line's content: a
+    line that is not `<user>:<hash>` may hold anything, a pasted password included."""
+    found: list[tuple[int, str | None, str]] = []
+    first: dict[str, int] = {}
+    for n, line in enumerate(lines_of(text), 1):
+        if not line:
+            continue
+        user, colon, hashed = line.partition(":")
+        if not colon:
+            found.append((n, None, "no `:` between a user and a hash"))
+        elif not USER.fullmatch(user) or len(user) > MAX_USER:
+            found.append((n, None, f"the user is not a principal id of at most {MAX_USER} characters"))
+        elif not HASH.fullmatch(hashed):
+            found.append((n, user, f"{user}'s hash is not a cost-10 `$2y$` bcrypt"))
+        elif user in first:
+            found.append((n, user, f"{user} again (first at line {first[user]})"))
+        else:
+            first[user] = n
+    return found
+
+
+def entries(text: str) -> dict[str, str]:
+    """password.db's users to their hashes, in file order; only for a text problems() passes."""
+    return dict(line.split(":", 1) for line in lines_of(text) if line)
+
+
+def slot(user: str, hashed: str) -> bytes:
+    return (f"{user}:{hashed}".ljust(SLOT - 1) + "\n").encode()
+
+
+def checked(old: str, text: str) -> dict[str, str]:
+    """`text`'s users and hashes, once both the new password.db and the current one parse, but
+    for the current lines of users the new one drops (a removal is the repair); else refused."""
+    if bad := problems(text):
+        die(f"refused: the new {PASSWORD_DB} would not parse and Trino would refuse every login: "
+            + "; ".join(f"line {n}: {why}" for n, _, why in bad))
+    want = entries(text)
+    if bad := [(n, why) for n, user, why in problems(old) if user is None or user in want]:
+        die(f"refused: {PASSWORD_DB} has lines Trino refuses, so every login fails now: "
+            + "; ".join(f"line {n}: {why}" for n, why in bad)
+            + "; make principal-remove PRINCIPAL=<that user> repairs a user's line, and "
+            "docs/runbooks/create-or-rotate-a-principal.md section 4 any other")
+    return want
+
+
+def write_db(fd: int, text: str) -> None:
+    """password.db becomes `text`'s users and hashes without moving a line (the module's docstring)."""
+    old = read(fd)
+    want = checked(old, text)
+    slots = [old[i:i + SLOT] for i in range(0, len(old), SLOT)]
+    if not (old.isascii() and all(len(s) == SLOT and s.find("\n") == SLOT - 1 for s in slots)):
+        rewrite(fd, b"".join(slot(u, h) for u, h in want.items()))  # not yet in slots: once
+    else:
+        where: dict[str, list[int]] = {}
+        for i, s in enumerate(slots):
+            if user := s.strip(TRIM).partition(":")[0]:
+                where.setdefault(user, []).append(i)
+        free = [i for i, s in enumerate(slots) if not s.strip(TRIM)]
+        for user, at in where.items():
+            for i in at if user not in want else ():
+                put(fd, i, BLANK.encode())
+                free.append(i)
+            if user in want and slots[at[0]].strip(TRIM) != f"{user}:{want[user]}":
+                put(fd, at[0], slot(user, want[user]))
+        for user in (u for u in want if u not in where):
+            if free:
+                i = free.pop(0)
+            else:  # one blank slot past the end first, then filled: a reader meets blank or whole
+                i = os.fstat(fd).st_size // SLOT
+                put(fd, i, BLANK.encode())
+            put(fd, i, slot(user, want[user]))
+    os.fsync(fd)
+    after = read(fd)
+    if problems(after) or entries(after) != want:
+        die(f"{PASSWORD_DB} does not read back as written; rerun")
+
+
+def put(fd: int, i: int, data: bytes) -> None:
+    """One slot, by one pwrite at its own offset."""
+    assert len(data) == SLOT
+    if os.pwrite(fd, data, i * SLOT) != SLOT:
+        die(f"a short write to {PASSWORD_DB}; rerun")
 
 
 def print_once(secret: str, what: str) -> None:
@@ -148,12 +305,14 @@ def print_once(secret: str, what: str) -> None:
     print(f"principal-secret: that {what} is shown this once; store it now", file=sys.stderr)
 
 
-def password(root: Path, principal: str, rotate: bool, to_file: bool) -> None:
-    if to_file:
+def password(root: Path, principal: str, rotate: bool, to_file: bool, held: frozenset[str] = frozenset()) -> None:
+    """`held`: the test principals whose password the platform holds (known()), who may take TO_FILE=1."""
+    if to_file and principal not in held:
         try:
             model.password_mount(principal)
         except ValueError:
-            die(f"{principal}: TO_FILE=1 is for a service principal; a person's password is printed, never stored")
+            die(f"{principal}: TO_FILE=1 is for a service principal, or a test principal granted on the access canary "
+                "and nothing else; a person's password is printed, never stored")
     with locked(root / PASSWORD_DB) as db:
         lines = read(db).splitlines(keepends=True)
         mine = [i for i, line in enumerate(lines) if line.split(":", 1)[0] == principal]
@@ -172,6 +331,7 @@ def password(root: Path, principal: str, rotate: bool, to_file: bool) -> None:
             if lines and not lines[-1].endswith("\n"):
                 lines[-1] += "\n"
             lines.append(line)
+        checked(read(db), "".join(lines))  # refused here, before the password file changes
         if to_file:
             with locked(stored) as f:
                 write(f, secret)
@@ -223,15 +383,19 @@ def remove(root: Path, principal: str) -> None:
           + (f"removed {', '.join(removed)}" if removed else "nothing to remove") + f" under {root}", file=sys.stderr)
 
 
-def status(root: Path, ids: set[str], callers: set[str]) -> None:
+def status(root: Path, ids: set[str], callers: set[str], held: set[str]) -> int:
+    """The table and its STALE and MALFORMED lines; 1 when there is any of either."""
     db, keys_file = root / PASSWORD_DB, root / API_KEYS
-    with_password = {line.split(":", 1)[0] for line in db.read_text().splitlines() if line.strip()} if db.exists() else set()
+    db_text = db.read_text() if db.exists() else ""
+    malformed = problems(db_text)
+    nameless = {n for n, user, _ in malformed if user is None}  # its content is never printed, not even as a name
+    with_password = {line.partition(":")[0] for n, line in enumerate(lines_of(db_text), 1) if line and n not in nameless}
     text = keys_file.read_text().strip() if keys_file.exists() else ""
     with_key = set(json.loads(text).values()) if text else set()
     with_file = {p.name.removesuffix(".password") for p in root.glob(model.password_file("*"))}
     print(f"{'principal':<28} {'password':<9} {'file':<5} api-key")
     for p in sorted(ids):
-        has_file = (root / model.password_file(p)).exists() if not p.startswith("p.") else None
+        has_file = (root / model.password_file(p)).exists() if not p.startswith("p.") or p in held else None
         print(f"{p:<28} {'yes' if p in with_password else 'no':<9} "
               f"{'-' if has_file is None else 'yes' if has_file else 'no':<5} "
               f"{('yes' if p in with_key else 'no') if p in callers else '-'}")
@@ -248,6 +412,11 @@ def status(root: Path, ids: set[str], callers: set[str]) -> None:
             if any(re.fullmatch(r, p) for r in model.PIPELINE_PRINCIPALS):
                 why += " and the platform's pattern rules still match it"
         print(f"STALE {p} in {', '.join(where)}: {why}; make principal-remove PRINCIPAL={p}")
+    for n, user, why in malformed:
+        fix = f"make principal-remove PRINCIPAL={user} FORCE=1" if user else \
+            "blank it in place (docs/runbooks/create-or-rotate-a-principal.md section 4)"
+        print(f"MALFORMED {PASSWORD_DB} line {n}: {why}; Trino refuses every login while it stands; {fix}")
+    return 1 if stale or malformed else 0
 
 
 def main() -> None:
@@ -256,13 +425,14 @@ def main() -> None:
     parser.add_argument("--principal", default="")
     parser.add_argument("--rotate", action="store_true", help="replace the principal's existing password or key")
     parser.add_argument("--to-file", action="store_true",
-                        help="password of a service principal: write it to principals/<id>.password, print nothing")
+                        help="password of a service or test principal: write it to principals/<id>.password, print nothing")
     parser.add_argument("--force", action="store_true", help="remove: the credentials of a principal still known")
     args = parser.parse_args()
     root = secrets_root()
-    ids, callers = known()
+    keep_modes(root)
+    ids, callers, held = known()
     if args.action == "status":
-        return status(root, ids, callers)
+        sys.exit(status(root, ids, callers, held))
     if args.action == "remove":
         if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", args.principal):
             die(f"{args.principal or 'PRINCIPAL=<id>'}: not a principal id")
@@ -283,7 +453,7 @@ def main() -> None:
         die("stdout is not a terminal, and the secret is printed there once; run it in a terminal"
             + (", or TO_FILE=1 for a service principal's password file" if args.action == "password" else ""))
     if args.action == "password":
-        password(root, args.principal, args.rotate, args.to_file)
+        password(root, args.principal, args.rotate, args.to_file, frozenset(held))
     else:
         api_key(root, args.principal, args.rotate)
 

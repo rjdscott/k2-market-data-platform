@@ -7,7 +7,8 @@
 #                                              release (every principal, generated passwords), the
 #                                              release's products staged, every row run, the lake removed
 #   make access-verify LIVE=1                  the running stack: the canary's and the platform's rows
-#                                              (RELEASE defaults to ${K2_RELEASES}/pointers/trino)
+#                                              (RELEASE defaults to ${K2_RELEASES}/pointers/trino);
+#                                              refused while .env is open to anyone but its owner
 #   make test-access RELEASE=<release dir>     the proofs behind the suite on a throwaway lake
 #                                              (tests/access/prove.sh)
 #
@@ -22,6 +23,7 @@ ACCESS_PY := uv run --project platform/k2gen --locked -q python
 access-verify:  ## RELEASE=<release dir>: every tests/access/expectations.yaml row on a throwaway lake run from it; LIVE=1: the canary and platform rows on the running stack
 	@set -eu; \
 	if [ "$${LIVE:-}" = 1 ]; then \
+	  python3 scripts/check-env.py --mode-only >/dev/null || exit 2; \
 	  rel=$${RELEASE:-$${K2_RELEASES:-$$HOME/k2-releases}/pointers/trino}; \
 	  [ -f "$$rel/manifest.json" ] || { echo "access-verify: no release at $$rel (deploy points pointers/trino at one)" >&2; exit 2; }; \
 	  rel=$$(realpath "$$rel"); \

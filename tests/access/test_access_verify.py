@@ -209,3 +209,37 @@ def test_the_live_scope_runs_only_platform_held_passwords_on_the_canary():
     assert "not the canary" in skips["a service row naming another product"]
     assert skips["a service row naming no product"] is None
     assert skips["the drift row"] is None
+
+
+def test_the_lake_env_json_is_read_as_the_lake_writes_it(tmp_path):
+    """A release-scope run finds each principal's password where the lake put it (the review of
+    S13 and S20, H1: env.json once named one `passwordFile`; the lake now writes a map)."""
+    secrets = tmp_path / "secrets"
+    (secrets / "throwaway").mkdir(parents=True)
+    (secrets / "principals").mkdir()
+    files = {"p.canary-full": secrets / "throwaway/p.canary-full.password", "svc.api": secrets / "principals/svc.api.password"}
+    for user, f in files.items():
+        f.write_text(f"pw-of-{user}\n")
+    (secrets / "principals/svc.extra.password").write_text("pw-of-svc.extra\n")  # in no map: the per-principal file
+    env_file = tmp_path / "env.json"
+    av.lake_env.write(env_file, release="/work/releases/r", trino="https://trino:8443", lakekeeper="http://lakekeeper:8181",
+                      secrets=str(secrets), ca=str(tmp_path / "ca.pem"), passwords={u: str(f) for u, f in files.items()},
+                      warehouses=["k2"])
+    subprocess.run(["openssl", "req", "-x509", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:P-256", "-nodes", "-subj", "/CN=t",
+                    "-days", "1", "-keyout", str(tmp_path / "ca.key"), "-out", str(tmp_path / "ca.pem")], capture_output=True, check=True)
+    trino, env = av.connect(env_file)
+    assert [trino.password(u) for u in ("p.canary-full", "svc.api", "svc.extra")] == \
+        ["pw-of-p.canary-full", "pw-of-svc.api", "pw-of-svc.extra"]
+    assert env["users"] == sorted(files) and env["release"] == "/work/releases/r"
+    with pytest.raises(av.NoPassword, match="no password file for p.nobody"):
+        trino.password("p.nobody")
+    del env["passwords"]
+    (tmp_path / "old.json").write_text(json.dumps(env | {"passwordFile": str(files["svc.api"])}))
+    with pytest.raises(ValueError, match="lacks passwords"):
+        av.connect(tmp_path / "old.json")
+
+
+def test_the_lake_writes_env_json_only_through_lake_env():
+    lake = (ROOT / "scripts/lib/throwaway-lake.sh").read_text()
+    assert "lake_env.write(Path(\"/work/env.json\")" in lake and "env.json\").write_text" not in lake
+    assert "passwordFile" not in (ROOT / "scripts/access_verify.py").read_text()

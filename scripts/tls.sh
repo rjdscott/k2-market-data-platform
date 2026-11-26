@@ -23,15 +23,22 @@
 #   names are not exactly NAMES. Until the expiry alert lands (a later step), this exit code is
 #   the alert.
 #
-# Keys are ECDSA P-256. The CA lives 1826 days (5 years) and may sign only NAMES (a critical
-# name constraint, so its key signs nothing else a client would accept); the server certificate
-# lives 90 days, short enough that rotating it is a habit, not an event. Its names are exactly
+# Keys are ECDSA P-256. The CA lives 1826 days (5 years) and carries a critical name constraint:
+# it permits the DNS names NAMES, excludes their subdomains (`.trino`, `.localhost`) and every
+# IPv4 and IPv6 address, so a leaf its key signs for any other DNS name or for an address fails
+# verification (tests/test_tls.py forges each). RFC 5280 reads a DNS constraint as a subtree
+# (`trino` permits `x.trino`); the leading-dot exclusion is how OpenSSL, and so Python, curl and
+# dbt, and Java, which the Trino CLI runs on, narrow it to the name alone (ADR-060's Outcome). A
+# leaf with only an email or URI name still verifies: no TLS client takes a server by one. The
+# server certificate lives 90 days, short enough that rotating it is a habit, not an event. Its names are exactly
 # NAMES: `trino`, the service's name inside the compose network (the throwaway lake's and the
 # rehearsal's network alias too), and `localhost`, for a client on the host or inside the
 # container. No IP address: Trino picks its certificate by the name a client asks for (SNI), so
 # a client that connects by address is shown Trino's internal certificate and refuses it
 # (step S11); an IP name here could never be served.
 #
+# init and rotate put ${K2_SECRETS} and tls/ back to mode 700 on every run; status reports a
+# looser tls/ and changes nothing.
 # Files are rewritten in place under an exclusive flock on the file, never renamed over: a
 # container that mounts one keeps reading the old file after a rename (Docker Desktop's file
 # sharing; CLAUDE.md's bind-mount note). Trino rereads its keystore while it runs (measured in
@@ -48,11 +55,9 @@ die() { echo "tls: $*" >&2; exit 2; }
 
 ROOT=${K2_SECRETS:-$HOME/k2-secrets}
 [[ "$ROOT" = /* ]] || ROOT=$PWD/$ROOT
-probe=$ROOT
-while [ ! -d "$probe" ]; do probe=$(dirname "$probe"); done
-if [ "$(git -C "$probe" rev-parse --is-inside-work-tree 2>/dev/null)" = true ]; then
-  die "$ROOT is inside a git checkout; K2_SECRETS must name a directory outside any"
-fi
+# shellcheck source=lib/outside-checkout.sh
+. "$(dirname "$0")/lib/outside-checkout.sh"
+outside_checkout "$ROOT" tls
 TLS=$ROOT/tls
 CA_PEM=$TLS/ca.pem CA_KEY=$TLS/ca.key SERVER=$TLS/trino.pem
 
@@ -81,7 +86,7 @@ PY
 
 workdir() {  # a private directory for new keys, under tls/ (mode 700), gone at exit
   (umask 077; mkdir -p "$TLS")
-  chmod 700 "$TLS"
+  chmod 700 "$ROOT" "$TLS"
   WORK=$(mktemp -d "$TLS/.new.XXXXXX")
   trap 'rm -rf "$WORK"' EXIT
 }
@@ -89,12 +94,17 @@ workdir() {  # a private directory for new keys, under tls/ (mode 700), gone at 
 new_key() { openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 -out "$1" 2>/dev/null; }
 serial() { echo "0x$(openssl rand -hex 16)"; }
 san() { local IFS=,; echo "${NAMES[*]/#/DNS:}"; }
-permitted() { local n s=""; for n in "${NAMES[@]}"; do s+="${s:+,}permitted;DNS:$n"; done; echo "$s"; }
+constraints() {  # each name permitted, its subdomains and every address excluded
+  local n s=""
+  for n in "${NAMES[@]}"; do s+="${s:+,}permitted;DNS:$n"; done
+  for n in "${NAMES[@]}"; do s+=",excluded;DNS:.$n"; done
+  echo "$s,excluded;IP:0.0.0.0/0.0.0.0,excluded;IP:::/::"
+}
 
 issue_ca() {
   new_key "$WORK/ca.key"
   printf '%s\n' "basicConstraints=critical,CA:TRUE,pathlen:0" "keyUsage=critical,keyCertSign,cRLSign" \
-    "nameConstraints=critical,$(permitted)" "subjectKeyIdentifier=hash" > "$WORK/ca.ext"
+    "nameConstraints=critical,$(constraints)" "subjectKeyIdentifier=hash" > "$WORK/ca.ext"
   openssl req -new -key "$WORK/ca.key" -subj "/CN=K2 local CA $(date -u +%FT%TZ)" -out "$WORK/ca.csr"
   openssl x509 -req -in "$WORK/ca.csr" -signkey "$WORK/ca.key" -days "$CA_DAYS" -sha256 -set_serial "$(serial)" \
     -extfile "$WORK/ca.ext" -out "$WORK/ca.pem" 2>/dev/null
@@ -117,6 +127,14 @@ issue_server() {
 fingerprint() { openssl x509 -in "$1" -noout -fingerprint -sha256 | cut -d= -f2; }
 # names <file> <extension>: the DNS names one extension of a certificate lists, comma-separated.
 names() { openssl x509 -in "$1" -noout -ext "$2" 2>/dev/null | grep -oE 'DNS:[^, ]+' | paste -sd, || true; }
+# permitted <CA file>: the DNS names its name constraint permits, comma-separated.
+permitted() { openssl x509 -in "$1" -noout -ext nameConstraints 2>/dev/null | sed -n '/Permitted:/,/Excluded:/p' | grep -oE 'DNS:[^, ]+' | paste -sd, || true; }
+# want_constraints: how openssl prints constraints(), spaces dropped and lines joined.
+want_constraints() {
+  local n p="" x=""
+  for n in "${NAMES[@]}"; do p+=" DNS:$n"; x+=" DNS:.$n"; done
+  echo "X509v3NameConstraints:critical Permitted:$p Excluded:$x IP:0.0.0.0/0.0.0.0 IP:0:0:0:0:0:0:0:0/0:0:0:0:0:0:0:0"
+}
 
 init() {
   local force=${1:-}
@@ -153,7 +171,11 @@ status() {
     left=$(( ($(date -u -d "$end" +%s) - $(date -u +%s)) / 86400 ))
     echo "$label: $file"
     echo "  subject   $(openssl x509 -in "$file" -noout -subject -nameopt RFC2253 | cut -d= -f2-)"
-    if [ "$label" = CA ]; then echo "  may sign  $(names "$file" nameConstraints)"; else echo "  names     $(names "$file" subjectAltName)"; fi
+    if [ "$label" = CA ]; then
+      echo "  may sign  $(permitted "$file") (and no subdomain of them, no IP address)"
+    else
+      echo "  names     $(names "$file" subjectAltName)"
+    fi
     echo "  expires   $end ($left days left)"
     if ! openssl x509 -in "$file" -noout -checkend 0 >/dev/null; then
       echo "  FAIL: expired"; bad=1
@@ -179,6 +201,8 @@ status() {
   local want; want=$(san)
   [ "$(names "$SERVER" subjectAltName)" = "$want" ] \
     || { echo "  FAIL: the server certificate's names are not exactly $want"; bad=1; }
+  [ "$(openssl x509 -in "$CA_PEM" -noout -ext nameConstraints 2>/dev/null | tr -d ' ' | paste -sd' ')" = "$(want_constraints)" ] \
+    || { echo "  FAIL: the CA's name constraint is not exactly $(constraints) (a CA made before its subdomain and address exclusions): make tls-init FORCE=1"; bad=1; }
   [ "$bad" = 0 ] && echo "tls: PASS (each certificate valid for more than $MIN_DAYS days)" || echo "tls: FAIL"
   return "$bad"
 }
