@@ -2,7 +2,7 @@
 # Three-way OHLCV parity at the pinned snapshots (scripts/parity_ohlcv.py).
 #   scripts/parity-ohlcv.sh                # uses tests/parity/pinned.json
 #   scripts/parity-ohlcv.sh --pin-current [YYYY-MM-DD]  # pin the lake's current gold snapshots, for yesterday or that day
-#   scripts/parity-ohlcv.sh --dbt          # and dbt's ohlcv_1m SQL through Trino (needs dbt/ synced)
+#   scripts/parity-ohlcv.sh --dbt          # and dbt's ohlcv_1m SQL through Trino (needs dbt/ synced), at the pin's dbt_trades_snapshot
 # Any other argument goes to parity_ohlcv.py, after --pin-current and its day too.
 # Both forms pass the pin's known_gaps (tests/parity/README.md), so a pin for a day with
 # a recorded loss window can be written once the gap is listed for that day.
@@ -22,9 +22,11 @@ if [ "${1:-}" = "--pin-current" ]; then
   OHLCV=$(echo "$O" | python3 -c "import sys,json; print(json.load(sys.stdin)['snapshot'])")
   set -- --day "$DAY" --ohlcv-snapshot "$OHLCV" --silver-snapshots "$SILVER" --known-gaps "$GAPS" --write-pin "$@"
 else
+  DBT_SNAP=$(python3 -c "import json; print(json.load(open('$PIN')).get('dbt_trades_snapshot') or '')")
   set -- --day "$(python3 -c "import json; print(json.load(open('$PIN'))['day'])")" \
          --ohlcv-snapshot "$(python3 -c "import json; print(json.load(open('$PIN'))['ohlcv_1m_snapshot'])")" \
          --silver-snapshots "$(python3 -c "import json; print(json.dumps(json.load(open('$PIN'))['silver_snapshots']))")" \
-         --known-gaps "$GAPS" "$@"
+         --known-gaps "$GAPS" \
+         ${DBT_SNAP:+--dbt-trades-snapshot "$DBT_SNAP"} "$@"
 fi
 exec uv run --no-project --with duckdb==1.4.4 --with clickhouse-connect==0.8.18 --with trino==0.340.0 python scripts/parity_ohlcv.py "$@"
