@@ -53,6 +53,7 @@ CREDENTIALS = {
 # could guess is shorter. One floor for every secret, keys included.
 MIN_LENGTH = 16
 # Factory defaults of the images compose runs, and the words typed in a hurry.
+# "prefect" is the database role's historical name (PREFECT_DB_USER, ADR-034).
 KNOWN = {"admin", "administrator", "password", "passw0rd", "p@ssw0rd", "changeme", "change-me", "secret",
          "minioadmin", "minio123", "postgres", "prefect", "airflow", "clickhouse", "grafana", "default",
          "root", "toor", "test", "guest", "letmein", "qwerty", "123456", "12345678", "1234567890"}

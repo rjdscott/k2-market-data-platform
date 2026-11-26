@@ -3,7 +3,7 @@ The lake schedules under Airflow 3 (ADR-034): `lake_ingest`, `lake_maintenance`
 and `lake_rebuild`. Three DAGs, written out by hand; there is no factory.
 
 Each one is a single task that runs one docker/lake script in the Spark
-container, exactly as the Prefect flows did (docker/lake/flows/lake_flows.py):
+container, exactly as the retired flows did (archived in legacy/prefect/flows/):
 
     docker exec k2-spark-iceberg python3 /home/iceberg/lake/<script> ...
 
@@ -14,8 +14,8 @@ schedule, one run at a time, a timeout that cannot leave the lock held, and
 metrics Prometheus can alert on.
 
 Airflow is the only scheduler of the lake writes since the cutover (plan phase
-P2, pull request 2). Prefect is stopped behind the compose `legacy` profile as
-the documented rollback: docs/runbooks/airflow-scheduling.md.
+P2, pull request 2). The retired scheduler is archived under legacy/; the
+recoveries are in docs/runbooks/airflow-scheduling.md.
 
 Rules every DAG here keeps, each from an incident on this stack:
 
@@ -127,7 +127,7 @@ COMMON = dict(
 
 with DAG(
     dag_id="lake_ingest",
-    # Minutes 1, 6, 11 ... 56: the cron Prefect ran, kept off the top of the
+    # Minutes 1, 6, 11 ... 56: the cron the retired scheduler ran, kept off the top of the
     # minute that every other cron on a host crowds into.
     schedule="1-59/5 * * * *",
     # Two tries of 3600 s and the 60 s between them, plus slack.

@@ -176,8 +176,7 @@ wait_healthy() {
 # A paused DAG gets no new run and no new task started, whatever state its
 # runs are in: there is no work queue to pause beside it, and max_active_runs=1
 # means at most one run was already under way. That one is waited out below.
-# lake_maintenance is paused too, as Prefect's queue pause held the nightly
-# run: a 03:00 maintenance taking the lock mid-fault is the same race.
+# lake_maintenance is paused too: a 03:00 maintenance taking the lock mid-fault is the same race.
 
 LAKE_DAG="${K2_LAKE_DAG:-lake_ingest}"
 LAKE_PAUSE_DAGS="$LAKE_DAG lake_maintenance"

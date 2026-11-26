@@ -1,8 +1,8 @@
 # The lake-metrics exporter (docker/lake/metrics.py), on its own pinned image.
 #
-# It ran on the Prefect worker image until ADR-034, only because that image
-# already carried prometheus-client. Its own image means retiring Prefect does
-# not take the lake alerts with it. Stdlib plus one package: metrics.py reads
+# It ran on the old scheduler's worker image until ADR-034, only because that
+# image already carried prometheus-client. Its own image means retiring that
+# scheduler did not take the lake alerts with it. Stdlib plus one package: metrics.py reads
 # the catalog over urllib, deliberately not PyIceberg (see its docstring).
 #
 # The script itself is bind-mounted from docker/lake/ (docker-compose.yml), the

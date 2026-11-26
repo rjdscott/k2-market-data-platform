@@ -64,10 +64,9 @@ def test_pause_waits_out_the_driver_and_a_queued_task_then_returns_zero(tmp_path
     assert out.returncode == 0, out.stderr
     assert "waiting for the in-flight lake job" in out.stderr
     assert "reached" in out.stdout
-    # The Airflow DAGs, in the scheduler, and nothing of Prefect's.
+    # The Airflow DAGs, in the scheduler.
     assert any(c.startswith("exec -e PYTHONWARNINGS=ignore k2-airflow-scheduler airflow dags pause lake_ingest")
                for c in calls)
-    assert not [c for c in calls if "prefect" in c]
     # The wait read the ingest task twice: queued (wait), then success (go). A
     # wait on the driver alone would have started while the executor held it.
     assert sum("states-for-dag-run lake_ingest" in c for c in calls) == 2

@@ -4,7 +4,7 @@
 # 3.3.2, not 3.4.0: astronomer-cosmos 1.16.0 added Airflow 3.4 to its test
 # matrix as a pre-release (3.4.0b1, cosmos PR #3049), so 3.3 is the newest
 # minor it supports outside beta. Python 3.12 is the image's default and the
-# Python the Prefect worker already runs. ADR-034 records how this was chosen.
+# Python the retired scheduler's worker ran. ADR-034 records how this was chosen.
 #
 # The slim image, because the full one carries some fifty providers K2 does
 # not use. It already ships docker-ce-cli (the scheduler dispatches every lake
