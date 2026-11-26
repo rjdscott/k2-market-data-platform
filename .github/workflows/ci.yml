@@ -162,6 +162,8 @@ jobs:
             tag: k2-lake-metrics:3.15.1
           - name: spark
             dockerfile: docker/spark/Dockerfile
+            load: true
+            tag: k2-spark-iceberg:3.5.9_1.8.1
           - name: capture
             dockerfile: services/capture-rust/Dockerfile
             # Only this image declares the ARG; passing it to the others would
@@ -204,6 +206,15 @@ jobs:
         run: >-
           docker run --rm --network none -v "$PWD/docker/lake":/opt/lake:ro
           k2-lake-metrics:3.15.1 python /opt/lake/metrics.py --self-check
+
+      # Why the Spark base moved (plan 000, N0-6): the old one shipped Python and
+      # OpenSSL past their end of life. A base bump that brings either back fails here.
+      - name: Python and OpenSSL versions, in the image just built
+        if: matrix.name == 'spark'
+        run: >-
+          docker run --rm --network none k2-spark-iceberg:3.5.9_1.8.1
+          python3 -c "import sys, ssl; print(sys.version, ssl.OPENSSL_VERSION);
+          assert sys.version_info[:2] == (3, 10) and ssl.OPENSSL_VERSION_INFO[0] == 3"
 
   compose:
     name: Compose (config validation)

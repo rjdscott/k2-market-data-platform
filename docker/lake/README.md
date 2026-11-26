@@ -819,13 +819,20 @@ nothing bootstrapped.
 
 ## The Spark image
 
-`docker/spark/Dockerfile` already carries `spark-sql-kafka-0-10_2.12:3.5.5`,
-`spark-token-provider-kafka-0-10`, `kafka-clients:3.4.1`, `commons-pool2:2.11.1`
-and `spark-avro_2.12:3.5.5`, each pinned by sha256. Nothing needed adding for
-Phase D, verified present in the running image:
+`docker/spark/Dockerfile` builds `k2-spark-iceberg:3.5.9_1.8.1` on the official
+`spark:3.5.9-scala2.12-java17-python3-ubuntu`, pinned by digest, and bakes in
+`iceberg-spark-runtime-3.5_2.12:1.8.1`, `iceberg-aws-bundle:1.8.1`,
+`spark-sql-kafka-0-10_2.12:3.5.9`, `spark-token-provider-kafka-0-10_2.12:3.5.9`,
+`kafka-clients:3.4.1`, `commons-pool2:2.11.1` and `spark-avro_2.12:3.5.9`, each
+pinned by sha256, plus PyYAML for `instruments.py` and `bars.py`. The scripts here
+run as the image's user `spark` (uid 185): they read this directory and
+`/home/iceberg/config`, and write only to `/tmp` (the writer lock, Spark's scratch)
+and `/home/iceberg/spark-events`. Moving any of those pins is
+[upgrade-a-pinned-component.md](../../docs/runbooks/upgrade-a-pinned-component.md).
+What the running image carries:
 
 ```bash
-docker exec k2-spark-iceberg ls /opt/spark/jars | grep -iE 'kafka|avro'
+docker exec k2-spark-iceberg ls /opt/spark/jars | grep -iE 'iceberg|kafka|avro'
 ```
 
 ---

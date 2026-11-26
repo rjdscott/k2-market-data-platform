@@ -91,12 +91,13 @@ SHOTS = [
         leads_to="docs/runbooks/lake-ingest-lag.md",
     ),
     dict(
-        file="05-spark-master.png", section="Lake ingest and tables", title="Spark master",
+        file="05-spark-history.png", section="Lake ingest and tables", title="Spark History Server",
         url="http://localhost:18080", app=None, height=700,
-        ready="text=ALIVE",
-        read="The batch engine is up: one worker, its cores and memory. It lists no applications: the "
-             "lake jobs start their own local-mode driver in this container with `docker exec`, and "
-             "show up on the Airflow pages instead. Spark's UI has no dark theme.",
+        ready="text=Event log directory",
+        read="The lake's finished Spark jobs, newest first: every five-minute ingest and the nightly "
+             "maintenance, each a local-mode driver started in this container by `docker exec`. Open "
+             "one for its stages, which is where a failed one is read after the fact. Its event-log "
+             "cleaner keeps two days. Spark's UI has no dark theme.",
         leads_to="docs/runbooks/lake-recovery.md",
     ),
     dict(

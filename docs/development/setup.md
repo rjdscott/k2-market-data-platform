@@ -183,7 +183,7 @@ dag-processor re-reads a changed DAG file within 30 s, with nothing to redeploy
 | Any container | `docker compose logs -f <service>` or `make logs` |
 | Capture | `docker logs -f k2-capture-binance`, `tracing` to stderr, filtered by `RUST_LOG`. No log files: nothing is bind-mounted out |
 | Lake job runs | the Airflow task logs: the UI at http://localhost:8090, or under `/opt/airflow/logs` in `k2-airflow-scheduler` |
-| Spark job detail | event logs in `/home/iceberg/spark-events` in `k2-spark-iceberg`. A running job's UI is port 4041 <!-- counts-ok: a port number, not a count --> inside the container, not published (`docker exec k2-spark-iceberg curl -s localhost:4041/api/v1/applications`); http://localhost:4040 is the always-on Thrift server's UI |
+| Spark job detail | event logs in `/home/iceberg/spark-events` in `k2-spark-iceberg`, two days of them, browsable in the History Server at http://localhost:18080. A running job's UI is http://localhost:4040; a second driver running at the same time gets port 4041 <!-- counts-ok: a port number, not a count --> inside the container, not published (`docker exec k2-spark-iceberg curl -s localhost:4041/api/v1/applications`) |
 | ClickHouse server | `docker logs k2-clickhouse` |
 
 ## Tearing down

@@ -1,74 +1,126 @@
-# K2 Spark image — v3 Redpanda→lake batch ingest and maintenance.
+# K2 Spark image: the v3 Redpanda-to-lake batch ingest and maintenance.
 #
-# Base bumped 3.5.0_1.4.2 → 3.5.5_1.8.1 for Phase B (ADR-018): Iceberg 1.8.1 is
-# the client Lakekeeper 0.13.3 is verified against, and it brings
-# iceberg-aws-bundle (S3FileIO) which the REST catalog needs.
-# 3.5.6_1.9.0 does not exist on Docker Hub — 3.5.5_1.8.1 is the newest tag.
+# Base: the official Apache Spark image, since 2026-11-26 (plan 000, step N0-6).
+# Until then it was tabulario/spark-iceberg:3.5.5_1.8.1, a demo image on Debian 11
+# with a source-built Python 3.10.16 (upstream 3.10 ended 2026-10) and OpenSSL
+# 1.1.1w (ended 2023-09): nothing patches either. This one is Ubuntu 22.04 LTS,
+# whose Python 3.10 and OpenSSL 3.0 packages the distribution still patches
+# (the image's python3.10 is 3.10.12-1~22.04.18, built 2026-08-31), with Temurin
+# Java 17 and Spark 3.5.9 built for Hadoop 3.3.4. Spark 3.5.5 to 3.5.9 is one patch line, so
+# Scala 2.12 and the Iceberg 1.8.1 that Lakekeeper is verified against stay.
 #
-# Phase D deleted the v2 offload, and psycopg2-binary (the PostgreSQL watermark
-# table) and clickhouse-jdbc-0.4.6-all.jar (the JDBC read) went with it. Nothing
-# under docker/lake/ imports either: the ingest reads Redpanda and writes
-# Iceberg, and carries its position in the Iceberg snapshot summary (ADR-022).
-#
-# Pinned by digest, not by tag alone: a tag is mutable and this image is not
-# ours, so an upstream repush would silently change the Spark and Iceberg jars
-# under every job. The tag is kept alongside for readability. Refresh with:
-#   docker buildx imagetools inspect tabulario/spark-iceberg:3.5.5_1.8.1
-# (2026-08-26 — OCI image index digest)
-FROM tabulario/spark-iceberg:3.5.5_1.8.1@sha256:790a72e744e0d09f161e1b4c7c2f79625cc598cf0476da4703e62f1f4e023460
+# Pinned by digest, not by tag alone: an official image tag is rebuilt in place
+# whenever its OS layer is patched, so the tag alone would change the image under
+# every job. The tag is kept alongside for readability. Refresh with
+#   docker buildx imagetools inspect spark:3.5.9-scala2.12-java17-python3-ubuntu
+# (2026-11-26, OCI image index digest); the whole procedure is
+# docs/runbooks/upgrade-a-pinned-component.md.
+FROM spark:3.5.9-scala2.12-java17-python3-ubuntu@sha256:8901b8427694267ed719f27aa1498815dbd3573efb3cde447246fbff29d07272
+
+# The base ends as USER spark (uid 185); root for the build steps, spark again below.
+USER root
+
+# Python: docker/lake/instruments.py and bars.py read their YAML with PyYAML, and
+# nothing else under docker/lake imports a package outside the standard library
+# and pyspark (metrics.py runs in docker/lake-metrics/, not here). pyspark is the
+# distribution's own, on PYTHONPATH below, not a second copy from PyPI. The
+# tabulario base also carried Jupyter, pandas, pyiceberg and the rest of its
+# sample-notebook packages; no lake job imports any of them.
+RUN pip install --no-cache-dir --only-binary=:all: PyYAML==6.0.4
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Neutralise the base image's `demo` catalog
+# JARs: baked at build time, not resolved from Maven at job runtime
 # ─────────────────────────────────────────────────────────────────────────────
-# The image ships a spark-defaults.conf that declares a REST catalog `demo` at
-# http://rest:8181 AND makes it spark.sql.defaultCatalog. `rest` does not resolve
-# in this stack, so any session that touches the default catalog dies with
-# UnknownHostException. Strip both settings so each job's own catalog stands
-# alone — today only v3's `lake` (REST, docker/lake/spark_conf.py). Everything
-# else in that file (eventLog, the Iceberg extensions, catalogImplementation) is
-# kept.
-RUN sed -i '/spark\.sql\.catalog\.demo/d; /spark\.sql\.defaultCatalog/d' \
-      "$SPARK_HOME/conf/spark-defaults.conf" \
- && ! grep -q 'demo' "$SPARK_HOME/conf/spark-defaults.conf"
-
-# Event logs: every Spark job writes one to /home/iceberg/spark-events, in the
-# container's writable layer, and the upstream image never deletes them. The
-# five-minute ingest alone left about 13 GiB a day there (P2 audit, 2026-11-26).
-# The HistoryServer this image already runs has a cleaner; turn it on, keep two
-# days for debugging, check hourly, and compress what is kept.
-RUN printf '%s\n' \
-      'spark.eventLog.compress                true' \
-      'spark.history.fs.cleaner.enabled       true' \
-      'spark.history.fs.cleaner.maxAge        2d' \
-      'spark.history.fs.cleaner.interval      1h' \
-      >> "$SPARK_HOME/conf/spark-defaults.conf" \
- && grep -q '^spark.history.fs.cleaner.enabled  *true$' "$SPARK_HOME/conf/spark-defaults.conf"
-
-# ─────────────────────────────────────────────────────────────────────────────
-# JARs — baked at build time, not resolved from Maven at job runtime
-# ─────────────────────────────────────────────────────────────────────────────
-# v3: Kafka source + Avro codec. The base image has neither, and Phase C reads
-# Redpanda by offset range and decodes Confluent-framed Avro.
+# Iceberg: the Spark 3.5 / Scala 2.12 runtime (SparkCatalog, the SQL extensions)
+# and the AWS bundle (S3FileIO, which the REST catalog's tables are read and
+# written through). The tabulario base shipped these two plus Azure and GCP
+# bundles this stack has no use for.
 #
-# Versions are not free choices: kafka-clients 3.4.1 and commons-pool2 2.11.1 are
-# what spark-sql-kafka-0-10_2.12:3.5.5 declares in its POM
-# (`kafka.version` / `commons-pool2.version` in spark-parent_2.12:3.5.5).
+# Kafka source and Avro codec: the ingest reads Redpanda by offset range and
+# decodes Confluent-framed Avro. kafka-clients 3.4.1 and commons-pool2 2.11.1 are
+# not free choices: they are what spark-sql-kafka-0-10_2.12:3.5.9 declares in its
+# POM (`kafka.version` / `commons-pool2.version` in spark-parent_2.12:3.5.9).
 #
-# sha256 provenance: Maven Central publishes .sha256 only for kafka-clients.
-# For the other four it publishes .sha1 only, so each jar was downloaded once,
-# its published .sha1 verified, and the sha256 computed from that same byte
-# stream and pinned here (2026-08-26). Reproduce with:
+# sha256 provenance (2026-11-26): Maven Central publishes a .sha256 for the two
+# Iceberg jars and kafka-clients, and each matched. For the other four it
+# publishes a .sha1 only, so each jar was downloaded once, its published .sha1
+# verified, and the sha256 computed from that same byte stream. The two Iceberg
+# jars, kafka-clients and commons-pool2 are byte-identical to the ones in the
+# tabulario image. Reproduce with:
 #   curl -fsSLO <url> && curl -fsSL <url>.sha1 && sha1sum <jar> && sha256sum <jar>
 ARG MAVEN=https://repo1.maven.org/maven2
 RUN set -eu; cd "$SPARK_HOME/jars"; \
     for spec in \
-      "org/apache/spark/spark-sql-kafka-0-10_2.12/3.5.5/spark-sql-kafka-0-10_2.12-3.5.5.jar 26e2ada52ed32d9310960749da074f3bfa9c20354c282303d1bd87b78856814c" \
-      "org/apache/spark/spark-token-provider-kafka-0-10_2.12/3.5.5/spark-token-provider-kafka-0-10_2.12-3.5.5.jar 475f1ba3d06afef4ab0ddb9e27f0490c07c1f5870212c7f178e7dfbbc433ec1d" \
+      "org/apache/iceberg/iceberg-spark-runtime-3.5_2.12/1.8.1/iceberg-spark-runtime-3.5_2.12-1.8.1.jar a42f6e3f89943ddc67d35738f822396970d0c83d5688c7614099a810aeabf9e0" \
+      "org/apache/iceberg/iceberg-aws-bundle/1.8.1/iceberg-aws-bundle-1.8.1.jar 31aeb0880fbdcf9b240326cc0a90a108159c3420a6c0e38bc70d3ade7ea97dd1" \
+      "org/apache/spark/spark-sql-kafka-0-10_2.12/3.5.9/spark-sql-kafka-0-10_2.12-3.5.9.jar fed393dcc3ef70611fe3d4f35ae78a8ea7c55301fd4cdd66c5dc97fcfaa5a00f" \
+      "org/apache/spark/spark-token-provider-kafka-0-10_2.12/3.5.9/spark-token-provider-kafka-0-10_2.12-3.5.9.jar e82612e6070438c5ea48b08c74f367a6d214a390bdf6dcf3ff316dca592ddda5" \
       "org/apache/kafka/kafka-clients/3.4.1/kafka-clients-3.4.1.jar 9d0a9058c8ede79db6e54ae378ed16fe8d1bead2894635a4aa6aa0b7981668c6" \
       "org/apache/commons/commons-pool2/2.11.1/commons-pool2-2.11.1.jar ea0505ee7515e58b1ac0e686e4d1a5d9f7d808e251a61bc371aa0595b9963f83" \
-      "org/apache/spark/spark-avro_2.12/3.5.5/spark-avro_2.12-3.5.5.jar 16815c7ae6e68eb8f097c3987737689a20fb9cd8718f1c6cce72b76008a94d06" \
+      "org/apache/spark/spark-avro_2.12/3.5.9/spark-avro_2.12-3.5.9.jar 9dda7512c1052bcd3774cbe247572cd481d4481eb8a90b7c4865b23a12bbecf8" \
     ; do \
       set -- $spec; \
       curl -fsSLO "$MAVEN/$1"; \
       echo "$2  $(basename $1)" | sha256sum -c -; \
     done
+
+# ─────────────────────────────────────────────────────────────────────────────
+# spark-defaults.conf: what the stack took from the tabulario base, written out
+# ─────────────────────────────────────────────────────────────────────────────
+# The base has no conf directory at all. Every line here was in the tabulario
+# file the jobs ran under, minus its `demo` REST catalog and the defaultCatalog
+# that pointed at it (http://rest:8181, which does not resolve in this stack).
+# The `lake` catalog is not here: docker/lake/spark_conf.py configures it per
+# session, from the environment.
+#
+# Event logs: every Spark job writes one to /home/iceberg/spark-events, in the
+# container's writable layer. The five-minute ingest alone left about 13 GiB a
+# day there before the cleaner was on (P2 audit, 2026-11-26). The History Server
+# (the CMD below) runs the cleaner: two days kept for debugging, checked hourly,
+# compressed.
+RUN mkdir -p "$SPARK_HOME/conf" /home/iceberg/spark-events \
+ && printf '%s\n' \
+      'spark.sql.extensions                   org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions' \
+      'spark.sql.catalogImplementation        in-memory' \
+      'spark.eventLog.enabled                 true' \
+      'spark.eventLog.dir                     /home/iceberg/spark-events' \
+      'spark.eventLog.compress                true' \
+      'spark.history.fs.logDirectory          /home/iceberg/spark-events' \
+      'spark.history.fs.cleaner.enabled       true' \
+      'spark.history.fs.cleaner.maxAge        2d' \
+      'spark.history.fs.cleaner.interval      1h' \
+      > "$SPARK_HOME/conf/spark-defaults.conf" \
+ && chown -R spark:spark /home/iceberg
+
+# PATH: spark-sql, spark-submit and the sbin scripts by name, as the old base had
+# them. PYTHONPATH: the distribution's pyspark and its py4j, which is how
+# `python3 /home/iceberg/lake/<script>.py` imports pyspark at all.
+ENV PATH=/opt/spark/bin:/opt/spark/sbin:$PATH \
+    PYTHONPATH=/opt/spark/python:/opt/spark/python/lib/py4j-0.10.9.7-src.zip
+
+# The build-time check: a py4j bump in a later Spark renames the zip above, and
+# a wrong PYTHONPATH must fail here, not in the first scheduled ingest.
+RUN python3 -c "import pyspark, py4j, yaml; assert pyspark.__version__ == '3.5.9', pyspark.__version__"
+
+# Not root: the jobs need nothing root has. The lake scripts are read from the
+# /home/iceberg/lake mount, the registry and bar thresholds from
+# /home/iceberg/config (both readable by any user), and everything a job writes
+# goes to /tmp (the writer lock, Spark's scratch) or /home/iceberg/spark-events,
+# which spark owns. `docker exec` runs as this user unless told otherwise.
+WORKDIR /home/iceberg
+USER spark
+
+# What the container runs between jobs: the History Server, in the foreground,
+# on its default port 18080 inside the container. It is the only long-running
+# process anything depends on, because it runs the event-log cleaner above; its
+# REST API is also where a failed stage is read after the fact (the 2026-11-25
+# note in docker/lake/spark_conf.py). The jobs themselves are local-mode drivers
+# started by `docker exec`, so the tabulario base's standalone Master and Worker,
+# Thrift server and Jupyter are not started: nothing in the stack used them.
+#
+# tini as PID 1, because every job leaves an orphan: the PySpark gateway JVM
+# outlives its Python driver by a moment, is reparented to PID 1, and a Java PID 1
+# never reaps it. A one-shot that sets its own entrypoint (lake-ddl) replaces all
+# of this, CMD included.
+ENTRYPOINT ["/usr/bin/tini", "--"]
+CMD ["/opt/spark/bin/spark-class", "org.apache.spark.deploy.history.HistoryServer"]

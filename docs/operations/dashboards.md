@@ -64,13 +64,11 @@ Is the lake current: ingest lag and commit age saw-tooth under the 5-minute sche
 
 Open: <http://localhost:3000/d/k2-lake>. Leads to: [lake-ingest-lag.md](../runbooks/lake-ingest-lag.md).
 
-### Spark master
+### Spark History Server
 
-![Spark master](../images/dashboards/05-spark-master.png)
+*No image: the last `make screenshots` did not capture this page.*
 
-*Captured 2026-11-25 at `v3-phase-e-69-g27eb1c5`.*
-
-The batch engine is up: one worker, its cores and memory. It lists no applications: the lake jobs start their own local-mode driver in this container with `docker exec`, and show up on the Airflow pages instead. Spark's UI has no dark theme.
+The lake's finished Spark jobs, newest first: every five-minute ingest and the nightly maintenance, each a local-mode driver started in this container by `docker exec`. Open one for its stages, which is where a failed one is read after the fact. Its event-log cleaner keeps two days. Spark's UI has no dark theme.
 
 Open: <http://localhost:18080>. Leads to: [lake-recovery.md](../runbooks/lake-recovery.md).
 

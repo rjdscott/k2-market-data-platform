@@ -772,7 +772,7 @@ services:
     build:
       context: .
       dockerfile: docker/spark/Dockerfile
-    image: k2-spark-iceberg:3.5.5_1.8.1  # local tag after build
+    image: k2-spark-iceberg:3.5.9_1.8.1  # local tag after build
     container_name: k2-spark-iceberg
     # Pinned off the capture cores (12-14) so a compaction or a heavy query
     # cannot steal a capture container's cycles; the Phase D noisy-neighbour
@@ -781,12 +781,13 @@ services:
     hostname: spark-iceberg
     networks:
       - k2-net
+    # The image runs as `spark` (uid 185) and, between jobs, only the Spark History
+    # Server under tini (docker/spark/Dockerfile): it runs the event-log cleaner,
+    # so the container's running state is the cleaner's. The lake jobs are
+    # local-mode drivers started by `docker exec`, as the same user.
     ports:
-      - "127.0.0.1:18080:8080"    # Spark Master UI (mapped to 18080 to avoid conflict)
-      - "127.0.0.1:4040:4040"     # Spark Application UI
-      # The Spark image also starts its own sample-notebook server on 8888:
-      # unauthenticated, root, and it holds the MinIO keys. Nothing in K2 uses
-      # it, so it is not published. K2's notebooks are `make notebooks`, 8889.
+      - "127.0.0.1:18080:18080"   # Spark History Server: finished lake jobs, newest first
+      - "127.0.0.1:4040:4040"     # the UI of the lake job running now, while it runs
     volumes:
       - ./docker/lake:/home/iceberg/lake          # ingest, maintenance, DDL, session builder
       # Silver derives canonical_symbol from the registry, not from the Avro
@@ -976,7 +977,7 @@ services:
   # no-op on re-run against a live warehouse.
   lake-ddl:
     logging: *k2-logging
-    image: k2-spark-iceberg:3.5.5_1.8.1  # built by the spark-iceberg service
+    image: k2-spark-iceberg:3.5.9_1.8.1  # built by the spark-iceberg service
     container_name: k2-lake-ddl
     # Pinned off the capture cores (12-14) so a compaction or a heavy query
     # cannot steal a capture container's cycles; the Phase D noisy-neighbour
