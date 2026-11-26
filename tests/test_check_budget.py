@@ -295,3 +295,10 @@ def test_the_old_lake_ingest_services_are_gone_and_nothing_waits_on_them():
     old = {"lake-ddl", "lake-metrics"}
     assert old.isdisjoint(services)
     assert [n for n, s in services.items() if old & set(s.get("depends_on") or {})] == []
+
+
+def test_an_included_makefile_is_pin_checked_like_the_makefile():
+    # The Makefile includes mk/*.mk (one file per phase 001 step): a docker run
+    # moved there must not leave the gate.
+    text = "\tdocker run --rm rust:1-bookworm cargo test\n"
+    assert budget.source_pin_problems("mk/release.mk", text) == ["mk/release.mk: docker run rust:1-bookworm is not pinned"]

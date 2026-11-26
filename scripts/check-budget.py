@@ -13,15 +13,15 @@ default plus that profile's services) and exits 1 on any of:
   limits times its `deploy.replicas`, which compose also sets from `scale`) above 25 CPU /
   48 GiB, the ceiling ADR-045 sets in place of ADR-034's 20 CPU / 36 GiB
   (which replaced ADR-010's 16 CPU / 40 GB). The steady default and the
-  profiled bootstraps are reported only. One profile is named today:
-  `hot-gold`, the paused ClickHouse tier (ADR-057), so three lines print, the
-  last being the default plus clickhouse.
+  profiled bootstraps are reported only, one line per profile: `hot-gold`,
+  the paused ClickHouse tier (ADR-057), and the phase 001 stubs `api`,
+  `build`, `fetch` and `tools`, each the default plus that profile.
 - a service under any profile that does not declare both a CPU and a memory
   limit, so a service behind a profile cannot ship without one.
 - an image that is not pinned (see `unpinned`): a compose image in any
   profile (one compose builds is exempt, its Dockerfile is checked), a
-  Dockerfile FROM or COPY --from, a `docker run` image in the Makefile or a
-  shell script.
+  Dockerfile FROM or COPY --from, a `docker run` image in the Makefile, an
+  included mk/*.mk or a shell script.
 - a `pip install` package in a Dockerfile, or a `uv run --with` dependency in
   the Makefile, a shell script, a scripts/ Python file or a workflow, with no
   `==` version.
@@ -217,7 +217,7 @@ def source_pin_problems(path: str, text: str, local: frozenset = frozenset()) ->
     Makefile and shell (`local`: images compose builds), uv dependencies, and
     workflow Actions."""
     problems = []
-    if path == "Makefile" or path.endswith(".sh"):
+    if path == "Makefile" or path.endswith((".sh", ".mk")):
         problems += [f"{path}: docker run {i} is not pinned" for i in run_images(text)
                      if i not in local and unpinned(i)]
     for n, line in enumerate(text.splitlines(), 1):
@@ -267,7 +267,7 @@ def main() -> int:
     files = tracked()
     dockerfiles = [(p, (ROOT / p).read_text()) for p in files
                    if Path(p).name.startswith("Dockerfile") and not p.endswith(".dockerignore")]
-    sources = [p for p in files if p == "Makefile" or p.endswith(".sh") or p.startswith(".github/workflows/")
+    sources = [p for p in files if p == "Makefile" or p.endswith((".sh", ".mk")) or p.startswith(".github/workflows/")
                or (p.startswith("scripts/") and p.endswith(".py"))]
     every = compose_services("--profile", "*")
     names = sorted({name for svc in every.values() for name in svc.get("profiles") or []})
