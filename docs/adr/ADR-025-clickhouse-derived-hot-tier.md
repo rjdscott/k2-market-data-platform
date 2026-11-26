@@ -115,7 +115,7 @@ this one's.
 described as rebuildable that has never been rebuilt is a tier whose rebuild is a
 research project on the worst possible day. The contract therefore includes a runbook
 path and a measured duration, and until it is measured it says so
-([`../runbooks/lake-recovery.md`](../runbooks/lake-recovery.md)). The distinction between
+([`../runbooks/lake-recovery.md`](../../legacy/v3-lake-ingest/docs/runbooks/lake-recovery.md)). The distinction between
 this and v2 is not the DDL; it is that a rebuild has an owner and a number.
 
 **`iceberg()` only, and the glob is banned in writing.** The `s3('…/data/*.parquet')`
@@ -201,7 +201,7 @@ whole tier is Phase E work described by a Phase D document: if Phase E finds tha
 constraint here is unbuildable, this ADR gets an Outcome rather than a quiet edit.
 
 **Revisit when:** the first real rebuild is performed and timed — that number goes into
-[`../runbooks/lake-recovery.md`](../runbooks/lake-recovery.md) and decides whether 7 days
+[`../runbooks/lake-recovery.md`](../../legacy/v3-lake-ingest/docs/runbooks/lake-recovery.md) and decides whether 7 days
 is the right window; or `iceberg()` fails against a compacted lake table, which is a
 stop-the-line bug and not a reason to reach for the glob; or ClickHouse moves off 24.x, at
 which point the Iceberg reader, `AvroConfluent` and `_headers` all need re-verifying
@@ -218,7 +218,7 @@ together.
 - [ADR-023](ADR-023-lakekeeper-rest-catalog.md) — why the lake's objects are addressable by ClickHouse at all
 - [ADR-024](ADR-024-unified-bronze-tables-in-the-lake.md) — the tables the rebuild pulls, and their copy-on-write property
 - [ADR-027](ADR-027-book-snapshot-and-sequencing.md) — the exact-vs-`Float64` asymmetry between the tiers
-- [`../runbooks/lake-recovery.md`](../runbooks/lake-recovery.md) — the rebuild procedure, and Redpanda replay as a cold start
+- [`../runbooks/lake-recovery.md`](../../legacy/v3-lake-ingest/docs/runbooks/lake-recovery.md) — the rebuild procedure, and Redpanda replay as a cold start
 - [`../plans/2026-08-26-v3-quant-research-platform/004-phase-e-hot-tier.md`](../plans/2026-08-26-v3-quant-research-platform/004-phase-e-hot-tier.md) — the phase that builds it
 
 ---

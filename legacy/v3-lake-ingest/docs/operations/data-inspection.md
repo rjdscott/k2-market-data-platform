@@ -10,10 +10,10 @@ Nothing on this page repeats it.
 
 > The v2 ClickHouse medallion (`k2.bronze_trades_*`, `k2.silver_trades`, `k2.ohlcv_*`) and
 > the six `market.crypto.trades.<ex>[.raw]` topics were **dropped on 2026-08-27** at the
-> Phase E cutover. Their DDL is kept in [`legacy/v2-clickhouse/`](../../legacy/v2-clickhouse/README.md);
-> the served tier is described in [`docker/clickhouse/README.md`](../../docker/clickhouse/README.md).
+> Phase E cutover. Their DDL is kept in [`legacy/v2-clickhouse/`](../../../v2-clickhouse/README.md);
+> the served tier is described in [`docker/clickhouse/README.md`](../../../../docker/clickhouse/README.md).
 
-**ClickHouse is paused** behind the compose profile `hot-gold` ([ADR-057](../adr/ADR-057-clickhouse-hot-tier-paused-during-platform-build.md)): its container is removed and its volume kept, so every `ch` command on this page needs that profile running ([pause-and-resume-a-serving-product.md](../runbooks/pause-and-resume-a-serving-product.md)).
+**ClickHouse is paused** behind the compose profile `hot-gold` ([ADR-057](../../../../docs/adr/ADR-057-clickhouse-hot-tier-paused-during-platform-build.md)): its container is removed and its volume kept, so every `ch` command on this page needs that profile running ([pause-and-resume-a-serving-product.md](../../../../docs/runbooks/pause-and-resume-a-serving-product.md)).
 
 Load credentials into your shell first, then set a shorthand:
 
@@ -132,14 +132,14 @@ ch -q "SELECT exchange, canonical_symbol, second, bid, ask, spread_bps, imbalanc
 `gold.ohlcv_live` is a view over `gold.trades FINAL`, so a minute that arrived in two insert
 blocks is still one correct candle, the v2 `SummingMergeTree` candles could not promise
 that, which is why the v3 tables are loaded from the lake and never aggregated here
-([`docker/clickhouse/README.md`](../../docker/clickhouse/README.md)).
+([`docker/clickhouse/README.md`](../../../../docker/clickhouse/README.md)).
 
 ## Lake tier: Iceberg via Spark
 
 The lake lives on a **Lakekeeper REST catalog** over MinIO
-([ADR-023](../adr/ADR-023-lakekeeper-rest-catalog.md)), one catalog, named `lake`, with the
+([ADR-023](../../../../docs/adr/ADR-023-lakekeeper-rest-catalog.md)), one catalog, named `lake`, with the
 `raw`, `bronze`, `silver`, `gold` and `audit` namespaces. Its configuration lives in exactly one place,
-[`docker/lake/spark_conf.py`](../../docker/lake/spark_conf.py); every v3 Spark job gets its
+[`docker/lake/spark_conf.py`](../../../../docker/lake/spark_conf.py); every v3 Spark job gets its
 session from `lake_session()`, so query it the same way rather than reassembling a dozen
 `--conf` flags:
 
@@ -196,9 +196,9 @@ Needs the `hot-gold` profile running (ClickHouse paused, ADR-057).
 
 ClickHouse `gold` is derived from the same topics the lake archives, and the lake's
 `gold.trades` is what a reload puts back into it, so on an overlapping window the two must
-agree **exactly**, the lake wins on conflict ([ADR-026](../adr/ADR-026-four-layer-lake-and-gold-served-from-clickhouse.md)).
+agree **exactly**, the lake wins on conflict ([ADR-026](../../../../docs/adr/ADR-026-four-layer-lake-and-gold-served-from-clickhouse.md)).
 They did on 2026-08-27: 1,978,901 / 273,060 / 33,246 (binance / coinbase / kraken) on
-00:00–05:00Z, both sides ([`docker/clickhouse/README.md`](../../docker/clickhouse/README.md#measured-2026-08-27-first-live-apply-commit-of-pr-98)).
+00:00–05:00Z, both sides ([`docker/clickhouse/README.md`](../../../../docker/clickhouse/README.md#measured-2026-08-27-first-live-apply-commit-of-pr-98)).
 
 ```bash
 # ClickHouse side
@@ -251,6 +251,6 @@ docker exec k2-redpanda rpk topic consume market.crypto.v3.raw.binance --num 100
 
 - [data-catalog.md](./data-catalog.md), the per-table reference: grain, time columns,
   symbol conventions, dedup keys, and which engine wins
-- [quick-reference.md](./quick-reference.md), the short version of this page
-- [observability.md](./observability.md), metrics and alerts rather than row-level data
-- [../runbooks/failure-recovery.md](../runbooks/failure-recovery.md), when inspection shows a gap
+- [quick-reference.md](../../../../docs/operations/quick-reference.md), the short version of this page
+- [observability.md](../../../../docs/operations/observability.md), metrics and alerts rather than row-level data
+- [../runbooks/failure-recovery.md](../../../../docs/runbooks/failure-recovery.md), when inspection shows a gap

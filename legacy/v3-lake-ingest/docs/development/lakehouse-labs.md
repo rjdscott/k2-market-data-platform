@@ -1,6 +1,6 @@
 # Lakehouse labs
 
-Five guided labs for [chapter 19](../architecture/19-lakehouse-and-domain-warehouses.md), the
+Five guided labs for [chapter 19](../../../../docs/architecture/19-lakehouse-and-domain-warehouses.md), the
 lakehouse and its domain warehouses. The chapter explains the design. These labs make you do
 it: look at the catalog, trace a record, hit the fence, add a domain, and break a test.
 
@@ -20,7 +20,7 @@ because this repository publishes no market data.
 | 4. Add a domain end to end | a separate checkout, and the throwaway Trinos that `make test-trino` and `make test-dbt` start and remove | that checkout, until you back the domain out |
 | 5. Break it and fix it | a throwaway Trino, then the live stack read-only | the throwaway only |
 
-You need the stack running (`make up`, then `make health`; [setup](setup.md)), Docker,
+You need the stack running (`make up`, then `make health`; [setup](../../../../docs/development/setup.md)), Docker,
 [`uv`](https://docs.astral.sh/uv/) and `jq`. Run every command from the repository root unless
 a step says `cd`. The shell lines work in bash and zsh.
 
@@ -33,7 +33,7 @@ Two rules keep the live stack safe:
 - Call your throwaway `k2-labs-trino` and delete it at the end of the lab. `make test-trino` and
   `make test-dbt` start their own, `k2-trino-rules-test` and `k2-dbt-test`. Run one at a time.
 
-Terms used below. The rest are in [chapter 19's glossary](../architecture/19-lakehouse-and-domain-warehouses.md#glossary).
+Terms used below. The rest are in [chapter 19's glossary](../../../../docs/architecture/19-lakehouse-and-domain-warehouses.md#glossary).
 
 | Term | Meaning |
 |---|---|
@@ -264,8 +264,8 @@ A Trino catalog is one file under `docker/trino/etc/catalog/` that names one Lak
 warehouse. Catalog `lake` also sets `iceberg.security=read_only`, so its connector refuses every
 commit, whoever asks. For the domain catalogs, `rules.json` decides, and the first matching
 rule wins: each writer's own rule comes first, and everyone else falls through to the last
-rule, `SELECT` only ([chapter 19, who can do what](../architecture/19-lakehouse-and-domain-warehouses.md#who-can-do-what),
-[ADR-044](../adr/ADR-044-producer-lake-and-domain-mart-warehouses.md)). The `$snapshots` and
+rule, `SELECT` only ([chapter 19, who can do what](../../../../docs/architecture/19-lakehouse-and-domain-warehouses.md#who-can-do-what),
+[ADR-044](../../../../docs/adr/ADR-044-producer-lake-and-domain-mart-warehouses.md)). The `$snapshots` and
 `$files` tables read Iceberg's metadata, so they are cheap on any table size.
 
 ### Check yourself
@@ -508,7 +508,7 @@ before the query.
 The ingest's first stage stores each Kafka record unchanged in `raw.messages`, keyed by its
 topic, partition and offset. Every later layer is decoded from it and keeps that position in
 the lineage columns, plus `src_index` once a frame is split into trades
-([ADR-021](../adr/ADR-021-raw-first-archive-and-lineage.md),
+([ADR-021](../../../../docs/adr/ADR-021-raw-first-archive-and-lineage.md),
 [chapter 08](../architecture/08-lake-ingest.md), [chapter 09](../architecture/09-lake-layers.md)).
 A candle stores `src_snapshot_id`, the `gold.trades` snapshot it was computed from. The mart is
 dbt's port of the same candle SQL, rebuilt whole every hour; the delayed view filters the lake's
@@ -657,9 +657,9 @@ statement that would commit and every table procedure. The domain catalogs are w
 `rules.json` makes only `dbt_<domain>` an owner there, so every other user's create, insert,
 delete or drop is refused. Trino 484's file-based access control does not check table
 procedures (`ALTER TABLE ... EXECUTE`) per user, so any user may run one in any domain catalog,
-at or above the 7-day floors. [ADR-044](../adr/ADR-044-producer-lake-and-domain-mart-warehouses.md)
+at or above the 7-day floors. [ADR-044](../../../../docs/adr/ADR-044-producer-lake-and-domain-mart-warehouses.md)
 records this limit, and `make test-trino` asserts it, so a Trino release that closes it fails
-there first ([chapter 19, the honest limits](../architecture/19-lakehouse-and-domain-warehouses.md#the-honest-limits)).
+there first ([chapter 19, the honest limits](../../../../docs/architecture/19-lakehouse-and-domain-warehouses.md#the-honest-limits)).
 
 ### Check yourself
 
@@ -925,8 +925,8 @@ and product page go with the domain.
 `make generate` reads `contracts/domains.yaml` and the products under `contracts/`, and writes
 every fence from them: the warehouse list `docker/lake/init-lake.sh` creates, a catalog file
 per domain, the writer's rules in `rules.json`, and the dbt selector
-([chapter 18](../architecture/18-data-mesh.md#what-k2gen-generate-writes),
-[chapter 19](../architecture/19-lakehouse-and-domain-warehouses.md#domains-one-entry-one-fence)).
+([chapter 18](../../../../docs/architecture/18-data-mesh.md#what-k2gen-generate-writes),
+[chapter 19](../../../../docs/architecture/19-lakehouse-and-domain-warehouses.md#domains-one-entry-one-fence)).
 Nothing reaches a running stack by itself: Trino reads its catalog files only when it starts,
 and a warehouse exists only after `lake-init` runs. CI runs `make generate` and fails on any
 difference, so a fence cannot drift from its domain.
@@ -1134,7 +1134,7 @@ ORDER BY checked_at DESC"
 
 Ask for a time window, not each check's latest status. The ingest files `offset_gap` only when
 Redpanda evicted records before the lake read them, so that check has no passing rows: its
-latest row is always a fail ([ADR-047](../adr/ADR-047-ingest-batch-audit-after-publish.md) does
+latest row is always a fail ([ADR-047](../../../../docs/adr/ADR-047-ingest-batch-audit-after-publish.md) does
 the same for `batch_offsets`).
 
 Then every dbt test whose last row is more than two hours old. An hourly run that never started
@@ -1165,7 +1165,7 @@ At 21:11 UTC both domains had just reported, from the 21:10 hourly run, and noth
 node, whatever its result. It writes one row per test the invocation ran into the writer's own
 catalog, so no writer ever writes outside its catalog. The governance view only reads: it is a
 definer view, so any reader sees the base tables through its owner, `dbt_governance`
-([ADR-046](../adr/ADR-046-governance-domain-and-quality-results.md),
+([ADR-046](../../../../docs/adr/ADR-046-governance-domain-and-quality-results.md),
 [`dbt/README.md`](../../dbt/README.md#test-results-every-domains-then-one-view)). Under Airflow,
 a task downstream of a failure is never started and records nothing, which is why the second
 live query looks for silence ([runbook](../runbooks/dbt-marts.md)).
@@ -1184,5 +1184,5 @@ marts' tasks `upstream_failed`. What do the marts' tests leave in
 
 - [`docs/runbooks/dbt-marts.md`](../runbooks/dbt-marts.md), when the marts stop rebuilding.
 - [`dbt/README.md`](../../dbt/README.md), every mart and how its tests were made to fail.
-- [The golden path](golden-path.md), adding a real data product.
-- [Testing](testing.md), every suite and what it covers.
+- [The golden path](../../../../docs/development/golden-path.md), adding a real data product.
+- [Testing](../../../../docs/development/testing.md), every suite and what it covers.

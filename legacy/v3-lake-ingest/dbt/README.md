@@ -1,8 +1,8 @@
 # dbt
 
 The domain marts: SQL models dbt builds on Trino, each in its domain's own catalog
-([ADR-035](../docs/adr/ADR-035-trino-and-dbt-for-marts.md),
-[ADR-044](../docs/adr/ADR-044-producer-lake-and-domain-mart-warehouses.md)). Spark keeps
+([ADR-035](../../../docs/adr/ADR-035-trino-and-dbt-for-marts.md),
+[ADR-044](../../../docs/adr/ADR-044-producer-lake-and-domain-mart-warehouses.md)). Spark keeps
 everything from raw to gold; a model here is one `SELECT` over lake tables or other marts.
 
 | Pinned | Version | Why this one |
@@ -51,14 +51,14 @@ docker exec k2-trino trino --execute \
 ## Identity and catalogs
 
 Trino has no authentication here: the user is the `X-Trino-User` header, and it decides what
-may be written ([`docker/trino/etc/rules.json`](../docker/trino/etc/rules.json)). Every user
+may be written ([`docker/trino/etc/rules.json`](../../../docker/trino/etc/rules.json)). Every user
 reads every catalog. Only `dbt_<catalog>` creates, replaces or drops in catalog `<catalog>`,
 and nobody writes `lake`. `profiles.yml` has one target, `trino`, whose host, port and user
 come from `K2_TRINO_HOST`, `K2_TRINO_PORT` and `K2_TRINO_USER` (defaults `localhost`, `8088`,
 `dbt_market_analytics`); there is no password because there is nothing to check it.
 
 So a run writes one domain: `K2_TRINO_USER=dbt_<catalog> dbt build --selector <catalog>`.
-[`selectors.yml`](selectors.yml) is generated from the contracts, one selector per domain
+[`selectors.yml`](../../../dbt/selectors.yml) is generated from the contracts, one selector per domain
 with marts: its models, plus the checks of every lake table its marts read. A model of
 another domain in the same run fails on the fence, with `Access Denied`.
 
@@ -81,7 +81,7 @@ scaffolds a commented `marts:` block at the product's place. A mart that is a vi
 `materialized: view` in its contract and `{{ config(materialized='view') }}` in its model. A product cannot be named
 `staging`, `intermediate` or `dq`: those schemas are the platform's in every domain catalog,
 not products (ADR-044's one schema per product holds for products;
-[ADR-046](../docs/adr/ADR-046-governance-domain-and-quality-results.md)). A second domain adds its
+[ADR-046](../../../docs/adr/ADR-046-governance-domain-and-quality-results.md)). A second domain adds its
 folder, a three-line block in `dbt_project.yml` that makes its marts tables, and its marts in
 its contracts; `make generate` gives it a selector. A domain whose marts are all views, as
 `governance`'s one mart is, needs no block. `make test-k2gen` pins today's marts in
@@ -161,7 +161,7 @@ ADR-035's delayed product, as its Decision has it: a view over the lake's own ca
 (`contracts/market-analytics/delayed-candles/`) so it has its own schema, which the
 entitlements phase can grant on its own. Same columns as the lake table without its lineage
 pair, same grain `(exchange, canonical_symbol, window_start)`, and as current as the lake.
-Readable through Trino only, like every view ([ADR-035](../docs/adr/ADR-035-trino-and-dbt-for-marts.md)).
+Readable through Trino only, like every view ([ADR-035](../../../docs/adr/ADR-035-trino-and-dbt-for-marts.md)).
 
 A candle is served once both hold, each on `window_start` alone:
 
@@ -242,10 +242,10 @@ is tagged `regexp_like`; the rest is plain SQL.
 the one that consumes it: it joins market-capture's `audit.checks` with this domain's
 `gold.trades`, and the reader who needs it, deciding which venue's day to trust, reads this
 domain's candles. Owned by market-capture, it would make that domain read this one, the
-both-directions dependency [ADR-033](../docs/adr/ADR-033-data-mesh-four-domains.md) names as its
+both-directions dependency [ADR-033](../../../docs/adr/ADR-033-data-mesh-four-domains.md) names as its
 revisit trigger. `audit.checks` needed a contract to be read (`contracts/market-capture/lake-audit/`),
 filed under market-capture, whose tables most checks are about; the governance domain
-([ADR-046](../docs/adr/ADR-046-governance-domain-and-quality-results.md)) reads it and left it
+([ADR-046](../../../docs/adr/ADR-046-governance-domain-and-quality-results.md)) reads it and left it
 there. Layer `audit` joined the contract schema's layers for it.
 
 Its tests: three unit tests on made-up venues (the UTC day edge, gaps and unknowable trades; each
@@ -392,7 +392,7 @@ for a model, which runs its unit tests, the model and its data tests; `dbt sourc
 the source tests for a lake table a mart reads. Before any of them, `<domain>_test_results_table`
 runs `dbt run-operation create_test_results_table` as the writer, so the domain's
 `dq.dbt_test_results` exists before two of its tasks' hooks could both create it at once
-([ADR-046](../docs/adr/ADR-046-governance-domain-and-quality-results.md) Risks). The governance group starts once every other
+([ADR-046](../../../docs/adr/ADR-046-governance-domain-and-quality-results.md) Risks). The governance group starts once every other
 group has finished, however it ended (`domains_built`, trigger rule `all_done`), so its view is
 rebuilt and tested on this run's results. `populate_cache: false` in `dbt_project.yml` keeps a
 run from listing every schema of the project first: with dbt's default, a `market_analytics`

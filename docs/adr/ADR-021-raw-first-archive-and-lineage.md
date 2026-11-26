@@ -73,7 +73,7 @@ both of those are caches in front of the archive and are meant to expire.
 
 Retention is a *platform* commitment with an *operator* escape hatch: disk expansion is
 an operator action, taken against an 80 % disk alert and its runbook
-([`../runbooks/lake-disk-usage-high.md`](../runbooks/lake-disk-usage-high.md)). No
+([`../runbooks/lake-disk-usage-high.md`](../../legacy/v3-lake-ingest/docs/runbooks/lake-disk-usage-high.md)). No
 process on this platform deletes a row of `raw.messages`.
 
 ---
@@ -212,7 +212,7 @@ constraint attached.
 - [ADR-027](ADR-027-book-snapshot-and-sequencing.md) — why the deltas stay in `raw.messages` and top-20 @ 1 Hz is the product
 - [Q8, v3 requirements clarification](../research/2026-08-26-v3-requirements-clarification.md#q8--raw-archive-retention-on-a-single-host) — keep forever, with an 80 % disk alert
 - [`../architecture/15-capacity-model.md`](../architecture/15-capacity-model.md) — the 6.47 GB/day prediction and the ~26-day disk bottleneck
-- [`../runbooks/lake-disk-usage-high.md`](../runbooks/lake-disk-usage-high.md) — what an operator does instead of a TTL
+- [`../runbooks/lake-disk-usage-high.md`](../../legacy/v3-lake-ingest/docs/runbooks/lake-disk-usage-high.md) — what an operator does instead of a TTL
 
 ---
 
@@ -253,7 +253,7 @@ and the archive is the lake, which is exactly what this ADR chose. The fix for a
 cannot keep up belongs in the lake: the per-run bound is now 200,000 offsets per partition,
 ~3.6× the measured rate. Revisit when `k2_lake_ingest_backlog_offsets` for any topic
 exceeds one hour of that topic's arrival rate for two consecutive cycles
-([lake-ingest-lag.md §3](../runbooks/lake-ingest-lag.md)); the disk-days trigger in
+([lake-ingest-lag.md §3](../../legacy/v3-lake-ingest/docs/runbooks/lake-ingest-lag.md)); the disk-days trigger in
 "Revisit when" above is unchanged and still unmeasured.
 
 _The rest of the outcome — the zstd ratio on `payload`, the days-remaining number, the

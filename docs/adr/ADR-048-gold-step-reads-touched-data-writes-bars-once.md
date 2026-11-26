@@ -1,6 +1,6 @@
 # ADR-048: Gold step reads only touched data and writes bars once
 
-**Status:** Accepted
+**Status:** Superseded by [ADR-056](ADR-056-unified-data-product-platform.md), never built
 **Accepted:** by the owner on 2026-11-26, after an independent design review in three rounds;
 the findings and their resolution are in pull request #215
 **Date:** 2026-11-26

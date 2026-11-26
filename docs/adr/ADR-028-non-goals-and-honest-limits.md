@@ -72,7 +72,7 @@ survives a dead disk: the archive is the system of record and it has one copy.
 - **Nearest thing K2 offers:** rebuild-from-lake as a first-class, timed path — every derived
   layer and the whole hot tier are functions of `raw.messages`
   ([ADR-025](ADR-025-clickhouse-derived-hot-tier.md),
-  [09](../architecture/09-lake-layers.md)) — and the bronze rebuild of the entire archive
+  [09](../../legacy/v3-lake-ingest/docs/architecture/09-lake-layers.md)) — and the bronze rebuild of the entire archive
   measured **520 s for 61,888,291 rows** ([2026-08-27](../benchmarks/2026-08-27.md#lake)).
 - **Revisit when:** a second host or an AWS account is provisioned (Q9's own trigger), or a
   disk failure has actually cost an archive no venue can re-serve.
@@ -148,7 +148,7 @@ surface plus auth, pagination and a deployment.
 
 - **Nearest thing K2 offers:** the `gold` database in ClickHouse for the head and DuckDB over
   the lake for the record, reading the same tables
-  ([10](../architecture/10-clickhouse-gold.md), [`notebooks/`](../../notebooks/README.md));
+  ([10](../architecture/10-clickhouse-gold.md), [`notebooks/`](../../legacy/v3-lake-ingest/notebooks/README.md));
   candles are computed on read, so the nearest thing to an endpoint is a table function.
 - **Revisit when:** a consumer that cannot open a database connection needs the data — a
   browser or mobile client, or a service on another host.
@@ -235,7 +235,7 @@ half-migrated contract failing silently at the ingest boundary rather than at bu
 ### 12. No retention policy: raw is kept forever, and the disk is the only limit
 
 `raw.messages` has no TTL and no row is ever deleted
-([`docker/lake/ddl/lake.sql`](../../docker/lake/ddl/lake.sql),
+([`docker/lake/ddl/lake.sql`](../../legacy/v3-lake-ingest/lake/ddl/lake.sql),
 [ADR-021](ADR-021-raw-first-archive-and-lineage.md),
 [Q8](../research/2026-08-26-v3-requirements-clarification.md#q8--raw-archive-retention-on-a-single-host));
 gold in ClickHouse likewise has no TTL

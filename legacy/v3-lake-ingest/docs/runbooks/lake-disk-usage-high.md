@@ -5,8 +5,8 @@ deletes a row of it**, compaction rewrites files, snapshot expiry drops supersed
 orphan removal deletes objects no snapshot ever referenced, and none of the three can touch
 a row in the current snapshot. A deliberate operator purge with an audit row (Option C
 below) is the one documented escape hatch, and it is a human decision rather than a policy
-([Q8](../research/2026-08-26-v3-requirements-clarification.md#q8--raw-archive-retention-on-a-single-host),
-[ADR-021](../adr/ADR-021-raw-first-archive-and-lineage.md)). Disk is therefore the
+([Q8](../../../../docs/research/2026-08-26-v3-requirements-clarification.md#q8--raw-archive-retention-on-a-single-host),
+[ADR-021](../../../../docs/adr/ADR-021-raw-first-archive-and-lineage.md)). Disk is therefore the
 platform's first binding constraint, it binds on a *calendar* rather than at a load
 multiple, and this runbook is the operator half of that decision.
 
@@ -36,7 +36,7 @@ this is a **capacity decision with a lead time**, not an incident.
 **Expected behaviour**, growth continues, because nothing in the design stops it. The
 capacity model predicts `raw.messages` at **6.47 GB/day** and the whole lake at
 **6.89 GB/day**, and predicts the host filling in **~26 days** from a cold start
-([capacity model §7](../architecture/15-capacity-model.md#7-bottleneck-prediction)). Those are
+([capacity model §7](../../../../docs/architecture/15-capacity-model.md#7-bottleneck-prediction)). Those are
 predictions, not measurements; the commands below produce the real slope.
 
 ### Read the disk: and know what the alert is reading
@@ -91,7 +91,7 @@ df -h / | tail -1 | awk '{print strftime("%F %T"), $4}' >> /tmp/k2-disk.log
 ```
 
 Phase F publishes days-remaining as a first-class number with its command
-([Q8](../research/2026-08-26-v3-requirements-clarification.md#q8--raw-archive-retention-on-a-single-host)).
+([Q8](../../../../docs/research/2026-08-26-v3-requirements-clarification.md#q8--raw-archive-retention-on-a-single-host)).
 Until it does, that two-sample subtraction is the honest version.
 
 ---
@@ -118,7 +118,7 @@ docker compose up -d --force-recreate --no-deps minio
 docker exec k2-minio mc du lk/k2-lake/      # byte count must match pre-move
 ```
 
-This is the option [capacity model §7](../architecture/15-capacity-model.md#7-bottleneck-prediction)
+This is the option [capacity model §7](../../../../docs/architecture/15-capacity-model.md#7-bottleneck-prediction)
 names as the one that keeps ADR-018's guarantee intact, and it is the recommended one.
 
 ### Option B: move object storage to S3 with a lifecycle
@@ -127,7 +127,7 @@ Capacity stops being the constraint and becomes a storage-class choice. The mapp
 the lifecycle tiers, and the two rules that make it work, never lifecycle the Iceberg
 metadata prefix, and Glacier **Instant Retrieval** rather than Deep Archive if the archive
 must stay queryable, are designed in
-[`../architecture/17-scale-out-path.md`](../architecture/17-scale-out-path.md), §4. Labelled
+[`../architecture/17-scale-out-path.md`](../../../../docs/architecture/17-scale-out-path.md), §4. Labelled
 *designed, not exercised*: nothing there has been deployed.
 
 Mechanically it is `K2_S3_ENDPOINT`, `K2_S3_REGION` and `K2_S3_PATH_STYLE=false`, because
@@ -179,7 +179,7 @@ and ClickHouse to start failing too.
 **Expected behaviour**, the ordering of failure is not in the platform's control, so
 assume everything on this host fails at once. Nothing is corrupted by it: a failed ingest
 commit is a no-op that the next run repeats
-([ADR-022](../adr/ADR-022-exactly-once-via-snapshot-offsets.md)), and Redpanda holds 48 h
+([ADR-022](../../../../docs/adr/ADR-022-exactly-once-via-snapshot-offsets.md)), and Redpanda holds 48 h
 of raw, which is the real deadline.
 
 **Recovery**, buy time first, then take Option A or B.
@@ -239,11 +239,11 @@ purge is recorded here**, with its window and the reason._
 
 ## Related
 
-- [Q8, v3 requirements clarification](../research/2026-08-26-v3-requirements-clarification.md#q8--raw-archive-retention-on-a-single-host), keep forever, 80 % alert, no lake TTL
-- [ADR-021](../adr/ADR-021-raw-first-archive-and-lineage.md), why the archive is unbounded, and the single-host limit stated plainly
-- [capacity model §7](../architecture/15-capacity-model.md#7-bottleneck-prediction), 6.89 GB/day, ~26 days, and the three responses
-- [capacity model §8](../architecture/15-capacity-model.md#8-how-this-table-is-settled), the `df` / `mc du` commands this runbook uses
-- [`../architecture/17-scale-out-path.md`](../architecture/17-scale-out-path.md), Option B in full, labelled *designed, not exercised*
+- [Q8, v3 requirements clarification](../../../../docs/research/2026-08-26-v3-requirements-clarification.md#q8--raw-archive-retention-on-a-single-host), keep forever, 80 % alert, no lake TTL
+- [ADR-021](../../../../docs/adr/ADR-021-raw-first-archive-and-lineage.md), why the archive is unbounded, and the single-host limit stated plainly
+- [capacity model §7](../../../../docs/architecture/15-capacity-model.md#7-bottleneck-prediction), 6.89 GB/day, ~26 days, and the three responses
+- [capacity model §8](../../../../docs/architecture/15-capacity-model.md#8-how-this-table-is-settled), the `df` / `mc du` commands this runbook uses
+- [`../architecture/17-scale-out-path.md`](../../../../docs/architecture/17-scale-out-path.md), Option B in full, labelled *designed, not exercised*
 - [lake-recovery.md](./lake-recovery.md), if the disk filled and something broke
 
 ---

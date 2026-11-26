@@ -18,7 +18,7 @@ make notebooks-run        # execute all five headless (nbconvert) into .executed
 | `04_completeness_audit.ipynb` | what the archive is missing and why: trade-id holes, venue replays, checksum failures by hour, offset gaps | `silver.trades_*`, `silver.book_kraken`, `audit.checks` |
 
 Notebooks 02, 03 and 04 read the book tables, which hold nothing after order-book capture
-was paused ([ADR-050](../docs/adr/ADR-050-order-book-capture-paused-during-platform-build.md)):
+was paused ([ADR-050](../../../docs/adr/ADR-050-order-book-capture-paused-during-platform-build.md)):
 pin them to a window before the pause. `k2lake.trades(book=True)` pairs a trade inside the
 pause with the last quote before it, however old, so its quote columns are not evidence of a
 live book there.
@@ -33,7 +33,7 @@ writing a query against a table you have not used.
 first cell calls `pin(con)`: one `pinned.<ns>_<table>` view per gold, silver and audit table
 at its current snapshot id, printed with the commit, and nothing below reads `lake.*`
 directly (`tests/test_notebooks_pinned.py` fails CI if one does). A number a notebook
-prints therefore names the snapshot it came from ([ADR-029](../docs/adr/ADR-029-research-production-parity-contract.md)).
+prints therefore names the snapshot it came from ([ADR-029](../../../docs/adr/ADR-029-research-production-parity-contract.md)).
 "Current" is the snapshot `main` points at, read from Lakekeeper's `loadTable`
 (`k2lake.main_lineage`), never the newest snapshot by commit time: once a table has a
 branch, that can be an unpublished commit. `pin()` raises rather than serve a table unpinned
@@ -42,7 +42,7 @@ pin the parity scripts are given is used only if it is on `main`'s lineage or it
 `parity_<day>` tag names it; otherwise the run stops
 ([`tests/parity/README.md`](../tests/parity/README.md#keeping-the-pinned-snapshots-alive)).
 What this data can and cannot honestly support is written down before any of it is
-quoted: [replay-fidelity-limits](../docs/research/2026-08-28-replay-fidelity-limits.md).
+quoted: [replay-fidelity-limits](../../../docs/research/2026-08-28-replay-fidelity-limits.md).
 
 ## The quant story in three lines
 
@@ -106,7 +106,7 @@ Import works from `notebooks/` (`cd notebooks && uv run python`, or the JupyterL
 ## The dimension is SCD2 — join it as of the trade
 
 `gold.dim_instrument` holds one row per validity interval, not one per instrument
-([ADR-030](../docs/adr/ADR-030-scd2-security-master.md)). `SELECT * FROM pinned.gold_dim_instrument`
+([ADR-030](../../../docs/adr/ADR-030-scd2-security-master.md)). `SELECT * FROM pinned.gold_dim_instrument`
 returns history; the current slice is `WHERE is_current`, and the attributes in force when a
 trade printed are an `ASOF JOIN` on `valid_from`:
 
@@ -130,7 +130,7 @@ A key's FIRST version opens at `1970-01-01`, not at the run that discovered it: 
 asserts what an instrument *is*, and that was true before K2 recorded it, so no trade is ever
 older than its dimension row. `recorded_at` dates when K2 learned it — on those seed rows
 `valid_from < recorded_at`, and the gap is the history nothing observed
-([ADR-030](../docs/adr/ADR-030-scd2-security-master.md) Outcome). Later versions open at their run.
+([ADR-030](../../../docs/adr/ADR-030-scd2-security-master.md) Outcome). Later versions open at their run.
 
 Numbers printed by these notebooks are not published anywhere else; the published ones are
 in `docs/benchmarks/`. A notebook cell is a query, not a claim.

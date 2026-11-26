@@ -105,8 +105,9 @@ x-airflow-env: &airflow-env
   AIRFLOW__METRICS__STATSD_PORT: "9125"
   AIRFLOW__METRICS__STATSD_INFLUXDB_ENABLED: "True"
   AIRFLOW__METRICS__LEGACY_NAMES_ON: "False"
-  # astronomer-cosmos, in the image for the dbt DAGs (ADR-034), sends usage
-  # telemetry and dbt anonymous usage stats unless told not to, and both are off.
+  # astronomer-cosmos, in the image since ADR-034's dbt DAG (retired; no DAG
+  # uses cosmos today), sends usage telemetry and dbt anonymous usage stats
+  # unless told not to, and both are off.
   # Cosmos keys its dbt ls cache on a hash of the project's files; a host
   # checkout's dbt/.venv is no part of the project.
   AIRFLOW__COSMOS__ENABLE_TELEMETRY: "False"
@@ -130,7 +131,7 @@ services:
       - k2-net
     ports:
       - "127.0.0.1:9092:9092"     # Kafka API
-      - "127.0.0.1:19092:19092"   # Kafka API, external listener advertised as localhost:19092 (host tooling: scripts/parity)
+      - "127.0.0.1:19092:19092"   # Kafka API, external listener advertised as localhost:19092 (host tooling)
       - "127.0.0.1:9644:9644"     # Admin API
       - "127.0.0.1:8081:8081"     # Schema Registry
     volumes:
@@ -550,7 +551,7 @@ services:
   # service given the Docker socket. No triggerer: nothing here defers.
   #
   # ./docker/airflow/dags and ./dbt are directory bind mounts held by the
-  # scheduler and the dag-processor, read-only: cosmos runs each dbt command in
+  # scheduler and the dag-processor, read-only: cosmos ran each dbt command in
   # a temporary copy of symlinks, where dbt writes target/ and logs/. A checkout
   # switch or a write-then-rename edit needs both recreated (CLAUDE.md,
   # bind-mount gotcha).
@@ -864,8 +865,9 @@ services:
   # Lakekeeper - Iceberg REST catalog
   # ───────────────────────────────────────────────────────────────────────
   # Port published on loopback only: the catalog runs unauthenticated on a
-  # single host, and the only host-side consumers are the Phase E DuckDB /
-  # PyIceberg notebooks. Same reasoning as prefect-db's 127.0.0.1:15432.
+  # single host, and the only host-side consumers were the DuckDB / PyIceberg
+  # notebooks, archived with the old lake ingest. Same reasoning as
+  # prefect-db's 127.0.0.1:15432.
   # 18181 rather than 8181 because Redpanda already owns host 8081/8082.
   #
   # The image is distroless (no shell), so the healthcheck is the binary's own

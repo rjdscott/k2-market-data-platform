@@ -9,7 +9,7 @@ Two engines hold the same products and they are not interchangeable:
 - **The Iceberg lake is the record** (ADR-018, ADR-026). Every gold table is populated
   there by the 5-minute Spark ingest, so it trails the market by up to one tick interval.
 - **ClickHouse `gold` is the head, and it is paused** behind the compose profile `hot-gold`
-  ([ADR-057](../adr/ADR-057-clickhouse-hot-tier-paused-during-platform-build.md)): while paused it is not running and nothing can query it, so the lake is
+  ([ADR-057](../../../../docs/adr/ADR-057-clickhouse-hot-tier-paused-during-platform-build.md)): while paused it is not running and nothing can query it, so the lake is
   the only copy. While the profile runs, `trades` and `book_top20` are fed live from the Avro
   topics and are seconds fresh; every other table is populated only by the pull runbook
   and is **empty until it runs**.
@@ -54,22 +54,22 @@ intended shape, not a fault.
 
 Trino is a third way in, not a third copy. `lake.<namespace>.<table>` through Trino reads
 the same Iceberg files Spark wrote, at the same freshness, and Trino writes only the marts
-below ([chapter 19](../architecture/19-lakehouse-and-domain-warehouses.md)).
+below ([chapter 19](../../../../docs/architecture/19-lakehouse-and-domain-warehouses.md)).
 
 ## Data products
 
 Every table and mart on this page belongs to one data product, and every product to one
-domain and the team that owns it ([chapter 18](../architecture/18-data-mesh.md)). The table
+domain and the team that owns it ([chapter 18](../../../../docs/architecture/18-data-mesh.md)). The table
 of every product, with its domain, owner, lifecycle and the tables and marts it publishes,
-is [products/all.md](../products/all.md). `make generate` writes it from `contracts/`, so it
+is [products/all.md](../../../../docs/products/all.md). `make generate` writes it from `contracts/`, so it
 is never kept by hand, and CI fails when it is stale. Look a table up there to find its
 owner; come back here to query it.
 
-**The book tables are paused** ([ADR-050](../adr/ADR-050-order-book-capture-paused-during-platform-build.md)): order-book capture is off on every
+**The book tables are paused** ([ADR-050](../../../../docs/adr/ADR-050-order-book-capture-paused-during-platform-build.md)): order-book capture is off on every
 venue, so `bronze.binance_depth20`, `bronze.kraken_book`, `bronze.coinbase_level2`, the three
 `silver.book_*`, `gold.book_state`, `gold.book_top20` and `gold.bbo_1s` in the lake, and
 `gold.book_top20`, `gold.bbo_1s` and the view `gold.bbo_live` in ClickHouse, hold everything up
-to the pause and nothing after it; [products/all.md](../products/all.md) marks them paused. Two
+to the pause and nothing after it; [products/all.md](../../../../docs/products/all.md) marks them paused. Two
 consequences for a query. **A last commit is not freshness**: the ingest commits an empty
 snapshot to each lake book table every run, so `k2_lake_last_commit_ts_seconds` stays fresh
 while no row arrives; read the newest `recv_ts` or `second` instead. **`gold.bbo_live`'s newest
@@ -79,11 +79,11 @@ pairs a trade in the pause with that quote.
 ## Lake — Iceberg via Lakekeeper on MinIO
 
 Every table is Iceberg format-version 2, Parquet + zstd, copy-on-write, append-only
-([`docker/lake/ddl/lake.sql`](../../docker/lake/ddl/lake.sql) header). Namespaces are
+([`docker/lake/ddl/lake.sql`](../../lake/ddl/lake.sql) header). Namespaces are
 `raw`, `bronze`, `silver`, `gold`, `audit`
-([`docker/lake/init-lake.sh`](../../docker/lake/init-lake.sh) line 133). The dbt marts live
+([`docker/lake/init-lake.sh`](../../../../docker/lake/init-lake.sh) line 133). The dbt marts live
 in one warehouse per data domain, the only places Trino writes, and are read through Trino
-([ADR-044](../adr/ADR-044-producer-lake-and-domain-mart-warehouses.md)), rebuilt whole every
+([ADR-044](../../../../docs/adr/ADR-044-producer-lake-and-domain-mart-warehouses.md)), rebuilt whole every
 hour at minute 10 by the Airflow DAG `dbt_marts` ([`dbt/README.md`](../../dbt/README.md)):
 
 | Mart | Built as | Grain, one row per | What it is |
@@ -91,7 +91,7 @@ hour at minute 10 by the Airflow DAG `dbt_marts` ([`dbt/README.md`](../../dbt/RE
 | `market_analytics.candles.ohlcv_1m` | table | `(exchange, canonical_symbol, window_start)` | `gold.ohlcv_1m`'s grain and columns without `src_snapshot_id` and `computed_at`, from `gold.trades` |
 | `market_analytics.delayed_candles.ohlcv_delayed_20m` | view | the same | `lake.gold.ohlcv_1m`'s candles whose minute ended at least 20 minutes before the query and before the venue's newest minute in the lake |
 | `market_analytics.venue_quality.venue_quality_scorecard` | table | `(exchange, utc_date)` | per venue and UTC day: trades, trades after a trade-id gap and the ids missing; the venue's audits of that day (run the next day) and the whole-table audits run that day, with their failures; raw frames, trade and book records Redpanda evicted before the ingest read them |
-| `governance.quality_results.dq_results` | view | `(source_system, checked_at, subject, check_name)` | every quality result: the lake jobs' checks from `audit.checks` and every domain's dbt tests from its `dq.dbt_test_results`, with `domain`, `status` as `pass`, `fail`, `warn` or `error`, and `detail` ([ADR-046](../adr/ADR-046-governance-domain-and-quality-results.md)) |
+| `governance.quality_results.dq_results` | view | `(source_system, checked_at, subject, check_name)` | every quality result: the lake jobs' checks from `audit.checks` and every domain's dbt tests from its `dq.dbt_test_results`, with `domain`, `status` as `pass`, `fail`, `warn` or `error`, and `detail` ([ADR-046](../../../../docs/adr/ADR-046-governance-domain-and-quality-results.md)) |
 
 Beside the marts, every domain catalog that has run a dbt test holds
 `<catalog>.dq.dbt_test_results`: one row per data test and unit test per dbt invocation,
@@ -118,15 +118,15 @@ governance view is how it is meant to be read.
 
 `gold.dim_instrument` and `gold.dim_venue` are the only gold tables `rebuild.py` will not
 recreate: nothing is a source for lost dimension history
-([`lake.sql`](../../docker/lake/ddl/lake.sql) above `dim_instrument`).
+([`lake.sql`](../../lake/ddl/lake.sql) above `dim_instrument`).
 
 ## ClickHouse `gold` — the served tier
 
 **Paused** (ADR-057): the tables below are as defined, and readable only while the `hot-gold`
 profile runs.
 
-[`docker/clickhouse/ddl/10-gold-tables.sql`](../../docker/clickhouse/ddl/10-gold-tables.sql)
-is the contract; [`20-gold-kafka.sql`](../../docker/clickhouse/ddl/20-gold-kafka.sql)
+[`docker/clickhouse/ddl/10-gold-tables.sql`](../../../../docker/clickhouse/ddl/10-gold-tables.sql)
+is the contract; [`20-gold-kafka.sql`](../../../../docker/clickhouse/ddl/20-gold-kafka.sql)
 attaches the Redpanda feeds. Read `ReplacingMergeTree` tables with `FINAL`; a count
 without it is a count of deliveries.
 
@@ -301,7 +301,7 @@ Use the lake for any research number; ClickHouse's book views are a live monitor
 
 **2. ClickHouse candles, bars and `bbo_1s` are empty until the pull runs.** They are
 pull-fed by design and never computed in ClickHouse
-([`10-gold-tables.sql`](../../docker/clickhouse/ddl/10-gold-tables.sql), above the candle
+([`10-gold-tables.sql`](../../../../docker/clickhouse/ddl/10-gold-tables.sql), above the candle
 tables). For the head, use `gold.ohlcv_live(bucket = 60)` and `gold.bbo_live` — noting
 that `ohlcv_live` emits only buckets that had at least one trade, so a quiet minute is a
 missing row, not a flat candle.
@@ -636,5 +636,5 @@ The archive knows exactly what it is missing.
 - `k2lake.trades()` and `k2lake.completeness()` in [`notebooks/k2lake.py`](../../notebooks/k2lake.py):
   the `+1 SECOND` join, the as-of security master and the completeness signals above, as
   one call each
-- [../architecture/13-schema-design.md](../architecture/13-schema-design.md), why the layers
+- [../architecture/13-schema-design.md](../../../../docs/architecture/13-schema-design.md), why the layers
   have the shape they do

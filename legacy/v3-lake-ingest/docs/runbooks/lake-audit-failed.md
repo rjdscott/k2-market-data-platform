@@ -28,7 +28,7 @@ the tier being down ([lake-recovery.md](./lake-recovery.md)).
 
 | # | Failure | MTTR target | Measured |
 |---|---------|-------------|----------|
-| 1 | `offset_continuity`, a hole in the archive | **investigation, not repair** | occurred 2026-08-26, one recorded hole (its count is in [ADR-021](../adr/ADR-021-raw-first-archive-and-lineage.md)'s Outcome), netted out by the check since 2026-08-27; see §1 |
+| 1 | `offset_continuity`, a hole in the archive | **investigation, not repair** | occurred 2026-08-26, one recorded hole (its count is in [ADR-021](../../../../docs/adr/ADR-021-raw-first-archive-and-lineage.md)'s Outcome), netted out by the check since 2026-08-27; see §1 |
 | 2 | `duplicate_identifiers`, a row landed twice | < 60 min | not yet verified, Phase D burn-in |
 | 3 | `sequence_gaps`, venue sequence discontinuity | **investigation, not repair** | not yet verified, Phase D burn-in |
 | 4 | `venue_replay`, informational; **cannot fail** | n/a, read the rate, do not repair it | not yet verified, Phase D burn-in |
@@ -164,7 +164,7 @@ WHERE check_name IN ('offset_gap', 'offset_continuity') ORDER BY scope, run_ts;
 
 Measured 2026-08-26: `market.crypto.v3.raw.kraken/0` carries an `offset_gap` and
 `offset_continuity` reported **the same count missing** on the same partition
-the two records agreeing (the count is in [ADR-021](../adr/ADR-021-raw-first-archive-and-lineage.md)'s Outcome). Measured 2026-08-27, after the netting landed, the same
+the two records agreeing (the count is in [ADR-021](../../../../docs/adr/ADR-021-raw-first-archive-and-lineage.md)'s Outcome). Measured 2026-08-27, after the netting landed, the same
 partition passes:
 
 ```text
@@ -185,11 +185,11 @@ cause upstream, ingest downtime, or a per-run bound below the real arrival rate.
 **If the gap is not real**, the bug is in the audit, and it is worth naming the two
 lookalikes that will produce it. **Compaction snapshots carry no `k2.kafka-offsets`** and
 must be skipped when walking the offset history
-([ADR-022](../adr/ADR-022-exactly-once-via-snapshot-offsets.md)), an audit that treats a
+([ADR-022](../../../../docs/adr/ADR-022-exactly-once-via-snapshot-offsets.md)), an audit that treats a
 compaction snapshot as an ingest one sees a gap the size of a night. And a **topic
 recreation resets the offset space**, so continuity is only meaningful within one epoch of
 a topic; that is an event to record, not a routine operation
-([ADR-021](../adr/ADR-021-raw-first-archive-and-lineage.md), *Risks*).
+([ADR-021](../../../../docs/adr/ADR-021-raw-first-archive-and-lineage.md), *Risks*).
 
 **Measured**, not yet verified.
 
@@ -208,7 +208,7 @@ the ones `docker/lake/maintenance.py` passes into `audit_duplicates`, which are 
 
 **Both keys were settled by measurement, and the trade key is the most misread line on this
 page.** Over a 30-minute sample of trades captured on 2026-08-26 (its counts are in
-[ADR-024](../adr/ADR-024-unified-bronze-tables-in-the-lake.md)), `(exchange, symbol, trade_id)` *alone* had **duplicated keys**, every one Coinbase, every one a pair of rows with identical
+[ADR-024](../../../../docs/adr/ADR-024-unified-bronze-tables-in-the-lake.md)), `(exchange, symbol, trade_id)` *alone* had **duplicated keys**, every one Coinbase, every one a pair of rows with identical
 price, qty, side and `exchange_ts` under two different `conn_id`s. Coinbase replays recent
 `market_trades` on resubscribe, so a reconnect genuinely delivers the same trade twice and
 the append-only archive genuinely holds both frames. The book table went the other way for
@@ -230,7 +230,7 @@ carries, and that is the only uniqueness the ingest can promise.
 one, is EXPECTED, and it is not this check.** It is counted separately by `venue_replay` (§4), which reports it as a
 number and never fails. **One sample exists and no daily rate is extrapolated from it:**
 30 minutes on 2026-08-26, all three venues (counts in
-[ADR-024](../adr/ADR-024-unified-bronze-tables-in-the-lake.md), repeated above
+[ADR-024](../../../../docs/adr/ADR-024-unified-bronze-tables-in-the-lake.md), repeated above
 `bronze.trades` in `docker/lake/ddl/lake.sql`). Reconnects are bursty, the replay follows
 resubscribes, not the clock, so scaling half an hour to a day would invent a number the
 sample cannot support. The Phase D burn-in produces the daily figure. Either way,
@@ -240,7 +240,7 @@ escalating this as an ingest bug is escalating the venue's documented behaviour.
 one that means the exactly-once contract broke, and that should be impossible. The ingest is
 exactly-once by construction: a run's own commit moves its start offset, so no run can
 re-read a range another run committed
-([ADR-022](../adr/ADR-022-exactly-once-via-snapshot-offsets.md)). A duplicate on the full
+([ADR-022](../../../../docs/adr/ADR-022-exactly-once-via-snapshot-offsets.md)). A duplicate on the full
 key therefore means one of the mechanism's assumptions has broken, not that a venue
 repeated itself.
 
@@ -263,7 +263,7 @@ columns exist:
 | `distinct_sources` | Meaning | Where the bug is |
 |---|---|---|
 | **1** | one archived frame decoded into two bronze rows | stage 2 ran twice over the same source snapshot range, check `k2.src-snapshot-id` on consecutive `bronze.*` commits |
-| **2** | two archived frames, on the *same connection*, carry the same venue trade id | **the venue re-sent it**, measured 2026-08-26, Coinbase pairs ~15 s apart (counted in [ADR-024](../adr/ADR-024-unified-bronze-tables-in-the-lake.md)). Not an ingest bug and, since the key became the lineage, no longer this check; §4 counts it |
+| **2** | two archived frames, on the *same connection*, carry the same venue trade id | **the venue re-sent it**, measured 2026-08-26, Coinbase pairs ~15 s apart (counted in [ADR-024](../../../../docs/adr/ADR-024-unified-bronze-tables-in-the-lake.md)). Not an ingest bug and, since the key became the lineage, no longer this check; §4 counts it |
 
 ```bash
 # 2. Was ingest running more than once at a time? Concurrency 1 is a
@@ -302,12 +302,12 @@ within one `conn_id`.
 means a message was lost between the venue and this host. It cannot be repaired: public
 feeds do not replay, so the frames are gone. The counter and the audit exist so the loss is
 *recorded* rather than silent, v2 had no gap detection at all, which is why a dropped
-message there was invisible ([ADR-018](../adr/ADR-018-v3-lake-first-rust-capture.md),
+message there was invisible ([ADR-018](../../../../docs/adr/ADR-018-v3-lake-first-rust-capture.md),
 Context).
 
 Sequencing means three different things across the three venues, and reading the failure
 wrong is easy. The authoritative table is in
-[ADR-027](../adr/ADR-027-book-snapshot-and-sequencing.md); the short form:
+[ADR-027](../../../../docs/adr/ADR-027-book-snapshot-and-sequencing.md); the short form:
 
 | Venue | `seq` is | A "gap" means |
 |---|---|---|
@@ -348,7 +348,7 @@ instead of to a counter:
 - **Gap in the archive with no capture-side increment** → the two disagree, which is worse
   than either alone. One of them is wrong, and finding out which is the priority.
 
-Capture-side triage is [capture-sequence-gaps.md](./capture-sequence-gaps.md); this
+Capture-side triage is [capture-sequence-gaps.md](../../../../docs/runbooks/capture-sequence-gaps.md); this
 runbook's job is the archive-side record.
 
 **Measured**, not yet verified.
@@ -369,7 +369,7 @@ the archive keeps both.
 
 **What to do with it**, read the *rate*, not the level. The number exists so that a
 **change** in it is visible: a jump means reconnect churn, which is a capture-tier
-question ([capture-sequence-gaps.md](./capture-sequence-gaps.md)), not a lake one.
+question ([capture-sequence-gaps.md](../../../../docs/runbooks/capture-sequence-gaps.md)), not a lake one.
 
 ```sql
 -- The replay count per run, over the last fortnight. A step change is the signal.
@@ -713,7 +713,7 @@ git log --oneline -- docker/lake/ddl/lake.sql contracts/   # did the declared sh
 | nothing changed for this table | the live table: a hand-run `ALTER` or a half-applied DDL | put the live table back to the declared shape (below) |
 | `lake.sql` or the contract changed, the live table has the old shape | the stack: the change was never applied here | apply it (below) |
 | the live change was deliberate and nobody wrote it down | the contract | the contract and `lake.sql` catch up through `/schema-change`, in one pull request. Never edit only the contract to clear the row |
-| `no contract` on a table nobody owns | the table | a person decides: give it a product and a contract (`make new-product`, [golden path](../development/golden-path.md)), or move it to a `scratch_` namespace. Create no table by hand anywhere else |
+| `no contract` on a table nobody owns | the table | a person decides: give it a product and a contract (`make new-product`, [golden path](../../../../docs/development/golden-path.md)), or move it to a `scratch_` namespace. Create no table by hand anywhere else |
 
 **Recovery**, the schema-change procedure is the only way to move either side
 (`.claude/skills/schema-change/SKILL.md`): `lake.sql`, the contract, `make generate`, tests and
@@ -740,7 +740,7 @@ a no-contract row; and in `tests/test_lake_contract_schema.py`. A nightly row no
 ## After any failure: do not silence the audit
 
 The audit fails the maintenance run on purpose, that is
-[ADR-017](../adr/ADR-017-iceberg-maintenance-pipeline.md)'s "fail-fast for audit" policy
+[ADR-017](../../../../docs/adr/ADR-017-iceberg-maintenance-pipeline.md)'s "fail-fast for audit" policy
 carried into the lake. Loosening a threshold to get a green run turns the one signal that
 proves the archive is complete into decoration. If a venue genuinely behaves in a way the
 audit calls a failure, that is a fact worth recording in the relevant ADR's Outcome, with
@@ -766,15 +766,15 @@ found by §1 or §3 is recorded here**, with its window and its evidence._
 
 ## Related
 
-- [ADR-022](../adr/ADR-022-exactly-once-via-snapshot-offsets.md), offset continuity, and why compaction snapshots must be skipped when reading the offset history
-- [ADR-024](../adr/ADR-024-unified-bronze-tables-in-the-lake.md), the identifier fields the duplicate check uses, and why the book table's differ from the trade table's
-- [`docker/lake/ddl/lake.sql`](../../docker/lake/ddl/lake.sql), the `SET IDENTIFIER FIELDS` clauses §2 asserts, with the 956/287,184 and 484/47,331 measurements that put `conn_id` and `snapshot_ts_ns` in them
-- [`docker/lake/maintenance.py`](../../docker/lake/maintenance.py), the `AUDITS` tuple: the checks, their scopes, and `INFORMATIONAL`
-- [`docker/lake/contract_schema.py`](../../docker/lake/contract_schema.py), §15's comparison and its rules; [ADR-032](../adr/ADR-032-odcs-contracts-and-k2gen.md), the contracts it holds the live tables to
-- [ADR-027](../adr/ADR-027-book-snapshot-and-sequencing.md), three sequencing mechanisms, and the `seq = 0` sentinel
-- [ADR-017](../adr/ADR-017-iceberg-maintenance-pipeline.md), the compact → expire → audit ordering and the fail-fast-on-audit policy the lake inherits
-- [ADR-021](../adr/ADR-021-raw-first-archive-and-lineage.md), the lineage columns that make §2 a one-query diagnosis
-- [capture-sequence-gaps.md](./capture-sequence-gaps.md), the capture-side half of §3
+- [ADR-022](../../../../docs/adr/ADR-022-exactly-once-via-snapshot-offsets.md), offset continuity, and why compaction snapshots must be skipped when reading the offset history
+- [ADR-024](../../../../docs/adr/ADR-024-unified-bronze-tables-in-the-lake.md), the identifier fields the duplicate check uses, and why the book table's differ from the trade table's
+- [`docker/lake/ddl/lake.sql`](../../lake/ddl/lake.sql), the `SET IDENTIFIER FIELDS` clauses §2 asserts, with the 956/287,184 and 484/47,331 measurements that put `conn_id` and `snapshot_ts_ns` in them
+- [`docker/lake/maintenance.py`](../../lake/maintenance.py), the `AUDITS` tuple: the checks, their scopes, and `INFORMATIONAL`
+- [`docker/lake/contract_schema.py`](../../lake/contract_schema.py), §15's comparison and its rules; [ADR-032](../../../../docs/adr/ADR-032-odcs-contracts-and-k2gen.md), the contracts it holds the live tables to
+- [ADR-027](../../../../docs/adr/ADR-027-book-snapshot-and-sequencing.md), three sequencing mechanisms, and the `seq = 0` sentinel
+- [ADR-017](../../../../docs/adr/ADR-017-iceberg-maintenance-pipeline.md), the compact → expire → audit ordering and the fail-fast-on-audit policy the lake inherits
+- [ADR-021](../../../../docs/adr/ADR-021-raw-first-archive-and-lineage.md), the lineage columns that make §2 a one-query diagnosis
+- [capture-sequence-gaps.md](../../../../docs/runbooks/capture-sequence-gaps.md), the capture-side half of §3
 - [lake-ingest-lag.md](./lake-ingest-lag.md), `failOnDataLoss`, the usual cause of a real §1 failure
 
 ---

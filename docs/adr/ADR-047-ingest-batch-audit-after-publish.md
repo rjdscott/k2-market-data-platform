@@ -69,7 +69,7 @@ sources stays ADR-036's.
 - **Alerting** reuses the ingest findings' path: `k2.batch-audit-failures` on the audit
   commit, read by `lake-metrics` into `k2_lake_batch_audit_failures_total`, aged out after
   15 minutes like `k2_lake_offset_gaps_total`, and `LakeIngestBatchAuditFailed` (critical,
-  no `for`). Runbook: [lake-ingest-batch-audit.md](../runbooks/lake-ingest-batch-audit.md).
+  no `for`). Runbook: [lake-ingest-batch-audit.md](../../legacy/v3-lake-ingest/docs/runbooks/lake-ingest-batch-audit.md).
 
 ---
 
@@ -157,4 +157,4 @@ worth reopening for the bus.
 - [Plan 003, pull request 3](../plans/2026-11-24-governed-self-serve-platform/003-trino-dbt-marts.md)
 - [ADR-021](ADR-021-raw-first-archive-and-lineage.md), [ADR-022](ADR-022-exactly-once-via-snapshot-offsets.md), [ADR-031](ADR-031-governed-self-serve-platform.md)
 - `docker/lake/README.md`, "What one run may read, and why nothing is cached"
-- [lake-ingest-batch-audit.md](../runbooks/lake-ingest-batch-audit.md), [lake-audit-failed.md](../runbooks/lake-audit-failed.md)
+- [lake-ingest-batch-audit.md](../../legacy/v3-lake-ingest/docs/runbooks/lake-ingest-batch-audit.md), [lake-audit-failed.md](../../legacy/v3-lake-ingest/docs/runbooks/lake-audit-failed.md)

@@ -22,7 +22,7 @@ USER root
 
 # Python: docker/lake/instruments.py and bars.py read their YAML with PyYAML, and
 # nothing else under docker/lake imports a package outside the standard library
-# and pyspark (metrics.py runs in docker/lake-metrics/, not here). pyspark is the
+# and pyspark. pyspark is the
 # distribution's own, on PYTHONPATH below, not a second copy from PyPI. The
 # tabulario base also carried Jupyter, pandas, pyiceberg and the rest of its
 # sample-notebook packages; no lake job imports any of them.
@@ -120,7 +120,7 @@ USER spark
 #
 # tini as PID 1, because every job leaves an orphan: the PySpark gateway JVM
 # outlives its Python driver by a moment, is reparented to PID 1, and a Java PID 1
-# never reaps it. A one-shot that sets its own entrypoint (lake-ddl) replaces all
-# of this, CMD included.
+# never reaps it. A one-shot that sets its own entrypoint replaces all of this,
+# CMD included.
 ENTRYPOINT ["/usr/bin/tini", "--"]
 CMD ["/opt/spark/bin/spark-class", "org.apache.spark.deploy.history.HistoryServer"]

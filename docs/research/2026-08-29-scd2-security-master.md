@@ -378,7 +378,7 @@ ClickHouse offers two shapes ([dictionaries](https://clickhouse.com/docs/en/sql-
 
 **Recommended shape when the need arrives:** a `complex_key_hashed` dictionary over
 `is_current = true` only, sourced by the same `iceberg()` pull that already loads ClickHouse
-gold from the lake ([`clickhouse-rebuild-from-lake.md`](../runbooks/clickhouse-rebuild-from-lake.md)),
+gold from the lake ([`clickhouse-rebuild-from-lake.md`](../../legacy/v3-lake-ingest/docs/runbooks/clickhouse-rebuild-from-lake.md)),
 with a `LIFETIME` refresh. That serves the hot-tier question — decorating live queries with
 current attributes — and it is the only question ClickHouse is on the path for. Historical
 as-of joins stay in the lake, read by DuckDB, where the research is.
