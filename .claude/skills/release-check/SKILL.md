@@ -47,7 +47,9 @@ docker exec k2-clickhouse clickhouse-client --password "$CLICKHOUSE_PASSWORD" -q
 # → three rows, all non-zero
 docker exec k2-clickhouse clickhouse-client --password "$CLICKHOUSE_PASSWORD" -q \
   "SELECT exchange, count() FROM gold.book_top20 GROUP BY exchange ORDER BY exchange"
-# → three rows, all non-zero
+# → a non-zero row for each venue whose book_capture is true, and no row for a venue
+#   whose switch is false (ADR-050): `grep -A3 '^book_capture:' config/instruments.yaml`.
+#   The release decision states which; `make health` step (4) checks each capture agrees.
 docker exec k2-clickhouse clickhouse-client --password "$CLICKHOUSE_PASSWORD" -q \
   "SELECT count() FROM gold.ohlcv_live(bucket = 60) WHERE window_start > now() - INTERVAL 10 MINUTE"
 # → non-zero: candles on read over the deduplicated trades
