@@ -34,6 +34,20 @@ def test_blocking_taker_waits_for_holder_to_exit(tmp_path):
     assert os.path.exists(path)
 
 
+def test_a_bounded_wait_gets_a_lock_freed_in_time_and_gives_up_on_one_that_is_not(tmp_path):
+    path = str(tmp_path / "lake.lock")
+    holder = subprocess.Popen(
+        [sys.executable, "-c",
+         f"import fcntl,time; h=open({path!r},'w'); fcntl.flock(h, fcntl.LOCK_EX); "
+         "print('held', flush=True); time.sleep(1.5)"],
+        stdout=subprocess.PIPE, text=True,
+    )
+    assert holder.stdout.readline().strip() == "held"
+    assert L.acquire_lock(path, wait_s=0.5) is None  # still held after half a second
+    assert L.acquire_lock(path, wait_s=10) is not None  # freed within ten
+    assert holder.wait(timeout=5) == 0
+
+
 _RUN_INGEST = """
 import runpy, sys
 from unittest import mock

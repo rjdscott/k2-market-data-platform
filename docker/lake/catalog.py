@@ -164,14 +164,18 @@ def fetch_schema(schema_id: int) -> str:
         raise UnresolvableSchema(f"schema id {schema_id}: {exc}") from exc
 
 
-def write_audit_rows(spark, rows: list, properties: dict, job: str = "ingest") -> bool:
+def write_audit_rows(
+    spark, rows: list, properties: dict, job: str = "ingest", table: str = CHECKS_TABLE
+) -> bool:
     """This run's findings into `audit.checks`, in ONE commit. True if it landed.
 
     Same table as the nightly audit, so "what did the pipeline find and when"
     stays one query. `job` is the `k2.job` property the commit carries and names
-    the writer: `ingest` for the pipeline's own findings (the default), or
+    the writer: `ingest` for the pipeline's own findings (the default),
+    `file_source` for a file source's audit (file_source.py), or
     `replay` / `operator` for the rows record_check.py writes from the command
-    line.
+    line. `table` is another table of the same shape only for a rehearsal in a
+    scratch namespace (file_source.py --namespace-map).
 
     Three properties ride on the commit and all three are load-bearing.
     `k2.job` — anything but `maintenance` — is what keeps this snapshot out of
@@ -202,7 +206,7 @@ def write_audit_rows(spark, rows: list, properties: dict, job: str = "ingest") -
     try:
         writer = (
             spark.createDataFrame(rows)
-            .writeTo(CHECKS_TABLE)
+            .writeTo(table)
             .option(f"snapshot-property.{O.JOB}", job)
             .option(f"snapshot-property.{O.AUDIT_FAILURES}", str(failures))
         )
