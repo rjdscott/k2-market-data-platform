@@ -13,6 +13,7 @@ import json
 import locale
 import os
 import stat
+import subprocess
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -21,8 +22,8 @@ from typing import Any
 import pytest
 import yaml
 
-from k2gen import cli, diff, docset, emit, model, release
-from k2gen.model import DocumentSet, Needs, Provenance
+from k2gen import checks, cli, diff, docset, emit, model, release
+from k2gen.model import DocumentSet, Finding, Needs, Provenance
 
 GOOD = Path(__file__).parent / "fixtures" / "v2" / "good"
 TAG = "v3.0.0-alpha.3-rc.1"
@@ -44,10 +45,10 @@ def dags(*entries: dict[str, Any]) -> str:
     return json.dumps({"dags": list(entries)})
 
 
-def write_set(dst: Path, compose: dict[str, Any]) -> Path:
-    """The good fixture set as `k2gen docset` would write it: its documents, a compose file and
-    a provenance.json that hashes them."""
-    docs = {p.relative_to(GOOD).as_posix(): p.read_bytes() for p in GOOD.rglob("*") if p.is_file()}
+def write_set(dst: Path, compose: dict[str, Any], over: dict[str, bytes] | None = None) -> Path:
+    """The good fixture set as `k2gen docset` would write it: its documents with `over` laid on
+    them, a compose file and a provenance.json that hashes them."""
+    docs = {p.relative_to(GOOD).as_posix(): p.read_bytes() for p in GOOD.rglob("*") if p.is_file()} | (over or {})
     docs[model.COMPOSE] = yaml.safe_dump(compose).encode()
     for path, data in docs.items():
         (dst / path).parent.mkdir(parents=True, exist_ok=True)
@@ -100,8 +101,8 @@ def emitted(monkeypatch: pytest.MonkeyPatch) -> dict[str, str]:
 
 
 def build(tmp: Path, name: str, previous: Path | None = None, images: dict[str, str] = IMAGES,
-          compose: dict[str, Any] = COMPOSE, out: Path | None = None) -> tuple[str, Path]:
-    set_dir = write_set(tmp / f"set-{name}", compose)
+          compose: dict[str, Any] = COMPOSE, out: Path | None = None, over: dict[str, bytes] | None = None) -> tuple[str, Path]:
+    set_dir = write_set(tmp / f"set-{name}", compose, over)
     images_file = tmp / f"images-{name}.json"
     images_file.write_text(json.dumps(images))
     out = out or tmp / "releases"
@@ -382,3 +383,69 @@ def test_cli_release_on_the_good_set_twice_prints_one_id(tmp_path: Path, capsys:
     assert cli.main(args) == 0 and cli.main(args) == 0
     first, second = capsys.readouterr().out.split()
     assert first == second and release.read(tmp_path / "releases" / first).id == first
+
+
+# The checks library runs inside release: a set `k2gen check` refuses never compiles.
+GOLD = "contracts/ops-insight/daily-load/gold_daily_load.odcs.yaml"
+GOLD_SQL = "contracts/ops-insight/daily-load/models/gold_daily_load.sql"
+# a contract whose id names another product: an error only a check catches
+MISPLACED = {GOLD: (GOOD / GOLD).read_bytes().replace(b"id: ops-insight.daily-load.", b"id: sensor-net.station-readings.")}
+# the adapter reading the catalog by hand: a warning
+ADAPTER = {GOLD_SQL: b"{% set r = adapter.get_relation(database='x', schema='y', identifier='z') %}\n" + (GOOD / GOLD_SQL).read_bytes()}
+# a column dropped at the same version: a major change without the bump, against the good set
+MAJOR = {GOLD: (Path(__file__).parent / "fixtures/v2/bad/versions/major-bump-missing/next" / GOLD).read_bytes()}
+
+
+def test_cli_release_refuses_a_set_with_an_error_finding_and_writes_nothing(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    """The real CLI in its own process: findings on stderr exactly as `k2gen check` prints them,
+    a non-zero exit, and the releases root holding only what it held before."""
+    rid, _ = build(tmp_path, "good", images=IMAGES)
+    set_dir = write_set(tmp_path / "set", yaml.safe_load((model.REPO / model.COMPOSE).read_bytes()), MISPLACED)
+    (tmp_path / "images.json").write_text(json.dumps(IMAGES))
+    done = subprocess.run([sys.executable, "-m", "k2gen.cli", "release", "--set", str(set_dir), "--previous", "none",
+                           "--images", str(tmp_path / "images.json"), "--out", str(tmp_path / "releases")], capture_output=True, text=True)
+    assert done.returncode != 0 and done.stdout == ""
+    assert [p.name for p in (tmp_path / "releases").iterdir()] == [rid]  # no new release, no temp
+    capsys.readouterr()
+    assert cli.main(["check", "--set", str(set_dir), "--previous", "none"]) == 1
+    printed = capsys.readouterr().err
+    assert printed.startswith("error docs.contract-misplaced ") and done.stderr.startswith(printed)
+    assert "1 error finding(s) from the checks library; nothing compiled, nothing written" in done.stderr
+
+
+def test_findings_are_printed_as_k2gen_check_prints_them(tmp_path: Path, emitted: dict[str, str], monkeypatch: pytest.MonkeyPatch,
+                                                        capsys: pytest.CaptureFixture[str]) -> None:
+    found = [Finding("docs.x", "warning", "contracts/a.yaml", "a warning"), Finding("docs.y", "error", "contracts/b.yaml", "an error", "/schema/0")]
+    monkeypatch.setattr(checks, "run", lambda docs, previous: found)
+    with pytest.raises(ValueError, match="1 error finding"):
+        build(tmp_path, "a")
+    assert not (tmp_path / "releases").exists()
+    printed = capsys.readouterr().err
+    assert cli.main(["check", "--set", str(tmp_path / "set-a"), "--previous", "none"]) == 1
+    assert printed == capsys.readouterr().err == "warning docs.x contracts/a.yaml: a warning\nerror docs.y contracts/b.yaml /schema/0: an error\n"
+
+
+def test_a_set_with_only_warnings_compiles_and_prints_them(tmp_path: Path, emitted: dict[str, str], capsys: pytest.CaptureFixture[str]) -> None:
+    rid, root = build(tmp_path, "a", over=ADAPTER)
+    assert f"warning sql.adapter {GOLD_SQL}: line 1: adapter.get_relation()" in capsys.readouterr().err
+    assert release.read(root).id == rid
+
+
+def test_running_the_checks_adds_nothing_to_the_release(tmp_path: Path, emitted: dict[str, str], monkeypatch: pytest.MonkeyPatch) -> None:
+    """Nothing is embedded for the checks: the previous set is the previous release's documents/,
+    so the good set compiles to the id and tree it did before release ran them."""
+    rid, root = build(tmp_path, "a")
+    monkeypatch.setattr(checks, "run", lambda docs, previous: [])
+    unchecked, unchecked_root = build(tmp_path, "b", out=tmp_path / "unchecked")
+    assert rid == unchecked and tree(root) == tree(unchecked_root)
+
+
+def test_a_major_change_without_a_version_bump_is_refused_against_the_previous_release(tmp_path: Path, emitted: dict[str, str],
+                                                                                       capsys: pytest.CaptureFixture[str]) -> None:
+    _, old = build(tmp_path, "old")
+    capsys.readouterr()
+    with pytest.raises(ValueError, match="2 error finding"):
+        build(tmp_path, "new", previous=old, over=MAJOR)
+    assert f"error versions.major-bump-missing {GOLD}: " in capsys.readouterr().err
+    assert [p.name for p in (tmp_path / "releases").iterdir()] == [old.name]
+    build(tmp_path, "first", over=MAJOR)  # the same set with no previous: nothing to compare, so it compiles
