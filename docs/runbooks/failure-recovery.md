@@ -23,13 +23,19 @@ exists to tell you what "normal recovery" looks like so you can spot when it isn
 > queries below are written against the served `gold` tier that replaced them
 > ([`docker/clickhouse/README.md`](../../docker/clickhouse/README.md)); the "Measured"
 > rows are the dated v2 observations, kept as written.
+>
+> **ClickHouse is paused** behind the compose profile `hot-gold`
+> ([ADR-057](../adr/ADR-057-clickhouse-hot-tier-paused-during-platform-build.md)): its container is stopped and removed, its volume kept. §2, §7, the
+> ClickHouse case of §6, the hot-tier half of §8 and the ClickHouse checks in §1 and §5 apply
+> only while that profile runs ([pause-and-resume-a-serving-product.md](./pause-and-resume-a-serving-product.md)). The six
+> ClickHouse alerts named here are removed with the pause, so none of them fires.
 
 **Run every command from the repo root with `set -a && . ./.env && set +a` loaded.**
 
 | # | Failure | MTTR target | Measured |
 |---|---------|-------------|----------|
 | 1 | Redpanda restart | <2 min | ~10 s |
-| 2 | ClickHouse restart | <3 min | ~32 s |
+| 2 | ClickHouse restart (only with `hot-gold` running) | <3 min | ~32 s |
 | 3 | Capture container crash | <1 min | ~30 s (Kotlin, 2026-02-19; not re-measured on Rust) |
 | 4 | Spark batch-job failure (the lake ingest) | <15 min | next scheduled run |
 | 5 | MinIO unavailable | <5 min | ~5 s |
@@ -54,7 +60,7 @@ docker compose restart redpanda
 docker exec k2-redpanda rpk cluster health          # wait for healthy
 docker exec k2-redpanda rpk topic list              # topics intact?
 
-# Confirm ingestion resumed
+# Confirm ingestion resumed (needs the hot-gold profile running, ADR-057)
 docker exec k2-clickhouse clickhouse-client --password "$CLICKHOUSE_PASSWORD" -q \
   "SELECT exchange, count() FROM gold.trades FINAL WHERE exchange_ts > now() - INTERVAL 2 MINUTE GROUP BY exchange"
 ```
@@ -66,6 +72,8 @@ restart it (see §3).
 ---
 
 ## 2. ClickHouse restart
+
+Applies only while the compose profile `hot-gold` runs (ClickHouse is paused, [ADR-057](../adr/ADR-057-clickhouse-hot-tier-paused-during-platform-build.md)).
 
 **Symptom**, queries fail; Grafana ClickHouse panels go blank.
 
@@ -162,7 +170,7 @@ exporter, and `LakeExporterDown` does not fire: `docker/lake/metrics.py` reads t
 never MinIO.
 
 **Expected behaviour**, the ingest fails cleanly with no committed Iceberg snapshot;
-ClickHouse ingest continues; the lake defers until MinIO is back. Uncommitted Parquet files
+ClickHouse ingest continues while `hot-gold` runs; the lake defers until MinIO is back. Uncommitted Parquet files
 are orphans no reader sees, reclaimed by the nightly maintenance pass, see
 [lake-recovery.md §4](./lake-recovery.md#4-minio-down).
 
@@ -184,8 +192,8 @@ is Phase D's to measure.
 
 **Symptom**, one container's consumers stall while everything else keeps running.
 
-**Detection**, `CaptureDown` or `ClickHouseDown` depending on which container
-is isolated.
+**Detection**, `CaptureDown`, or `ClickHouseDown` while the `hot-gold` profile runs, depending
+on which container is isolated.
 
 **Expected behaviour**, the isolated container reconnects when the partition heals and
 consumers resume from their last committed offset. No corruption.
@@ -194,6 +202,7 @@ consumers resume from their last committed offset. No corruption.
 
 ```bash
 docker network connect k2-net k2-clickhouse    # or whichever container was cut off
+# The consumer check needs the hot-gold profile running (ClickHouse paused, ADR-057).
 docker exec k2-clickhouse clickhouse-client --password "$CLICKHOUSE_PASSWORD" -q \
   "SELECT table, num_messages_read, exceptions.text FROM system.kafka_consumers WHERE database='gold' FORMAT Vertical"
 ```
@@ -204,6 +213,8 @@ recovered from their last committed offset with no data corruption.
 ---
 
 ## 7. ClickHouse resource pressure
+
+Applies only while the compose profile `hot-gold` runs (ClickHouse is paused, [ADR-057](../adr/ADR-057-clickhouse-hot-tier-paused-during-platform-build.md)); the three alerts below are removed with the pause.
 
 **Not one of the six.** This section was written on 2026-09-03 to give
 `ClickHouseHighMemoryUsage`, `ClickHouseQueryFailureRateHigh` and
@@ -277,6 +288,9 @@ nothing more.
 ---
 
 ## 8. Host or Docker VM killed: the hot tier against the lake
+
+The comparison in step 2 needs the hot tier, so it applies only while the compose profile `hot-gold` runs (ClickHouse is paused, [ADR-057](../adr/ADR-057-clickhouse-hot-tier-paused-during-platform-build.md)); paused, there is
+no second store to compare, and steps 1 and 5 stand alone.
 
 **Not one of the six**, and not induced: written after the host's out-of-memory killer
 killed the Docker VM at 22:33:43 UTC on 2026-11-25 (stack back at 22:39:26 UTC).

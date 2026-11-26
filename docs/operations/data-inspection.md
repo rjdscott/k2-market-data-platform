@@ -13,6 +13,8 @@ Nothing on this page repeats it.
 > Phase E cutover. Their DDL is kept in [`legacy/v2-clickhouse/`](../../legacy/v2-clickhouse/README.md);
 > the served tier is described in [`docker/clickhouse/README.md`](../../docker/clickhouse/README.md).
 
+**ClickHouse is paused** behind the compose profile `hot-gold` ([ADR-057](../adr/ADR-057-clickhouse-hot-tier-paused-during-platform-build.md)): its container is removed and its volume kept, so every `ch` command on this page needs that profile running ([pause-and-resume-a-serving-product.md](../runbooks/pause-and-resume-a-serving-product.md)).
+
 Load credentials into your shell first, then set a shorthand:
 
 ```bash
@@ -53,7 +55,8 @@ docker exec k2-redpanda curl -s \
   | jq -r '.schema | fromjson'
 
 # Consumer groups: k2-gold-trades (gold.q_trades on trades.*) and k2-gold-book
-# (gold.q_book on book.*). The lake ingest reads by offset range and has no group.
+# (gold.q_book on book.*); no members while ClickHouse is paused (ADR-057). The lake ingest
+# reads by offset range and has no group.
 docker exec k2-redpanda rpk group list
 docker exec k2-redpanda rpk group describe k2-gold-trades
 ```
@@ -181,13 +184,15 @@ SELECT run_ts, job, check_name, scope, passed, observed, detail
 FROM lake.audit.checks ORDER BY run_ts DESC LIMIT 20;
 ```
 
-**Reading the lake from ClickHouse: `iceberg()` only.** The
+**Reading the lake from ClickHouse: `iceberg()` only**, while the `hot-gold` profile runs. The
 `s3('…/data/*.parquet')` glob is banned, it reads the object listing rather than the
 current Iceberg metadata and returns files no live snapshot references, which fails as a
 plausible number rather than as an error. See
 [lake-recovery.md](../runbooks/lake-recovery.md).
 
 ## ClickHouse vs. lake reconciliation
+
+Needs the `hot-gold` profile running (ClickHouse paused, ADR-057).
 
 ClickHouse `gold` is derived from the same topics the lake archives, and the lake's
 `gold.trades` is what a reload puts back into it, so on an overlapping window the two must

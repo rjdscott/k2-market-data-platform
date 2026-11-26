@@ -8,11 +8,14 @@ Two engines hold the same products and they are not interchangeable:
 
 - **The Iceberg lake is the record** (ADR-018, ADR-026). Every gold table is populated
   there by the 5-minute Spark ingest, so it trails the market by up to one tick interval.
-- **ClickHouse `gold` is the head.** `trades` and `book_top20` are fed live from the Avro
+- **ClickHouse `gold` is the head, and it is paused** behind the compose profile `hot-gold`
+  ([ADR-057](../adr/ADR-057-clickhouse-hot-tier-paused-during-platform-build.md)): while paused it is not running and nothing can query it, so the lake is
+  the only copy. While the profile runs, `trades` and `book_top20` are fed live from the Avro
   topics and are seconds fresh; every other table is populated only by the pull runbook
   and is **empty until it runs**.
 
-Run the freshness check before you trust either side.
+Run the freshness check before you trust either side. The ClickHouse half needs the
+`hot-gold` profile running.
 
 ```bash
 docker exec k2-clickhouse clickhouse-client --user quant --password "$K2_QUANT_PASSWORD" -q \
@@ -118,6 +121,9 @@ recreate: nothing is a source for lost dimension history
 ([`lake.sql`](../../docker/lake/ddl/lake.sql) above `dim_instrument`).
 
 ## ClickHouse `gold` — the served tier
+
+**Paused** (ADR-057): the tables below are as defined, and readable only while the `hot-gold`
+profile runs.
 
 [`docker/clickhouse/ddl/10-gold-tables.sql`](../../docker/clickhouse/ddl/10-gold-tables.sql)
 is the contract; [`20-gold-kafka.sql`](../../docker/clickhouse/ddl/20-gold-kafka.sql)
@@ -345,7 +351,8 @@ cd notebooks && uv sync && uv run python -   # then: from k2lake import connect,
 current snapshot id; those are the views below. `raw` and `bronze` are not pinned, so
 those two examples read `lake.<ns>.<table>` directly.
 
-ClickHouse examples use the read-only `quant` user:
+ClickHouse examples use the read-only `quant` user, and need the `hot-gold` profile running
+(ClickHouse paused, ADR-057):
 
 ```bash
 set -a && . ./.env && set +a

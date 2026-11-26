@@ -10,7 +10,7 @@ set -a && . ./.env && set +a
 ```
 
 [quick-reference.md](./quick-reference.md) is the companion: the per-component commands
-(Redpanda, ClickHouse, capture, lake, Trino) on one page. Incidents have their own procedures
+(Redpanda, ClickHouse while it runs, capture, lake, Trino) on one page. Incidents have their own procedures
 in [`../runbooks/`](../runbooks/README.md).
 
 **Terms used on this page.** The *stack* is everything `docker-compose.yml` defines. A
@@ -19,8 +19,9 @@ in [`../runbooks/`](../runbooks/README.md).
 (`restart: "no"`: `redpanda-init`, `lakekeeper-migrate`, `lake-init`, `lake-ddl`,
 `airflow-migrate`); `Exited (0)` is its success state. *Redpanda* is the message broker the
 capture processes write every venue message to (it speaks the Kafka protocol). The *hot tier* is
-ClickHouse's `gold` database, fed live from Redpanda; its tables keep duplicate deliveries until
-a background merge, and `FINAL` in a query collapses them. The *lake* is the system of record:
+ClickHouse's `gold` database, fed live from Redpanda when it runs; its tables keep duplicate
+deliveries until a background merge, and `FINAL` in a query collapses them. A *compose profile*
+is a label that keeps a service out of `docker compose up` unless that profile is named. The *lake* is the system of record:
 tables in the *Iceberg* format (data files plus metadata that make a set of files one table with
 atomic commits), stored in *MinIO* (an S3-compatible object store) and listed by *Lakekeeper*,
 the catalog that names each table; a *warehouse* is one named lake in that catalog, `k2` for the
@@ -92,6 +93,15 @@ shows what each capture is actually doing; [section 6](#pause-or-resume-one-venu
 pauses and resumes one venue. **This ends** at P7's release tag or on 2027-02-26, whichever
 comes first (the ADR's "Revisit when").
 
+**The ClickHouse hot tier is paused** while the platform is built
+([ADR-057](../adr/ADR-057-clickhouse-hot-tier-paused-during-platform-build.md)): the `clickhouse` service is behind the compose profile `hot-gold`, so `make
+up` and a bare `docker compose up -d` do not start it; its container is removed and its volumes
+are kept. Every command on this page that runs `k2-clickhouse` needs that profile running. The
+alerts, dashboards and the `make health` line that read it are removed with it. Starting it again
+is `docker compose --profile hot-gold up -d clickhouse` and has a 7-day limit:
+[pause-and-resume-a-serving-product.md](../runbooks/pause-and-resume-a-serving-product.md). **This ends** when ADR-057's "Revisit when" fires:
+a measured need for sub-second reads, or the release gate.
+
 ---
 
 ## 1. Start from a fresh clone
@@ -110,14 +120,16 @@ live ones' names. Check first; this must print nothing:
 docker ps -a --filter name=k2- --format '{{.Names}}'
 ```
 
-On the reference host it prints 24 names (19 running, 5 exited one-shots). If it prints
+On the reference host it printed 24 names (19 running, 5 exited one-shots) on 2026-11-26; with
+`k2-clickhouse` removed by the pause, 23 (18 running). If it prints
 anything, the host already has a stack: use section 2, from the directory that stack was
 started in.
 
 You need Docker with Compose v2, `git`, `python3`, `jq` (the reads in section 3), and enough
 memory: the Docker engine must
-offer at least 38 GiB, so that every container's declared memory limit fits (37.812 GiB at the
-bootstrap peak, when the one-shots run beside everything else; [setup.md](../development/setup.md)),
+offer at least 30 GiB, so that every container's declared memory limit fits (29.812 GiB at the
+bootstrap peak, when the one-shots run beside everything else; 37.812 GiB, so 38, with the paused
+ClickHouse running; [setup.md](../development/setup.md)),
 and on Docker Desktop the host must have more RAM than the VM's memory setting plus everything
 else it runs ([sizing](../runbooks/docker-vm-oom-kill.md#2-size-the-vm-so-the-host-keeps-enough-memory)).
 `docker info --format '{{.MemTotal}} {{.NCPU}}'` prints what the engine offers, in bytes and
@@ -206,7 +218,7 @@ docker compose up -d     # the same compose command make up runs, without the cr
 
 That bare `docker compose up -d` is the one sanctioned use of it on this host, and only to bring
 back a stack that already ran with this `.env`: it skips `check-env.py`, which is the guard a
-new stack needs. **Not yet run on this stack since the loopback change of 2026-11-26.**
+new stack needs. It does not start the paused ClickHouse (profile `hot-gold`). **Not yet run on this stack since the loopback change of 2026-11-26.**
 <!-- VERIFY: docker compose up -d after make down -->
 
 **Then, either way:** unpause any DAG you paused before stopping (section 6, step 5; a pause is
@@ -247,15 +259,16 @@ health: PASS
 ```
 
 That run predates step (4), the order-book switch: its lines are tested against a fake
-`docker` (`tests/test_health.py`) and not yet recorded from the live stack.
+`docker` (`tests/test_health.py`) and not yet recorded from the live stack. It also predates the
+ClickHouse pause (ADR-057), which removes the three `(2) <venue>` lines read from ClickHouse.
 
 Line by line (`scripts/health.sh`):
 
 | Line | What it checks | A FAIL or WARN means | Open |
 |---|---|---|---|
-| `(1) health` | Every running container of this compose project reports `healthy`, or has no healthcheck (`spark-iceberg`, `lake-metrics`). Waits up to 5 min (`K2_HEALTH_WAIT`) | `FAIL (no containers in project '<name>')`: you are not in the live checkout (a git worktree is another compose project), or the stack is down. `FAIL (still unhealthy after 5 min)` lists the containers: read that one's `docker logs --tail 100 k2-<service>` | capture: [capture-down.md](../runbooks/capture-down.md); `redpanda`: [redpanda.md](../runbooks/redpanda.md); `clickhouse`: [failure-recovery.md](../runbooks/failure-recovery.md) section 2; `minio`, `lakekeeper`: [lake-recovery.md](../runbooks/lake-recovery.md); `airflow-*`: [airflow-scheduling.md](../runbooks/airflow-scheduling.md) section 1; `trino`: [dbt-marts.md](../runbooks/dbt-marts.md) |
+| `(1) health` | Every running container of this compose project reports `healthy`, or has no healthcheck (`spark-iceberg`, `lake-metrics`). Waits up to 5 min (`K2_HEALTH_WAIT`) | `FAIL (no containers in project '<name>')`: you are not in the live checkout (a git worktree is another compose project), or the stack is down. `FAIL (still unhealthy after 5 min)` lists the containers: read that one's `docker logs --tail 100 k2-<service>` | capture: [capture-down.md](../runbooks/capture-down.md); `redpanda`: [redpanda.md](../runbooks/redpanda.md); `clickhouse` (only while `hot-gold` runs): [failure-recovery.md](../runbooks/failure-recovery.md) section 2; `minio`, `lakekeeper`: [lake-recovery.md](../runbooks/lake-recovery.md); `airflow-*`: [airflow-scheduling.md](../runbooks/airflow-scheduling.md) section 1; `trino`: [dbt-marts.md](../runbooks/dbt-marts.md) |
 | `(1) long-running services` | Every service `docker-compose.yml` defines without `restart: "no"` has a running container. The health line above cannot see an **exited** container, so this is the line that fails when, for example, Prometheus stayed `Exited (255)` after the 2026-11-25 VM restart | `FAIL (not running: <services>; ...)`: start each by name. `FAIL (could not read the services ...)`: `docker compose config` failed, so nothing is known | `docker compose up -d --no-deps <service>`, then section 2 |
-| `(2) <venue>` | Trades of that venue in ClickHouse `gold.trades` with an exchange timestamp in the last 2 minutes. Never FAIL | `WARN (0 trades/2min)`, or **a venue missing from the list** (only venues with rows print): nothing reached the hot tier from it. `WARN (no rows ...)` for all: ClickHouse unreachable, or nothing is flowing | [capture-feed-stale.md](../runbooks/capture-feed-stale.md); everything silent: [failure-recovery.md](../runbooks/failure-recovery.md) sections 1 and 2 |
+| `(2) <venue>` | **Removed with the ClickHouse pause** (ADR-057); this row describes it as it was. Trades of that venue in ClickHouse `gold.trades` with an exchange timestamp in the last 2 minutes. Never FAIL | `WARN (0 trades/2min)`, or **a venue missing from the list** (only venues with rows print): nothing reached the hot tier from it. `WARN (no rows ...)` for all: ClickHouse unreachable, or nothing is flowing | [capture-feed-stale.md](../runbooks/capture-feed-stale.md); everything silent: [failure-recovery.md](../runbooks/failure-recovery.md) sections 1 and 2 |
 | `(2) capture-<venue> metrics` | Reads each capture's `/metrics` (port 8082 inside the compose network, through a throwaway `curlimages/curl` container) and prints the last-message time per stream, in Unix seconds. It does not judge staleness | `WARN (no k2_capture_last_message_ts_seconds yet ...)`: the capture is not serving metrics | [capture-down.md](../runbooks/capture-down.md); staleness per stream: `docker exec k2-capture-<venue> /k2-capture healthcheck` |
 | `(3) lake commit age` | Seconds since the newest commit to any lake table, from Prometheus (`time() - max(k2_lake_last_commit_ts_seconds)`), at most 1800 (`K2_HEALTH_LAKE_MAX_AGE`) | `FAIL (Prometheus has no k2_lake_last_commit_ts_seconds ...)`: Prometheus is down (`curl -s localhost:9090/-/healthy`), the `lake-metrics` exporter is down, or the lake never committed. `FAIL (last commit <n>s ago ...)`: the lake is stale | Prometheus down: `docker compose up -d --no-deps prometheus` (safe at any time, section 6); exporter: [lake-recovery.md](../runbooks/lake-recovery.md); stale: [lake-ingest-lag.md](../runbooks/lake-ingest-lag.md) section 2 |
 | `(4) <venue> book_capture` | Each capture's `k2_capture_book_capture` (what it read at start, from its `/metrics`) against `book_capture` in the host's `config/instruments.yaml` and in the copy `spark-iceberg` mounts, which the nightly book-audit skip reads ([ADR-050](../adr/ADR-050-order-book-capture-paused-during-platform-build.md)). Tested against a fake `docker` (`tests/test_health.py`); not yet recorded from the live stack | `FAIL (... capture-<venue> was not recreated ...)`: the file changed and the process did not; the line names the recreate. `FAIL (... spark-iceberg's mounted copy is stale ...)`. `FAIL (... exports no k2_capture_book_capture ...)`: an image older than the switch. **During the switch's rollout, or a rollback to the old image, this FAILs for every capture not yet recreated: expected.** `WARN (no metrics ...)`: the capture is down or starting | [Pause or resume one venue's order book](#pause-or-resume-one-venues-order-book), below |
@@ -277,8 +290,8 @@ curl -sG localhost:9090/api/v1/query --data-urlencode 'query=sum by (exchange) (
 ```
 
 Run 2026-11-26: the lag read `286.89...`, inside one 5-minute cycle plus a run, and the produce
-errors `binance 0`, `coinbase 0`, `kraken 0`. All 36 alert rules, what each means and its
-runbook: [observability.md](./observability.md#alert-rules).
+errors `binance 0`, `coinbase 0`, `kraken 0`. All 30 alert rules (36 until the six ClickHouse
+rules left with the pause, ADR-057), what each means and its runbook: [observability.md](./observability.md#alert-rules).
 
 ---
 
@@ -300,14 +313,15 @@ Prometheus, which answer 302 (a redirect to their login and query pages), and th
 | Lakekeeper | http://localhost:18181/ui/ | Browse the Iceberg catalog: warehouse `k2` holds the lake (`raw`, `bronze`, `silver`, `gold`, `audit`); one warehouse per data domain holds its marts | none (authorization is off) |
 | MinIO console | http://localhost:9001 | The objects under the lake, bucket `k2-lake` | `MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD` |
 | Prometheus | http://localhost:9090 | Metrics, scrape targets (`/targets`) and alert state (`/alerts`) | none |
-| ClickHouse | http://localhost:8123/play | A query box over the hot tier, `SELECT count() FROM gold.trades FINAL` | user `default`, `CLICKHOUSE_PASSWORD`; read-only research user `quant`, `K2_QUANT_PASSWORD` |
+| ClickHouse | http://localhost:8123/play | **Paused** (ADR-057): answers only while the `hot-gold` profile runs. A query box over the hot tier, `SELECT count() FROM gold.trades FINAL` | user `default`, `CLICKHOUSE_PASSWORD`; read-only research user `quant`, `K2_QUANT_PASSWORD` |
 | Spark master | http://localhost:18080 | Mostly empty by design: the lake jobs run as local drivers and never register with it | none |
 | Spark Thrift server | http://localhost:4040 | The UI of the image's always-on Thrift JDBC server (answers 302), **not** of the lake jobs. A running lake job's UI is port 4041 inside the container and is not published: `docker exec k2-spark-iceberg curl -s localhost:4041/api/v1/applications` | none |
 | JupyterLab | http://localhost:8889 | The research notebooks; only while `make notebooks` runs in a terminal (answers 000 otherwise) | token printed by `make notebooks` |
 
 APIs rather than consoles, also on `127.0.0.1`: Redpanda's Kafka API `19092` (the listener host
 tools use; `9092` is advertised as `redpanda:9092`, for containers), its Admin API `9644` and
-Schema Registry `8081`; ClickHouse's native protocol `9002` and its Prometheus endpoint `9363`;
+Schema Registry `8081`; ClickHouse's native protocol `9002` and its Prometheus endpoint `9363`,
+while `hot-gold` runs;
 MinIO's S3 API `9000`; PostgreSQL `15432` (`prefect-db`, a historical name: the Airflow and Lakekeeper
 metadata). The capture containers' `/metrics` (8082) is not published: Prometheus reads it on
 the compose network.
@@ -386,7 +400,7 @@ rule below). `-t <seconds>` gives the old container that long to stop cleanly.
 | Service | When it is safe | What a restart costs | As run 2026-11-25, 23:50 to 23:54 UTC |
 |---|---|---|---|
 | `prometheus`, `grafana`, `redpanda-console`, `cadvisor`, `lake-metrics` | any time | a gap of seconds in scrapes or dashboards; alerts re-evaluate after it | `prometheus`, `grafana`, `redpanda-console`: seconds each |
-| `clickhouse` | any time, with `-t 60`: its Kafka consumers resume from their committed offsets, and duplicates collapse under `FINAL` | hot-tier queries fail while it restarts | `-t 60`, healthy in 8 s |
+| `clickhouse` | **paused** (ADR-057): stop and start it only through [pause-and-resume-a-serving-product.md](../runbooks/pause-and-resume-a-serving-product.md). While `hot-gold` runs: any time, with `-t 60`: its Kafka consumers resume from their committed offsets, and duplicates collapse under `FINAL` | hot-tier queries fail while it restarts | `-t 60`, healthy in 8 s |
 | `capture-binance`, `capture-kraken`, `capture-coinbase` | any time for correctness, one venue at a time | **that venue's market data while it is down, for good**; a book resync on reconnect | not restarted |
 | `redpanda` | with the lake DAGs paused: the ingest reads it | capture holds its records in its producer queue for the restart | `-t 30`, healthy in 13 s; `k2_capture_produce_errors_total` 0 on all three venues before and after |
 | `minio`, `lakekeeper`, `spark-iceberg`, `trino`, `prefect-db` | with the four DAGs paused and nothing running (steps 1 and 2 below): every lake and mart write goes through them, and `prefect-db` holds Airflow's and Lakekeeper's databases | a run cut mid-way commits nothing and fails or retries; pausing keeps the record clean | `minio`: healthy in 6 s; `trino` with `--force-recreate`: 10 s; `spark-iceberg`: seconds. `lakekeeper` and `prefect-db` not yet recreated on this stack |
@@ -531,8 +545,8 @@ it printed `wait_up: k2-nope is 'missing' after 5 min` and returned 1 (with its 
 
 **A change that touches several services**: one pause around all of them, and recreate them
 one at a time, each verified before the next, in the order used on 2026-11-25: `minio`, then
-`trino`, then `spark-iceberg`, `prometheus`, `grafana` and `redpanda-console`, then `clickhouse`,
-and `redpanda` last.
+`trino`, then `spark-iceberg`, `prometheus`, `grafana` and `redpanda-console`, then `clickhouse`
+(only while `hot-gold` runs), and `redpanda` last.
 
 Steps 1, 3 and 5 are as run on 2026-11-25 for the loopback roll-out, the timings in the table
 above; a later per-minute comparison of lake candles with ClickHouse trades showed no
@@ -735,7 +749,7 @@ command and step 5 after it.
 | `docker/grafana/provisioning/` | read at start | `docker compose up -d --force-recreate --no-deps grafana` |
 | `docker/trino/etc/` (including the catalogs `make generate` writes) | read at start | under the pause (section 6, the `trino` row): `docker compose up -d --force-recreate --no-deps trino` |
 | `docker/lake/generated/warehouses.txt` (a new data domain from `make generate`) | the `lake-init` one-shot creates its warehouse | `docker compose up -d --force-recreate --no-deps lake-init`, then the `docker/trino/etc/` row; [`docker/trino/README.md`](../../docker/trino/README.md) has the order |
-| `docker/clickhouse/config.xml`, `users.xml` | file mounts | `docker compose up -d --force-recreate --no-deps -t 60 clickhouse` |
+| `docker/clickhouse/config.xml`, `users.xml` | file mounts | while `hot-gold` runs: `docker compose --profile hot-gold up -d --force-recreate --no-deps -t 60 clickhouse`; paused, nothing |
 | `docker/clickhouse/ddl/` | only an empty volume | apply by hand: [`docker/clickhouse/README.md`](../../docker/clickhouse/README.md#applying-it-to-a-running-server) |
 | `config/instruments.yaml` | the captures at start; file mount in `spark-iceberg` | recreate the three `capture-*` one at a time (each loses its venue's data while down), and `spark-iceberg` under the pause. A `book_capture` change goes in **before** the pull, into the same inode: [Pause or resume one venue's order book](#pause-or-resume-one-venues-order-book) |
 | `docker/redpanda/`, `schemas/avro/` | the `redpanda-init` one-shot | `docker compose up -d --force-recreate --no-deps redpanda-init`: every step is create-if-missing or converge |
@@ -769,7 +783,7 @@ at a time with the pattern in section 6.
 | A lake job's own output (ingest, maintenance, rebuild) | the Airflow task log: the UI, or `docker exec k2-airflow-scheduler sh -c "find /opt/airflow/logs -path '*dag_id=lake_ingest*' -name '*.log' \| sort \| tail -2"` and read the older one; the newest can still be running | the scheduler container is removed |
 | dbt runs | the Airflow task logs of `dbt_marts`, the same way | as above |
 | Spark job detail | event logs in `/home/iceberg/spark-events` in `k2-spark-iceberg` | `spark-iceberg` is removed |
-| ClickHouse server | `docker exec k2-clickhouse tail -n 50 /var/log/clickhouse-server/clickhouse-server.err.log` | a volume (`clickhouse-logs`): survives recreates |
+| ClickHouse server, while `hot-gold` runs | `docker exec k2-clickhouse tail -n 50 /var/log/clickhouse-server/clickhouse-server.err.log` | a volume (`clickhouse-logs`): survives recreates and the pause |
 | Docker Desktop itself, and the host's kernel | `journalctl --user -u docker-desktop --utc`; `journalctl -k --utc` | the host's journal |
 
 ---
@@ -811,13 +825,13 @@ included: the first copy was 25.3 GiB on 2026-11-26, and a run refuses to start 
 
 | Doc | What it covers |
 |-----|----------------|
-| [quick-reference.md](./quick-reference.md) | The per-component commands: Redpanda, ClickHouse, capture, the lake, Trino |
+| [quick-reference.md](./quick-reference.md) | The per-component commands: Redpanda, ClickHouse (paused), capture, the lake, Trino |
 | [data-catalog.md](./data-catalog.md) | Every user-facing table: grain, partitioning, time columns and units, symbol conventions, dedup key, which engine is authoritative, one runnable example each |
-| [data-inspection.md](./data-inspection.md) | Operator health queries per hop: Redpanda, ClickHouse `gold`, the Iceberg lake |
-| [observability.md](./observability.md) | Grafana dashboards, capture-tier and lake metrics, all 36 Prometheus alert rules |
+| [data-inspection.md](./data-inspection.md) | Operator health queries per hop: Redpanda, ClickHouse `gold` (paused), the Iceberg lake |
+| [observability.md](./observability.md) | Grafana dashboards, capture-tier and lake metrics, all 30 Prometheus alert rules |
 | [dashboards.md](./dashboards.md) | Every dashboard and console as a screenshot of a live run, in the order the data moves, with what to read from each and the runbook it leads to. Written by `make screenshots` |
 | [latency-budgets.md](./latency-budgets.md) | 7-segment latency budget plus the measured 2026-02-19 p50/p99 numbers |
-| [docker-resources.md](./docker-resources.md) | Per-service CPU/RAM limits, 19.30 CPU / 35.312 GiB across 19 long-running services, +5 one-shot (2.00 / 2.500 GiB), bootstrap peak 21.30 / 37.812 GiB against the 25 / 48 GiB ceiling |
+| [docker-resources.md](./docker-resources.md) | Per-service CPU/RAM limits, 15.30 CPU / 27.312 GiB across 18 long-running services, +5 one-shot (2.00 / 2.500 GiB), bootstrap peak 17.30 / 29.812 GiB against the 25 / 48 GiB ceiling, ClickHouse paused and outside them |
 | [airflow-schedules.md](./airflow-schedules.md) | The four Airflow DAGs, their crons, limits and runbooks: `lake_ingest`, `lake_maintenance`, `lake_rebuild` and the hourly `dbt_marts` |
 | [clickhouse-database-standard.md](./clickhouse-database-standard.md) | Why everything served lives in the `gold` database (`k2` was dropped at the Phase E cutover) and how to keep it that way |
 | [adding-new-exchanges.md](./adding-new-exchanges.md) | End-to-end checklist for wiring up a 4th exchange |

@@ -127,7 +127,9 @@ docker exec k2-airflow-scheduler ls '/opt/airflow/logs/dag_id=lake_ingest/run_id
 #   attempt=1.log  attempt=2.log
 ```
 
-**7. Compare the hot tier with the lake, minute by minute, around the kill.** The procedure
+**7. Compare the hot tier with the lake, minute by minute, around the kill**, only while the
+compose profile `hot-gold` runs; with ClickHouse paused (ADR-057) there is no hot tier to compare,
+so skip to step 8. The procedure
 is [failure-recovery.md section 8, "Host or Docker VM killed: the hot tier against the
 lake"](./failure-recovery.md#8-host-or-docker-vm-killed-the-hot-tier-against-the-lake); follow
 it rather than a copy here. On 2026-11-25 it showed one differing minute, 22:33 UTC, where the

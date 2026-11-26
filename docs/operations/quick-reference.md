@@ -40,7 +40,8 @@ docker exec k2-redpanda rpk topic describe market.crypto.v3.trades.binance -p
 docker exec k2-redpanda rpk topic consume market.crypto.v3.trades.binance -n 3 -f '%p %o %k\n'
 
 # Consumer groups: the two ClickHouse gold feeds (k2-gold-trades on trades.*, k2-gold-book
-# on book.*). The lake ingest reads by offset range and has no group.
+# on book.*); no members while ClickHouse is paused (ADR-057). The lake ingest reads by offset
+# range and has no group.
 docker exec k2-redpanda rpk group list
 docker exec k2-redpanda rpk group describe k2-gold-trades
 
@@ -50,7 +51,11 @@ docker exec k2-redpanda curl -s localhost:8081/subjects | jq
 
 ## ClickHouse
 
-ClickHouse serves the `gold` database, canonical, deduplicated, every venue in one schema
+**Paused** behind the compose profile `hot-gold` ([ADR-057](../adr/ADR-057-clickhouse-hot-tier-paused-during-platform-build.md)): every command in this
+section needs that profile running. Starting it, and its 7-day limit:
+[pause-and-resume-a-serving-product.md](../runbooks/pause-and-resume-a-serving-product.md).
+
+While it runs, ClickHouse serves the `gold` database, canonical, deduplicated, every venue in one schema
 ([`docker/clickhouse/README.md`](../../docker/clickhouse/README.md)). `gold.trades` and
 `gold.book_top20` are `ReplacingMergeTree`: read them with `FINAL` when the number has to be
 exact. The v2 `k2` database was dropped at the Phase E cutover on 2026-08-27 (phase names:

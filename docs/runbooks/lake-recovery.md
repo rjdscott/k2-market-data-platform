@@ -15,10 +15,15 @@ without belonging to any of those (§6–§8). It does **not** cover capture-sid
 > real output is pasted. Everything else is marked **not yet run** and is written against
 > the Phase D design.
 
+> **ClickHouse is paused** behind the compose profile `hot-gold`
+> ([ADR-057](../adr/ADR-057-clickhouse-hot-tier-paused-during-platform-build.md)). §1, §2 and the `iceberg()` reads below apply only while that profile
+> runs, and §1 only while the old lake `gold` it reads exists: phase 000 drops it at its end
+> ([pause-and-resume-a-serving-product.md §4](./pause-and-resume-a-serving-product.md#4-when-the-reload-from-lake-runbook-no-longer-applies)).
+
 | # | Failure | MTTR target | Measured |
 |---|---------|-------------|----------|
-| 1 | ClickHouse hot tier lost, rebuild from the lake | < 60 min for a 7-day window | not yet verified, Phase D burn-in |
-| 2 | Hot tier behind by hours, Redpanda replay (cold start) | < 15 min | not yet verified, Phase D burn-in |
+| 1 | ClickHouse hot tier lost, rebuild from the lake (only with `hot-gold` running) | < 60 min for a 7-day window | not yet verified, Phase D burn-in |
+| 2 | Hot tier behind by hours, Redpanda replay (cold start; only with `hot-gold` running) | < 15 min | not yet verified, Phase D burn-in |
 | 3 | Lakekeeper down, nothing commits to the lake | < 10 min | not yet verified, `make chaos` |
 | 4 | MinIO down, nothing reads or writes lake data | < 10 min | not yet verified, `make chaos` |
 | 5 | Ingest killed mid-run | recovery automatic; **verification < 5 min** | not yet verified, `make chaos` |
@@ -48,7 +53,8 @@ the reader. Do not substitute the glob "just to get the dashboard back": a dashb
 showing double-counted rows is worse than a dashboard showing nothing, because someone
 will believe it.
 
-Verified on the running stack, 2026-08-26, the function exists on this ClickHouse:
+Verified on the running stack, 2026-08-26, the function exists on this ClickHouse (both
+commands need the `hot-gold` profile running):
 
 ```console
 $ docker exec k2-clickhouse clickhouse-client --password "$CLICKHOUSE_PASSWORD" \
@@ -70,8 +76,8 @@ Note the name: it is `iceberg`, **not** `icebergS3`, that function does not exis
 after a schema change. Dashboards are empty or partial; the lake is fine.
 
 **Detection**, `ClickHouseDown` from
-[`docker/prometheus/rules/clickhouse-alerts.yml`](../../docker/prometheus/rules/clickhouse-alerts.yml),
-or a `k2_lake_rows_total` / ClickHouse row-count divergence noticed by hand.
+[`docker/prometheus/rules/clickhouse-alerts.yml`](../../docker/prometheus/rules/clickhouse-alerts.yml)
+(removed while ClickHouse is paused, ADR-057), or a `k2_lake_rows_total` / ClickHouse row-count divergence noticed by hand.
 
 **Expected behaviour**, **no data is lost.** The hot tier originates nothing
 ([ADR-025](../adr/ADR-025-clickhouse-derived-hot-tier.md)); every row it held exists in
@@ -97,7 +103,8 @@ curl -fsS "localhost:18181/catalog/v1/$PREFIX/namespaces" | jq -c .
 
 ```bash
 # 3. Bring ClickHouse back with its schema, empty.        not yet run: Phase D burn-in
-docker compose up -d clickhouse
+#    It is behind the hot-gold profile (ADR-057): start it by name with the profile.
+docker compose --profile hot-gold up -d clickhouse
 docker exec k2-clickhouse clickhouse-client --password "$CLICKHOUSE_PASSWORD" \
   -q "SHOW TABLES FROM k2"
 ```
@@ -143,7 +150,8 @@ says so.
 ## 2. Redpanda replay: the cold-start path
 
 **Symptom**, the hot tier is behind by hours, not days. ClickHouse was down and is back;
-the lake is fine.
+the lake is fine. While ClickHouse is paused this section does not apply; a resume is
+[pause-and-resume-a-serving-product.md](./pause-and-resume-a-serving-product.md).
 
 **Detection**, ClickHouse Kafka-engine consumer lag, or a stale `max(recv_ts_ns)` in the
 hot tier while the lake keeps advancing.
