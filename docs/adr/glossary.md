@@ -20,7 +20,9 @@ warehouses and access.
 [catalogs and access](#catalogs-warehouses-and-who-may-write) ·
 [dbt and the marts](#dbt-and-the-marts) · [quality and parity](#quality-and-parity) ·
 [Spark query mechanics](#spark-query-mechanics) ·
-[resources](#resources-memory-cpu-and-the-ceiling) · [tools](#tools) ·
+[resources](#resources-memory-cpu-and-the-ceiling) ·
+[releases and rollouts](#releases-versions-and-rollouts) ·
+[logs and telemetry](#logs-and-telemetry) · [tools](#tools) ·
 [plan labels](#plan-and-phase-labels)
 
 ---
@@ -800,6 +802,194 @@ trigger is a p90 above 240 s over a day, and it fired on 2026-11-25 at 253 s, as
 candle and bar step (stage 2d) grew. ADR-048 is the response.
 Where: [ADR-034](ADR-034-airflow-3-replaces-prefect.md)'s 2026-11-26 Outcome, which carries the
 command.
+
+---
+
+## Releases, versions and rollouts
+
+The terms of [ADR-042](ADR-042-one-platform-version-manifest-and-recorded-rollouts.md), proposed,
+not built unless an entry says so.
+
+### Semantic version and pre-release
+
+A semantic version is `MAJOR.MINOR.PATCH`. A consumer may take a new MINOR or PATCH without
+changing anything and must read the notes before a new MAJOR. A pre-release adds a suffix,
+`3.0.0-alpha.1`, that sorts before `3.0.0`; anything after a `+` is build metadata, ignored for
+ordering, which is where K2 puts "this many commits after the release". The data contracts carry
+one each (`version` in every `*.odcs.yaml`, all `1.0.0` today); under ADR-042 the platform carries
+one more, and internal components carry the placeholder `0.0.0`.
+Where: [semver.org](https://semver.org/); `version.txt` once ADR-042 is built.
+
+### Conventional commit
+
+A commit message whose first line names the kind of change: `feat(scope): ...` adds something,
+`fix(scope): ...` repairs something, `docs:`, `chore:`, `ci:`, `build:`, `test:` and `refactor:`
+change nothing a consumer sees, and a `!` after the type (`feat!:`) or a `BREAKING CHANGE:` footer
+marks a breaking change. A release tool reads these to choose the next version and write the
+changelog; release-please treats `feat`, `fix` and `deps` as releasable and nothing else.
+Where: `CONTRIBUTING.md`; [conventionalcommits.org](https://www.conventionalcommits.org/en/v1.0.0/).
+
+### Platform version
+
+The one version that names a tested set of K2's components: a tag `v<version>` on `main` and the
+release manifest at that commit. Between releases it is derived from
+`git describe --tags --match 'v[0-9]*.[0-9]*.[0-9]*'`, so `3.0.0-alpha.1+5.g1a2b3c4` reads "five
+commits after `3.0.0-alpha.1`, at commit `1a2b3c4`". The strict pattern skips the `v3-phase-*`
+milestone tags, which the capture's build label uses today (`v3-phase-e-26-g9932f42`).
+Where: [ADR-042](ADR-042-one-platform-version-manifest-and-recorded-rollouts.md), section 1.
+
+### release-please and the release pull request
+
+release-please is Google's release tool. It keeps one pull request open, the release pull request,
+whose diff is the next `CHANGELOG.md` section and the new version, updated as work merges; merging
+it tags the commit and creates the GitHub release. K2 configures it as one package at the
+repository root, so splitting into several packages later is a configuration change.
+Where: `release-please-config.json` once built; [its README](https://github.com/googleapis/release-please).
+
+### Release manifest
+
+The bill of materials: a generated, committed file, `release/manifest.json`, naming for every
+service what it runs (a locally built image by its content-id tag, a third-party image by its
+digest) and what it mounts from the checkout (by content id), and every contract's version. CI
+regenerates it and fails on a difference, and `make health` compares the running stack with it.
+Where: [ADR-042](ADR-042-one-platform-version-manifest-and-recorded-rollouts.md), section 4.
+
+### Content id
+
+The first 12 hex digits of a SHA-256 over the sorted paths and bytes of exactly the files an image
+is built from (its Dockerfile and the paths its `COPY` lines name) or a container mounts. It is
+known before a commit exists and unchanged by a squash merge, unlike a commit hash, so a committed
+file can hold it; and it changes only when those files do, so an image tagged by it is rebuilt,
+and its containers recreated, only when its own inputs change.
+Where: `scripts/release.py` once built.
+
+### Image tag and digest
+
+A Docker image's tag (`k2-airflow:3.3.2`) is a movable name; its digest (`sha256:...`) is the hash
+of its content and names exactly one image. Today the tags of K2's locally built images are reused
+on every rebuild, so the name can point at a different image from the one a container runs: on
+2026-11-26 the three Airflow containers ran `sha256:2cb77bd56eb6...` while the tag named
+`sha256:f38f39ad27b9...`. An immutable tag is one that is never rebuilt once it exists.
+Where: `docker inspect -f '{{.Image}}' <container>` against `docker image inspect <tag>`.
+
+### Bind mount
+
+A bind mount maps a file or directory of the host's checkout into a container, so the container
+reads the checkout itself rather than a copy baked into its image. K2 mounts the lake jobs, the
+DAGs, the dbt project, Trino's settings, the Prometheus rules and the Grafana dashboards this way,
+so a `git pull` changes what the next run executes without recreating anything. A file-level mount
+pins the file's inode: when `git pull` replaces the file, the container keeps reading the old one
+until it is recreated.
+Where: the `volumes:` entries in `docker-compose.yml`; CLAUDE.md, "Bind-mount gotcha".
+
+### Rollout and the deployment log
+
+A rollout is moving the live stack from one commit to another: the checkout, the images, and the
+recreate of every service whose definition or mounted content changed. Under ADR-042 it is one
+command, `make deploy`, which pauses the lake DAGs, waits for idle, builds and recreates in tiers,
+verifies with `make health`, and records who, when, from which commit and version to which,
+the services recreated and the image digests, into the Trino table
+`governance.ops.deployments` and `release/deployed.json`.
+Where: [ADR-042](ADR-042-one-platform-version-manifest-and-recorded-rollouts.md), section 7.
+
+### Drift
+
+Any difference between what the checkout's release manifest names, what the last rollout recorded,
+and what the containers run: a bare `git pull` (the checkout is ahead of the last rollout), a
+container recreated by hand from another image, or a dirty checkout. Under ADR-042, `make health`
+fails on it and the alert `K2ReleaseDrift` fires after 15 minutes of it.
+Where: [ADR-042](ADR-042-one-platform-version-manifest-and-recorded-rollouts.md), section 8.
+
+### Public surface and the bump rule
+
+The public surface is what an operator or consumer relies on without reading the code: the
+contracted tables and topics, configuration keys, `make` targets, published ports, alert names and
+the upgrade procedure. The bump rule maps changes to it onto MAJOR (something removed, renamed,
+irreversible or needing more than pull plus recreate), MINOR (an addition, a reversible migration,
+restated data, a deprecation) and PATCH (a fix touching none of it); documentation and chores
+release nothing.
+Where: [ADR-042](ADR-042-one-platform-version-manifest-and-recorded-rollouts.md), section 2.
+
+---
+
+## Logs and telemetry
+
+The terms of [ADR-051](ADR-051-central-structured-logs-run-id-and-host-metrics.md), proposed, not
+built unless an entry says so.
+
+### Log rotation and the json-file driver
+
+Docker's `json-file` driver writes every line a container prints to a file inside the Docker VM.
+With no options, as on every K2 container in 2026-11, the file has no size limit and is deleted
+only with its container; `max-size` and `max-file` make Docker start a new file at a size and keep
+a fixed number, which is rotation. The options are read when a container is created, so a change
+reaches a container only when it is recreated.
+Where: the `x-logging` anchor in `docker-compose.yml` once built;
+[Docker's documentation](https://docs.docker.com/engine/logging/drivers/json-file/).
+
+### Structured log line
+
+A log line written as one JSON object with fixed keys rather than a sentence, so a machine can
+filter on a field without guessing at the text. K2's own components share the keys `timestamp`,
+`level`, `message`, `component`, `version`, `commit`, `run_id`, `table` and `topic`; third-party
+services keep their own formats. Lines go out as text instead when a person runs a command at a
+terminal.
+Where: [ADR-051](ADR-051-central-structured-logs-run-id-and-host-metrics.md), section 5;
+`docker/lake/k2log.py` once built.
+
+### Loki, streams and labels
+
+Loki is Grafana's log store. It indexes only a few labels per line and keeps the lines compressed
+in chunks; each distinct set of label values is a stream, with its own open chunk in memory and
+its own index entries. A query picks streams by label, then reads their lines. A label with a new
+value per run or per row (high cardinality) makes many tiny streams, which costs memory, index and
+query time out of proportion to the data, so K2's labels are only `service` and `level`.
+Where: [ADR-051](ADR-051-central-structured-logs-run-id-and-host-metrics.md), sections 2 and 4.
+
+### Structured metadata
+
+Key-value pairs Loki stores beside each line inside its chunk, without indexing them. A query
+filters on them after choosing streams by label: `{service="airflow-scheduler"} | run_id="..."`.
+It is where values that change per run or per row belong (the run id, the table, the connection).
+It needs Loki's `tsdb` index and schema `v13`.
+Where: [Loki's documentation](https://grafana.com/docs/loki/latest/get-started/labels/structured-metadata/).
+
+### Grafana Alloy
+
+Grafana's collector, the successor of Promtail (end of life on 2026-03-02). In K2 it finds the
+containers through the Docker API, reads their logs from the Docker daemon, redacts secrets,
+parses JSON and Airflow's `key=value` pairs, attaches labels and structured metadata, counts a few
+patterns as metrics, and pushes the lines to Loki.
+Where: `docker/alloy/config.alloy` once built.
+
+### Run id and trace
+
+A run id is the name of one Airflow run, such as `scheduled__2026-11-26T02:26:00+00:00`. Carried
+into every log line, lake commit (`k2.run-id`) and dbt test result that run produced, it joins
+them with one equality filter: a correlation id. A trace is the heavier alternative: every
+service records timed spans of one request, linked by a trace id, into a trace store. K2's work is
+batches that each belong to one run, so the run id answers what a trace would; traces wait for a
+synchronous request path such as a serving API.
+Where: [ADR-051](ADR-051-central-structured-logs-run-id-and-host-metrics.md), section 6.
+
+### Host exporter and host watcher
+
+node_exporter is Prometheus's exporter of a machine's memory, swap, disks and kernel counters. On
+Docker Desktop a container sees the VM, not the host, so K2's runs on the host itself, installed
+by the owner and listening on the host's loopback address, scraped by Prometheus through
+`host.docker.internal`. The host watcher is a small timer on the host that raises a desktop notice
+when memory or swap is nearly gone, and when the VM dies, because Prometheus cannot alert on the
+VM it runs inside.
+Where: [ADR-051](ADR-051-central-structured-logs-run-id-and-host-metrics.md), section 8;
+`scripts/host/` once built.
+
+### Recording rule
+
+A Prometheus rule that stores the result of an expression as a new series on every evaluation,
+rather than alerting on it. ADR-051 uses generated recording rules with a constant value and fixed
+labels to put each data product's owner, tables and freshness target into Prometheus, so a
+dashboard can group table metrics by product.
+Where: `docker/prometheus/rules/`; `products.yml` once built.
 
 ---
 
