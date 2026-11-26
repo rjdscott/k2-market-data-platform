@@ -362,9 +362,12 @@ def publish(release: str) -> str:
     table, which the deploy has already made empty, so it is dropped first (no run writes it before 002)."""
     q("svc.platform", f"DROP TABLE IF EXISTS {RUN_RECORD}")
     WORK.mkdir(exist_ok=True)
-    (WORK / "env.json").write_text(json.dumps({"release": f"/k2/releases/{release}", "trino": "https://trino:8443",
-                                               "lakekeeper": "http://lakekeeper:8181", "secrets": "/work/secrets",
-                                               "ca": "/work/secrets/tls/ca.pem"}))
+    lake_env = _load("lake_env", REPO / "scripts/lib/lake_env.py")  # the one writer of env.json
+    plan = json.loads((ROOT / release / model.STORAGE_PLAN).read_text())
+    lake_env.write(WORK / "env.json", release=f"/k2/releases/{release}", trino="https://trino:8443",
+                   lakekeeper="http://lakekeeper:8181", secrets="/work/secrets", ca="/work/secrets/tls/ca.pem",
+                   passwords={f.stem: f"/work/secrets/principals/{f.name}" for f in (SECRETS / "principals").glob("*.password")},
+                   warehouses=[w["name"] for w in plan["warehouses"]])
     tools = json.loads((ROOT / release / "manifest.json").read_text())["images"]["tools"]
     return sh("docker", "run", "--rm", "--network", f"{PROJECT}_k2-catalog", "--user", f"{os.getuid()}:{os.getgid()}",
               "--memory", "256m", "-v", f"{CLONE / 'scripts'}:/opt/k2/scripts:ro", "-v", f"{ROOT}:/k2/releases:ro",

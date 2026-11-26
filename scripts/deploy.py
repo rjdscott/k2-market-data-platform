@@ -931,7 +931,6 @@ def release_suite(ctx: Ctx, rel: Release) -> list[str]:
     try:
         run(*lake, "up", prefix, str(rel.root), env=env)
         state = Path(run(*lake, "state", prefix, env=env).stdout.strip())
-        file_people(state)
         run(*lake, "py", prefix, "scripts/access_verify.py", "stage", "--release", work, "--env", "/work/env.json", env=env)
         rows = run(*lake, "py", prefix, "scripts/access_verify.py", "run", "--scope", "release", "--release", work,
                    "--env", "/work/env.json", "--out", "/work/access-verify.json", env=env, check=False)
@@ -950,19 +949,6 @@ def release_suite(ctx: Ctx, rel: Release) -> list[str]:
         raise Refused(f"the release fails the tested-data marker check (exit {done.returncode}): {tail(done)}")
     return [f"access-verify at release time: {counts}",
             f"tested-data marker: {sum(1 for x in done.stdout.splitlines() if x.startswith('PASS'))} PASS"]
-
-
-def file_people(state: Path) -> None:
-    """Each person's password where access_verify.py looks for it, principals/<id>.password: the lake
-    keeps people's under throwaway/ and lists them in env.json's `passwords` map, which access_verify.py
-    does not read yet (step fix-identity-review changes that; then this copies nothing new)."""
-    doc = json.loads((state / "env.json").read_text())
-    secrets_dir = Path(str(doc.get("secrets", "/work/secrets/k2")).replace("/work", str(state), 1))
-    for user, path in (doc.get("passwords") or {}).items():
-        src, dst = Path(str(path).replace("/work", str(state), 1)), secrets_dir / model.password_file(user)
-        if src.is_file() and not dst.exists():
-            with ps.locked(dst) as fd:
-                ps.write(fd, src.read_text())
 
 
 def make_target(ctx: Ctx, target: str, env: dict[str, str], **variables: str) -> subprocess.CompletedProcess[str]:

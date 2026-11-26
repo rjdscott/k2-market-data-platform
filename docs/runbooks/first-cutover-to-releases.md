@@ -18,9 +18,9 @@ and, if it goes wrong, moving it back to today's shape. Every later change is an
 
 | # | Task | MTTR target | Measured |
 |---|------|-------------|----------|
-| 1 | The cutover, from the release to verified | <15 min | MEASURE_CUTOVER |
-| 2 | Each service's outage during it | | MEASURE_DOWN |
-| 3 | The rollback to today's shape | <10 min | MEASURE_BACK |
+| 1 | The cutover, from the release to verified | <15 min | 127 s for the whole rehearsal; the deploy 32 s (2026-11-27, rehearsal) |
+| 2 | Each service's outage during it | | Lakekeeper 2.2 s, Trino 10.8 s, each new service 0.1 s; MinIO, Postgres and the capture never down (2026-11-27, rehearsal) |
+| 3 | The rollback to today's shape | <10 min | 8 s (2026-11-27, rehearsal) |
 
 ---
 
@@ -100,9 +100,27 @@ make deploy RELEASE=<release id> ALLOW_STATEFUL=lakekeeper
 make release-verify
 ```
 
-CUTOVER_OUTPUT
+```text
+  access-verify at release time: {'PASS': 63, 'FAIL': 0, 'SKIP': 0}
+  tested-data marker: 11 PASS
+  recreate, one at a time: trino, prometheus, standin
+  one-shots run: lakekeeper-migrate
+  Trino restart: yes; DDL: governance.run_records.run_record
+  views to re-sync: governance.access_canary.events
+  not recreated: tools: a one-shot this deploy runs itself, from the release
+PASS  make release: the services deploy never recreates keep the images they run  {'prefect-db': True, 'minio': True, 'lakekeeper': True, 'capture-binance': True}
+PASS  the cutover deploy converges, exit 0  32 s; down while recreated: {'lakekeeper': '2.2', 'trino': '10.8', 'prometheus': '0.1', 'standin': '0.1'}
+PASS  MinIO, Postgres and the capture were never restarted
+PASS  Lakekeeper is fenced: no host port, on the catalog's network only  ports none, networks ['k2-rehearsal_k2-catalog']
+PASS  Trino: plain HTTP gone, HTTPS by name with a password
+PASS  release-verify after the cutover  catalog drift check clean (0 differences, pending ['PENDING view governance.access_canary.events: ...
+```
 
-**Measured**, MEASURE_CUTOVER_TEXT
+The plan lines are `PLAN=1`'s, which runs without `ALLOW_STATEFUL`: with it, Lakekeeper is recreated first,
+before Trino, whose catalogs reach it on the new network. The live suite is a visible SKIP after the
+cutover: the access canary is not published until phase 002.
+
+**Measured**, 2026-11-27, on the rehearsal: the cutover deploy 32 s from the command to verified (its release-time suites ran at `PLAN=1` and were kept), each service's outage as the deploy measured it from its recreate to healthy: Lakekeeper 2.2 s, Trino 10.8 s (started from the release's etc over HTTPS), the two services the release shape adds 0.1 s each; MinIO, Postgres and the stand-in capture kept their `State.StartedAt` throughout. The whole rehearsal, today's shape up to rolled back, 127 s. The live stack has more services to recreate once (Airflow's three, Spark, Grafana, cAdvisor, Alertmanager, Redpanda Console): seconds each, not measured.
 
 **Not covered by the rehearsal**: the live services the rehearsal has no copy of (Airflow, Spark,
 Grafana, cAdvisor, Alertmanager, Redpanda Console, the one-shots), each recreated once by the same
@@ -137,9 +155,15 @@ mv "${K2_RELEASES:-$HOME/k2-releases}" "${K2_RELEASES:-$HOME/k2-releases}.rolled
 make health
 ```
 
-BACK_OUTPUT
+```text
+PASS  the cutover rolled back: Trino on HTTP and Lakekeeper on its host port again  (200, 200) in 8 s; removed the release-only ['prometheus', 'standin']
+PASS  and MinIO, Postgres and the capture were still never restarted
+```
 
-**Measured**, MEASURE_BACK_TEXT
+On the live stack no service is release-only (every one is in today's compose), so nothing is removed:
+each service the cutover recreated is recreated again from today's file.
+
+**Measured**, 8 s, 2026-11-27, on the rehearsal: Lakekeeper and Trino recreated from today's compose, MinIO and Postgres left the catalog's network in place, the network removed, the releases root moved aside; Trino answered on plain HTTP and Lakekeeper on its host port again, and MinIO, Postgres and the capture had still never restarted.
 
 ---
 

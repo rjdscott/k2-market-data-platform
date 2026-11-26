@@ -234,19 +234,19 @@ release gate `v3.0.0` (phase N11), whichever comes first.
 The decision stands; integrating it with steps S12, S13 and S20 and with the fix of the review of
 S12 (the reader view now fails closed unless its base is a tagged Iceberg table, by a `WHERE EXISTS`
 over `<base>$refs` that only the new rules let the publisher read) changed five things in the
-sequence, each proven on the rehearsal (`make deploy-rehearsal`, OUTCOME_RUN).
+sequence, each proven on the rehearsal (`make deploy-rehearsal`, 2026-11-27, and the cutover from today's shape and back with `CUTOVER=1`).
 
 1. **Release-time suites in preflight.** Before anything moves, one throwaway lake started from the
    release (`scripts/lib/throwaway-lake.sh`) runs S20's 63 access rows and the tested-data marker; a
    failure refuses the deploy (exit 2). A sealed release's pass is kept by its id under
-   `<releases root>/verify/`, so each release pays once (OUTCOME_SUITE).
+   `<releases root>/verify/`, so each release pays once (63 of 63 rows and 11 marker checks; a rules-only deploy of a new release took 49 s with them, a rerun of one already passed 27 s).
 2. **Each release writes its views with its own emitter**, in its own tools image, not the deploying
    checkout's k2gen: a view shape is readable only under the rules of the release that made it. The
    order per case: (a) columns dropped: narrowed before the rules move, in the target's shape when the
    source's rules admit it, else (Trino answers PERMISSION_DENIED) in the source's shape; (b) the shape
    or the publisher's grants changed with no column change: rewritten after the target's rules are
    loaded (the widen step); (c) both: (a), then (b). Readers saw no error and no masked value across
-   the old shape to the guarded one, a `make rollback` back and a deploy forward (OUTCOME_SHAPE). The
+   the old shape to the guarded one, a `make rollback` back and a deploy forward (897 polls at 50 ms, no error, no masked value; 9,441 more through a kill after each step). The
    one window left is stated: were a target's rules to refuse the source's shape AND the source's
    rules the target's, the view's readers would get access errors, failing closed, from the rules
    switch until the widen step, at most `RULES_WAIT_S` plus one refresh (25 s); no release pair here
