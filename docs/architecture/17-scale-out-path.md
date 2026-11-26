@@ -515,7 +515,7 @@ byte-perfect and inert**.
 
 Two things make the recommended route practical rather than theoretical. First,
 `rewrite_table_path` landed in **Iceberg 1.8.0**, and the stack runs **1.8.1**
-(`tabulario/spark-iceberg:3.5.5_1.8.1`, pinned by digest) — **the mitigation is available
+(`k2-spark-iceberg:3.5.9_1.8.1`, the Iceberg runtime baked in with its sha256): **the mitigation is available
 in the image the repo already runs.** Second, its documented limitation is tables with
 partition statistics files; nothing in `docker/lake/` computes them, so it does not bite.
 

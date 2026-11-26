@@ -301,8 +301,8 @@ Prometheus, which answer 302 (a redirect to their login and query pages), and th
 | MinIO console | http://localhost:9001 | The objects under the lake, bucket `k2-lake` | `MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD` |
 | Prometheus | http://localhost:9090 | Metrics, scrape targets (`/targets`) and alert state (`/alerts`) | none |
 | ClickHouse | http://localhost:8123/play | A query box over the hot tier, `SELECT count() FROM gold.trades FINAL` | user `default`, `CLICKHOUSE_PASSWORD`; read-only research user `quant`, `K2_QUANT_PASSWORD` |
-| Spark master | http://localhost:18080 | Mostly empty by design: the lake jobs run as local drivers and never register with it | none |
-| Spark Thrift server | http://localhost:4040 | The UI of the image's always-on Thrift JDBC server (answers 302), **not** of the lake jobs. A running lake job's UI is port 4041 inside the container and is not published: `docker exec k2-spark-iceberg curl -s localhost:4041/api/v1/applications` | none |
+| Spark History Server | http://localhost:18080 | The lake's finished Spark jobs, newest first, two days of them (its event-log cleaner deletes older ones); open one for its stages. The only process the Spark container runs between jobs. Its page answered 200 in a throwaway container of `k2-spark-iceberg:3.5.9_1.8.1` on 2026-11-26, not yet on this published port | none |
+| Spark job UI | http://localhost:4040 | The lake job running now, while it runs (nothing answers between jobs). A second driver running at the same time gets 4041 inside the container, not published: `docker exec k2-spark-iceberg curl -s localhost:4041/api/v1/applications` | none |
 | JupyterLab | http://localhost:8889 | The research notebooks; only while `make notebooks` runs in a terminal (answers 000 otherwise) | token printed by `make notebooks` |
 
 APIs rather than consoles, also on `127.0.0.1`: Redpanda's Kafka API `19092` (the listener host
@@ -429,10 +429,12 @@ stops with a message and exit status 1, never proceeding. It counts two things a
 - **Any Spark driver or Python process in `k2-spark-iceberg`.** Every Spark driver is a JVM
   whose main class is `org.apache.spark.deploy.SparkSubmit` (a PySpark one, started from a
   script, also carries `pyspark-shell`), whatever started it: a lake job, `record_check.py`, a
-  chaos script, a notebook kernel, the release gate. The image's always-on Thrift server is one
-  too and is left out by its class, `HiveThriftServer2`. A lake script holds the writer lock as
-  a Python process before its JVM starts, so Python counts as well, except the image's Jupyter
-  server. `docker exec k2-spark-iceberg ps -A -o args=` lists what it reads.
+  chaos script, a notebook kernel, the release gate. Between jobs the image runs only tini and
+  the History Server, neither of which matches. The previous image, `k2-spark-iceberg:3.5.5_1.8.1`
+  (kept for a rollback), also ran an always-on Thrift server, a driver too, left out by its class
+  `HiveThriftServer2`, and a Jupyter server, left out by name. A lake script holds the writer lock
+  as a Python process before its JVM starts, so Python counts as well.
+  `docker exec k2-spark-iceberg ps -A -o args=` lists what it reads.
 - **Any queued or running run of the four DAGs with a task instance not yet finished**:
   busy unless every task of the run is `success`, `failed`, `skipped`, `upstream_failed` or
   `removed`, so `scheduled`, `queued`, `running`, `up_for_retry`, `deferred`, `restarting`

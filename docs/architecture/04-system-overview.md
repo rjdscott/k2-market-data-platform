@@ -41,7 +41,7 @@ flowchart TB
         FHC["capture-coinbase"]
     end
     RP[("Redpanda v25.3.4 + schema registry<br/>9 topics · 12 partitions each · Avro")]
-    subgraph BATCH["Airflow 3 → Spark 3.5.5 / Iceberg 1.8.1"]
+    subgraph BATCH["Airflow 3 → Spark 3.5.9 / Iceberg 1.8.1"]
         ING["ingest every 5 min<br/>offset range → raw, batch audited → bronze → silver → gold"]
         MNT["maintenance nightly<br/>compact · expire · audit"]
     end

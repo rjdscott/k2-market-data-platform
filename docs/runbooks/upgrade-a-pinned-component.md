@@ -139,9 +139,10 @@ grep -n -E '^FROM|PyYAML==|py4j-|\.jar [0-9a-f]{64}' docker/spark/Dockerfile
 grep -n 'k2-spark-iceberg:' docker-compose.yml .github/workflows/ci.yml
 ```
 
-During the rebase the two `image:` lines still named `3.5.5_1.8.1` while CI built
-`3.5.9_1.8.1`: on purpose, because moving the `image:` lines is the step that puts the image
-live (section 4).
+Move the `image:` lines in the same branch as the Dockerfile, as their own commit, and merge
+the two together: between a Dockerfile change and its `image:` lines, any compose build
+writes the new image under the old tag (section 4). The rebase did exactly that, steps N0-6
+and N0-13 on one branch.
 
 **Measured**, not timed.
 
@@ -215,7 +216,9 @@ docker rm -f k2-spark-candidate
 Then the change goes live: move both `image:` lines to the new tag and recreate
 `spark-iceberg` between ingest runs, with the
 [operator guide's pause pattern](../operations/README.md#the-pattern-pause-wait-for-idle-recreate-verify-unpause),
-and run `make gates` on it. For the rebase that is step N0-13, its own change.
+and run `make gates` on it. Build the new tag first, before the pause: with the `image:`
+lines moved, `docker compose build spark-iceberg` writes only the new tag and leaves the old
+one, the rollback, alone.
 
 **Measured**, 2026-11-26: the build took 14 s with the base image already pulled; steps 4
 to 8 took 28 s together, with a scheduled ingest running in `k2-spark-iceberg` beside them.

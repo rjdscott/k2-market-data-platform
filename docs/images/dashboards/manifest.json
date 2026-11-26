@@ -25,12 +25,6 @@
       "captured_at": "2026-11-25T20:34:37Z"
     },
     {
-      "file": "05-spark-master.png",
-      "url": "http://localhost:18080",
-      "git_sha": "v3-phase-e-69-g27eb1c5",
-      "captured_at": "2026-11-25T20:34:40Z"
-    },
-    {
       "file": "06-lakekeeper-gold.png",
       "url": "http://localhost:18181/ui/warehouse/81d3215a-a2bc-11f1-9478-ffbc9544e0ba/namespace/gold",
       "git_sha": "v3-phase-e-69-g27eb1c5",

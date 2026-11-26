@@ -114,9 +114,13 @@ Airflow limits are the plan's estimates until ADR-034's measured figures replace
   views and every analytical query run against the hot tier.
 - **Spark is batch-only, but the container is never empty.** Its 3.0 CPU (2.0 until 2026-11-25) / 8 GiB (4 GiB until 2026-08-26) runs a job
   only during the 5-minute lake ingest and the nightly maintenance run, so the practical
-  steady-state footprint is closer to 16.30 CPU / 26.312 GiB, but the base image's
-  always-on Master, Worker, History Server, Thrift Server and Jupyter idle at **633 MiB**
-  before any driver starts (`docker stats --no-stream k2-spark-iceberg`, 2026-08-26). The
+  steady-state footprint is closer to 16.30 CPU / 26.312 GiB, but the old tabulario base
+  image's always-on Master, Worker, History Server, Thrift Server and Jupyter idled at
+  **633 MiB** before any driver started (`docker stats --no-stream k2-spark-iceberg`,
+  2026-08-26). The official-image rebuild (`k2-spark-iceberg:3.5.9_1.8.1`, 2026-11-26) runs
+  only the History Server between jobs: **167 MiB** idle in a throwaway container started from
+  `spark-iceberg`'s compose definition (`docker stats --no-stream`, 2026-11-26), not yet
+  re-read on `k2-spark-iceberg` itself. The
   container was first sized for **two** drivers on top of that, the 03:00 maintenance
   run overlapping the 03:01 ingest tick, which is why `docker/lake/spark_conf.py` pins
   the ingest heap (768m then; 1536m since 2026-11-25, when the daily recompute outgrew it, see the comment there) instead of inheriting the image's 1 g, and why the `lake-ddl`
