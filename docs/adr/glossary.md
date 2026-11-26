@@ -609,8 +609,11 @@ A table procedure is a maintenance command Trino runs on one table as
 `ALTER TABLE ... EXECUTE <name>`: `optimize` (compaction), `expire_snapshots`,
 `remove_orphan_files`, `rollback_to_snapshot`. In Trino 484 no built-in access control limits
 them per user on a writable catalog, so inside the domain catalogs any user can run them (at or
-above the retention floor). That is ADR-044's stated gap, asserted by `make test-trino` so a
-release that closes it is noticed.
+above the retention floor). That is ADR-044's stated gap. Spike (e) found how Trino checks one: as
+`SELECT` on that table, so a user with no privilege on a table cannot run one, and a user allowed
+`SELECT` through a writable catalog can; the compiled rules of
+[ADR-059](ADR-059-access-rules-compiled-default-deny-over-two-catalogs-per-domain.md) therefore give
+nobody `SELECT` on another product's table except through a read-only catalog.
 Where: [ADR-044](ADR-044-producer-lake-and-domain-mart-warehouses.md), "The honest limits".
 
 ### Definer view
@@ -1211,6 +1214,41 @@ The file group provider reads group membership from a second file; the target na
 `<fence>__<role>`, so a grant is a membership. Trino reloads both within its 5 s refresh period.
 Where: `docker/trino/etc/rules.json` today;
 [ADR-061](ADR-061-readers-see-dbt-outputs-through-a-view-over-the-tested-tag.md) for the target.
+
+### Default deny and exact-name rules
+
+The compiled rules allow nothing that no rule names: no list ends in a rule matching everyone, so an
+unknown user is refused its first statement, and a section left out is left out because Trino's own
+default for it is the stricter one (only built-in functions, no owner transfer). Every name in a rule
+is an exact name with its regex characters escaped, because Trino matches a rule's regex against the
+whole name and an unescaped `.` matches any character. So a rule for table `t` never matches its
+metadata table `t$files`, and a rule for product `station_readings` never matches `station_readings__base`
+or `station_readings_twin`.
+Where: [ADR-059](ADR-059-access-rules-compiled-default-deny-over-two-catalogs-per-domain.md) points 2 and 3.
+
+### Operator principal
+
+`svc.platform`, the one identity allowed to read Trino's `system.runtime` tables (the query history
+holds every statement's text, untested values included), view and kill other users' queries, read
+system information and set every session property, retention floors included. It holds no privilege
+in a reader namespace. A person operating the platform does so as it, from the `tools` container.
+Where: [ADR-059](ADR-059-access-rules-compiled-default-deny-over-two-catalogs-per-domain.md) point 4.
+
+### Impersonation
+
+Logging in as one principal and running a query as another. Trino allows it only where an
+`impersonation` rule names both; the compiled rules let `svc.api`, the REST service's identity, become
+each declared person (`p.*`) by exact name and nobody else, so a REST request runs under its caller's own
+rules and policies.
+Where: [ADR-059](ADR-059-access-rules-compiled-default-deny-over-two-catalogs-per-domain.md) point 4.
+
+### Release canary
+
+`k2_release_<first 12 hex of the document set's sha256>`, a user only one release's rules name: they let
+it execute a query and reach nothing. `SELECT 1` as it succeeds exactly while that release's rules are
+loaded, which is how `release-verify` tells that Trino has read the new rules file.
+Where: [ADR-059](ADR-059-access-rules-compiled-default-deny-over-two-catalogs-per-domain.md) point 4;
+`k2gen.model.canary_user`.
 
 ### Catalog fence and drift check
 
