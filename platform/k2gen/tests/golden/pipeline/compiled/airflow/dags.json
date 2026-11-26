@@ -1,0 +1,36 @@
+{
+  "dags": [
+    {
+      "dagId": "daily_load",
+      "pipeline": "compiled/products/ops-insight.daily-load/pipeline.json",
+      "product": "ops-insight.daily-load",
+      "schedule": "30 1 * * *",
+      "status": "active",
+      "tasks": [
+        "resolve",
+        "build",
+        "expire",
+        "record",
+        "maintain"
+      ]
+    },
+    {
+      "dagId": "station_readings",
+      "pipeline": "compiled/products/sensor-net.station-readings/pipeline.json",
+      "product": "sensor-net.station-readings",
+      "schedule": "15 * * * *",
+      "status": "active",
+      "tasks": [
+        "resolve",
+        "fetch",
+        "load",
+        "audit",
+        "publish",
+        "build",
+        "expire",
+        "record",
+        "maintain"
+      ]
+    }
+  ]
+}
