@@ -48,9 +48,10 @@ def test_the_repository_validates():
 
 
 def test_every_table_has_exactly_one_contract():
+    # A contract with inline columns is a table lake.sql does not create (generate writes its DDL).
     tables = list(ddl.parse(ROOT / cli.LAKE_SQL))
-    described = [yaml.safe_load(p.read_text())["schema"][0]["physicalName"] for p in (ROOT / "contracts").glob("*/*/*.odcs.yaml")]
-    assert sorted(described) == sorted(tables)
+    docs = [yaml.safe_load(p.read_text())["schema"][0] for p in (ROOT / "contracts").glob("*/*/*.odcs.yaml")]
+    assert sorted(d["physicalName"] for d in docs if "properties" not in d) == sorted(tables)
 
 
 def test_an_audit_table_without_a_contract_fails(tree):

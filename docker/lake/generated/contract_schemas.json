@@ -575,6 +575,48 @@
       "recv_ts_ns"
     ]
   },
+  "bronze.source_files": {
+    "columns": [
+      {
+        "name": "domain",
+        "required": true,
+        "type": "STRING"
+      },
+      {
+        "name": "product",
+        "required": true,
+        "type": "STRING"
+      },
+      {
+        "name": "url",
+        "required": true,
+        "type": "STRING"
+      },
+      {
+        "name": "fetched_at",
+        "required": true,
+        "type": "TIMESTAMP"
+      },
+      {
+        "name": "sha256",
+        "required": true,
+        "type": "STRING"
+      },
+      {
+        "name": "landing_path",
+        "required": true,
+        "type": "STRING"
+      },
+      {
+        "name": "byte_size",
+        "required": true,
+        "type": "BIGINT"
+      }
+    ],
+    "identifier": [],
+    "partitioning": [],
+    "sort": []
+  },
   "gold.bars": {
     "columns": [
       {

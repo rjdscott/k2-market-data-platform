@@ -20,4 +20,5 @@ its inputs, classification, retention and columns; [the index](README.md) has ea
 | [market-analytics](README.md#market-analytics) | [delayed-candles](market-analytics/delayed-candles.md) | `analytics-team` | draft | running | `market_analytics.delayed_candles.ohlcv_delayed_20m` |
 | [market-analytics](README.md#market-analytics) | [event-bars](market-analytics/event-bars.md) | `analytics-team` | draft | running | `gold.bars` |
 | [market-analytics](README.md#market-analytics) | [venue-quality](market-analytics/venue-quality.md) | `analytics-team` | draft | running | `market_analytics.venue_quality.venue_quality_scorecard` |
+| [governance](README.md#governance) | [landed-files](governance/landed-files.md) | `platform-team` | draft | running | `bronze.source_files` |
 | [governance](README.md#governance) | [quality-results](governance/quality-results.md) | `platform-team` | draft | running | `governance.quality_results.dq_results` |

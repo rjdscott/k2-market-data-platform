@@ -1,0 +1,76 @@
+# Contract for lake.bronze.source_files, a table lake.sql does not create: its columns are
+# inline, and `make generate` writes its DDL to docker/lake/ddl/generated/bronze.source_files.sql.
+apiVersion: v3.2.0
+kind: DataContract
+id: lake.bronze.source_files
+name: bronze.source_files
+version: 1.0.0
+domain: governance
+description:
+  purpose: >-
+    One row per file a file source landed, append-only, written by the load step of
+    docker/lake/file_source.py before it parses the file, so a file that fails to parse or
+    to audit is recorded too. A file landed again on another day is another row. No
+    upstream is declared: the rows describe the landing zone, which every file source
+    writes, and a list of the URL of every source would say less than the code does.
+team:
+  name: platform-team
+schema:
+  - name: source_files
+    physicalName: bronze.source_files
+    physicalType: table
+    properties:
+      - name: domain
+        logicalType: string
+        physicalType: STRING
+        required: true
+        description: The data domain of the source, as contracts/domains.yaml names it.
+      - name: product
+        logicalType: string
+        physicalType: STRING
+        required: true
+        description: The data product of the source, as its product.yaml names it.
+      - name: url
+        logicalType: string
+        physicalType: STRING
+        required: true
+        description: The URL the file was fetched from.
+      - name: fetched_at
+        logicalType: timestamp
+        physicalType: TIMESTAMP
+        required: true
+        description: When the fetch step downloaded the file, UTC, from the metadata of the landed object.
+      - name: sha256
+        logicalType: string
+        physicalType: STRING
+        required: true
+        description: The sha256 of the bytes of the file, in hex, and the source_file_sha256 every row loaded from it carries.
+      - name: landing_path
+        logicalType: string
+        physicalType: STRING
+        required: true
+        description: Where the file lies, s3://<bucket>/<domain>/<product>/<fetch date>/<sha256>.<ext>.
+      - name: byte_size
+        logicalType: integer
+        physicalType: BIGINT
+        required: true
+        description: The size of the file in bytes.
+customProperties:
+  - property: layer
+    value: bronze
+  - property: format
+    value: iceberg
+  - property: partitioning
+    value: []
+  - property: sort
+    value: []
+  - property: classification
+    value: internal
+  - property: entitlement
+    value: none
+  - property: retention
+    value: 7
+  - property: upstreams
+    value: []
+  - property: schedule
+    value: ""

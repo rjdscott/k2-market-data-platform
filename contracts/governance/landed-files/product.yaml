@@ -1,0 +1,17 @@
+name: landed-files
+domain: governance
+owner: platform-team
+purpose: >-
+  The record of every file a file source landed (ADR-036): one row per landed file, for every
+  source, naming its product, the URL it came from, when it was fetched, its sha256, where it
+  lies in the landing zone and its size. The file itself stays in the landing zone, never in a
+  row. Every row a file source writes carries the sha256 of its file, so a value traces back
+  through this table to the bytes it was read from.
+kind: consumer-aligned
+lifecycle: draft
+inputs: []
+outputs:
+  - bronze.source_files
+consumers:
+  - docker/lake/file_source.py
+  - docs/runbooks/file-source-audit-failed.md

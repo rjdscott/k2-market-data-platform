@@ -8,4 +8,4 @@ table is declared. `docker/lake/apply_ddl.py` applies them in name order after `
 which stays the DDL of record for every table it creates
 ([ADR-032](../../../../docs/adr/ADR-032-odcs-contracts-and-k2gen.md)).
 
-None today: every contract references `lake.sql`.
+- `bronze.source_files.sql`

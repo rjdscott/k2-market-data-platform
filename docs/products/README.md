@@ -52,4 +52,5 @@ Owner `platform-team`, consumer-aligned. What the platform records about the oth
 
 | Product | Lifecycle | Status | Outputs and marts |
 |---|---|---|---|
+| [landed-files](governance/landed-files.md) | draft | running | `bronze.source_files` |
 | [quality-results](governance/quality-results.md) | draft | running | `governance.quality_results.dq_results` |
