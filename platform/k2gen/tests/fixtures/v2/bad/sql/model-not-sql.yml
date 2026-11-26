@@ -1,0 +1,7 @@
+# expect: sql.model-not-sql
+# at: models/gold_daily_load.yml
+# Model properties YAML: config here would bypass the one config() parser and this lint.
+models:
+  name: daily_load__gold_daily_load
+  config:
+    materialized: view
