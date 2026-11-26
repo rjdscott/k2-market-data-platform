@@ -19,7 +19,8 @@ tolerance ZERO on open/high/low/close (1e-8 fixed point), trade_count and volume
 
 Pinned, never `latest`: a parity check that reads whatever is current cannot be
 re-run to the same answer, and a check that cannot be re-run is not a check.
-`tests/parity/pinned.json` holds the ids of the last run this passed against.
+`tests/parity/pinned.json` holds the ids of the last run this passed against. A pin
+neither on main's lineage nor named by a tag stops the run (`resolve_snapshot`).
 
 A, B and C compare volume as round(float(volume), 8): a double, exact to about 15
 significant digits, so not to the eighth decimal of a large volume.
@@ -87,42 +88,47 @@ AUDIT_REF = re.compile(r"lake\.audit\.checks job=([a-z_]+) check_name=([a-z_]+) 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "notebooks"))  # for k2lake, once
 
 
-def main_lineage(table: str) -> list:
-    """`main`'s snapshot ids for `table`, current first: notebooks/k2lake.py's, the one copy."""
-    from k2lake import main_lineage as lineage  # imports duckdb, so not at module level
+def table_refs(table: str) -> tuple:
+    """(main's snapshot ids, current first; {snapshot id: tag name}) for `table`, from one loadTable.
 
-    return lineage(table)
-
-
-def resolve_snapshot(lineage: list, table: str, pinned: int) -> int:
-    """The pinned snapshot if it is on `main`'s lineage, else main's current one, said out loud.
-
-    A pin written on another host, or one `expire_snapshots` has since dropped,
-    is not in this table, and reading `AT (VERSION => <pin>)` raised
-    `Could not find snapshot with id ...`: the release gate ADR-029 names crashed
-    instead of reporting anything, every run, from 2026-08-27 to 2026-09-03.
-    A pin that is a branch's snapshot is in the table but was never published,
-    so it falls back too.
-
-    Falling back *silently* would be worse than the crash — the gate would print
-    PASS at a snapshot nobody pinned and nobody could re-run. So: fall back, name
-    both ids on stdout, and leave the exit code to parity. A stale pin degrades
-    the check from reproducible to current; it never turns a FAIL into a PASS.
-
-    `lineage` is `main_lineage(table)`, passed in so the decision is testable
-    without a catalog (tests/test_parity.py). Not the newest by sequence number,
-    which on a table with a branch can be the branch's commit (spike, 2026-11-25).
+    notebooks/k2lake.py's `lineage` and `tags`, the one copy.
     """
-    if not lineage:
-        raise SystemExit(f"{table} has no snapshots — nothing to compare")
+    import k2lake  # imports duckdb, so not at module level
+
+    meta = k2lake.table_metadata(table)
+    return k2lake.lineage(meta), k2lake.tags(meta)
+
+
+def resolve_snapshot(lineage: list, tags: dict, table: str, pinned: int) -> int:
+    """The pinned snapshot if it is on `main`'s lineage or a tag names it; otherwise the run stops.
+
+    `lineage` walks `parent-snapshot-id` from main's head and stops at the first
+    parent that expiry removed. Expiry keeps a tagged snapshot, so a pin a week old
+    is still in the table and readable, but off the walk: a resolver that read the
+    walk alone took it for stale. The tag is what keeps a pin valid, not only what
+    keeps it readable (tests/parity/README.md). A snapshot only a branch reaches was
+    never published to main and stays refused.
+
+    Anything else stops the run, naming the table, the id and the way out. Until
+    2026-11-26 this fell back to main's current snapshot with one printed line and
+    left the exit code to parity, so a week after pinning the gate compared engines
+    on live data and called it the pin. The only path to "current" is an explicit
+    `--pin-current`, which passes main's head as the pin.
+
+    `lineage` and `tags` are `table_refs(table)`, passed in so the decision is
+    testable without a catalog (tests/test_parity.py).
+    """
     if pinned in lineage:
         return pinned
-    current = lineage[0]
-    print(
-        f"pin {pinned} not found in {table} on main; ran at current snapshot {current} "
-        f"(pin stale: refresh tests/parity/pinned.json with --pin-current)"
+    if pinned in tags:
+        print(f"pin {pinned} of {table}: held by tag {tags[pinned]}, off main's walk because expiry removed snapshots after it")
+        return pinned
+    raise SystemExit(
+        f"{table}: pinned snapshot {pinned} is not on main's lineage and no tag names it (expired, a branch's commit, "
+        f"or from another table or host), so this run cannot read the pin. Nothing was compared. Either restore the tag "
+        f"on {pinned} if the snapshot is still in the table, or re-pin with --pin-current on a green run and tag the "
+        f"new snapshots (tests/parity/README.md, 'Keeping the pinned snapshots alive')."
     )
-    return current
 
 
 def duck(minio_user: str, minio_pass: str):
@@ -192,20 +198,33 @@ def clickhouse_candles(day: str, password: str) -> list:
     return rows
 
 
-def latest_source_snapshot(src_ids, snapshots) -> int:
-    """The newest of the gold.trades snapshots `src_ids` names, by sequence number.
+def latest_source_snapshot(src_ids, snapshots, lineage: list, tags: dict) -> int:
+    """The newest of the gold.trades snapshots `src_ids` names that the table still holds, by sequence number.
 
     `snapshots` is (sequence_number, snapshot_id) rows, as `iceberg_snapshots`
     returns them. Snapshot ids are random, so the newest is the highest sequence
     number, never the highest id. Every bucket of a finished day was last computed
     at one of `src_ids`, and a trade landing later would have recomputed its bucket
     at a later one, so the newest holds every trade B counted.
+
+    A week after the pin, expiry has removed every one of them but the tagged
+    newest (tests/parity/README.md, `parity_<day>_dbt`), so the newest still held
+    is the one read, and it must pass `resolve_snapshot` like any pin: on main or
+    tagged, never a branch's. Were an expired one newer, its buckets hold trades
+    the one read lacks, their trade counts differ and the run fails: this choice
+    can fail a run, never pass one. None held stops the run.
     """
     seq = {sid: n for n, sid in snapshots}
-    gone = sorted(set(src_ids) - set(seq))
-    if not src_ids or gone:
-        raise SystemExit(f"gold.trades snapshot(s) {gone} are expired or from another table: D cannot read the trades B was computed from")
-    return max(src_ids, key=seq.__getitem__)
+    held = [s for s in set(src_ids) if s in seq]
+    if not held:
+        raise SystemExit(
+            f"lake.gold.trades holds none of the {len(set(src_ids))} snapshots the day's lake candles were computed from: "
+            f"D cannot read the trades B counted. Restore the parity_<day>_dbt tag, or re-pin (tests/parity/README.md)"
+        )
+    newest = resolve_snapshot(lineage, tags, "lake.gold.trades", max(held, key=seq.__getitem__))
+    if len(held) < len(set(src_ids)):
+        print(f"dbt side: {len(set(src_ids)) - len(held)} of the day's {len(set(src_ids))} gold.trades source snapshots are expired; reading the newest held, {newest}")
+    return newest
 
 
 def pinned_sql(manifest: dict, unique_id: str, snapshots: dict) -> str:
@@ -427,7 +446,7 @@ def main() -> int:
     def q(sql):
         return c.execute(sql).fetchall()
 
-    ohlcv_snapshot = resolve_snapshot(main_lineage("lake.gold.ohlcv_1m"), "lake.gold.ohlcv_1m", args.ohlcv_snapshot)
+    ohlcv_snapshot = resolve_snapshot(*table_refs("lake.gold.ohlcv_1m"), "lake.gold.ohlcv_1m", args.ohlcv_snapshot)
     lake_rows = lake_candles(c, args.day, ohlcv_snapshot)
     b = normalise(lake_rows)
     if not_empty(**{"lake.gold.ohlcv_1m": b}):
@@ -435,7 +454,7 @@ def main() -> int:
     bad = 0
     if not args.skip_silver:
         silver_snaps = {
-            venue: resolve_snapshot(main_lineage(f"lake.silver.trades_{venue}"), f"lake.silver.trades_{venue}", snap)
+            venue: resolve_snapshot(*table_refs(f"lake.silver.trades_{venue}"), f"lake.silver.trades_{venue}", snap)
             for venue, snap in json.loads(args.silver_snapshots).items()
         }
         cc = normalise(silver_candles(c, args.day, silver_snaps))
@@ -445,12 +464,15 @@ def main() -> int:
     if args.dbt:
         src = [r[0] for r in q(f"""SELECT DISTINCT src_snapshot_id FROM lake.gold.ohlcv_1m AT (VERSION => {ohlcv_snapshot})
                                    WHERE CAST(window_start AS DATE) = DATE '{args.day}'""")]
-        trades_snapshot = latest_source_snapshot(src, q("SELECT sequence_number, snapshot_id FROM iceberg_snapshots('lake.gold.trades')"))
+        trades_snapshot = latest_source_snapshot(
+            src, q("SELECT sequence_number, snapshot_id FROM iceberg_snapshots('lake.gold.trades')"), *table_refs("lake.gold.trades")
+        )
         print(f"dbt side: lake.gold.trades FOR VERSION AS OF {trades_snapshot}, the newest of the {len(src)} snapshots the day's lake candles name")
         d_rows = dbt_candles(args.day, trades_snapshot)
         if not_empty(**{"dbt.ohlcv_1m": d_rows}):
             return 1
-        lake_type = q("SELECT typeof(quote_volume) FROM lake.gold.ohlcv_1m LIMIT 1")[0][0].lower()  # Iceberg's, for B
+        # Iceberg's type, for B, at B's snapshot: the head's could differ after a schema change.
+        lake_type = q(f"SELECT typeof(quote_volume) FROM lake.gold.ohlcv_1m AT (VERSION => {ohlcv_snapshot}) LIMIT 1")[0][0].lower()
         bad += lake_vs_dbt(lake_rows, d_rows, lake_type)
     if not args.skip_clickhouse:
         a = normalise(clickhouse_candles(args.day, os.environ["CLICKHOUSE_PASSWORD"]))
@@ -464,6 +486,7 @@ def main() -> int:
         doc = json.loads(pin.read_text()) if pin.exists() else {}
         doc.update({"day": args.day, "ohlcv_1m_snapshot": ohlcv_snapshot, "silver_snapshots": silver_snaps})
         pin.write_text(json.dumps(doc, indent=2) + "\n")
+        print(f"pinned in {pin}: tag these snapshots now (tests/parity/README.md); an untagged pin fails the gate once expiry removes it")
     print(verdict(bad, applied))
     return 0 if bad == 0 else 1
 

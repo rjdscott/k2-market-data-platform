@@ -798,70 +798,74 @@ def test_v2_only_json_carries_the_truncation_the_exit_code_reports(monkeypatch, 
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Stale-pin fallback — scripts/parity_ohlcv.py resolve_snapshot
+# Pin resolution — scripts/parity_ohlcv.py resolve_snapshot
 #
-# `make parity-ohlcv` crashed on every run from 2026-08-27 to 2026-09-03 because
-# tests/parity/pinned.json held a snapshot id written on another host, and
-# `AT (VERSION => <pin>)` raised `Could not find snapshot with id ...` before the
-# gate compared anything. These assert the two halves of the fix: the pin is
-# used when it is on main, and its absence degrades to the current snapshot LOUDLY
-# rather than either crashing or quietly passing at an unpinned snapshot.
+# A pin is read only if it is on main's lineage (the walk from main's head along
+# parent links) or a tag names it; anything else stops the run. From 2026-08-27 to
+# 2026-09-03 a pin written on another host crashed the gate; the fix that followed
+# fell back to main's current snapshot with one printed line. The walk stops at the
+# first parent expiry removed, so a week after pinning that fallback compared the
+# engines on live data and called it the pin (audit, 2026-11-26). These hold the
+# rule that replaced both: no crash, no fallback, and the tag keeps a pin valid.
 # ─────────────────────────────────────────────────────────────────────────────
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
 
 from parity_ohlcv import resolve_snapshot  # noqa: E402
 
-# main's lineage, current first (notebooks/k2lake.py `main_lineage`). 444 is a
-# commit on a branch, newer than 999 and in the table, but never on main.
+# main's lineage, current first (notebooks/k2lake.py `lineage`). 444 is a commit on
+# a branch, in the table but never on main. 100 is kept by the tag parity_x, and
+# expiry removed the snapshot after it, so the walk from main no longer reaches it.
 _LINEAGE = [999, 222, 111]
 _BRANCH = 444
+_TAGGED = 100
+_TAGS = {_TAGGED: "parity_x"}
+_STALE = 1622213366608023449  # the 2026-08-27 pin: in no table today
 
 
-def test_a_pin_the_table_still_holds_is_used_as_is(capsys):
-    assert resolve_snapshot(_LINEAGE, "lake.gold.ohlcv_1m", 111) == 111
+def test_a_pin_on_mains_lineage_is_used_as_is(capsys):
+    assert resolve_snapshot(_LINEAGE, _TAGS, "lake.gold.ohlcv_1m", 111) == 111
     assert capsys.readouterr().out == "", "an intact pin must say nothing"
 
 
-def test_a_missing_pin_falls_back_to_mains_current_snapshot():
-    assert resolve_snapshot(_LINEAGE, "lake.gold.ohlcv_1m", 1622213366608023449) == 999
+def test_a_tagged_pin_off_mains_walk_is_used_and_says_why(capsys):
+    """The 2026-12-03 case: the tag kept the pin, expiry cut the walk above it."""
+    assert resolve_snapshot(_LINEAGE, _TAGS, "lake.gold.ohlcv_1m", _TAGGED) == _TAGGED
+    assert "held by tag parity_x" in capsys.readouterr().out
 
 
-def test_a_pin_on_a_branch_is_not_used():
-    """A branch's snapshot is in the table, so `iceberg_snapshots` lists it: the old
-    resolver accepted it as a pin, and fell back to one when a pin was stale (spike,
-    2026-11-25). Either way parity would run over rows main never published."""
-    assert resolve_snapshot(_LINEAGE, "lake.gold.ohlcv_1m", _BRANCH) == 999
+def test_a_pin_only_a_branch_reaches_stops_the_run():
+    """A branch's snapshot is in the table (`iceberg_snapshots` lists it) but was never
+    published: parity over it would compare rows main never served (spike, 2026-11-25)."""
+    with pytest.raises(SystemExit, match="444 is not on main's lineage and no tag names it"):
+        resolve_snapshot(_LINEAGE, _TAGS, "lake.gold.ohlcv_1m", _BRANCH)
 
 
-def test_the_fallback_names_both_ids_and_how_to_refresh_the_pin(capsys):
-    """The one line is the whole point: a silent fallback is a gate that lies.
-
-    A run at an unpinned snapshot is not reproducible, so the output has to carry
-    the pin that was missing, the snapshot that was used instead, and the command
-    that makes the next run reproducible again.
-    """
-    resolve_snapshot(_LINEAGE, "lake.gold.ohlcv_1m", 1622213366608023449)
-    out = capsys.readouterr().out
-    assert "pin 1622213366608023449 not found in lake.gold.ohlcv_1m" in out
-    assert "current snapshot 999" in out
-    assert "--pin-current" in out
+def test_an_unresolvable_pin_stops_the_run_instead_of_falling_back(capsys):
+    """No other snapshot is returned, and the message carries the table, the id and both ways out."""
+    with pytest.raises(SystemExit) as stop:
+        resolve_snapshot(_LINEAGE, _TAGS, "lake.gold.ohlcv_1m", _STALE)
+    message = str(stop.value.code)
+    assert f"lake.gold.ohlcv_1m: pinned snapshot {_STALE}" in message
+    assert "restore the tag" in message and "re-pin with --pin-current" in message
+    assert capsys.readouterr().out == ""
 
 
-def test_a_table_with_no_snapshots_is_an_error_not_a_fallback():
-    """Nothing to fall back TO. Exiting beats `max()` on an empty sequence."""
+def test_a_table_with_no_snapshots_stops_the_run():
     with pytest.raises(SystemExit):
-        resolve_snapshot([], "lake.gold.ohlcv_1m", 111)
+        resolve_snapshot([], {}, "lake.gold.ohlcv_1m", 111)
 
 
-# The entry points: main() of both parity scripts must resolve through main's
-# lineage, not through `iceberg_snapshots`. Lakekeeper answers every table with
-# main at 3, a live branch's commit 4 and a dropped branch's 5 (the newest); the
-# DuckDB stand-in answers `iceberg_snapshots` as DuckDB does, 5 with the highest
-# sequence number. Both pins are stale, so each side must run AT main's 3.
+# The entry points: main() of both parity scripts resolve every pin through main's
+# lineage and the tags, and nothing else. Lakekeeper answers every table with main
+# at 3, a live branch's commit 4 and a dropped branch's 5 (the newest), and 7, kept
+# by a tag, whose parent 6 expiry removed. The DuckDB stand-in answers
+# `iceberg_snapshots` as DuckDB does: every snapshot in the metadata.
 _REST = {
     "current-snapshot-id": 3,
-    "snapshots": [{"snapshot-id": 1}] + [{"snapshot-id": s, "parent-snapshot-id": p} for s, p in ((2, 1), (3, 2), (4, 3), (5, 2))],
+    "refs": {"main": {"snapshot-id": 3, "type": "branch"}, "audit_1": {"snapshot-id": 4, "type": "branch"},
+             "parity_x": {"snapshot-id": 7, "type": "tag"}},
+    "snapshots": [{"snapshot-id": 1}] + [{"snapshot-id": s, "parent-snapshot-id": p} for s, p in ((2, 1), (3, 2), (4, 3), (5, 2), (7, 6))],
 }
 
 
@@ -869,10 +873,10 @@ class _Duck:
     def __init__(self):
         self.sql = []
 
-    def execute(self, sql):
+    def execute(self, sql, params=None):
         self.sql.append(sql)
         if "iceberg_snapshots" in sql:
-            rows = [(n, n) for n in range(1, 6)]  # (sequence_number, snapshot_id)
+            rows = [(n, n) for n in (1, 2, 3, 4, 5, 7)]  # (sequence_number, snapshot_id)
         elif "lake.gold.ohlcv_1m AT" in sql:
             rows = [("kraken", "BTC/USD", datetime(2026, 1, 1), 1, 1, 1, 1, 1, Decimal(1), Decimal(1))]
         else:
@@ -896,26 +900,44 @@ def lake(monkeypatch):
     k2lake._prefix.cache_clear()
 
 
-def test_parity_ohlcv_main_reads_mains_snapshot(lake, monkeypatch):
+def _ohlcv(lake, monkeypatch, pin):
     import parity_ohlcv
 
     monkeypatch.setattr(parity_ohlcv, "duck", lambda user, password: lake)
-    monkeypatch.setattr(sys, "argv", ["parity_ohlcv.py", "--day", "2026-01-01", "--ohlcv-snapshot", "999",
-                                      "--silver-snapshots", '{"kraken": 999}', "--skip-clickhouse"])
-    assert parity_ohlcv.main() == 1  # silver is empty in the stand-in
-    assert any("lake.gold.ohlcv_1m AT (VERSION => 3)" in q for q in lake.sql)
-    assert any("lake.silver.trades_kraken AT (VERSION => 3)" in q for q in lake.sql)
+    monkeypatch.setattr(sys, "argv", ["parity_ohlcv.py", "--day", "2026-01-01", "--ohlcv-snapshot", str(pin),
+                                      "--silver-snapshots", json.dumps({"kraken": pin}), "--skip-clickhouse"])
+    return parity_ohlcv.main()
 
 
-def test_parity_bars_main_reads_mains_snapshot(lake, monkeypatch):
+def _bars(lake, monkeypatch, pin):
     import parity_bars
 
     monkeypatch.setattr(parity_bars, "duck", lambda user, password: lake)
-    monkeypatch.setattr(sys, "argv", ["parity_bars.py", "--day", "2026-01-01", "--bars-snapshot", "999",
-                                      "--trades-snapshot", "999", "--reference-symbols", ""])
-    assert parity_bars.main() == 1  # every side is empty in the stand-in
-    assert any("lake.gold.bars AT (VERSION => 3)" in q for q in lake.sql)
-    assert any("lake.gold.trades AT (VERSION => 3)" in q for q in lake.sql)
+    monkeypatch.setattr(sys, "argv", ["parity_bars.py", "--day", "2026-01-01", "--bars-snapshot", str(pin),
+                                      "--trades-snapshot", str(pin), "--reference-symbols", ""])
+    return parity_bars.main()
+
+
+@pytest.mark.parametrize("pin", [3, 7])  # main's head, as --pin-current passes it; the tagged one off the walk
+def test_parity_ohlcv_main_reads_each_pin_at_the_pin(lake, monkeypatch, pin):
+    assert _ohlcv(lake, monkeypatch, pin) == 1  # silver is empty in the stand-in
+    assert any(f"lake.gold.ohlcv_1m AT (VERSION => {pin})" in q for q in lake.sql)
+    assert any(f"lake.silver.trades_kraken AT (VERSION => {pin})" in q for q in lake.sql)
+
+
+@pytest.mark.parametrize("pin", [3, 7])
+def test_parity_bars_main_reads_each_pin_at_the_pin(lake, monkeypatch, pin):
+    assert _bars(lake, monkeypatch, pin) == 1  # every side is empty in the stand-in
+    assert any(f"lake.gold.bars AT (VERSION => {pin})" in q for q in lake.sql)
+    assert any(f"lake.gold.trades AT (VERSION => {pin})" in q for q in lake.sql)
+
+
+@pytest.mark.parametrize("run", [_ohlcv, _bars])
+@pytest.mark.parametrize("pin", [999, 4, 5])  # in no table; a live branch's commit; a dropped branch's
+def test_both_scripts_stop_on_a_pin_they_cannot_resolve_before_reading_anything(lake, monkeypatch, run, pin):
+    with pytest.raises(SystemExit, match=f"pinned snapshot {pin} is not on main's lineage"):
+        run(lake, monkeypatch, pin)
+    assert not any("AT (VERSION" in q for q in lake.sql), "nothing may be read at a snapshot nobody pinned"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -953,15 +975,26 @@ def _manifest():
 
 def test_the_newest_source_snapshot_is_the_highest_sequence_number_not_the_highest_id():
     # 999 is the highest id; 222 has the highest sequence number among the ids asked for.
-    assert latest_source_snapshot([111, 222], [(13, 111), (44, 999), (27, 222)]) == 222
+    assert latest_source_snapshot([111, 222], [(13, 111), (44, 999), (27, 222)], [999, 222, 111], {}) == 222
 
 
-def test_an_expired_source_snapshot_is_an_error_not_a_fallback():
-    # D must read the trades B was computed from; reading any other snapshot proves nothing.
-    with pytest.raises(SystemExit, match=r"\[333\]"):
-        latest_source_snapshot([111, 333], [(13, 111)])
+def test_a_week_on_the_dbt_side_reads_the_tagged_newest_once_the_rest_are_expired(capsys):
+    # 2026-12-03 for 2026-11-25: of the day's source snapshots only the parity_<day>_dbt tag's is left, off the walk.
+    assert latest_source_snapshot([111, 333, 555], [(50, 555), (90, 999)], [999], {555: "parity_x_dbt"}) == 555
+    assert "2 of the day's 3 gold.trades source snapshots are expired; reading the newest held, 555" in capsys.readouterr().out
+
+
+def test_the_dbt_side_refuses_a_newest_source_snapshot_only_a_branch_reaches():
+    # 444 is the newest the table holds, but on a branch: D must not read it, and must not pick 111 instead.
+    with pytest.raises(SystemExit, match="444 is not on main's lineage"):
+        latest_source_snapshot([111, 444], [(13, 111), (60, 444)], [111], {})
+
+
+def test_the_dbt_side_stops_when_the_table_holds_none_of_the_source_snapshots():
+    with pytest.raises(SystemExit, match="holds none of the 2 snapshots .* Restore the parity_<day>_dbt tag, or re-pin"):
+        latest_source_snapshot([111, 333], [(13, 999)], [999], {})
     with pytest.raises(SystemExit):
-        latest_source_snapshot([], [(13, 111)])
+        latest_source_snapshot([], [(13, 111)], [111], {})
 
 
 def test_pinned_sql_inlines_the_staging_view_and_reads_the_source_at_the_snapshot():
@@ -1039,10 +1072,17 @@ def test_a_run_with_no_side_to_compare_the_lake_with_is_refused(monkeypatch):
 # nothing reaches a catalog and nothing is written.
 # ─────────────────────────────────────────────────────────────────────────────
 
+# main is at 7; 8 is a newer commit on a branch, which --pin-current must not take.
+_CURL_TABLE = json.dumps({"metadata": {
+    "current-snapshot-id": 7,
+    "refs": {"main": {"snapshot-id": 7, "type": "branch"}, "audit_1": {"snapshot-id": 8, "type": "branch"}},
+    "snapshots": [{"snapshot-id": 7, "summary": {"k2.src-snapshot-id.x": "5"}},
+                  {"snapshot-id": 8, "parent-snapshot-id": 7, "summary": {"k2.src-snapshot-id.x": "6"}}],
+}})
 _CURL = """#!/usr/bin/env bash
 case "$2" in
   *config*) echo '{"defaults": {"prefix": "p"}}' ;;
-  *) echo '{"metadata": {"current-snapshot-id": 7, "snapshots": [{"snapshot-id": 7, "summary": {"k2.src-snapshot-id.x": "5"}}]}}' ;;
+  *) echo '""" + _CURL_TABLE + """' ;;
 esac
 """
 
@@ -1074,6 +1114,17 @@ def test_pin_current_passes_dbt_through_and_pins_yesterday(tmp_path):
     assert _wrapper(tmp_path, "--pin-current", "--dbt") == [
         "--day", yesterday, "--ohlcv-snapshot", "7", "--silver-snapshots", '{"x": 5}', "--known-gaps", "[]", "--write-pin", "--dbt"
     ]
+
+
+def test_pin_current_pins_mains_head_which_the_strict_resolver_then_reads(tmp_path):
+    """--pin-current is the one way to run at "current": it passes main's head, never a newer branch commit."""
+    import k2lake
+
+    given = _wrapper(tmp_path, "--pin-current", "2001-01-02")
+    pin = int(given[given.index("--ohlcv-snapshot") + 1])
+    assert pin == 7
+    meta = json.loads(_CURL_TABLE)["metadata"]
+    assert resolve_snapshot(k2lake.lineage(meta), k2lake.tags(meta), "lake.gold.ohlcv_1m", pin) == 7
 
 
 def test_pin_current_takes_a_day_then_the_rest(tmp_path):
@@ -1135,7 +1186,7 @@ def _main(monkeypatch, capsys, gaps, *, clickhouse=_CLEAN, silver=_CLEAN, dbt=_C
     for var in ("MINIO_ROOT_USER", "MINIO_ROOT_PASSWORD", "CLICKHOUSE_PASSWORD"):
         monkeypatch.setenv(var, "x")
     monkeypatch.setattr(p, "duck", lambda user, password: _Q())
-    monkeypatch.setattr(p, "main_lineage", lambda table: [1])
+    monkeypatch.setattr(p, "table_refs", lambda table: ([7, 1], {}))  # 1 the pins, 7 the dbt side's source snapshot
     monkeypatch.setattr(p, "lake_candles", lambda c, day, snapshot: _CLEAN)
     monkeypatch.setattr(p, "silver_candles", lambda c, day, snapshots: silver)
     monkeypatch.setattr(p, "clickhouse_candles", lambda day, password: clickhouse)
@@ -1279,3 +1330,4 @@ def test_the_wrapper_passes_the_pins_known_gaps(tmp_path, pin_current):
     pin = {"day": _DAY, "ohlcv_1m_snapshot": 1, "silver_snapshots": {"x": 5}, "known_gaps": [_gap()]}
     given = _wrapper(tmp_path, *(["--pin-current", _DAY] if pin_current else []), pin=pin)
     assert json.loads(given[given.index("--known-gaps") + 1]) == [_gap()]
+
