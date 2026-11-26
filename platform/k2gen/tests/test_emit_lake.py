@@ -663,6 +663,16 @@ def test_the_storage_plan_lists_every_domain_and_both_namespaces_of_each_built_p
     }
 
 
+def test_a_seeds_table_is_retained_at_the_floor() -> None:
+    m = load(good())
+    seeded = dataclasses.replace(m, products=tuple(
+        dataclasses.replace(p, seeds={"stations.csv": b"id\n1\n"}) if p.name == "station-readings" else p for p in m.products))
+    out = yaml.safe_load(lake.emit(seeded)[model.RETENTION])
+    assert out["sensor_net.station_readings__base.stations"] == lake.RETENTION_FLOOR_DAYS
+    assert "sensor_net.station_readings__base.stations" not in yaml.safe_load(lake.emit(m)[model.RETENTION])
+    assert "stations" not in lake.emit(seeded)[model.BACKUP_SET]  # the seed is rebuilt from the release, not backed up
+
+
 def test_retention_is_the_contracts_else_the_floor() -> None:
     docs = edited(good(), SILVER, lambda d: prop(d, "retention").update(value=30))
     retention = yaml.safe_load(lake.emit(load(docs))[model.RETENTION])

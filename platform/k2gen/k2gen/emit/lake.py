@@ -297,7 +297,11 @@ def emit(model: Model) -> dict[str, str]:
             "columns": [{"name": c.name, "type": c.physical_type, "required": c.required} for c in t.columns],
             "partitioning": list(t.partitioning), "sort": list(t.sort)}
         for t in tables}))
-    put(k2.RETENTION, _json({".".join(loc): days for loc, (days, _, _) in lake.items()}))
+    # A seed is a table of the base, built beside the models; it has no contract, so the floor. Not
+    # backed up: the seed's CSV is in the release and dbt rebuilds it. ponytail: retention only.
+    seeds = {".".join(_in_warehouse(k2.base_relation(p.domain, p.name, s.removesuffix(".csv")), p.domain)): RETENTION_FLOOR_DAYS
+             for p in model.products for s in p.seeds}
+    put(k2.RETENTION, _json({**seeds, **{".".join(loc): days for loc, (days, _, _) in lake.items()}}))
 
     namespaces: dict[str, set[str]] = {w: set() for w in (k2.LAKE_WAREHOUSE, *(k2.warehouse(d.name) for d in model.domains))}
     readers = [_in_warehouse(k2.reader_relation(t), _parts(t)[0]) for t in tables]
