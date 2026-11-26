@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # "Is it up?" in one command: every container healthy, a message on every venue
-# in the last 2 minutes, and a lake that is still committing.
+# in the last 2 minutes, a lake that is still committing, and every capture doing
+# what the registry says about its order book.
 #
 # `make health` runs this, and scripts/dev-up.sh calls it for its steps (e) and
 # (f) — one implementation, so a check added here is a check the bring-up does.
@@ -98,6 +99,7 @@ else
   done <<< "$ch_out"
 fi
 
+declare -A cap_metrics=()
 for svc in capture-binance capture-kraken capture-coinbase; do
   cid=$(docker compose ps -q "$svc" 2>/dev/null || true)
   [ -z "$cid" ] && continue || true
@@ -106,6 +108,7 @@ for svc in capture-binance capture-kraken capture-coinbase; do
   net=$(docker inspect -f '{{range $k,$v := .NetworkSettings.Networks}}{{$k}}{{end}}' "$cid" 2>/dev/null || true)
   [ -z "$net" ] && continue || true
   metrics=$(docker run --rm --network "$net" curlimages/curl:8.14.1 -s "http://${svc}:8082/metrics" 2>/dev/null || true)
+  cap_metrics[$svc]=$metrics
   lastts=$(printf '%s\n' "$metrics" | grep '^k2_capture_last_message_ts_seconds' || true)
   if [ -n "$lastts" ]; then
     result "(2) $svc metrics" "PASS ($lastts)"
@@ -188,6 +191,58 @@ elif [ "$skips" -ge 3 ]; then
 else
   result "$label" "WARN ($skips skipped in a row: another lake writer holds the lock; FAIL at 3, $runbook §3)"
 fi
+
+# ── (4) the order-book switch: process, host file and Spark's copy agree ─────
+# ADR-050. Each capture reads config/instruments.yaml once, at start, and exports
+# what it read as k2_capture_book_capture; the lake's book-audit skip reads the
+# Spark container's mounted copy. A capture not recreated after a change, or a
+# stale mount, leaves the three disagreeing, and nothing else would show it.
+step "(4) order-book switch (ADR-050)"
+# book_capture's venue/value pairs from a registry on stdin. Python's re, not
+# PyYAML: the host need not have it, and the section is a flat map.
+book_switch() {
+  python3 -c '
+import re, sys
+m = re.search(r"^book_capture:[ \t]*\n((?:[ \t]+.*\n?)*)", sys.stdin.read(), re.M)
+for venue, value in re.findall(r"^[ \t]+([a-z]+):[ \t]*([^\s#]+)", m.group(1) if m else "", re.M):
+    print(venue, value)' 2>/dev/null
+}
+host_sw=$(book_switch 2>/dev/null < config/instruments.yaml)
+spark_sw=$(docker exec k2-spark-iceberg cat /home/iceberg/config/instruments.yaml 2>/dev/null | book_switch)
+# on/off from a registry value, "?" for anything that is not a YAML boolean.
+as_state() { case "$1" in true|True|TRUE) echo on ;; false|False|FALSE) echo off ;; "") echo missing ;; *) echo "?$1" ;; esac; }
+for venue in binance kraken coinbase; do
+  label="(4) $venue book_capture"
+  metrics=${cap_metrics[capture-$venue]:-}
+  if [ -z "$metrics" ]; then
+    result "$label" "WARN (no metrics from capture-$venue: not running or warming up, switch not compared)"
+    continue
+  fi
+  gauge=$(printf '%s\n' "$metrics" | awk -v v="$venue" '$1 == "k2_capture_book_capture{exchange=\"" v "\"}" { print $2 }')
+  case "$gauge" in 1|1.0) proc=on ;; 0|0.0) proc=off ;; "") proc=missing ;; *) proc="?$gauge" ;; esac
+  host=$(as_state "$(printf '%s\n' "$host_sw" | awk -v v="$venue" '$1 == v { print $2 }')")
+  spark=$(as_state "$(printf '%s\n' "$spark_sw" | awk -v v="$venue" '$1 == v { print $2 }')")
+  states="process $proc, host file $host, spark-iceberg's copy $spark"
+  if [ "$proc" = missing ]; then
+    bad "$label" "FAIL (capture-$venue exports no k2_capture_book_capture: an image older than ADR-050 subscribes to books whatever the file says; $states)"
+    continue
+  elif [ "$host" != on ] && [ "$host" != off ]; then
+    bad "$label" "FAIL (config/instruments.yaml book_capture.$venue is $host, not true or false; $states)"
+    continue
+  fi
+  problems=""
+  if [ "$proc" != "$host" ]; then
+    problems="capture-$venue was not recreated since the registry changed: docker compose up -d --force-recreate --no-deps capture-$venue"
+  fi
+  if [ "$spark" != "$host" ]; then
+    problems="${problems:+$problems; }spark-iceberg's mounted copy is stale, and the audit skip reads it: when no ingest runs, docker compose up -d --force-recreate --no-deps spark-iceberg"
+  fi
+  if [ -n "$problems" ]; then
+    bad "$label" "FAIL ($states. $problems)"
+  else
+    result "$label" "PASS (books $proc: $states)"
+  fi
+done
 
 step "summary"
 [ "$fail" = "0" ] && result "health" "PASS" || result "health" "FAIL (see the FAIL lines above)"
