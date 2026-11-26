@@ -1,0 +1,6 @@
+daily_load__full_reader:
+- svc.load-dashboard
+station_readings__delayed_reader:
+- p.analyst-delayed
+station_readings__full_reader:
+- p.analyst-full
