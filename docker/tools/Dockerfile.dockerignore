@@ -1,0 +1,10 @@
+# The build context is the repository root; the image needs only these (docker/tools/Dockerfile).
+*
+!platform/k2gen/k2gen
+!platform/k2gen/pyproject.toml
+!platform/k2gen/uv.lock
+!platform/runs
+!contracts/schema
+!dbt/macros
+!docker/tools/k2tools.py
+**/__pycache__

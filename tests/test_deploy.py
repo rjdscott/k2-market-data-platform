@@ -1,0 +1,502 @@
+"""scripts/deploy.py (ADR-058) against a fake `docker` on PATH and releases compiled for real.
+
+The fake plays compose and the engine: containers in a JSON state file, `compose up` recreating
+one service on the image the override pins, `compose run tools k2tools ...` running the real
+docker/tools/k2tools.py over the test's releases root (so the pointers really move), `exec` and
+`kill` logged. Trino is the two functions deploy reaches it through, replaced in process: the
+canary of the release the trino pointer names is admitted, every other refused; views and the tag
+live in a dict. Every action, from either side, goes to one ordered timeline, so a test asserts
+order: the view loses a dropped column before the pointer moves (review finding H2).
+
+Each release is the k2gen good fixture set compiled by k2gen itself, with one change. The root
+suite has neither k2gen nor bcrypt, so the module reruns itself in platform/k2gen's locked
+environment with the bcrypt mk/release.mk pins. The proof on a real stack is
+scripts/verify/deploy_rehearsal.py (`make deploy-rehearsal`).
+"""
+
+from __future__ import annotations
+
+import importlib.util
+import json
+import os
+import subprocess
+import sys
+import time
+from pathlib import Path
+from typing import Any
+
+import pytest
+
+ROOT = Path(__file__).resolve().parent.parent
+
+try:
+    import bcrypt  # noqa: F401
+    import k2gen  # noqa: F401
+except ImportError:
+    def test_deploy_cases_in_the_k2gen_environment() -> None:
+        p = subprocess.run(["uv", "run", "--project", "platform/k2gen", "--locked", "-q", "--with", "bcrypt==5.0.0",
+                            "pytest", "-q", "-p", "no:cacheprovider", str(Path(__file__).relative_to(ROOT))],
+                           cwd=ROOT, capture_output=True, text=True)
+        assert p.returncode == 0, p.stdout[-8000:] + p.stderr[-2000:]
+else:
+    import yaml
+    from k2gen import model
+    from k2gen import release as k2release
+
+    sys.path.insert(0, str(ROOT / "platform/k2gen/tests"))
+    from test_release import write_set  # the good fixture set as `k2gen docset` writes it
+
+    def load(name: str, path: Path) -> Any:
+        spec = importlib.util.spec_from_file_location(name, path)
+        assert spec and spec.loader
+        mod = importlib.util.module_from_spec(spec)
+        sys.modules[name] = mod  # dataclasses look their module up there
+        spec.loader.exec_module(mod)
+        return mod
+
+    deploy = load("deploy", ROOT / "scripts/deploy.py")
+
+    A = "alpine@sha256:" + "a" * 64
+    B = "alpine@sha256:" + "b" * 64
+    TRINO = "trinodb/trino@sha256:" + "c" * 64
+    LK = "quay.io/lakekeeper/catalog@sha256:" + "d" * 64
+    LK2 = "quay.io/lakekeeper/catalog@sha256:" + "e" * 64
+    TOOLS = "tools:0123456789ab"
+    VIEW = "sensor_net.station_readings.silver_readings"
+    SILVER = "contracts/sensor-net/station-readings/silver_readings.odcs.yaml"
+    GOOD = ROOT / "platform/k2gen/tests/fixtures/v2/good"
+
+    def compose_doc(standin: str = "alpine:3.20", lakekeeper: str = "quay.io/lakekeeper/catalog:v0.13.9") -> dict[str, Any]:
+        return {"services": {
+            "trino": {"image": "trinodb/trino:484", "restart": "unless-stopped"},
+            "standin": {"image": standin, "restart": "unless-stopped"},
+            "lakekeeper": {"image": lakekeeper, "restart": "unless-stopped"},
+            "lake-init": {"image": "alpine:3.20", "restart": "no"},
+            "clickhouse": {"image": "clickhouse/clickhouse-server:24.3", "profiles": ["hot-gold"], "restart": "unless-stopped"},
+            "tools": {"image": "tools:local", "profiles": ["tools"], "restart": "no"},
+        }}
+
+    FAKE_DOCKER = r'''#!/usr/bin/env python3
+import json, os, subprocess, sys, time, uuid
+A, E = sys.argv[1:], os.environ
+S = json.loads(open(E["FAKE_STATE"]).read())
+def save(): open(E["FAKE_STATE"], "w").write(json.dumps(S))
+def log(*what):
+    with open(E["FAKE_LOG"], "a") as f: f.write(json.dumps([time.time_ns(), *what]) + "\n")
+def inspect(c):
+    return {"Id": c["id"], "Created": c["created"], "Image": c["image"], "Mounts": [{"Destination": "/k2/releases"}],
+            "Config": {"Labels": {"com.docker.compose.project": "k2", "com.docker.compose.service": c["service"]}},
+            "State": {"Status": c["status"], "Running": c["status"] == "running", "Restarting": False, "ExitCode": 0}}
+if A[:2] == ["ps", "-aq"]:
+    print("\n".join(c["id"] for c in S["containers"])); sys.exit(0)
+if A[0] == "inspect":
+    print(json.dumps([inspect(c) for c in S["containers"] if c["id"] in A[1:]])); sys.exit(0)
+if A[:2] == ["image", "inspect"]:
+    ref = A[-1]
+    if ref not in S["images"]: sys.exit(1)
+    print(S["images"][ref]); sys.exit(0)
+if A[0] == "pull":
+    S["images"][A[-1]] = "sha256:" + A[-1][-64:]; save(); log("pull", A[-1]); sys.exit(0)
+if A[0] == "kill":
+    log("kill", A[2]); sys.exit(0)
+if A[0] == "exec":
+    if A[2] == "sh":  # the landing listing: the answer the state holds, as the MinIO shell gives it
+        print(S.get("mc_out", "")); sys.exit(S.get("mc_rc", 0))
+    if A[2] == "readlink":
+        print("\n".join(os.readlink(p.replace("/k2/releases", E["FAKE_ROOT"])) for p in A[3:])); sys.exit(0)
+    log("exec", *A[2:4]); sys.exit(0)
+assert A[0] == "compose", A
+files = [A[i + 1] for i, a in enumerate(A) if a == "-f"]
+pinned = json.loads(open(files[1]).read())["services"]
+rest = A[A.index(files[1]) + 1:]
+if rest[0] == "config":
+    sys.exit(0)
+if rest[0] == "run":
+    argv = rest[rest.index("k2tools") + 1:]
+    if argv[0] in ("swap", "pointers"):
+        log("tools", *argv)
+        out = subprocess.run([sys.executable, E["K2TOOLS"], *argv], env={**E, "K2_RELEASES_MOUNT": E["FAKE_ROOT"]},
+                             capture_output=True, text=True)
+        sys.stdout.write(out.stdout); sys.stderr.write(out.stderr); sys.exit(out.returncode)
+    if argv[0] == "table":
+        print(json.dumps(S["tables"].get(".".join(argv[-3:])))); sys.exit(0)
+    log("tools", *argv); sys.exit(0)
+if rest[0] == "up":
+    svc = rest[-1]
+    S["containers"] = [c for c in S["containers"] if c["service"] != svc]
+    oneshot = svc in S.get("oneshots", [])
+    S["containers"].append({"id": uuid.uuid4().hex, "service": svc, "created": f"{time.time_ns()}",
+                            "image": S["images"][pinned[svc]["image"]], "status": "exited" if oneshot else "running"})
+    save(); log("up", svc, pinned[svc]["image"]); sys.exit(0)
+sys.exit(f"fake docker: no answer for {A}")
+'''
+
+    class World:
+        """A releases root, a secrets directory, the fake docker's state, and Trino in process."""
+
+        def __init__(self, tmp: Path, monkeypatch: pytest.MonkeyPatch):
+            self.tmp, self.root, self.secrets = tmp, tmp / "releases", tmp / "secrets"
+            self.state, self.log = tmp / "state.json", tmp / "timeline.jsonl"
+            (tmp / "bin").mkdir()
+            (tmp / "bin/docker").write_text(FAKE_DOCKER)
+            (tmp / "bin/docker").chmod(0o755)
+            monkeypatch.setenv("PATH", f"{tmp / 'bin'}:{os.environ['PATH']}")
+            for k, v in {"FAKE_STATE": self.state, "FAKE_LOG": self.log, "FAKE_ROOT": self.root,
+                         "K2TOOLS": ROOT / "docker/tools/k2tools.py"}.items():
+                monkeypatch.setenv(k, str(v))
+            images = {r: "sha256:" + r[-64:] for r in (A, B, TRINO, LK, LK2)} | {TOOLS: "sha256:0123456789ab" + "0" * 52}
+            self.write({"containers": [], "images": images, "tables": {}, "oneshots": ["lake-init"]})
+            for f in ("tls/ca.pem", "trino/password.db", "tls/trino.pem", "principals/pub_station_readings.password",
+                      "principals/svc.platform.password"):
+                (self.secrets / f).parent.mkdir(parents=True, exist_ok=True)
+                (self.secrets / f).write_text("svc.platform:$2y$10$" + "x" * 53 + "\n" if f.endswith(".db") else f"fixture {f}\n")
+            self.views: dict[str, list[str]] = {}
+            self.tag = {"station_id": "varchar", "read_at": "timestamp(6) with time zone", "value": "decimal(12,3)",
+                        "region": "varchar", "operator_note": "varchar"}
+            monkeypatch.setattr(deploy, "admitted", self.admitted)
+            monkeypatch.setattr(deploy, "sql", self.sql)
+            monkeypatch.setattr(deploy, "REFRESH_S", 0)
+            self.ctx = deploy.Ctx(root=self.root, secrets=self.secrets, home=ROOT, project="k2", trino="https://localhost:1",
+                                  operator="tester", faults=set(), tmp=tmp, say=lambda line: None)
+            self.n = 0
+
+        def read(self) -> dict[str, Any]:
+            return json.loads(self.state.read_text())
+
+        def write(self, s: dict[str, Any]) -> None:
+            self.state.write_text(json.dumps(s))
+
+        def event(self, *what: Any) -> None:
+            with open(self.log, "a") as f:
+                f.write(json.dumps([time.time_ns(), *what]) + "\n")
+
+        def timeline(self) -> list[list[Any]]:
+            return [json.loads(x)[1:] for x in self.log.read_text().splitlines()] if self.log.exists() else []
+
+        def release(self, compose: dict[str, Any] | None = None, over: dict[str, bytes] | None = None,
+                    images: dict[str, str] | None = None) -> Any:
+            """A sealed release of the good set with `over` laid on it, compiled against the newest one."""
+            self.n += 1
+            set_dir = write_set(self.tmp / f"set{self.n}", compose or compose_doc(), over)
+            refs = {"trino": TRINO, "standin": A, "lakekeeper": LK, "lake-init": A, "tools": TOOLS} | (images or {})
+            (self.tmp / f"images{self.n}.json").write_text(json.dumps(refs))
+            kept = sorted((p for p in self.root.glob("v*")), key=lambda p: p.stat().st_mtime) if self.root.exists() else []
+            rid = k2release.release(set_dir, kept[-1] if kept else None, self.tmp / f"images{self.n}.json", self.root,
+                                    set_dir / model.COMPOSE)
+            return deploy.open_release(self.ctx, rid)
+
+        def live(self, rel: Any) -> None:
+            """`rel` deployed and good: pointers, its containers, a done record, its view published."""
+            (self.root / "pointers").mkdir(exist_ok=True)
+            for p in deploy.POINTERS:
+                (self.root / "pointers" / p).unlink(missing_ok=True)
+                (self.root / "pointers" / p).symlink_to(f"../{rel.id}")
+            s = self.read()
+            s["containers"] = [{"id": f"c-{svc}", "service": svc, "created": "0", "image": s["images"][ref], "status": "running"}
+                               for svc, ref in rel.manifest.images.items() if svc not in ("tools", "lake-init")]
+            self.write(s)
+            deploy.record(self.ctx, rel, None, "done", "ok", set())
+            v = deploy.views_of(rel)[VIEW]
+            self.views[VIEW] = [c for c in v.columns if c in self.tag]
+            self.stored = deploy.view_body(deploy.create_view(v, self.views[VIEW])).upper()  # stored reformatted
+
+        def admitted(self, ctx: Any, user: str) -> bool | None:
+            live = deploy.k2release.read(self.root / "pointers" / "trino")
+            return user == model.canary_user(live.manifest.set_sha256)
+
+        def sql(self, ctx: Any, user: str, statement: str) -> dict[str, Any]:
+            if statement.startswith("SELECT column_name"):
+                return {"columns": [["column_name", "varchar"]], "rows": [[c] for c in self.views.get(VIEW, [])]}
+            if statement.startswith("SELECT * FROM"):
+                return {"columns": [[c, t] for c, t in self.tag.items()], "rows": []}
+            if statement.startswith("SELECT view_definition"):
+                return {"columns": [["view_definition", "varchar"]], "rows": [[self.stored]] if VIEW in self.views else []}
+            if statement.startswith("CREATE OR REPLACE VIEW"):
+                self.stored = statement.split(" SECURITY DEFINER AS ", 1)[1].replace(", ", "\n, ")  # Trino reformats
+                cols = self.stored.split("SELECT ", 1)[1].split(" FROM ")[0]
+                self.views[VIEW] = [c.strip().strip('"') for c in cols.replace("\n", "").split(",")]
+                self.event("view", self.views[VIEW])
+                return {"columns": [], "rows": []}
+            self.event("sql", user, statement[:40])
+            return {"columns": [], "rows": []}
+
+        def deploy(self, rel: Any, *faults: str, allow: set[str] | None = None) -> int:
+            self.ctx.faults, self.ctx.allow_stateful = set(faults), allow or set()
+            with deploy.lock(self.root):
+                return deploy.deploy(self.ctx, rel.id, plan_only=False)
+
+        def ups(self) -> list[str]:
+            return [e[1] for e in self.timeline() if e[0] == "up"]
+
+        def image_of(self, svc: str) -> str:
+            return next(c["image"] for c in self.read()["containers"] if c["service"] == svc)
+
+    EXPECT = "tests/access/expectations.yaml"
+
+    def policy(minutes: int) -> dict[str, bytes]:
+        """The delayed reader's delay tightened: a major version, and an expectation that asserts it."""
+        return {SILVER: (GOOD / SILVER).read_bytes().replace(b"minutes: 20}", f"minutes: {minutes}}}".encode())
+                .replace(b"\nversion: 1.0.0\n", b"\nversion: 2.0.0\n"),
+                EXPECT: (GOOD / EXPECT).read_bytes().replace(b"minRowAgeMinutes: 20", f"minRowAgeMinutes: {minutes}".encode())
+                } | bumped_product("2.0.0")
+
+    def bumped_product(version: str, reader_version: str = "1.0.1") -> dict[str, bytes]:
+        """station-readings and its silver port at `version`, and daily-load's input port acknowledging it."""
+        path = "contracts/sensor-net/station-readings/product.odps.yaml"
+        reader = "contracts/ops-insight/daily-load/product.odps.yaml"
+        port = f"  - name: silver_readings\n    version: {version}".encode()
+        text = (GOOD / path).read_bytes().replace(b"\nversion: 1.0.0\n", f"\nversion: {version}\n".encode(), 1)
+        return {path: text.replace(b"  - name: silver_readings\n    version: 1.0.0", port),
+                reader: (GOOD / reader).read_bytes().replace(b"  - name: silver_readings\n    version: 1.0.0", port)
+                .replace(b"\nversion: 1.0.0\n", f"\nversion: {reader_version}\n".encode(), 1)}
+
+    def dropped_note() -> dict[str, bytes]:
+        """operator_note gone from the silver contract, its mask, its model and its expectations: a major."""
+        contract = ((GOOD / SILVER).read_bytes()
+                    .replace(b"      - name: operator_note\n        physicalType: varchar\n        description: Free text the made-up operator attached.\n", b"")
+                    .replace(b"        mask: [operator_note]\n", b"").replace(b"\nversion: 1.0.0\n", b"\nversion: 2.0.0\n"))
+        sql = "contracts/sensor-net/station-readings/models/silver_readings.sql"
+        unit = "contracts/sensor-net/station-readings/unit_tests.yml"
+        expect = EXPECT
+        e = (GOOD / expect).read_text().replace("[station_id, read_at, value, region, operator_note]", "[station_id, read_at, value, region]")
+        return {SILVER: contract, sql: (GOOD / sql).read_bytes().replace(b"  region,\n  operator_note\n", b"  region\n"),
+                unit: (GOOD / unit).read_bytes().replace(b"value: 1.5, region: north, operator_note: synthetic}", b"value: 1.5, region: north}"),
+                expect: e.replace("\n    masked: [operator_note]", "").encode()} | bumped_product("2.0.0")
+
+    @pytest.fixture
+    def world(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> World:
+        return World(tmp_path, monkeypatch)
+
+    def records(w: World) -> list[dict[str, Any]]:
+        return deploy.history(w.root)
+
+    # --- the plan ---------------------------------------------------------------------
+
+    def test_standing_is_the_newest_done_and_every_attempt_since() -> None:
+        r = [{"release": "a", "from": None, "step": "done", "outcome": "ok"},
+             {"release": "b", "from": "a", "step": "swap", "outcome": "ok"},
+             {"release": "b", "from": "a", "step": "verify", "outcome": "failed"},
+             {"release": "a", "from": "b", "step": "rollback-done", "outcome": "ok"},
+             {"release": "c", "from": "a", "step": "canary", "outcome": "ok"}]
+        assert deploy.standing(r) == (["a", "a"], ["c", "a"])
+        assert deploy.standing(r[:4]) == (["a", "a"], [])
+        assert deploy.standing([]) == ([], [])
+        planned = r[:4] + [{"release": "c", "from": "a", "step": s, "outcome": "ok"} for s in ("preflight", "images", "plan")]
+        assert deploy.standing(planned) == (["a", "a"], [])  # PLAN=1 moved nothing: no unfinished attempt
+
+    def test_make_rollback_resumes_an_interrupted_rollback_and_undoes_an_interrupted_deploy(world: World) -> None:
+        r1 = world.release()
+        world.live(r1)
+        r2 = world.release(over=policy(60))
+        assert world.deploy(r2) == 0
+        deploy.record(world.ctx, r1, r2.id, "rollback-swap", "ok", set())  # a make rollback to r1, interrupted
+        with deploy.lock(world.root):
+            assert deploy.rollback(world.ctx) == 0
+        assert os.readlink(world.root / "pointers/trino") == f"../{r1.id}"
+        deploy.record(world.ctx, r2, r1.id, "swap", "ok", set())  # a deploy of r2, interrupted
+        with deploy.lock(world.root):
+            assert deploy.rollback(world.ctx) == 0
+        assert os.readlink(world.root / "pointers/trino") == f"../{r1.id}"
+
+    def test_a_rules_only_release_recreates_nothing(world: World) -> None:
+        r1 = world.release()
+        world.live(r1)
+        r2 = world.release(over=policy(60))
+        p = deploy.make_plan(world.ctx, r2, [r1])
+        assert (p.recreate, p.oneshots, p.trino_restart, p.ddl) == ([], [], False, [])
+        assert world.deploy(r2) == 0
+        assert world.ups() == [] and os.readlink(world.root / "pointers/trino") == f"../{r2.id}"
+        assert [r["step"] for r in records(world)][-1] == "done"
+
+    def test_one_image_changed_recreates_only_its_service(world: World) -> None:
+        r1 = world.release()
+        world.live(r1)
+        r3 = world.release(compose=compose_doc(standin="alpine:3"), images={"standin": B})
+        assert deploy.make_plan(world.ctx, r3, [r1]).recreate == ["standin"]
+        assert world.deploy(r3) == 0
+        assert world.ups() == ["standin"] and world.image_of("standin") == "sha256:" + "b" * 64
+
+    def test_a_forced_mismatch_restores_the_previous_release_images_included_and_exits_1(world: World) -> None:
+        r1 = world.release()
+        world.live(r1)
+        r3 = world.release(compose=compose_doc(standin="alpine:3"), images={"standin": B})
+        assert world.deploy(r3, "verify-mismatch") == 1
+        assert world.ups() == ["standin", "standin"]
+        assert world.image_of("standin") == "sha256:" + "a" * 64  # R-1's image, not only its configuration
+        assert os.readlink(world.root / "pointers/trino") == f"../{r1.id}"
+        steps = [(r["step"], r["outcome"]) for r in records(world)]
+        assert ("verify", "failed") in steps and steps[-1] == ("rollback-done", "ok")
+        assert deploy.standing(records(world))[0][-1] == r1.id
+
+    def test_rollback_goes_back_to_the_previous_good_release(world: World) -> None:
+        r1 = world.release()
+        world.live(r1)
+        r3 = world.release(compose=compose_doc(standin="alpine:3"), images={"standin": B})
+        assert world.deploy(r3) == 0
+        with deploy.lock(world.root):
+            assert deploy.rollback(world.ctx) == 0
+        assert os.readlink(world.root / "pointers/trino") == f"../{r1.id}" and world.image_of("standin") == "sha256:" + "a" * 64
+
+    def test_a_rerun_after_an_unfinished_attempt_recreates_what_the_attempt_moved(world: World) -> None:
+        r1 = world.release()
+        world.live(r1)
+        r3 = world.release(compose=compose_doc(standin="alpine:3"), images={"standin": B})
+        deploy.record(world.ctx, r3, r1.id, "recreate", "ok", set())  # an attempt at r3 that never reached done
+        r2 = world.release(over=policy(60))  # compiled after r3: the standin is A again in r2
+        p = deploy.make_plan(world.ctx, r2, [r1, r3])
+        assert p.recreate == ["standin"], "r2 equals r1's standin, but the attempt at r3 may have moved it"
+
+    def test_a_changed_stateful_service_is_refused_unless_allowed(world: World) -> None:
+        r1 = world.release()
+        world.live(r1)
+        r5 = world.release(compose=compose_doc(lakekeeper="quay.io/lakekeeper/catalog:v0.14.0"), images={"lakekeeper": LK2})
+        with pytest.raises(deploy.Refused, match="ALLOW_STATEFUL=lakekeeper"):  # main() turns it into exit 2
+            world.deploy(r5)
+        assert world.ups() == [] and records(world)[-1]["step"] == "preflight" and records(world)[-1]["outcome"] == "failed"
+        assert world.deploy(r5, allow={"lakekeeper"}) == 0 and world.ups() == ["lakekeeper"]
+
+    def test_profiled_services_not_running_are_never_started_and_one_shots_run_to_their_exit(world: World) -> None:
+        r1 = world.release()
+        p = deploy.make_plan(world.ctx, r1, [None])
+        assert "clickhouse" not in p.recreate and any(s.startswith("clickhouse: profile hot-gold") for s in p.skipped)
+        assert "tools" not in p.recreate and p.oneshots == ["lake-init"]
+        assert p.recreate[0] == "trino" and set(p.recreate) == {"trino", "standin"}  # lakekeeper held: never recreated
+
+    # --- the views around the rules (review finding H2) ------------------------------
+
+    def test_a_dropped_masked_column_leaves_the_view_before_the_pointer_moves(world: World) -> None:
+        r1 = world.release()
+        world.live(r1)
+        assert "operator_note" in world.views[VIEW]
+        r2 = world.release(over=dropped_note())
+        assert [v.relation for v in deploy.make_plan(world.ctx, r2, [r1]).views] == [VIEW]
+        assert world.deploy(r2) == 0
+        t = world.timeline()
+        narrowed = next(i for i, e in enumerate(t) if e[0] == "view" and "operator_note" not in e[1])
+        swapped = next(i for i, e in enumerate(t) if e[:2] == ["tools", "swap"])
+        assert narrowed < swapped, t
+        assert world.views[VIEW] == ["station_id", "read_at", "value", "region"]
+
+    def test_a_column_coming_back_joins_the_view_only_after_its_rules_are_loaded(world: World) -> None:
+        r1 = world.release()
+        world.live(r1)
+        r2 = world.release(over=dropped_note())
+        assert world.deploy(r2) == 0
+        world.log.unlink()
+        loaded = []
+        real = world.admitted
+        world.admitted = lambda ctx, user: (loaded.append(user) or real(ctx, user))  # type: ignore[method-assign]
+        deploy.admitted = world.admitted
+        assert world.deploy(r1) == 0  # forward to r1's contract: operator_note, masked again
+        t = world.timeline()
+        swapped = next(i for i, e in enumerate(t) if e[:2] == ["tools", "swap"])
+        widened = next(i for i, e in enumerate(t) if e[0] == "view" and "operator_note" in e[1])
+        assert swapped < widened and loaded, t
+        assert all(e[0] != "view" or "operator_note" not in e[1] for e in t[:swapped])
+
+    # --- refusals, the canary, the log --------------------------------------------------
+
+    def test_a_second_deploy_is_refused_while_one_holds_the_lock(world: World) -> None:
+        with deploy.lock(world.root):
+            with pytest.raises(deploy.Refused, match="another deploy holds"):
+                with deploy.lock(world.root):
+                    pass
+
+    def test_a_release_whose_backup_set_drops_a_restore_table_storage_still_holds_is_refused(
+            world: World, monkeypatch: pytest.MonkeyPatch) -> None:
+        r1 = world.release()
+        old = deploy.backup_entries(r1)
+        assert {("table", "k2.station_readings.landing_files"), ("landing", "k2-landing", "sensor-net/station-readings/")} <= old
+        assert ("table", "k2.station_readings.bronze_readings") not in old  # rebuild mode: nothing to lose
+        s = world.read()
+        s["tables"]["k2.station_readings.landing_files"] = {"columns": [], "partitioning": []}  # still in the catalog
+        world.write(s)
+        assert deploy.dropped_storage(world.ctx, r1, r1) == []
+        real = deploy.backup_entries
+        monkeypatch.setattr(deploy, "backup_entries", lambda rel: real(rel) if rel is r1 else set())
+        held = deploy.dropped_storage(world.ctx, r1, world.release())
+        assert held == ["landing s3://k2-landing/sensor-net/station-readings/ (MinIO not running, so not proven empty)",
+                        "table k2.station_readings.landing_files"], held  # audit_checks is gone from the catalog: allowed
+        monkeypatch.setattr(deploy, "required_secrets", lambda ctx, p: [])
+        with pytest.raises(deploy.Refused, match="make drop TARGET"):
+            deploy.preflight(world.ctx, deploy.make_plan(world.ctx, world.release(), [r1]))
+
+    @pytest.mark.parametrize("rc, out, held", [(0, "", False), (0, "held", True), (3, "", True), (1, "", True)])
+    def test_a_dropped_landing_prefix_is_allowed_only_when_minio_lists_it_empty(
+            world: World, monkeypatch: pytest.MonkeyPatch, rc: int, out: str, held: bool) -> None:
+        r1 = world.release()
+        s = world.read()
+        s["containers"].append({"id": "c-minio", "service": "minio", "created": "0", "image": "x", "status": "running"})
+        s |= {"mc_rc": rc, "mc_out": out}
+        world.write(s)
+        real = deploy.backup_entries
+        monkeypatch.setattr(deploy, "backup_entries", lambda rel: real(rel) if rel is r1 else
+                            {e for e in real(r1) if e[0] != "landing"})
+        found = deploy.dropped_storage(world.ctx, r1, world.release())
+        assert bool(found) is held and all(f.startswith("landing s3://k2-landing/") for f in found), found
+
+    def test_the_canary_line_is_written_in_place_and_the_others_pruned(world: World) -> None:
+        db = world.secrets / "trino/password.db"
+        inode = db.stat().st_ino
+        deploy.canary_write(world.ctx, "k2_release_aaaaaaaaaaaa")
+        deploy.canary_write(world.ctx, "k2_release_bbbbbbbbbbbb")
+        deploy.canary_write(world.ctx, "k2_release_bbbbbbbbbbbb")  # a rerun replaces its own line
+        users = [x.split(":")[0] for x in db.read_text().splitlines()]
+        assert users == ["svc.platform", "k2_release_aaaaaaaaaaaa", "k2_release_bbbbbbbbbbbb"] and db.stat().st_ino == inode
+        assert oct((world.secrets / "canary/k2_release_bbbbbbbbbbbb.password").stat().st_mode & 0o777) == "0o600"
+        assert deploy.canary_prune(world.ctx, "k2_release_bbbbbbbbbbbb") == ["k2_release_aaaaaaaaaaaa"]
+        assert [x.split(":")[0] for x in db.read_text().splitlines()] == ["svc.platform", "k2_release_bbbbbbbbbbbb"]
+        assert not (world.secrets / "canary/k2_release_aaaaaaaaaaaa.password").exists() and db.stat().st_ino == inode
+
+    def test_every_record_meets_its_schema_and_holds_checksums_never_content(world: World) -> None:
+        r1 = world.release()
+        world.live(r1)
+        assert world.deploy(world.release(over=policy(60))) == 0
+        lines = (world.root / model.DEPLOY_LOG).read_text().splitlines()
+        assert len(lines) > 10 and all(model.schema_errors("deploy-record", json.loads(x)) == [] for x in lines)
+        text = "\n".join(lines)
+        assert "fixture" not in text and "$2y$" not in text
+        last = json.loads(lines[-1])["secrets"]
+        assert last["trino/password.db"] == __import__("hashlib").sha256((world.secrets / "trino/password.db").read_bytes()).hexdigest()
+
+    def test_an_unsealed_or_altered_release_is_refused(world: World) -> None:
+        r1 = world.release()
+        (r1.root / "manifest.json").chmod(0o644)
+        with pytest.raises(deploy.Refused, match="not sealed"):
+            deploy.open_release(world.ctx, r1.id)
+        (r1.root / "manifest.json").chmod(0o444)
+        target = r1.root / model.VIEWS
+        target.chmod(0o644)
+        target.write_text("{}")
+        target.chmod(0o444)
+        with pytest.raises(deploy.Refused, match="files differ"):
+            deploy.open_release(world.ctx, r1.id)
+
+    # --- the DDL comparison --------------------------------------------------------------
+
+    def test_an_emitted_spark_table_is_read_as_the_catalog_spells_it(world: World) -> None:
+        r1 = world.release()
+        text = (r1.root / model.ddl_path("spark", "k2", "station_readings", "landing_files")).read_text()
+        want = deploy.expected_table(text, "spark")
+        assert want["columns"][0][1:] in (["string", False], ["string", True]) and want["partitioning"]
+        assert deploy.table_difference("t", want, json.loads(json.dumps(want))) is None
+        changed = json.loads(json.dumps(want))
+        changed["columns"][0][1] = "long"
+        why = deploy.table_difference("t", want, changed)
+        assert why and f"column {want['columns'][0][0]} is long" in why
+
+    def test_the_run_record_ddl_is_read_with_its_partition(world: World) -> None:
+        want = deploy.expected_table(model.RUN_RECORD_SQL.read_text(), "trino")
+        names = [c[0] for c in want["columns"]]
+        assert names[:2] == ["run_id", "product_id"] and len(names) == 17
+        assert dict((c[0], c[1]) for c in want["columns"])["recorded_at"] == "timestamptz"
+        assert want["partitioning"] == [["day", "recorded_at"]]
+        other = {**want, "partitioning": [["month", "recorded_at"]]}
+        assert "partitioned by" in (deploy.table_difference("r", want, other) or "")
+
+    def test_the_tools_image_is_the_one_compose_builds_and_its_base_is_pinned() -> None:
+        doc = yaml.safe_load((ROOT / "docker-compose.yml").read_text())["services"]["tools"]
+        assert doc["build"]["dockerfile"] == "docker/tools/Dockerfile" and doc["profiles"] == ["tools"]
+        dockerfile = (ROOT / "docker/tools/Dockerfile").read_text()
+        assert all("@sha256:" in line for line in dockerfile.splitlines() if line.startswith(("FROM", "COPY --from")))
+        assert "\nUSER " in dockerfile and "USER root" not in dockerfile
