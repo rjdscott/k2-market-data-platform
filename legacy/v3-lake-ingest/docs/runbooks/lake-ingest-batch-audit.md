@@ -1,7 +1,7 @@
 # Runbook: An ingest batch does not match its planned offsets
 
 `LakeIngestBatchAuditFailed` fired: stage 1 committed a batch to `raw.messages` whose rows
-do not match the offset range it read ([ADR-047](../adr/ADR-047-ingest-batch-audit-after-publish.md)).
+do not match the offset range it read ([ADR-047](../../../../docs/adr/ADR-047-ingest-batch-audit-after-publish.md)).
 This covers reading the finding, re-reading the missing records while Redpanda still holds
 them, and recording them when it no longer does. It does not cover records evicted before
 the read (that is `offset_gap`, [lake-ingest-lag.md §3](./lake-ingest-lag.md#3-failondataloss-the-offsets-point-below-what-the-broker-holds))

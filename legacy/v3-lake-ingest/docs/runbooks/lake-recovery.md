@@ -16,9 +16,9 @@ without belonging to any of those (§6–§8). It does **not** cover capture-sid
 > the Phase D design.
 
 > **ClickHouse is paused** behind the compose profile `hot-gold`
-> ([ADR-057](../adr/ADR-057-clickhouse-hot-tier-paused-during-platform-build.md)). §1, §2 and the `iceberg()` reads below apply only while that profile
+> ([ADR-057](../../../../docs/adr/ADR-057-clickhouse-hot-tier-paused-during-platform-build.md)). §1, §2 and the `iceberg()` reads below apply only while that profile
 > runs, and §1 only while the old lake `gold` it reads exists: phase 000 drops it at its end
-> ([pause-and-resume-a-serving-product.md §4](./pause-and-resume-a-serving-product.md#4-when-the-reload-from-lake-runbook-no-longer-applies)).
+> ([pause-and-resume-a-serving-product.md §4](../../../../docs/runbooks/pause-and-resume-a-serving-product.md#4-when-the-reload-from-lake-runbook-no-longer-applies)).
 
 | # | Failure | MTTR target | Measured |
 |---|---------|-------------|----------|
@@ -43,7 +43,7 @@ dashboards are empty.
 The glob reads the object listing instead of the current Iceberg metadata, so it returns
 files that no live snapshot references: spike S11 measured **8 rows against a truth of 5**
 after a single copy-on-write delete
-([ADR-018 Appendix A](../adr/ADR-018-v3-lake-first-rust-capture.md#s11--clickhouse-243-reads-iceberg-v2)).
+([ADR-018 Appendix A](../../../../docs/adr/ADR-018-v3-lake-first-rust-capture.md#s11--clickhouse-243-reads-iceberg-v2)).
 Compaction rewrites files nightly, so this is not a corner case, it is the state of every
 table the morning after any maintenance run. And it fails as a *plausible number*, not as
 an error, which is the one failure shape a research platform must not have.
@@ -80,7 +80,7 @@ after a schema change. Dashboards are empty or partial; the lake is fine.
 (removed while ClickHouse is paused, ADR-057), or a `k2_lake_rows_total` / ClickHouse row-count divergence noticed by hand.
 
 **Expected behaviour**, **no data is lost.** The hot tier originates nothing
-([ADR-025](../adr/ADR-025-clickhouse-derived-hot-tier.md)); every row it held exists in
+([ADR-025](../../../../docs/adr/ADR-025-clickhouse-derived-hot-tier.md)); every row it held exists in
 `lake.bronze.*`, which in turn is a pure function of `lake.raw.messages`. What is lost is
 freshness, for as long as the rebuild takes. This is the scenario the whole v3 storage
 inversion was designed for, and it is the one that most deserves to be timed rather than
@@ -151,7 +151,7 @@ says so.
 
 **Symptom**, the hot tier is behind by hours, not days. ClickHouse was down and is back;
 the lake is fine. While ClickHouse is paused this section does not apply; a resume is
-[pause-and-resume-a-serving-product.md](./pause-and-resume-a-serving-product.md).
+[pause-and-resume-a-serving-product.md](../../../../docs/runbooks/pause-and-resume-a-serving-product.md).
 
 **Detection**, ClickHouse Kafka-engine consumer lag, or a stale `max(recv_ts_ns)` in the
 hot tier while the lake keeps advancing.
@@ -223,7 +223,7 @@ opposite of this failure. **`LakeCommitAgeHigh` is not the signal either**, it s
 **Expected behaviour**, **nothing is lost and nothing is duplicated.** A run that cannot
 commit has written orphan Parquet files that no snapshot references, so no reader ever
 sees them, and the stored offsets never moved, the next run reads the same range and
-redoes the work ([ADR-022](../adr/ADR-022-exactly-once-via-snapshot-offsets.md)). The
+redoes the work ([ADR-022](../../../../docs/adr/ADR-022-exactly-once-via-snapshot-offsets.md)). The
 constraint is Redpanda retention: at 48 h on raw topics, the catalog can be down for
 roughly a weekend before data starts being lost at the broker, and that is the number
 that decides whether this is urgent or merely annoying.
@@ -359,7 +359,7 @@ prove.** The reasoning, once, because it is the thing an operator most needs to 
 
 The consumed Kafka offsets live in the Iceberg snapshot summary of the commit that wrote
 the rows they describe (`snapshot-property.k2.kafka-offsets`,
-[ADR-022](../adr/ADR-022-exactly-once-via-snapshot-offsets.md)). There is no second store.
+[ADR-022](../../../../docs/adr/ADR-022-exactly-once-via-snapshot-offsets.md)). There is no second store.
 So after any death there is exactly one durable fact:
 
 - **The commit did not happen** → the offsets did not move. The next run reads the same

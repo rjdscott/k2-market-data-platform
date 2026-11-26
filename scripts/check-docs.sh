@@ -85,11 +85,11 @@ fi
 # (c2) promtool test rules — the alert unit tests (needs Docker)
 # `check rules` only says the YAML parses. These say the thresholds mean what
 # the comments claim: that a stopped stream crosses CaptureFeedStale on its own
-# per-stream bound, that a frozen gauge still crosses LakeIngestFailed, and that
-# a healthy small-file day fires nothing. Two directories, one gate: the capture
-# tests were written as `tests/*.test.yml`, the lake ones as
-# `rules/tests/*_test.yml`, and both are run rather than renamed because every
-# runbook and FMEA row that cites one cites it by path.
+# per-stream bound, and that the Airflow rules fire on a lost scheduler heartbeat
+# and a failed task, and stay quiet on a healthy scheduler. Two directories, one gate: the capture tests
+# were written as `tests/*.test.yml`, the Airflow ones as `rules/tests/*_test.yml`,
+# and both are run rather than renamed because every runbook and FMEA row that
+# cites one cites it by path.
 if command -v docker >/dev/null 2>&1; then
   if docker run --rm --entrypoint sh -v "$PWD/docker/prometheus:/p" prom/prometheus:v3.2.0 \
       -c 'promtool test rules /p/tests/*.test.yml /p/rules/tests/*_test.yml'; then
@@ -195,6 +195,13 @@ rm -f "$out"
 # files. CI checks out with fetch-depth 0 so the merge base exists there. The
 # character is built from its UTF-8 bytes so this file does not contain one.
 #
+# Two kinds of line carry an old em-dash without adding one, and pass. A file
+# moved or copied whole (`-C`: an archive move whose old path then gets a new,
+# shorter file) shows only the lines that differ from its source. A line whose
+# only change is the target of a Markdown link, the one edit an Accepted ADR's
+# conventions allow when the file it links to is archived, matches a removed line
+# of the same hunk once each `](target)` is blanked.
+#
 # On a push to main the merge base is HEAD itself, so the diff was empty and a
 # commit pushed straight to main was never read. CI's push run sets
 # K2_DIFF_BASE to the commit main was at before the push (github.event.before)
@@ -207,10 +214,14 @@ if [ -n "${K2_DIFF_BASE:-}" ] && ! git cat-file -e "${K2_DIFF_BASE}^{commit}" 2>
 elif base=${K2_DIFF_BASE:-$(git merge-base origin/main HEAD 2>/dev/null)}; [ -n "$base" ]; then
   out=$(mktemp)
   {
-    git diff --unified=0 --no-color --no-ext-diff "$base" -- "${exts[@]}" | awk -v d="$emdash" '
-      /^\+\+\+ / { f = substr($0, 7); next }
-      /^@@/      { split($3, a, ","); n = substr(a[1], 2) + 0; next }
-      /^\+/      { if (index($0, d)) print f ":" n ": " substr($0, 2); n++ }'
+    git diff -C --unified=0 --no-color --no-ext-diff "$base" -- "${exts[@]}" | awk -v d="$emdash" '
+      function blank(s) { gsub(/[]][(][^)]*[)]/, "]()", s); return s }
+      /^diff --git / { head = 1; next }
+      head && /^\+\+\+ / { f = substr($0, 7); next }
+      /^@@/      { head = 0; split("", gone); split($3, a, ","); n = substr(a[1], 2) + 0; next }
+      head       { next }
+      /^-/       { gone[blank(substr($0, 2))] = 1; next }
+      /^\+/      { s = substr($0, 2); if (index(s, d) && !(blank(s) in gone)) print f ":" n ": " s; n++ }'
     git ls-files --others --exclude-standard -z -- "${exts[@]}" \
       | xargs -0 -r grep -nHF "$emdash" || true
   } > "$out"

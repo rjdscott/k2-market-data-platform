@@ -69,8 +69,7 @@ test-python:  ## Contract, lake-offset, wire-format and script unit tests (needs
 # Inside the Airflow image itself: it carries no pytest and the root suite has no
 # Airflow, so the tests are stdlib unittest. The repo is mounted read-only, and
 # dbt/ again at /opt/k2/dbt, where compose mounts it for the scheduler; the
-# container has no network and no metadata database, so cosmos's dbt ls cache,
-# an Airflow Variable, is off. The DAG tests retired with the old DAGs
+# container has no network and no metadata database. The DAG tests retired with the old DAGs
 # (legacy/v3-lake-ingest/airflow/); what runs today is the image's dbt check
 # (docker/airflow/tests/test_dbt_image.py). Nothing here reaches the stack. The
 # build is a cache hit after the first; CI's docker job runs the same tests in
@@ -81,7 +80,7 @@ test-python:  ## Contract, lake-offset, wire-format and script unit tests (needs
 AIRFLOW_IMAGE ?= k2-airflow:test
 test-airflow:  ## Every test under docker/airflow/tests (today the image's dbt against dbt/uv.lock and package-lock.yml), inside a k2-airflow:test build (no stack needed)
 	docker build -q -f docker/airflow/Dockerfile -t $(AIRFLOW_IMAGE) . >/dev/null
-	docker run --rm --network none -e AIRFLOW__LOGGING__LOGGING_LEVEL=WARNING -e AIRFLOW__COSMOS__ENABLE_CACHE_DBT_LS=False \
+	docker run --rm --network none -e AIRFLOW__LOGGING__LOGGING_LEVEL=WARNING \
 	  -v "$(CURDIR)":/repo:ro -v "$(CURDIR)/dbt":/opt/k2/dbt:ro $(AIRFLOW_IMAGE) \
 	  python -m unittest discover -s /repo/docker/airflow/tests
 

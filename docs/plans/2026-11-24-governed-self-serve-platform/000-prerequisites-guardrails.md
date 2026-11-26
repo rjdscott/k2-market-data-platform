@@ -75,7 +75,7 @@
 
 **Stack.** No `k2-*` container is running at the time of writing. Bring it up with
 `make up`. If the first ingest reports evicted offsets, follow
-[lake-ingest-lag](../../runbooks/lake-ingest-lag.md) rather than forcing it from a script.
+[lake-ingest-lag](../../../legacy/v3-lake-ingest/docs/runbooks/lake-ingest-lag.md) rather than forcing it from a script.
 
 ## Verification
 

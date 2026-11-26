@@ -7,12 +7,12 @@
 `docker/lake/ingest.py` is the only writer of new data into the lake. Every 5 minutes (cron
 `1-59/5`, off the top of the minute) it reads
 Redpanda by explicit offset range, appends every record verbatim to `raw.messages`, then derives
-bronze, silver and gold from that archive. Design: [ADR-022](../adr/ADR-022-exactly-once-via-snapshot-offsets.md); operations: [`docker/lake/README.md`](../../docker/lake/README.md).
+bronze, silver and gold from that archive. Design: [ADR-022](../../../../docs/adr/ADR-022-exactly-once-via-snapshot-offsets.md); operations: [`docker/lake/README.md`](../../lake/README.md).
 
 ## Problem
 
 A topic is a position, not a dataset. Redpanda hands out records by offset; the lake must end up
-holding each of them exactly once ([exactly-once](03-data-engineering-concepts.md#exactly-once):
+holding each of them exactly once ([exactly-once](../../../../docs/architecture/03-data-engineering-concepts.md#exactly-once):
 every source record lands in the target once, however the job dies). An offset stored twice and an
 offset nobody stored must both be impossible.
 
@@ -27,10 +27,10 @@ buffer is a standing choice between duplicates and loss.
 
 | Option | Why it lost | Reference |
 |---|---|---|
-| Spark Structured Streaming with its own checkpoint | The framework's own answer, and a resident streaming runtime against a 16 CPU single-host budget; ADR-004 deleted precisely this to recover 13.5 CPU. The checkpoint is still a second store with the same atomicity gap against the Iceberg commit, in a format that is Spark's business, not ours ([batch vs streaming](03-data-engineering-concepts.md#batch-vs-streaming): a bounded run you can re-run, against a process you can only restart). | [ADR-004](../adr/ADR-004-eliminate-spark-streaming.md); [ADR-006](../adr/ADR-006-spark-batch-only.md) fixed batch-only as the Spark contract |
-| A watermark table in PostgreSQL | What v2's offload did. Two stores, no transaction, so the crash window survives; and the watermark was a timestamp, so lateness was guesswork. It also put PostgreSQL on the archive's critical path: no scheduler database, no advancing system of record. | [ADR-014](../adr/ADR-014-spark-based-iceberg-offload.md), [ADR-022](../adr/ADR-022-exactly-once-via-snapshot-offsets.md) |
-| Kafka Connect with an Iceberg sink connector | An always-on JVM cluster to run, size and monitor for a job that fires 12 times an hour, committing on a cadence of its own into an offset store of its own: the two-store problem bought back at a higher resting cost. The lake wants one writer under one lock, not an autonomous one. No ADR of its own; it never survived the resident-cost line those two ADRs draw. | none; resident-cost line from [ADR-004](../adr/ADR-004-eliminate-spark-streaming.md) and [ADR-010](../adr/ADR-010-resource-budget.md) |
-| **Offsets committed in the Iceberg snapshot summary** (chosen) | Nothing left to disagree: the position is a property of the commit that wrote the rows. It costs one rule, "latest snapshot carrying `k2.job = ingest`", which is why `offsets.py` is pure Python and unit-tested. | [ADR-022](../adr/ADR-022-exactly-once-via-snapshot-offsets.md) |
+| Spark Structured Streaming with its own checkpoint | The framework's own answer, and a resident streaming runtime against a 16 CPU single-host budget; ADR-004 deleted precisely this to recover 13.5 CPU. The checkpoint is still a second store with the same atomicity gap against the Iceberg commit, in a format that is Spark's business, not ours ([batch vs streaming](../../../../docs/architecture/03-data-engineering-concepts.md#batch-vs-streaming): a bounded run you can re-run, against a process you can only restart). | [ADR-004](../../../../docs/adr/ADR-004-eliminate-spark-streaming.md); [ADR-006](../../../../docs/adr/ADR-006-spark-batch-only.md) fixed batch-only as the Spark contract |
+| A watermark table in PostgreSQL | What v2's offload did. Two stores, no transaction, so the crash window survives; and the watermark was a timestamp, so lateness was guesswork. It also put PostgreSQL on the archive's critical path: no scheduler database, no advancing system of record. | [ADR-014](../../../../docs/adr/ADR-014-spark-based-iceberg-offload.md), [ADR-022](../../../../docs/adr/ADR-022-exactly-once-via-snapshot-offsets.md) |
+| Kafka Connect with an Iceberg sink connector | An always-on JVM cluster to run, size and monitor for a job that fires 12 times an hour, committing on a cadence of its own into an offset store of its own: the two-store problem bought back at a higher resting cost. The lake wants one writer under one lock, not an autonomous one. No ADR of its own; it never survived the resident-cost line those two ADRs draw. | none; resident-cost line from [ADR-004](../../../../docs/adr/ADR-004-eliminate-spark-streaming.md) and [ADR-010](../../../../docs/adr/ADR-010-resource-budget.md) |
+| **Offsets committed in the Iceberg snapshot summary** (chosen) | Nothing left to disagree: the position is a property of the commit that wrote the rows. It costs one rule, "latest snapshot carrying `k2.job = ingest`", which is why `offsets.py` is pure Python and unit-tested. | [ADR-022](../../../../docs/adr/ADR-022-exactly-once-via-snapshot-offsets.md) |
 
 ## Decision
 
@@ -38,10 +38,10 @@ buffer is a standing choice between duplicates and loss.
 wrote the rows, and read the next run's start back out of it, because one atomic commit cannot
 half-happen.**
 
-An [Iceberg snapshot](03-data-engineering-concepts.md#iceberg-snapshots) is an immutable listing of
+An [Iceberg snapshot](../../../../docs/architecture/03-data-engineering-concepts.md#iceberg-snapshots) is an immutable listing of
 the table's files, swapped in atomically, so a property hung on it lives or dies with the rows it
 describes. Re-running an ingest that did not commit is a no-op; re-running one that did is impossible,
-because its own commit moved the start: [idempotency](03-data-engineering-concepts.md#idempotency) by construction, not by deduplication.
+because its own commit moved the start: [idempotency](../../../../docs/architecture/03-data-engineering-concepts.md#idempotency) by construction, not by deduplication.
 
 ## How it works
 
@@ -73,7 +73,7 @@ never shares the 8 GiB container with an ingest.
    `EARLIEST`: for an archive that is never expired, the beginning is always right.
 2. **Where to stop.** `bounded_offsets()` clips each partition at the broker's `latest`,
    at `--max-offsets-per-partition` for backlog slicing (600,000 by default,
-   [`docker/lake/README.md`](../../docker/lake/README.md)), or at `--end-timestamp`. What it
+   [`docker/lake/README.md`](../../lake/README.md)), or at `--end-timestamp`. What it
    leaves behind is the `k2_lake_ingest_backlog_offsets` gauge.
 3. **What is gone.** If a committed start is below the broker's earliest offset, retention
    evicted records the lake never read. `failOnDataLoss=true` and the run fails; it keeps
@@ -89,15 +89,15 @@ never shares the 8 GiB container with an ingest.
    first offset is `start`, the last is `end - 1`. A mismatch is a `batch_offsets` row in
    `audit.checks` and `LakeIngestBatchAuditFailed`; a clean batch files nothing. It never
    blocks or fails the run: holding the offsets would stop the archive reading while
-   retention evicts ([ADR-047](../adr/ADR-047-ingest-batch-audit-after-publish.md)).
+   retention evicts ([ADR-047](../../../../docs/adr/ADR-047-ingest-batch-audit-after-publish.md)).
 
 ### Stages 2–2e: incremental by parent snapshot
 
-Below raw is the usual [medallion](03-data-engineering-concepts.md#medallion-layers) progression, each
+Below raw is the usual [medallion](../../../../docs/architecture/03-data-engineering-concepts.md#medallion-layers) progression, each
 layer a pure function of its parent plus the
-[lineage columns](03-data-engineering-concepts.md#lineage-and-identifiers) that trace a gold row back
+[lineage columns](../../../../docs/architecture/03-data-engineering-concepts.md#lineage-and-identifiers) that trace a gold row back
 to the frame it came from, and flags that record what a venue did rather than smoothing it away
-([replays](02-market-data-concepts.md#trades-and-replays): a venue re-sending a trade it already
+([replays](../../../../docs/architecture/02-market-data-concepts.md#trades-and-replays): a venue re-sending a trade it already
 sent, which is not a duplicate the lake made). Each layer reads its parent with `start-snapshot-id` = the id it last committed
 (`k2.src-snapshot-id` on its own newest snapshot) and `end-snapshot-id` = the parent's
 current id, then writes that end id into its own commit. Same contract as stage 1, one
@@ -112,29 +112,29 @@ range).
 | books | `books.py` | one streaming replay per connection: Kraken CRC32 verified per update, end-of-second top-20 sampled from the same pass, `gold.bbo_1s` projected from it in SQL; `gold.book_state` carries the book across runs | replaying once is cheaper than twice, and a checksum proves the replay is the venue's book |
 
 `rebuild.py --layer bronze|silver|gold|books` drops a layer and recomputes it from its parent
-over the whole archive; bronze 520 s ([benchmarks](../benchmarks/2026-08-27.md#lake)), books 2,367 s
-([`docker/lake/README.md`](../../docker/lake/README.md) section Books). That is what keeping raw buys: every layer above
-it is [rebuildable](03-data-engineering-concepts.md#rebuildability), so a bug in a projection is a re-run rather than a loss.
+over the whole archive; bronze 520 s ([benchmarks](../../../../docs/benchmarks/2026-08-27.md#lake)), books 2,367 s
+([`docker/lake/README.md`](../../lake/README.md) section Books). That is what keeping raw buys: every layer above
+it is [rebuildable](../../../../docs/architecture/03-data-engineering-concepts.md#rebuildability), so a bug in a projection is a re-run rather than a loss.
 
 ## Proof
 
 `maintenance.py` runs nightly and writes every assertion to `audit.checks`; any failure exits non-zero
 and `LakeAuditFailed` fires ([runbook](../runbooks/lake-audit-failed.md)). These are
-[audits as tests](03-data-engineering-concepts.md#audits-as-tests): assertions about last night's data, not about the code CI ran.
+[audits as tests](../../../../docs/architecture/03-data-engineering-concepts.md#audits-as-tests): assertions about last night's data, not about the code CI ran.
 The ingest's own findings land in the same table: `offset_gap`, `unresolvable_schema_id`,
 `bronze_parity`, and stage 1's per-batch `batch_offsets`, which sees within one run the hole
 `offset_continuity` would find at 03:00.
 
 | Audit | Asserts |
 |---|---|
-| `contract_schema` | every lake table's live columns, types, nullability, order, partition spec, sort order and identifier fields equal its contract; no table without one in the lake's namespaces ([chapter 18](18-data-mesh.md#where-a-contract-is-enforced-and-when)) |
+| `contract_schema` | every lake table's live columns, types, nullability, order, partition spec, sort order and identifier fields equal its contract; no table without one in the lake's namespaces ([chapter 18](../../../../docs/architecture/18-data-mesh.md#where-a-contract-is-enforced-and-when)) |
 | `offset_continuity` | per `(topic, partition)`, `raw.messages` offsets are contiguous from min to max; the only permitted holes are ranges recorded as `offset_gap` in `audit.checks` |
 | `bronze_unparseable`, `bronze_schema_drift`, `duplicate_identifiers` | no frame the parser rejected (venue columns NULL); no undeclared keys; no repeated `(src_topic, src_partition, src_offset)` lineage |
 | `silver_parity`, `silver_flags` | bronze == silver row counts; flag rates reported |
 | `gold_parity`, `ohlcv_parity`, `duplicate_identifiers` | per venue, `gold.trades` rows == the non-replay rows of silver at the snapshot gold last read; candles recompute from gold trades to the same values; one row per `(exchange, canonical_symbol, trade_id)` |
 | `silver_parity` (book tables), `kraken_checksum` | `silver.book_*` rows == the events exploded from the bronze snapshot it last read; failed checksums outside acknowledged windows are zero |
 
-`kraken_checksum` re-verifies the venue's own [checksum](02-market-data-concepts.md#checksums) in
+`kraken_checksum` re-verifies the venue's own [checksum](../../../../docs/architecture/02-market-data-concepts.md#checksums) in
 the lake: the replayed book either is the one Kraken had, or it is not. Independently,
 `make lake-verify` runs the parity checks on demand and `make parity-ohlcv` compares lake,
 ClickHouse and DuckDB candles at a pinned snapshot.
@@ -158,8 +158,8 @@ ClickHouse and DuckDB candles at a pinned snapshot.
 - **One writer, one container.** Ingest, rebuilds and maintenance share 3 CPU / 8 GiB in turn; serial by lock is a capacity ceiling, not a correctness one.
 - **Retention is the deadline.** `raw.*` topics keep 48 h or 2 GiB per partition, whichever
   binds first, the only door
-  [loss](03-data-engineering-concepts.md#backpressure-and-loss) can enter by, and it enters loudly:
-  a longer outage is a recorded, acknowledged hole ([failure modes](16-failure-modes.md#lake-tier)).
+  [loss](../../../../docs/architecture/03-data-engineering-concepts.md#backpressure-and-loss) can enter by, and it enters loudly:
+  a longer outage is a recorded, acknowledged hole ([failure modes](../../../../docs/architecture/16-failure-modes.md#lake-tier)).
 - **Bronze keeps vendor schemas.** Cross-venue work waits for gold; in exchange nothing a venue sent is normalised away before it can be inspected.
 
 ## Key points

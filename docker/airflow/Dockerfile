@@ -14,8 +14,9 @@
 FROM apache/airflow:slim-3.3.2-python3.12
 
 # postgres: the metadata DB driver. statsd: metrics to the statsd exporter.
-# astronomer-cosmos renders the dbt_marts DAG from the dbt project
-# (docker/airflow/dags/dbt_marts.py). 1.16.0 (2026-11-03) is the newest release
+# astronomer-cosmos rendered the retired dbt_marts DAG from the dbt project (archived
+# with the old lake ingest in legacy/v3-lake-ingest/airflow/dags/); no DAG uses
+# cosmos today. 1.16.0 (2026-11-03) is the newest release
 # on 2026-11-26; its compatibility policy lists Airflow 3.3 and dbt Core 1.12.
 # The constraints file is the one Airflow publishes for this exact release and
 # Python, so every transitive dependency is the set Airflow tested; it pins

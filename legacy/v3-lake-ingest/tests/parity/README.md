@@ -25,9 +25,9 @@ make differ.
 `lake.audit.checks` (the lake's table of check results), with its cause, where the two
 stores cannot be made equal without deleting data: a hard kill of the host or the Docker VM
 is the case it was built for
-([`failure-recovery.md` §8](../../docs/runbooks/failure-recovery.md#8-host-or-docker-vm-killed-the-hot-tier-against-the-lake)).
+([`failure-recovery.md` §8](../../../../docs/runbooks/failure-recovery.md#8-host-or-docker-vm-killed-the-hot-tier-against-the-lake)).
 Never for a difference nobody has explained, and never to get a run green: that is the
-tolerance [ADR-029](../../docs/adr/ADR-029-research-production-parity-contract.md) rejects.
+tolerance [ADR-029](../../../../docs/adr/ADR-029-research-production-parity-contract.md) rejects.
 A second incident is not a second entry: it is the trigger in ADR-029's 2026-11-26 Outcome
 to read loss windows from `lake.audit.checks` instead.
 

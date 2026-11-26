@@ -6,7 +6,7 @@ definitions, the ingest, the nightly maintenance and the metrics exporter.
 
 It replaces `docker/offload/`, which copied ClickHouse into Iceberg over JDBC.
 Both are present right now, the parallel-run window
-([003-phase-d](../../docs/plans/2026-08-26-v3-quant-research-platform/003-phase-d-lake-tier.md))
+([003-phase-d](../../../docs/plans/2026-08-26-v3-quant-research-platform/003-phase-d-lake-tier.md))
 compares them before the old path is deleted.
 
 ---
@@ -16,7 +16,7 @@ compares them before the old path is deleted.
 | File | What it does |
 |---|---|
 | `ddl/lake.sql` | Every table: `raw.messages`, the six per-venue `bronze.<venue>_<msgtype>` plus `bronze.kraken_instrument`, silver, gold, and `audit.checks`. The Phase D unified `bronze.*` pair was dropped at the Phase E cutover (comment above `bronze.binance_trade`) |
-| `ddl/generated/` | Written by `k2gen generate`, never by hand: DDL for data product contracts with inline columns ([ADR-032](../../docs/adr/ADR-032-odcs-contracts-and-k2gen.md)). None today |
+| `ddl/generated/` | Written by `k2gen generate`, never by hand: DDL for data product contracts with inline columns ([ADR-032](../../../docs/adr/ADR-032-odcs-contracts-and-k2gen.md)). None today |
 | `generated/retention.json` | Written by `k2gen generate`: snapshot expiry in days per table, from the contracts. Nothing reads it until phase P5 |
 | `generated/contract_schemas.json` | Written by `k2gen generate`: per lake table, what its contract states (columns in order with their Spark SQL type and `NOT NULL`, partitioning, sort order, identifier fields). The nightly `contract_schema` audit reads it, since `contracts/` is not mounted here |
 | `apply_ddl.py` | Applies `ddl/lake.sql`, then `ddl/generated/*.sql` in name order. The `lake-ddl` one-shot runs it; idempotent, so a re-run is a no-op |
@@ -25,7 +25,7 @@ compares them before the old path is deleted.
 | `offsets.py` | Pure offset bookkeeping. The exactly-once contract, and the only file with no Spark import |
 | `wire.py` | The Confluent framing, as a Python parser and as the Spark SQL the executors run |
 | `catalog.py` | Snapshot bookkeeping, the registry fetch by id, and how a running job files an audit row. Shared by the next three |
-| `ingest.py` | Stage 1 Kafka → `raw.messages` and the batch audit of what it committed ([ADR-047](../../docs/adr/ADR-047-ingest-batch-audit-after-publish.md)), stage 2 `raw.messages` → per-venue `bronze.<venue>_*`, then stages 2c to 2e: silver, gold, books, in the same run |
+| `ingest.py` | Stage 1 Kafka → `raw.messages` and the batch audit of what it committed ([ADR-047](../../../docs/adr/ADR-047-ingest-batch-audit-after-publish.md)), stage 2 `raw.messages` → per-venue `bronze.<venue>_*`, then stages 2c to 2e: silver, gold, books, in the same run |
 | `bronze.py` | Stage 2b: the six per-venue tables, decoded from the venue JSON in `raw.*`, vendor field names and types as sent |
 | `silver.py` | Stage 2c: `silver.trades_<venue>`, bronze frames typed, one row per trade, canonical symbol from the registry, replay / gap / precision flags |
 | `instruments.py` | The registry (`config/instruments.yaml`) as silver needs it: native → canonical, failing loudly on an unknown symbol |
@@ -36,7 +36,7 @@ compares them before the old path is deleted.
 | `record_check.py` | One `audit.checks` row from the command line, `job='replay'`: what `scripts/replay-lake.sh` files after every replay (snapshot id, conn_id, crate sha, output sha256), so a research result is reproducible by re-running the same ids and comparing one digest |
 | `rebuild.py` | `make lake-rebuild LAYER=bronze|silver|gold|books|bars`: drop, recreate and re-decode a layer from its parent, one day per venue at a time (`bars` rebuilds `gold.bars` alone, leaving the candles' snapshots pinned) |
 | `maintenance.py` | Nightly compaction, snapshot expiry, and the audits. Non-zero exit on a failure |
-| `contract_schema.py` | Pure: the live table against its contract, from Iceberg's own JSON for its schema, partition spec and sort order. `maintenance.py` files one `contract_schema` row per lake table with it, and one per table with no contract outside a `scratch_` namespace; run from the host, it does the same comparison read-only over the REST catalog (`python3 docker/lake/contract_schema.py`). [Runbook](../../docs/runbooks/lake-audit-failed.md#15-contract_schema-a-live-table-is-not-what-its-contract-states) section 15 |
+| `contract_schema.py` | Pure: the live table against its contract, from Iceberg's own JSON for its schema, partition spec and sort order. `maintenance.py` files one `contract_schema` row per lake table with it, and one per table with no contract outside a `scratch_` namespace; run from the host, it does the same comparison read-only over the REST catalog (`python3 docker/lake/contract_schema.py`). [Runbook](../docs/runbooks/lake-audit-failed.md#15-contract_schema-a-live-table-is-not-what-its-contract-states) section 15 |
 | `metrics.py` | The `lake-metrics` exporter. Reads snapshot summaries over the catalog's REST API |
 
 ---
@@ -129,8 +129,8 @@ docker exec k2-airflow-scheduler airflow dags unpause lake_ingest
 
 Each prints the DAG with the state it had before: the pause `lake_ingest | False` and the
 unpause `lake_ingest | True`, both as run on the live stack on 2026-11-25 (the
-[operator guide](../../docs/operations/README.md#the-pattern-pause-wait-for-idle-recreate-verify-unpause)
-§6 and [airflow-scheduling.md](../../docs/runbooks/airflow-scheduling.md) §5).
+[operator guide](../../../docs/operations/README.md#the-pattern-pause-wait-for-idle-recreate-verify-unpause)
+§6 and [airflow-scheduling.md](../../../docs/runbooks/airflow-scheduling.md) §5).
 
 ---
 
@@ -252,7 +252,7 @@ where "intact" is unknowable.
   venue is a separate `k2.src-snapshot-id.<venue>` property carried forward on every
   commit.
 - **`gold.dim_instrument`, `gold.dim_venue`** — the security master, **SCD2** since
-  2026-08-29 ([ADR-030](../../docs/adr/ADR-030-scd2-security-master.md)). One row per
+  2026-08-29 ([ADR-030](../../../docs/adr/ADR-030-scd2-security-master.md)). One row per
   validity interval, keyed by a deterministic `sha256` surrogate over `(exchange,
   canonical_symbol)`, with the native `symbol` as a *tracked attribute* so a venue rename
   (Kraken `XBT/USD` → `BTC/USD`) opens a version instead of inventing a second instrument.
@@ -487,7 +487,7 @@ record count on its first line rather than raising Kafka's
 per partition into `audit.checks` *before* it advances anything, and it aborts
 without skipping if that row cannot be written. There is no environment
 variable, so the scheduled run keeps failing until a person types the flag , 
-[lake-ingest-lag.md §3](../../docs/runbooks/lake-ingest-lag.md) has the whole
+[lake-ingest-lag.md §3](../docs/runbooks/lake-ingest-lag.md) has the whole
 procedure and the 2026-08-26 occurrence it was written from.
 
 What is left is one pass for the write and one single-column pass for
@@ -506,7 +506,7 @@ read of the one snapshot just committed, projecting `topic`, `partition` and `of
 grouped and collected, so no payload is decoded and nothing is cached.
 
 **It never blocks the commit**
-([ADR-047](../../docs/adr/ADR-047-ingest-batch-audit-after-publish.md)). The commit has
+([ADR-047](../../../docs/adr/ADR-047-ingest-batch-audit-after-publish.md)). The commit has
 already happened, a mismatch is a finding, and an audit that raises is a finding too, not a
 failed run: holding the offsets would stop the archive reading while raw retention keeps
 evicting. A mismatch writes one `batch_offsets` row per partition into `audit.checks`
@@ -514,7 +514,7 @@ evicting. A mismatch writes one `batch_offsets` row per partition into `audit.ch
 with both ranges) and `k2.batch-audit-failures` on that commit, which `metrics.py` serves as
 `k2_lake_batch_audit_failures_total` for `LakeIngestBatchAuditFailed`. A clean batch files
 nothing; the run logs `stage 1: batch audit 0 failure(s) in <s>s`. Recovery is
-[lake-ingest-batch-audit.md](../../docs/runbooks/lake-ingest-batch-audit.md).
+[lake-ingest-batch-audit.md](../docs/runbooks/lake-ingest-batch-audit.md).
 
 What it costs per run: two metadata queries and one small Spark job. The same aggregate
 over the files the newest ingest snapshot added, run through Trino as a proxy, executed in
@@ -565,7 +565,7 @@ number `spark_conf.py`'s sizing comment now carries; the previous entry was
 arithmetic, not a measurement.
 
 Offsets committed equals rows written on every run (the per-run counts are in
-[ADR-022](../../docs/adr/ADR-022-exactly-once-via-snapshot-offsets.md)'s Outcome), the ranges are dense, so
+[ADR-022](../../../docs/adr/ADR-022-exactly-once-via-snapshot-offsets.md)'s Outcome), the ranges are dense, so
 the bookkeeping and the data agree exactly.
 
 Backlog draining across runs 1-3: `market.crypto.v3.raw.kraken` fell on every run.
@@ -586,7 +586,7 @@ docker exec k2-redpanda rpk topic describe -p market.crypto.v3.raw.kraken
 
 While the cold start drained that topic at 50,000 per run, the 512 MiB
 per-partition cap evicted the head of the queue faster (the real offsets and count are in
-[ADR-021](../../docs/adr/ADR-021-raw-first-archive-and-lineage.md)'s Outcome):
+[ADR-021](../../../docs/adr/ADR-021-raw-first-archive-and-lineage.md)'s Outcome):
 
 ```text
 market.crypto.v3.raw.kraken-0   committed <committed>   LOG-START <log-start>
@@ -598,7 +598,7 @@ reported as such: `offsets.evicted` compares the resume point against the
 broker's log start at plan time and the run stops with the numbers the runbook
 needs, before Spark starts. **It is never repaired automatically**, skipping
 forward is an unrecorded hole, which is the one outcome this archive exists to
-prevent. Recovery is [`../../docs/runbooks/lake-ingest-lag.md`](../../docs/runbooks/lake-ingest-lag.md) §3.
+prevent. Recovery is [`../../docs/runbooks/lake-ingest-lag.md`](../docs/runbooks/lake-ingest-lag.md) §3.
 
 200,000 was ~3.6× the 2026-08-27 arrival rate, and run 4 shows what it costs: more
 wall time, no more memory. A caught-up cycle never reaches it either way.
@@ -637,11 +637,11 @@ Full procedures are in the runbooks; the pointers:
 
 | Symptom | Start at |
 |---|---|
-| Ingest stopped committing | [lake-recovery.md](../../docs/runbooks/lake-recovery.md) |
-| Data arriving late, commits still landing | [lake-ingest-lag.md](../../docs/runbooks/lake-ingest-lag.md) |
-| An audit failed | [lake-audit-failed.md](../../docs/runbooks/lake-audit-failed.md) |
-| Disk over 80% | [lake-disk-usage-high.md](../../docs/runbooks/lake-disk-usage-high.md) |
-| What is lost vs delayed, per failure | [failure-modes.md](../../docs/architecture/16-failure-modes.md) |
+| Ingest stopped committing | [lake-recovery.md](../docs/runbooks/lake-recovery.md) |
+| Data arriving late, commits still landing | [lake-ingest-lag.md](../docs/runbooks/lake-ingest-lag.md) |
+| An audit failed | [lake-audit-failed.md](../docs/runbooks/lake-audit-failed.md) |
+| Disk over 80% | [lake-disk-usage-high.md](../docs/runbooks/lake-disk-usage-high.md) |
+| What is lost vs delayed, per failure | [failure-modes.md](../../../docs/architecture/16-failure-modes.md) |
 
 Three things worth stating here because they shape every one of those:
 
@@ -683,7 +683,7 @@ on the metric rather than an assumption in the docs. That matters here.
 the VM's disk is a thin-provisioned image on the machine's real disk. The two
 disagree. Both readings below are from the same instant, and this is the pair
 the alert's honesty is argued from. It is not the only free-space figure in the
-repo, [capacity-model.md](../../docs/architecture/15-capacity-model.md) I11 carries
+repo, [capacity-model.md](../../../docs/architecture/15-capacity-model.md) I11 carries
 its own `df` reading as an input to the disk-runway prediction, so a figure
 without a timestamp and a command is the thing to distrust, not a second figure:
 
@@ -715,7 +715,7 @@ with. 0.95 is the input, 0.90 is the rule. What
 is missing on this host is a truthful input, and closing that needs a host-side
 exporter, a maintainer decision rather than something a container can fix.
 Until then the check is manual and it is `df -h /` on the host, which the
-[disk runbook](../../docs/runbooks/lake-disk-usage-high.md) carries.
+[disk runbook](../docs/runbooks/lake-disk-usage-high.md) carries.
 
 `mc du k2/k2-lake` answers a different question, what the buckets hold, rather
 than what is left, and both belong in the days-remaining arithmetic.
@@ -726,7 +726,7 @@ than what is left, and both belong in the days-remaining arithmetic.
 
 Every endpoint, region, path-style flag and catalog URI is an environment
 variable with today's single-host value as its default
-([Q9](../../docs/research/2026-08-26-v3-requirements-clarification.md#q9--scale-target):
+([Q9](../../../docs/research/2026-08-26-v3-requirements-clarification.md#q9--scale-target):
 pointing this lake at real S3 must be a config change, not a rewrite).
 
 | Variable | Default | Read by |
@@ -828,7 +828,7 @@ pinned by sha256, plus PyYAML for `instruments.py` and `bars.py`. The scripts he
 run as the image's user `spark` (uid 185): they read this directory and
 `/home/iceberg/config`, and write only to `/tmp` (the writer lock, Spark's scratch)
 and `/home/iceberg/spark-events`. Moving any of those pins is
-[upgrade-a-pinned-component.md](../../docs/runbooks/upgrade-a-pinned-component.md).
+[upgrade-a-pinned-component.md](../../../docs/runbooks/upgrade-a-pinned-component.md).
 What the running image carries:
 
 ```bash
@@ -839,10 +839,10 @@ docker exec k2-spark-iceberg ls /opt/spark/jars | grep -iE 'iceberg|kafka|avro'
 
 ## Related
 
-- [ADR-018](../../docs/adr/ADR-018-v3-lake-first-rust-capture.md), lake-first, and why
-- [ADR-021](../../docs/adr/ADR-021-raw-first-archive-and-lineage.md), the raw archive
-- [ADR-022](../../docs/adr/ADR-022-exactly-once-via-snapshot-offsets.md), the contract above
-- [ADR-023](../../docs/adr/ADR-023-lakekeeper-rest-catalog.md), the catalog
-- [ADR-024](../../docs/adr/ADR-024-unified-bronze-tables-in-the-lake.md), one table per record type
-- [partitioning-strategy.md](../../docs/architecture/14-partitioning-strategy.md), specs and rejects
-- [scale-out-path.md](../../docs/architecture/17-scale-out-path.md), what changes on AWS, and what does not
+- [ADR-018](../../../docs/adr/ADR-018-v3-lake-first-rust-capture.md), lake-first, and why
+- [ADR-021](../../../docs/adr/ADR-021-raw-first-archive-and-lineage.md), the raw archive
+- [ADR-022](../../../docs/adr/ADR-022-exactly-once-via-snapshot-offsets.md), the contract above
+- [ADR-023](../../../docs/adr/ADR-023-lakekeeper-rest-catalog.md), the catalog
+- [ADR-024](../../../docs/adr/ADR-024-unified-bronze-tables-in-the-lake.md), one table per record type
+- [partitioning-strategy.md](../../../docs/architecture/14-partitioning-strategy.md), specs and rejects
+- [scale-out-path.md](../../../docs/architecture/17-scale-out-path.md), what changes on AWS, and what does not

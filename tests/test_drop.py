@@ -7,7 +7,13 @@ A catalog drop with purge deletes the table's files, as Lakekeeper's purge task
 does. The mc subcommands and their exit codes are the ones measured on the
 pinned image, RELEASE.2025-08-13, on 2026-11-26: `ls --recursive` of a missing
 prefix prints nothing and exits 0, `ls` of a missing bucket exits 1, `mirror`
-refuses to overwrite a differing file with a JSON error line and exit 0.
+refuses to overwrite a differing file with a JSON error line and exit 0. The
+object-lock answers were read on RELEASE.2025-09-07T16-13-09Z, the image drop.sh
+pins, on 2026-11-26: `retention info --default` of a bucket without lock is an
+error line and exit 1; `retention info --recursive --versions` prints a line per
+version with `mode` and `until`, or, with no version, an error line and exit 1;
+`legalhold info --recursive --versions` prints nothing and exits 0 when no
+version is held.
 Switches in the environment break one step each, so every abort is shown to
 leave the catalog, the storage and the drop untouched."""
 
@@ -157,6 +163,26 @@ def mc(args):
         t = pathlib.Path(pos[2])
         t.parent.mkdir(parents=True, exist_ok=True)
         t.write_text(v["body"])
+    elif pos[0] == "retention" and "--default" in flags:
+        lock = w.get("locked", {}).get(pos[2][3:])
+        if not lock:
+            out({"status": "error", "error": {"message": "Remote bucket `%s` does not support locking"}})
+            sys.exit(1)
+        out({"op": "info", "enabled": "Enabled", **lock, "status": "success"})
+    elif pos[0] in ("retention", "legalhold"):
+        if E.get("LOCK_SILENT"):   # the helper gives no answer at all
+            sys.exit(1)
+        b = pos[2][3:]
+        vs = [v for v in w["versioned"].get(b, []) if not v.get("dm")]
+        if pos[0] == "retention" and not vs:
+            out({"status": "error", "error": {"message": "Unable to find any object/version to show its retention."}})
+            sys.exit(1)
+        for v in vs:
+            if pos[0] == "retention":
+                out({"mode": v.get("mode", ""), "until": v.get("until", ""), "urlpath": f"k2/{b}/{v['key']}",
+                     "versionID": v["id"], "status": "success", "error": None})
+            elif v.get("hold"):
+                out({"legalhold": "ON", "urlpath": f"k2/{b}/{v['key']}", "versionID": v["id"], "status": "success"})
     elif pos[0] == "rb":
         b = pos[1][3:]
         shutil.rmtree(MINIO / b)
@@ -177,13 +203,13 @@ def stack(tmp_path):
     (repo / ".env").write_text(f"MINIO_ROOT_USER={USER}\nMINIO_ROOT_PASSWORD={PASSWORD}\nOTHER_PASSWORD=x\n")
     world = {"warehouses": {"k2": {"id": "p-k2", "bucket": "k2-lake", "prefix": "warehouse/k2", "namespaces": {
         "spike": {"t1": ["table", LOC.format("t1")], "v1": ["view", LOC.format("v1")]},
-        "gold": {"bars": ["table", LOC.format("bars")]},
+        "kept": {"t9": ["table", LOC.format("t9")]},
     }}}, "versioned": {"landing": [
         {"key": "a.txt", "id": "va2", "body": "new a"}, {"key": "a.txt", "id": "va1", "body": "old a"},
         {"key": "gone.txt", "id": "vg2", "body": "", "dm": True}, {"key": "gone.txt", "id": "vg1", "body": "gone body"},
     ]}}
     (tmp_path / "world.json").write_text(json.dumps(world))
-    for name in ("t1", "v1", "bars"):
+    for name in ("t1", "v1", "t9"):
         for f, body in FILES.items():
             p = tmp_path / "minio" / LOC.format(name)[5:] / f
             p.parent.mkdir(parents=True, exist_ok=True)
@@ -241,7 +267,7 @@ def copy_root(stack) -> Path:
     ("bucket:Bad_Name", {}, "is not"),
     ("k2.spike;rm -rf ~", {}, "is not"),
     ("k2..t1", {}, "is not"),
-    ("k2.spike/../gold", {}, "is not"),
+    ("k2.spike/../kept", {}, "is not"),
     ("k2.spike", {"DRY_RUN": "yes"}, "DRY_RUN must be 0 or 1"),
 ])
 def test_refuses_a_bad_target_before_touching_the_stack(stack, target, env, says):
@@ -256,8 +282,8 @@ def test_refuses_a_bad_target_before_touching_the_stack(stack, target, env, says
     ("another warehouse", "s3://k2-lake/warehouse/other/u-x", "not inside the warehouse's prefix"),
     ("another bucket", "s3://elsewhere/warehouse/k2/u-x", "not inside the warehouse's prefix"),
     ("climbs out", "s3://k2-lake/warehouse/k2/../k2-escape", "not inside the warehouse's prefix"),
-    ("same as another table", LOC.format("bars"), "shared with k2.gold.bars"),
-    ("inside another table", LOC.format("bars") + "/sub", "shared with k2.gold.bars"),
+    ("same as another table", LOC.format("t9"), "shared with k2.kept.t9"),
+    ("inside another table", LOC.format("t9") + "/sub", "shared with k2.kept.t9"),
 ])
 def test_refuses_a_location_outside_the_warehouse_or_shared(stack, name, loc, says):
     world = json.loads((stack / "world.json").read_text())
@@ -319,7 +345,7 @@ def test_drops_a_namespace_after_a_matching_copy_in_order(stack):
                 f"{BYTES} bytes in MinIO; {OBJECTS} objects, {BYTES} bytes in the copy: match") in out.stdout
         assert not (stack / "minio" / LOC.format(name)[5:]).exists()
     assert "spike" not in namespaces(stack)
-    assert tree(stack / "minio" / LOC.format("bars")[5:]) == FILES and "bars" in namespaces(stack)["gold"]
+    assert tree(stack / "minio" / LOC.format("t9")[5:]) == FILES and "t9" in namespaces(stack)["kept"]
     [manifest] = day.glob("k2.spike.*.json")
     rows = json.loads(manifest.read_text())["objects"]
     assert [(r["name"], r["location"], r["objects"]) for r in rows] == [
@@ -403,3 +429,53 @@ def test_never_prints_or_passes_the_credential(stack, target, env, rc):
         assert secret not in out.stdout + out.stderr
         assert secret not in (stack / "docker.log").read_text(), "on a docker command line"
         assert secret not in written
+
+
+def lock(stack, mode="GOVERNANCE", **by_version):
+    """Turn on object lock for bucket landing; by_version sets fields on one version each."""
+    world = json.loads((stack / "world.json").read_text())
+    world["locked"] = {"landing": {"mode": mode, "validity": "1DAYS"}}
+    for v in world["versioned"]["landing"]:
+        v.update(by_version.get(v["id"], {}))
+    (stack / "world.json").write_text(json.dumps(world))
+
+
+@pytest.mark.parametrize("dry", ["0", "1"])
+def test_a_retained_version_refuses_before_the_copy_naming_the_latest_expiry(stack, dry):
+    lock(stack, va1={"mode": "GOVERNANCE", "until": "2999-01-01T00:00:00.5Z"},
+         va2={"mode": "GOVERNANCE", "until": "2999-06-30T05:59:07.42Z"},
+         vg1={"mode": "GOVERNANCE", "until": "2001-01-01T00:00:00Z"})   # expired: no longer protects
+    before = tree(stack / "minio")
+    out = run(stack, "bucket:landing", DRY_RUN=dry)
+    assert out.returncode == 1, out.stderr
+    assert "object lock (bucket default GOVERNANCE 1DAYS): 2 object version(s) under GOVERNANCE retention" in out.stderr
+    assert "until 2999-06-30T05:59:07.42Z at the latest" in out.stderr
+    assert "never bypasses governance mode. Run again after 2999-06-30T05:59:07.42Z" in out.stderr
+    assert "nothing was copied or dropped" in out.stderr
+    assert tree(stack / "minio") == before and tree(stack / "k2-backup") == {}
+    assert deletes(stack) == [] and not any(c[3:4] in (["mirror"], ["cp"]) for c in calls(stack))
+    assert not any("--bypass" in c for c in calls(stack))
+
+
+def test_a_legal_hold_refuses_before_the_copy(stack):
+    lock(stack, va1={"hold": True})
+    out = run(stack, "bucket:landing", DRY_RUN="1")
+    assert out.returncode == 1
+    assert "1 object version(s) under a legal hold, which has no expiry" in out.stderr
+    assert deletes(stack) == [] and not any(c[3:4] in (["mirror"], ["cp"]) for c in calls(stack))
+
+
+def test_a_lock_whose_retention_has_expired_drops_as_before(stack):
+    lock(stack, va1={"mode": "COMPLIANCE", "until": "2001-01-01T00:00:00Z"})
+    out = run(stack, "bucket:landing")
+    assert out.returncode == 0, out.stderr
+    assert "object lock on (bucket default GOVERNANCE 1DAYS), no version retained or held now" in out.stdout
+    assert not (stack / "minio/landing").exists()
+
+
+def test_no_answer_on_the_lock_fails_closed(stack):
+    lock(stack)
+    out = run(stack, "bucket:landing", LOCK_SILENT="1")
+    assert out.returncode == 1
+    assert "could not read its object retention" in out.stderr
+    assert deletes(stack) == [] and not any(c[3:4] in (["mirror"], ["cp"]) for c in calls(stack))

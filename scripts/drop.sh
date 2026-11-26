@@ -11,7 +11,9 @@
 #   1. resolve what the target holds from the catalog: each table's and view's
 #      location, refused unless it sits inside its warehouse's storage prefix and
 #      no other table or view in that warehouse shares it or nests in it;
-#   2. list its objects in MinIO, and check the backup disk has room for them;
+#   2. list its objects in MinIO, and check the backup disk has room for them; a
+#      bucket under object lock is refused while any version in it is retained or
+#      on legal hold, naming the latest expiry (governance mode is never bypassed);
 #   3. mc mirror them to $K2_BACKUP_DIR/drop/<UTC date>/<target>/, and copy every
 #      object version of a versioned bucket to <target>.versions/<key>/<version id>;
 #   4. compare object count and bytes, MinIO against the copy, then list MinIO
@@ -211,6 +213,35 @@ elif cmd == "has":              # has <listing> <key>
     sys.exit(0 if a[1] in entries(a[0], False) else 1)
 elif cmd == "versioned":        # versioned <mc version info --json>: exit 0 if versioning was ever on
     sys.exit(0 if json.loads(a[0]).get("versioning", {}).get("status") in ("Enabled", "Suspended") else 1)
+elif cmd == "lock":             # lock <mc retention info --default --json>: "<mode> <validity>", or "off"
+    d = json.loads(a[0] or "{}")
+    if d.get("status") == "success":
+        print(f"{d.get('mode') or 'none'} {d.get('validity') or 'none'}" if d.get("enabled") == "Enabled" else "off")
+    elif "does not support locking" in json.dumps(d.get("error", {})):
+        print("off")
+    else:
+        fail(f"could not read the bucket's object-lock configuration: {json.dumps(d.get('error', d))[:300]}")
+elif cmd == "held":             # held <retention listing> <legal hold listing>: what object lock still protects
+    import datetime as dt
+    now, until, n, holds = dt.datetime.now(dt.timezone.utc), [], 0, 0
+    for path, field in ((a[0], "until"), (a[1], "legalhold")):
+        with open(path) as f:
+            for line in f:
+                if not line.strip():
+                    continue
+                d = json.loads(line)
+                if d.get("status") != "success":
+                    if "Unable to find any object" in json.dumps(d.get("error", {})):
+                        continue   # an empty prefix: nothing to protect
+                    fail(f"could not read object-lock state: {json.dumps(d.get('error', d))[:300]}")
+                if field == "legalhold":
+                    holds += d.get("legalhold") == "ON"
+                elif d.get("mode") in ("GOVERNANCE", "COMPLIANCE") and d.get("until") \
+                        and dt.datetime.fromisoformat(d["until"]) > now:
+                    n += 1
+                    until.append((dt.datetime.fromisoformat(d["until"]), d["until"], d["mode"]))
+    latest = max(until)[1] if until else "-"
+    print(n, latest, ",".join(sorted({m for *_, m in until})) or "-", holds)
 elif cmd == "manifest":         # manifest <file> <target> <row>...: what was copied, for a restore
     rows = [dict(zip(("kind", "name", "location", "metadata_location", "copy"), r.split("\t")[:5]),
                  objects=int(r.split("\t")[5]), bytes=int(r.split("\t")[6])) for r in a[2:]]
@@ -263,6 +294,24 @@ for i in "${!OBJS[@]}"; do
   if py versioned "$info"; then
     [ "$kind" = bucket ] || die "$name: bucket $b keeps object versions, which a copy of the current objects misses and a purge leaves behind"
     VERS[i]=1
+    # Object lock (WORM) needs versioning, so only a versioned bucket can hold a
+    # retained version. Checked before the copy: `mc rb` cannot delete a version
+    # under retention or a legal hold, and this script never bypasses governance mode.
+    lock=$(py lock "$(mcx retention info --default --json "k2/$b" 2>/dev/null || true)") || exit 1
+    if [ "$lock" != off ]; then
+      # mc exits 1 on a bucket with no object version; anything else non-zero is no answer.
+      for q in retention:r legalhold:h; do
+        mcx "${q%:*}" info --recursive --versions --json "k2/$b" > "$WORK/$i.${q#*:}" 2>/dev/null ||
+          grep -q 'Unable to find any object' "$WORK/$i.${q#*:}" || die "$name: could not read its object ${q%:*}"
+      done
+      res=$(py held "$WORK/$i.r" "$WORK/$i.h") || exit 1
+      read -r rn until modes holds <<<"$res"
+      [ "$rn" = 0 ] ||
+        die "$name: object lock (bucket default $lock): $rn object version(s) under $modes retention until $until at the latest, which no delete may remove before then; drop.sh never bypasses governance mode. Run again after $until; nothing was copied or dropped"
+      [ "$holds" = 0 ] ||
+        die "$name: object lock: $holds object version(s) under a legal hold, which has no expiry; run again once its owner has cleared it; nothing was copied or dropped"
+      echo "drop: $name: object lock on (bucket default $lock), no version retained or held now"
+    fi
     mcx ls --recursive --versions --json "k2/${loc#s3://}/" > "$WORK/$i.v" || die "$name: could not list its object versions"
     res=$(py count "$WORK/$i.v" 1) || exit 1
     read -r vn vb <<<"$res"

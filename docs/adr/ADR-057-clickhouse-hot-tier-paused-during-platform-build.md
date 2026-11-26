@@ -40,7 +40,7 @@ the trade and book topics of all three venues, binary records in the Avro format
 Redpanda, the Kafka-compatible broker, stores the group's committed offsets, the position in each
 partition up to which the group has read, so a restarted reader carries on where it stopped.
 Since ADR-025 and ADR-026 the tier originates nothing: whatever it loses is reloaded from the lake's
-gold tables ([runbook](../runbooks/clickhouse-rebuild-from-lake.md)).
+gold tables ([runbook](../../legacy/v3-lake-ingest/docs/runbooks/clickhouse-rebuild-from-lake.md)).
 
 **Who reads it.** Two Grafana dashboards (`clickhouse-overview.json`, and panels of
 `k2-pipeline-overview.json`); step (2) of `scripts/health.sh`; the ClickHouse leg of the three-way
@@ -178,4 +178,4 @@ rebuilt as above or moved through the product lifecycle to deprecated.
   [phase 001](../plans/2026-11-26-unified-product-platform/001-release-and-rules-spine.md)
 - Research: [`CLICKHOUSE-INVENTORY.md`](../research/2026-11-26-unified-platform-architecture/CLICKHOUSE-INVENTORY.md),
   [`DECISIONS-FINAL.md`](../research/2026-11-26-unified-platform-architecture/DECISIONS-FINAL.md)
-- Runbook: [rebuild ClickHouse gold from the lake](../runbooks/clickhouse-rebuild-from-lake.md)
+- Runbook: [rebuild ClickHouse gold from the lake](../../legacy/v3-lake-ingest/docs/runbooks/clickhouse-rebuild-from-lake.md)

@@ -109,11 +109,11 @@ important line in `offsets.py` — which is why that module is pure and unit-tes
 
 | Failure | What survives | What the next run does | Result |
 |---|---|---|---|
-| **Crash after the Parquet files are written, before the Iceberg commit** | orphan data files in MinIO; no snapshot | reads the same `startingOffsets` as the dead run, re-reads the same records, writes new files, commits | no duplicates, no gap. The orphans are unreferenced by any snapshot, so no reader ever sees them; the nightly `remove_orphan_files` reclaims the space, with a 24 h floor so it cannot race a live write ([maintenance.py](../../docker/lake/maintenance.py)) |
+| **Crash after the Parquet files are written, before the Iceberg commit** | orphan data files in MinIO; no snapshot | reads the same `startingOffsets` as the dead run, re-reads the same records, writes new files, commits | no duplicates, no gap. The orphans are unreferenced by any snapshot, so no reader ever sees them; the nightly `remove_orphan_files` reclaims the space, with a 24 h floor so it cannot race a live write ([maintenance.py](../../legacy/v3-lake-ingest/lake/maintenance.py)) |
 | **Crash after the commit, before the process exits** | the snapshot, with its offsets | reads the committed offsets, starts at the successor | no duplicates, no gap. The commit *is* the completion signal — there is nothing else to do after it |
 | **Double-run** (two ingests launched over the same window) | both read the same start; both write | an exclusive `flock` in `ingest.py`'s `main()` — the second process exits 2 before it opens a Spark session. Prefect's `concurrency_limit=1` is belt and braces behind it, and covers only Prefect-launched runs; the runbooks, the chaos scripts and `make lake-verify` all dispatch by hand | no duplicates. **Without the lock there would be duplicates**, and not because Iceberg fails to notice: measured on a scratch table with this DDL's `commit.retry.num-retries=10`, two identical 5-row appends raised nothing and left 10 rows in two append snapshots. Iceberg's optimistic concurrency detects the conflict and its retry re-applies the loser on the new base — which is correct for an append and fatal for an append that also carries the reader's position |
 | **Compaction snapshot lands between two ingests** | the compaction snapshot, no offsets property | the offset reader skips it and takes the latest snapshot *with* the property | correct resume. If the reader took "latest" instead, it would either fail or restart from zero — silently duplicating a day |
-| **Topic truncated below the stored offset** (retention evicted unread data) | the offsets, pointing at records that no longer exist | `failOnDataLoss=true` → the job fails immediately | a loud failure and an alert, not a silent hole. Recovery is a human decision: record the gap, then resume from the earliest surviving offset explicitly. [`../runbooks/lake-ingest-lag.md`](../runbooks/lake-ingest-lag.md) |
+| **Topic truncated below the stored offset** (retention evicted unread data) | the offsets, pointing at records that no longer exist | `failOnDataLoss=true` → the job fails immediately | a loud failure and an alert, not a silent hole. Recovery is a human decision: record the gap, then resume from the earliest surviving offset explicitly. [`../runbooks/lake-ingest-lag.md`](../../legacy/v3-lake-ingest/docs/runbooks/lake-ingest-lag.md) |
 | **Lakekeeper unreachable at commit time** | the data files; no snapshot | identical to the first row — the commit never happened | no duplicates, no gap; the run is a no-op with orphans |
 
 **The property that makes all of this true in one sentence:** re-running an ingest that
@@ -194,8 +194,8 @@ error and needs a real answer.
 - [ADR-017](ADR-017-iceberg-maintenance-pipeline.md) — the compact → expire → audit ordering Phase D keeps, and whose snapshots the offset reader must skip
 - [ADR-021](ADR-021-raw-first-archive-and-lineage.md) — why the offsets are also the lineage coordinate on every bronze row
 - [ADR-023](ADR-023-lakekeeper-rest-catalog.md) — the catalog whose atomic commit this depends on, and why the Hadoop catalog could not provide it
-- [`../runbooks/lake-recovery.md`](../runbooks/lake-recovery.md) — killed mid-run, Lakekeeper down, MinIO down: why re-running is safe
-- [`../runbooks/lake-ingest-lag.md`](../runbooks/lake-ingest-lag.md) — lag, backlog slicing, and what to do when `failOnDataLoss` fires
+- [`../runbooks/lake-recovery.md`](../../legacy/v3-lake-ingest/docs/runbooks/lake-recovery.md) — killed mid-run, Lakekeeper down, MinIO down: why re-running is safe
+- [`../runbooks/lake-ingest-lag.md`](../../legacy/v3-lake-ingest/docs/runbooks/lake-ingest-lag.md) — lag, backlog slicing, and what to do when `failOnDataLoss` fires
 
 ---
 
@@ -274,7 +274,7 @@ to prevent.
 a 4 GiB container, and 53× the batch size moved that peak by *less than nothing* —
 the largest run had the lowest peak. Numbers,
 commands and the backlog drain are in
-[`../../docker/lake/README.md`](../../docker/lake/README.md) under "What one run
+[`../../docker/lake/README.md`](../../legacy/v3-lake-ingest/lake/README.md) under "What one run
 may read, and why nothing is cached", and in the Phase D deployment gate.
 
 **Still open for the burn-in:** whether the nightly `offset_continuity` audit

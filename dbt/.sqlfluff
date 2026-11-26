@@ -18,6 +18,7 @@ apply_dbt_builtins = True
 current_timestamp = {% macro current_timestamp() %}current_timestamp{% endmacro %}
 
 # dbt's execute is false at parse time; here it keeps the linter out of the blocks that ask
-# the warehouse (graph, adapter), as in models/governance/staging/stg_dq__dbt_test_results.sql.
+# the warehouse (graph, adapter), as the archived
+# legacy/v3-lake-ingest/dbt/models/governance/staging/stg_dq__dbt_test_results.sql did.
 [sqlfluff:templater:jinja:context]
 execute = False

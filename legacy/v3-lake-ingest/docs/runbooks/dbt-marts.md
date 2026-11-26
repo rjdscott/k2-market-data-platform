@@ -1,17 +1,17 @@
 # Runbook: The dbt marts are not being rebuilt
 
 The domain marts on Trino are rebuilt every hour at minute 10 by the Airflow DAG `dbt_marts`
-(`docker/airflow/dags/dbt_marts.py`, [ADR-035](../adr/ADR-035-trino-and-dbt-for-marts.md),
-[ADR-044](../adr/ADR-044-producer-lake-and-domain-mart-warehouses.md)): one task group per
+(`docker/airflow/dags/dbt_marts.py`, [ADR-035](../../../../docs/adr/ADR-035-trino-and-dbt-for-marts.md),
+[ADR-044](../../../../docs/adr/ADR-044-producer-lake-and-domain-mart-warehouses.md)): one task group per
 domain with marts, every task run as that domain's writer `dbt_<domain>`, the `governance`
 group after all the others however they ended, and once a day, in the 04:10 run, the domain's
 snapshot maintenance. Every dbt invocation that runs a test records its results in its domain's
-`dq.dbt_test_results` ([ADR-046](../adr/ADR-046-governance-domain-and-quality-results.md)), a
+`dq.dbt_test_results` ([ADR-046](../../../../docs/adr/ADR-046-governance-domain-and-quality-results.md)), a
 table each domain's first task, `<domain>_test_results_table`, creates if it is absent; a task
 Airflow never starts records nothing. This covers a run that fails, a DAG that is
 not running, and a failed maintenance. It does not cover the lake behind the marts: a stale
 source is [lake-ingest-lag.md](./lake-ingest-lag.md), Airflow itself is
-[airflow-scheduling.md](./airflow-scheduling.md).
+[airflow-scheduling.md](../../../../docs/runbooks/airflow-scheduling.md).
 
 **Run every command from the repo root with `set -a && . ./.env && set +a` loaded.**
 
@@ -169,7 +169,7 @@ docker compose --dry-run up -d --force-recreate --no-deps airflow-api-server air
 ```
 
 Recreate between two `lake_ingest` runs: the scheduler's stop stops a running ingest's driver
-([airflow-scheduling.md](./airflow-scheduling.md)).
+([airflow-scheduling.md](../../../../docs/runbooks/airflow-scheduling.md)).
 
 Once the cause is fixed, do not wait for minute 10:
 
@@ -254,7 +254,7 @@ second (15:28:19 UTC, 2026-11-25), and with the results table's three, all seven
 Catalog `governance` exists in Trino only once its warehouse does and Trino has restarted with
 the generated `docker/trino/etc/catalog/governance.properties`. Until then the governance group
 fails with `Catalog 'governance' not found` and every other domain builds. Once, after the pull
-request that added the domain ([ADR-046](../adr/ADR-046-governance-domain-and-quality-results.md))
+request that added the domain ([ADR-046](../../../../docs/adr/ADR-046-governance-domain-and-quality-results.md))
 is merged, in the live checkout. The outputs marked "before" are the stack's on 2026-11-25,
 read-only; the rollout itself ran on 2026-11-25 from 19:29 UTC, and the outputs marked "after"
 and the two at the end are that run's.

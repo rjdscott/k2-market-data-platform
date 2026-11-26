@@ -1,10 +1,10 @@
 # Runbook: Rebuild ClickHouse gold from the lake
 
 > **Applies only while the compose profile `hot-gold` runs, and only while the old lake `gold`
-> exists.** ClickHouse is paused behind that profile ([ADR-057](../adr/ADR-057-clickhouse-hot-tier-paused-during-platform-build.md)), and phase 000 drops the
+> exists.** ClickHouse is paused behind that profile ([ADR-057](../../../../docs/adr/ADR-057-clickhouse-hot-tier-paused-during-platform-build.md)), and phase 000 drops the
 > lake's old `gold` namespace, this runbook's only source, at its end. Starting ClickHouse, the
 > 7-day limit on it, and how to tell whether this page still applies:
-> [pause-and-resume-a-serving-product.md](./pause-and-resume-a-serving-product.md).
+> [pause-and-resume-a-serving-product.md](../../../../docs/runbooks/pause-and-resume-a-serving-product.md).
 
 ClickHouse's `gold` database is derived (ADR-026): the lake's `gold.*` tables are the
 record, the Avro topics are the head start. This is how the served tier is reloaded , 
@@ -18,7 +18,7 @@ the lake-computed candles get in at all.
 | ClickHouse and lake disagree on a window | §4 first, it tells you which side to believe (the lake), then §2 for that window |
 
 **One rule.** Read the lake through `iceberg()` only ([lake-recovery.md, the one rule](./lake-recovery.md#the-one-rule-on-this-page)).
-Two settings make it work on 24.3, both explained in [`docker/clickhouse/README.md`](../../docker/clickhouse/README.md):
+Two settings make it work on 24.3, both explained in [`docker/clickhouse/README.md`](../../../../docker/clickhouse/README.md):
 the gold tables are written with `write.metadata.compression-codec = none` (24.3 cannot
 parse the gzip metadata Lakekeeper writes by default), and every read passes
 `SETTINGS iceberg_engine_ignore_schema_evolution = 1` (the `SET IDENTIFIER FIELDS` in

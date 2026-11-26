@@ -133,8 +133,8 @@ jobs:
 
       - uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
 
-      # make test-dbt: the steps scripts/dbt-test.sh lists in its header, on the
-      # pinned Trino image over the local catalogs job trino uses. The old marts
+      # make test-dbt: the steps scripts/dbt-test.sh lists in its header (lint,
+      # deps, parse, compile, the manifest check), with no Trino. The old marts
       # are archived (legacy/v3-lake-ingest/dbt/) and dbt builds return in phase
       # 002; the job keeps its name because "dbt (marts)" is a required check.
       - run: bash scripts/dbt-test.sh
@@ -197,7 +197,6 @@ jobs:
         if: matrix.name == 'airflow'
         run: >-
           docker run --rm --network none -e AIRFLOW__LOGGING__LOGGING_LEVEL=WARNING
-          -e AIRFLOW__COSMOS__ENABLE_CACHE_DBT_LS=False
           -v "$PWD":/repo:ro -v "$PWD/dbt":/opt/k2/dbt:ro k2-airflow:3.3.2
           python -m unittest discover -s /repo/docker/airflow/tests
 

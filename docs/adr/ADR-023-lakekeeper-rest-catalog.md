@@ -195,7 +195,7 @@ property stops being insurance and starts being load-bearing.
 - [ADR-022](ADR-022-exactly-once-via-snapshot-offsets.md) — the atomic commit this exists to provide
 - [ADR-025](ADR-025-clickhouse-derived-hot-tier.md) — the rebuild path that needs tables addressable from outside Spark
 - [`../architecture/17-scale-out-path.md`](../architecture/17-scale-out-path.md) — the ECS + RDS + S3 mapping, and the env vars that flip it
-- [`../runbooks/lake-recovery.md`](../runbooks/lake-recovery.md) — Lakekeeper down, MinIO down
+- [`../runbooks/lake-recovery.md`](../../legacy/v3-lake-ingest/docs/runbooks/lake-recovery.md) — Lakekeeper down, MinIO down
 
 ---
 

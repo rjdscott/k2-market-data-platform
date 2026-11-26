@@ -1,6 +1,6 @@
 # ADR-049: Event bars are extended by new trades, not recomputed
 
-**Status:** Proposed
+**Status:** Withdrawn: superseded by [ADR-056](ADR-056-unified-data-product-platform.md) before acceptance, never built
 **Date:** 2026-11-26
 **Author:** Platform
 **Category:** Lake / Data model

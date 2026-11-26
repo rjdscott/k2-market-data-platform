@@ -245,3 +245,44 @@ worktree. Run: every command on this page, on scratch objects of its own (`k2.sp
 bucket `spike-drop-n05`), plus the dry run of `k2.scratch_p4`, with `K2_BACKUP_DIR` set to a
 temporary directory under the home directory. The `mcrun rm` of section 2 ran only on an empty
 location.
+
+---
+
+## 4. A bucket under object lock
+
+**Symptom**, `make drop TARGET=bucket:<name>` stops in step 2, before any copy, dry run or not:
+
+```
+drop: FAIL: bucket:scratch-p4-landing: object lock (bucket default GOVERNANCE 1DAYS): 19 object version(s) under COMPLIANCE,GOVERNANCE retention until 2026-11-27T06:00:18.47Z at the latest, which no delete may remove before then; drop.sh never bypasses governance mode. Run again after 2026-11-27T06:00:18.47Z; nothing was copied or dropped
+```
+
+or the same with `under a legal hold, which has no expiry`.
+
+**Why.** Object lock (write once, read many) keeps every object version written to the bucket
+until its own `until` time: `GOVERNANCE` lets a holder of the bypass permission delete it early,
+`COMPLIANCE` lets nobody, and a legal hold lasts until someone clears it. `mc rb` cannot remove
+such a version, so the drop would copy everything and then fail at the last step. That happened
+on 2026-11-26 with `bucket:scratch-p4-landing`: the copy matched, `mc rb` answered
+`WORM protected`, nothing was lost. The check now runs first, and `drop.sh` never passes a
+bypass flag.
+
+**Recovery.** Wait until the time the message names, then run the same command again. To see
+the lock yourself, with `mcrun` from section 1, read-only:
+
+```bash
+mcrun retention info --default --json k2/scratch-p4-landing      # ✅ verified
+#   {"op":"info","enabled":"Enabled","mode":"GOVERNANCE","validity":"1DAYS","status":"success"}
+mcrun retention info --recursive --versions --json k2/scratch-p4-landing | python3 -c '
+import json, sys, datetime as d
+r = [x for x in map(json.loads, sys.stdin) if x.get("until")]
+print(len(r), "versions retained,", sorted({x["mode"] for x in r}), "the latest until", max((x["until"] for x in r), key=d.datetime.fromisoformat))'
+#   19 versions retained, ['COMPLIANCE', 'GOVERNANCE'] the latest until 2026-11-27T06:00:18.47Z
+mcrun legalhold info --recursive --versions --json k2/scratch-p4-landing | grep -c '"legalhold":"ON"'
+#   0: no version is on legal hold (grep exits 1 when it counts none)
+```
+
+**Last verified:** 2026-11-26, from a worktree: the dry run above against the live stack, with
+the worktree's `scripts/drop.sh` run under the live checkout's path so it read `.env` in place
+(`bash -c "$(cat scripts/drop.sh)" <live checkout>/scripts/drop.sh`); the bucket's version
+listing was the same before and after. `tests/test_drop.py` covers a retained version, a legal
+hold, an expired retention and a lock state MinIO does not answer.

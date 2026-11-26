@@ -318,7 +318,7 @@ summary == `COUNT(*)`.
 - [ADR-029](ADR-029-research-production-parity-contract.md) — the reproducibility contract this extends to instrument attributes.
 - [ADR-022](ADR-022-exactly-once-via-snapshot-offsets.md) — why a durable id generator outside Iceberg is not an option here.
 - [`docs/architecture/12-data-strategy.md`](../architecture/12-data-strategy.md) § Security master — the deferral this supersedes.
-- [`docker/lake/scd2.py`](../../docker/lake/scd2.py), [`docker/lake/gold.py`](../../docker/lake/gold.py) `load_dims()`, [`docker/lake/ddl/lake.sql`](../../docker/lake/ddl/lake.sql), [`tests/test_lake_scd2.py`](../../tests/test_lake_scd2.py).
+- [`docker/lake/scd2.py`](../../legacy/v3-lake-ingest/lake/scd2.py), [`docker/lake/gold.py`](../../legacy/v3-lake-ingest/lake/gold.py) `load_dims()`, [`docker/lake/ddl/lake.sql`](../../legacy/v3-lake-ingest/lake/ddl/lake.sql), [`tests/test_lake_scd2.py`](../../legacy/v3-lake-ingest/tests/test_lake_scd2.py).
 
 ---
 

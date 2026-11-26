@@ -30,7 +30,7 @@ It does **not** cover a crashed run (that is safe and automatic ,
 
 The archive's position lives in the Iceberg snapshot summary, so a late run reads the same
 range a punctual one would have
-([ADR-022](../adr/ADR-022-exactly-once-via-snapshot-offsets.md)). Falling behind costs
+([ADR-022](../../../../docs/adr/ADR-022-exactly-once-via-snapshot-offsets.md)). Falling behind costs
 freshness, not correctness.
 
 **The deadline is broker retention, and it is the number to hold in your head:** raw topics
@@ -112,7 +112,7 @@ Then read the cause:
 | Runs completing, each slower than 5 min | the backlog is larger than one cycle can drain | it is already draining, every run is bounded at `--max-offsets-per-partition` (600,000). Watch `k2_lake_ingest_backlog_offsets{topic}` fall; raise the bound on a hand-run to drain faster |
 | Backlog gauge flat or rising across runs | the bound is below the arrival rate on that topic | raise `--max-offsets-per-partition` on hand-runs until it falls, then raise `K2_LAKE_MAX_OFFSETS_PER_PARTITION` for the scheduled path. This is `LakeIngestBacklogSustained`, below |
 | Runs completing fast, lag flat | the scheduler is not firing at cadence | §2 |
-| Spark at its CPU limit during a run | contention with capture or ClickHouse | check the cpuset layout, capture is pinned away from Spark deliberately ([Phase D isolation experiment](../plans/2026-08-26-v3-quant-research-platform/003-phase-d-lake-tier.md)) |
+| Spark at its CPU limit during a run | contention with capture or ClickHouse | check the cpuset layout, capture is pinned away from Spark deliberately ([Phase D isolation experiment](../../../../docs/plans/2026-08-26-v3-quant-research-platform/003-phase-d-lake-tier.md)) |
 | `failOnDataLoss` in the logs | offsets below broker retention | §3, **stop and read it before doing anything** |
 
 ```bash
@@ -144,14 +144,14 @@ docker exec k2-spark-iceberg python3 /home/iceberg/lake/ingest.py \
 ```
 
 **Do not raise the ingest cadence to catch up.** Runs are deployed at concurrency 1 for
-correctness ([ADR-022](../adr/ADR-022-exactly-once-via-snapshot-offsets.md)); a faster
+correctness ([ADR-022](../../../../docs/adr/ADR-022-exactly-once-via-snapshot-offsets.md)); a faster
 schedule against a concurrency-1 deployment queues runs rather than parallelising them, and
 raising the concurrency is the one change that breaks the exactly-once argument. Raise the
 per-run bound instead, one bigger run, not two overlapping ones.
 
 **Measured, 2026-08-27**, draining the cold-start backlog at the default
 bound, `lake-ingest-5min` paused: three runs of 92 s / 57 s / 49 s (what each committed is
-in [ADR-022](../adr/ADR-022-exactly-once-via-snapshot-offsets.md)'s Outcome), peak ingest driver RSS 1,243 MiB of a 4 GiB container. A run with
+in [ADR-022](../../../../docs/adr/ADR-022-exactly-once-via-snapshot-offsets.md)'s Outcome), peak ingest driver RSS 1,243 MiB of a 4 GiB container. A run with
 nothing to do costs 5.7 s. The `market.crypto.v3.raw.kraken` backlog fell on each of
 the three.
 
@@ -197,10 +197,10 @@ refreshing (the usual shape of a Lakekeeper outage), `LakeExporterStalled` fires
 both are [lake-recovery.md](./lake-recovery.md).
 
 **Expected behaviour**, nothing recovers on its own. A paused DAG stays paused, and a stale
-DAG folder stays stale ([airflow-scheduling.md §5](./airflow-scheduling.md#5-lake_ingest-not-running-a-stale-dag-folder-or-a-forgotten-pause)).
+DAG folder stays stale ([airflow-scheduling.md §5](../../../../docs/runbooks/airflow-scheduling.md#5-lake_ingest-not-running-a-stale-dag-folder-or-a-forgotten-pause)).
 
 **Recovery**. The lake schedules are Airflow's since the cutover (ADR-034); a scheduler
-that has stopped heartbeating is [airflow-scheduling.md §1](./airflow-scheduling.md#1-scheduler-heartbeat-lost).
+that has stopped heartbeating is [airflow-scheduling.md §1](../../../../docs/runbooks/airflow-scheduling.md#1-scheduler-heartbeat-lost).
 
 Run on the live stack 2026-11-25 (read-only): `dags list` showed `lake_ingest`,
 `lake_maintenance` and `lake_rebuild`, all `is_paused` `False`; `details` showed `is_stale`
@@ -246,7 +246,7 @@ from `docker/prometheus/rules/lake-alerts.yml`.
 `failOnDataLoss=true` is set deliberately: the alternative is Spark silently skipping to
 the earliest surviving offset, which produces an archive with an **unrecorded hole**, the
 one outcome the whole v3 design exists to prevent
-([ADR-022](../adr/ADR-022-exactly-once-via-snapshot-offsets.md)). A loud failure is the
+([ADR-022](../../../../docs/adr/ADR-022-exactly-once-via-snapshot-offsets.md)). A loud failure is the
 correct behaviour; the recovery is a human decision, and its deliverable is a record, not a
 restart.
 
@@ -307,7 +307,7 @@ exactly where it was committed. **The record is written first and a record that 
 written aborts the run**, skipping nothing: the two live in different Iceberg tables and
 so cannot be one commit, and the only failure direction worth having is a recorded gap
 that was not skipped. The reverse is an unrecorded hole, which is the outcome
-[ADR-021](../adr/ADR-021-raw-first-archive-and-lineage.md) exists to prevent.
+[ADR-021](../../../../docs/adr/ADR-021-raw-first-archive-and-lineage.md) exists to prevent.
 
 There is no environment variable and no default, deliberately. The scheduled run keeps
 failing until a person types the flag.
@@ -363,7 +363,7 @@ keyboard is not visible solely in a terminal that has since been closed.
 repaired partition is exactly the number of evicted records, forever, because the hole is
 permanent. Measured immediately after the repair above: partition 0's `max - min + 1 - count`
 came out at **the same number as the
-`offset_gap` row** (the count is in [ADR-021](../adr/ADR-021-raw-first-archive-and-lineage.md)'s Outcome). Reconcile the two before treating a `LakeAuditFailed` on
+`offset_gap` row** (the count is in [ADR-021](../../../../docs/adr/ADR-021-raw-first-archive-and-lineage.md)'s Outcome). Reconcile the two before treating a `LakeAuditFailed` on
 `offset_continuity` as new: same scope, same count, means it is this hole and not another.
 
 ```sql
@@ -424,7 +424,7 @@ step this section used to describe in prose is a command that files the record i
 **The cause here was the second of the two above**: the byte cap binding well inside 48 h
 on one hot partition. It is a capacity finding, measured on 2026-08-26, that partition
 holds **7.0 h** of records at the 512 MiB cap, not 48 ([capacity-model.md
-§4b](../architecture/15-capacity-model.md)):
+§4b](../../../../docs/architecture/15-capacity-model.md)):
 
 ```console
 $ docker exec k2-redpanda rpk topic describe -p market.crypto.v3.raw.kraken   # ✅ verified
@@ -482,7 +482,7 @@ compacted once, so a fresh table cannot fire it either.
 **Expected behaviour**, the 5-minute cadence writes ~288 commits per table per day, each
 one small, and nightly compaction is what converges them toward the target (256 MB for
 `raw.messages`, 128 MB for `bronze.*` , 
-[partitioning-strategy.md](../architecture/14-partitioning-strategy.md)). If maintenance ran,
+[partitioning-strategy.md](../../../../docs/architecture/14-partitioning-strategy.md)). If maintenance ran,
 this self-corrects overnight. If it did not, nothing corrects it.
 
 **Recovery**
@@ -514,7 +514,7 @@ compaction, then expiry, then orphan removal, then the audits.
 
 **Sort-order degradation is the second-order cost, and it is the one that is easy to miss.**
 `bronze.*` prune by symbol through the sort order rather than a partition field
-([ADR-024](../adr/ADR-024-unified-bronze-tables-in-the-lake.md)), so unsorted small files
+([ADR-024](../../../../docs/adr/ADR-024-unified-bronze-tables-in-the-lake.md)), so unsorted small files
 widen every file's symbol bounds and single-instrument queries stop pruning. Compaction on
 `bronze.*` must therefore be a **sort rewrite**, not a plain binpack, a binpack merges the
 files and leaves the clustering as bad as it found it. `compact()` does exactly that:
@@ -530,7 +530,7 @@ both bronze tables using the sort order declared in `lake.sql`.
 > **Since the Airflow cutover (2026-11-25)** a run that exits 75 is a *skipped* task in a
 > successful `lake_ingest` run, not a failed one, and three skips in a row with no
 > maintenance or rebuild running fire `AirflowLakeIngestSkippedRepeatedly`: the procedure for
-> that is [airflow-scheduling.md section 3](./airflow-scheduling.md#3-lake_ingest-skipped-three-runs-in-a-row).
+> that is [airflow-scheduling.md section 3](../../../../docs/runbooks/airflow-scheduling.md#3-lake_ingest-skipped-three-runs-in-a-row).
 > What follows is why the lock exists, written before the cutover.
 
 **Symptom**, before the cutover, one scheduled ingest run was marked Failed, its logs ending in
@@ -554,7 +554,7 @@ nothing.** `main()` in `docker/lake/ingest.py` takes a non-blocking exclusive `f
 queueing if another process holds it. Two concurrent ingests would both read the same
 committed offsets from the last snapshot summary and both append the same records, so
 concurrency is the one thing that breaks the exactly-once argument
-([ADR-022](../adr/ADR-022-exactly-once-via-snapshot-offsets.md)). The DAG's
+([ADR-022](../../../../docs/adr/ADR-022-exactly-once-via-snapshot-offsets.md)). The DAG's
 `max_active_runs=1` only gates runs *Airflow* launched; the runbooks, the chaos scripts
 and `make lake-verify` all `docker exec` an ingest directly, and the flock is the guard
 that covers every path.
@@ -596,7 +596,7 @@ _Appended with their date as they happen; never overwritten. **Every §3 data-lo
 recorded here**, with its offsets and its wall-clock span._
 
 **2026-08-26, `market.crypto.v3.raw.kraken/0`, ~1 h 40 m of the feed** (the record count and
-both offsets are in [ADR-021](../adr/ADR-021-raw-first-archive-and-lineage.md)'s Outcome).
+both offsets are in [ADR-021](../../../../docs/adr/ADR-021-raw-first-archive-and-lineage.md)'s Outcome).
 The Phase D cold start ran with `--max-offsets-per-partition 50000` against a partition
 receiving more than that per cycle, so the ingest fell behind the 512 MiB-per-partition cap and
 Redpanda evicted the head of the queue. The committed offset fell below the broker's LOG-START.
@@ -619,12 +619,12 @@ revisiting it is in §3.
 
 ## Related
 
-- [ADR-022](../adr/ADR-022-exactly-once-via-snapshot-offsets.md), why lag is safe, why `failOnDataLoss` is loud, why concurrency 1 is a correctness setting
-- [ADR-021](../adr/ADR-021-raw-first-archive-and-lineage.md), why a lost window has to be recorded rather than absorbed
+- [ADR-022](../../../../docs/adr/ADR-022-exactly-once-via-snapshot-offsets.md), why lag is safe, why `failOnDataLoss` is loud, why concurrency 1 is a correctness setting
+- [ADR-021](../../../../docs/adr/ADR-021-raw-first-archive-and-lineage.md), why a lost window has to be recorded rather than absorbed
 - [lake-recovery.md](./lake-recovery.md), a killed run, Lakekeeper down, MinIO down
 - [lake-audit-failed.md](./lake-audit-failed.md), when the continuity audit finds the hole instead of the ingest job
-- [`../architecture/14-partitioning-strategy.md`](../architecture/14-partitioning-strategy.md), target file sizes and the sort-order pruning that §4 protects
-- [`docker/redpanda/init.sh`](../../docker/redpanda/init.sh), the 48 h / 2 GiB retention arithmetic and why it is deliberately unresolved
+- [`../architecture/14-partitioning-strategy.md`](../../../../docs/architecture/14-partitioning-strategy.md), target file sizes and the sort-order pruning that §4 protects
+- [`docker/redpanda/init.sh`](../../../../docker/redpanda/init.sh), the 48 h / 2 GiB retention arithmetic and why it is deliberately unresolved
 
 ---
 
