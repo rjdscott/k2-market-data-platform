@@ -85,4 +85,5 @@ Bringing it back is not a supported path. It would be: move `image/` back to `do
 - `legacy/v2-offload/runbooks/` still link `prefect-schedules.md`, which is deleted (`airflow-schedules.md` replaces it); they are archived unmodified.
 - Dependabot has no entry for `legacy/prefect/image`, CI's Trivy scan skips `legacy/` (`skip-dirs: legacy`), and `scripts/check-budget.py` does not read this Dockerfile. Its `FROM prefecthq/prefect:3.9.5-python3.12` and `prometheus-client==0.21.1` are therefore not tracked for advisories.
 - `scripts/check-docs.sh` link and word gates do not scan this README (they cover `legacy/v2-kotlin` only); its links were checked by hand.
+- A checkout that ran the scheduler still holds its result files in `docker/prefect/storage/`; git removes only the tracked files on pull. `.gitignore` keeps the directory out of `git status`, and `rm -rf docker/prefect` clears it.
 - `tests/test_no_scheduler_name.py` fails if the scheduler's name returns to the live tree outside the kept names.

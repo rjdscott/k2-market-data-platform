@@ -243,3 +243,7 @@ services/capture-rust/tests/recorded/
 logs/
 .benchmarks/
 .claude/settings.local.json
+
+# Result files the retired scheduler left in a checkout that ran it (ADR-034
+# Outcome). The directory is gone from the tree; the line keeps the leftovers out.
+docker/prefect/

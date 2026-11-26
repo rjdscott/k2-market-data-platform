@@ -27,6 +27,7 @@ KEPT_NAME_FILES = {
     "docker-compose.yml",
     ".env.example",
     "docker/postgres/ddl/10-lakekeeper-db.sql",
+    ".gitignore",
 }
 
 # Names that are kept, wherever they are quoted: the database service and its
