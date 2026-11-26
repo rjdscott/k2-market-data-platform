@@ -46,7 +46,7 @@ from typing import Any
 
 import yaml
 
-from k2gen.cli import SUFFIX, adr_file, fence
+from k2gen.cli import SUFFIX, adr_file, fence, old_contracts
 
 GENERATED_DDL = "docker/lake/ddl/generated"
 RETENTION = "docker/lake/generated/retention.json"
@@ -462,7 +462,7 @@ def render(root: Path) -> dict[str, str]:
     domains = yaml.safe_load((contracts / "domains.yaml").read_text())["domains"]
     products = [yaml.safe_load(p.read_text()) for p in sorted(contracts.glob("*/*/product.yaml"))]
     tables: dict[str, Contract] = {}
-    for path in sorted(contracts.glob(f"*/*/*{SUFFIX}")):
+    for path in old_contracts(contracts):  # a v2 product directory is not this generator's
         doc = yaml.safe_load(path.read_text())
         props = {p["property"]: p["value"] for p in doc["customProperties"]}
         tables[doc["schema"][0]["physicalName"]] = (path.relative_to(root).as_posix(), doc, props)

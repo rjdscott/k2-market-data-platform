@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://k2.invalid/schema/storage-plan.schema.json",
+  "title": "compiled/lake/storage-plan.json: the warehouses, namespaces and landing prefixes a release needs (A8)",
+  "description": "Frozen in phase 001. Emitted by k2gen.emit.lake (S15), compared between two releases by k2gen diff (S08), applied additively by deploy (S19; remote signing off and the namespaces from phase 002). It only ever adds: a warehouse, namespace or prefix a release stops listing is reported by diff and removed only by scripts/drop.sh. Every list is sorted.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["warehouses", "landing"],
+  "properties": {
+    "warehouses": {
+      "description": "Warehouse k2 (connector products' namespaces) and one per domain (each product's <fence> and <fence>__base), sorted by name.",
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "remoteSigningEnabled", "namespaces"],
+        "properties": {
+          "name": {"description": "k2, or a domain's fence (k2gen.model.warehouse).", "$ref": "#/$defs/fence"},
+          "remoteSigningEnabled": {"description": "Always false: engines read storage with their own keys, never a signing catalog (A8).", "const": false},
+          "namespaces": {"description": "The namespaces the warehouse holds, sorted.", "type": "array", "uniqueItems": true, "items": {"description": "<fence> or <fence>__base.", "type": "string", "pattern": "^[a-z][a-z0-9]*(_[a-z0-9]+)*(__base)?$"}}
+        }
+      }
+    },
+    "landing": {
+      "description": "The landing bucket and each connector product's prefix in it.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["bucket", "prefixes"],
+      "properties": {
+        "bucket": {"description": "The landing bucket.", "const": "k2-landing"},
+        "prefixes": {"description": "<domain>/<product>/ per product with a fetch-kind connector, sorted (k2gen.model.landing_prefix).", "type": "array", "uniqueItems": true, "items": {"type": "string", "pattern": "^[a-z][a-z0-9-]*/[a-z][a-z0-9-]*/$"}}
+      }
+    }
+  },
+  "$defs": {
+    "fence": {"description": "A name with hyphens as underscores.", "type": "string", "pattern": "^[a-z][a-z0-9]*(_[a-z0-9]+)*$"}
+  }
+}

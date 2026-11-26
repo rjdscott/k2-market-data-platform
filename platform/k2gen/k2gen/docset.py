@@ -1,7 +1,9 @@
 """The document-set adapter (A2), filled by step S04.
 
 In 3.0 the store is git: a set is `git archive <tag>` of model.DOCUMENT_ROOTS, byte-identical
-on a re-run, with its provenance record. After 3.0 only this module changes, to read a
+on a re-run, with its provenance record. A root the tag does not hold (`domains/` before the
+first parser, or at an older tag) is left out, found with `git ls-tree <tag>`, never an error:
+`git archive` itself refuses a missing pathspec. After 3.0 only this module changes, to read a
 registry's approved version (ADR-055 part 7).
 """
 

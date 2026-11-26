@@ -1,14 +1,15 @@
 -- The run-record table (phase 001 interface A6, docs/development/phase-001-interfaces.md).
--- Frozen here; created by the deploy (step S19) and written from phase 002 by the dbt
--- wrapper, the Airflow record task and the Spark publish, always as svc.runs through the
--- governance_build catalog. Append-only: a row is never updated or deleted.
+-- Frozen here. Step S15's lake emitter copies this file into every release as
+-- compiled/lake/ddl/trino/governance.run_records.run_record.sql (k2gen.model.ddl_path), and
+-- deploy (step S19) applies it when the release's needs.ddl names the table. Written from
+-- phase 002 by the dbt wrapper, the Airflow record task and the Spark publish, always as
+-- svc.runs through the governance_build catalog. Append-only: a row is never updated or deleted.
 --
--- History, not authority: a dbt output's tested snapshot is its `audited` tag, a bronze
--- table's is its `main` (one query, A6:
+-- History, not authority: a dbt output's tested snapshot is its `audited` tag, a bronze or
+-- platform table's is its `main` (k2gen.model.tested_ref; one query, A6:
 -- SELECT snapshot_id FROM <cat>.<ns>."<t>$refs" WHERE name = 'audited').
 -- The catalog drift check holds every `audited` tag equal to the newest `audited` row
--- of its table (provisional until S01: the tag and the view over it are design (a),
--- which the gate spine-h-tested-data-view proves or replaces).
+-- of its table (ADR-061 part 6).
 --
 -- Each column's meaning is its COMMENT, so Trino's information_schema and the catalog
 -- carry it too; tests/test_frozen_interfaces.py fails on a column without one.
@@ -27,7 +28,9 @@ CREATE TABLE governance_build.run_records.run_record (
     started_at timestamp(6) with time zone COMMENT 'When the step started, UTC',
     recorded_at timestamp(6) with time zone COMMENT 'When this row was written, UTC; the partition source',
     duration_s double COMMENT 'Seconds from started_at to recorded_at, as the writer measured them',
-    detail varchar COMMENT 'Free text for an operator, at most 1000 characters (cut as dbt/macros/record_test_results.sql cuts messages); never a secret'
+    detail varchar COMMENT 'Free text for an operator, at most 1000 characters (cut as dbt/macros/record_test_results.sql cuts messages); never a secret',
+    dbt_invocation_id varchar COMMENT 'dbt''s invocation_id on a build row; the results hook writes it and run_id on every test row, so a publish joins its tests; null when dbt did not run',
+    openlineage_run_id varchar COMMENT 'The OpenLineage run id the step emitted lineage under, a UUID; null while no lineage is emitted'
 )
 COMMENT 'One row per step of every product run (phase 001 interface A6); written only by svc.runs'
 WITH (partitioning = ARRAY['day(recorded_at)'])

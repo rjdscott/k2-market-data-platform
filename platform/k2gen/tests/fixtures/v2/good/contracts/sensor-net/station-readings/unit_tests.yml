@@ -1,6 +1,6 @@
 unit_tests:
   - name: silver_readings_types_the_value
-    model: silver_readings
+    model: station_readings__silver_readings  # the dbt name, <fence>__<table> (k2gen.model.dbt_model)
     given:
       - input: source('station_readings', 'bronze_readings')
         rows:

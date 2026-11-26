@@ -9,15 +9,18 @@ info:
     Read-only REST over the platform's data products, served by k2-api on 127.0.0.1:8095
     from the release it runs (phase 003). k2-api never decides access: a data request is run
     on Trino as the caller (impersonated by svc.api), and Trino's rules decide what it sees.
-    A data route reads a product's reader view, which shows only the snapshot its `audited`
-    tag names (provisional until S01: design (a), proved or replaced by the gate
-    spine-h-tested-data-view). Metadata routes need no key; they add `access` when one is given.
+    A data route reads a product's reader name (k2gen.model.reader_relation): for a dbt or
+    code output the view that shows only the snapshot its `audited` tag names (ADR-061).
+    Metadata routes need no key; they add `access` when one is given. k2-api has one Trino
+    identity, svc.api, which may read a base's `t$refs` and nothing else of it.
     `/catalog/` and `/dbt-docs/` serve the release's static site (phase 003) and are not part
     of this document.
-    Phase 003 builds every route here with `cursor` absent and `next` always null; phase 007
-    adds cursors, the product state headers and 410. `as_of` is not offered: the owner decides
-    it in phase 007, and until then any value is refused with 422 `as_of_unavailable`, so a
-    client never silently gets the current rows instead.
+    Phase 003 builds every route here without cursors: a data request matching more rows than
+    `limit` is refused with 422 `result_too_large`, so `next` is null exactly when no row
+    follows. Phase 007 adds cursors (a truncated page then carries a non-null `next`), the
+    product state headers and 410. `as_of` is not offered: the owner decides it in phase 007,
+    and until then any value is refused with 422 `as_of_unavailable`, so a client never
+    silently gets the current rows instead.
 servers:
   - url: http://127.0.0.1:8095
 security: []
@@ -127,8 +130,13 @@ paths:
       tags: [data]
       summary: Rows of one output, read through its reader view as the caller
       description: |
-        The snapshot is the view's `audited` tag, read before and after the query; when the two
-        differ the query runs once more. Equality filters only, on declared columns.
+        The snapshot is the table's tested ref (`audited` for a view, k2gen.model.tested_ref),
+        read from `t$refs` before and after the query; when the two differ the query runs once
+        more. Filters are query parameters named `filter.<column>` (a declared column) with the
+        value to equal, one per column, so no column name collides with `fields`, `limit`,
+        `cursor` or `as_of`; any other parameter name, or an undeclared column, is a 400. When
+        more rows match than `limit`, phase 003 answers 422 `result_too_large` rather than a
+        page that hides the rest; phase 007 answers with a page whose `next` is set.
       security:
         - apiKey: []
       parameters:
@@ -151,14 +159,6 @@ paths:
           in: query
           description: Not offered (owner decision in phase 007); any value is refused with 422 as_of_unavailable
           schema: {type: string}
-        - name: filters
-          in: query
-          description: "`<column>=<value>` per declared column, equality only"
-          style: form
-          explode: true
-          schema:
-            type: object
-            additionalProperties: {type: string}
       responses:
         "200":
           description: One page of rows
@@ -174,13 +174,13 @@ paths:
         "403": {$ref: "#/components/responses/Forbidden"}
         "404": {$ref: "#/components/responses/NotFound"}
         "410": {$ref: "#/components/responses/Gone"}
-        "422": {$ref: "#/components/responses/AsOfUnavailable"}
+        "422": {$ref: "#/components/responses/Unprocessable"}
 components:
   securitySchemes:
     apiKey:
       type: http
       scheme: bearer
-      description: "`Authorization: Bearer k2_<key>`; k2-api maps the key's sha256 to a principal through the release's compiled/api/principals.json"
+      description: "`Authorization: Bearer k2_<key>`; k2-api maps the key's sha256 to a principal through ${K2_SECRETS}/api/keys.json, never a file in git or in a release, and serves only the principals the release's compiled/api/principals.json lists"
   parameters:
     Domain:
       name: domain
@@ -229,7 +229,7 @@ components:
     Product:
       description: |
         The product's catalog document (interface A11), whose schema is
-        platform/k2gen/k2gen/schemas/catalog-product.schema.json; reader names only. `access`
+        contracts/schema/catalog-product.schema.json; reader names only. `access`
         is added for an authenticated caller and absent otherwise.
       type: object
       required: [id]
@@ -249,12 +249,12 @@ components:
       required: [release, snapshot, rows, next]
       properties:
         release: {type: string}
-        snapshot: {type: integer, format: int64, description: The audited snapshot the rows were read at}
+        snapshot: {type: string, pattern: "^-?[0-9]+$", description: "The tested snapshot id the rows were read at, as a decimal string: an Iceberg id is 64 bits, more than a JavaScript number holds exactly"}
         rows:
           type: array
           items: {type: object}
         next:
-          description: The cursor of the next page; always null until phase 007
+          description: The cursor of the next page; null exactly when no row follows this page, never null on a truncated one (until phase 007 no page is truncated, see result_too_large)
           type: [string, "null"]
     Error:
       type: object
@@ -288,12 +288,12 @@ components:
       content:
         application/json:
           schema: {$ref: "#/components/schemas/Error"}
-    AsOfUnavailable:
-      description: "`as_of` was given; it is not offered (owner decision in phase 007)"
+    Unprocessable:
+      description: "as_of_unavailable: `as_of` was given, and it is not offered (owner decision in phase 007); result_too_large: more rows match than `limit` (phase 003, until cursors in phase 007)"
       content:
         application/json:
           schema:
             allOf:
               - $ref: "#/components/schemas/Error"
               - properties:
-                  error: {const: as_of_unavailable}
+                  error: {enum: [as_of_unavailable, result_too_large]}

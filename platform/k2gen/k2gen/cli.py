@@ -43,6 +43,9 @@ ROOT = Path(__file__).resolve().parents[3]
 ODCS_SCHEMA = "odcs-json-schema-v3.2.0-20261117.json"
 ADR_DIR = "docs/adr"
 SUFFIX = ".odcs.yaml"
+# A directory holding this is a v2 product: `k2gen check` reads it, and this old validator and
+# `generate` leave it alone until step S23 deletes them (k2gen.model.V2_PRODUCT_FILE).
+V2_PRODUCT_FILE = "product.odps.yaml"
 # A reader resumes from the parent snapshot id it last read, so expiring that snapshot
 # breaks its next run; 7 days is also the Iceberg connector's own retention floor.
 FLOOR_DAYS = 7
@@ -81,6 +84,11 @@ def _schema_errors(validator: jsonschema.protocols.Validator, doc: Any, where: s
     return [f"{where}: {e.json_path}: {e.message}" for e in validator.iter_errors(doc)]
 
 
+def old_contracts(contracts: Path) -> list[Path]:
+    """Every `<domain>/<product>/*.odcs.yaml` of the old format: a v2 product's are skipped."""
+    return [p for p in sorted(contracts.glob(f"*/*/*{SUFFIX}")) if not (p.parent / V2_PRODUCT_FILE).exists()]
+
+
 def validate(root: Path = ROOT) -> list[str]:
     """Every problem found under `root`, as one line each. Empty means valid."""
     contracts = root / "contracts"
@@ -98,7 +106,7 @@ def validate(root: Path = ROOT) -> list[str]:
         products[path.parent] = yaml.safe_load(path.read_text())
         errors += _schema_errors(_k2(k2, "product"), products[path.parent], rel(path))
     docs: dict[Path, tuple[Any, dict[str, Any]]] = {}  # contract path -> (contract, its custom properties)
-    for path in sorted(contracts.glob(f"*/*/*{SUFFIX}")):
+    for path in old_contracts(contracts):
         doc = yaml.safe_load(path.read_text())
         found = _schema_errors(odcs, doc, rel(path)) or _schema_errors(_k2(k2, "contract"), doc, rel(path))
         if not found:
@@ -252,6 +260,7 @@ def parser() -> argparse.ArgumentParser:
     release.add_argument("--previous", required=True, type=_optional_dir, help="the previous release directory, or none")
     release.add_argument("--images", required=True, type=Path, help="a JSON file of compose service to image ref")
     release.add_argument("--out", required=True, type=Path, help="the releases root")
+    release.add_argument("--compose", type=Path, help="the compose file the release runs (default: the set's own docker-compose.yml)")
     diff = sub.add_parser("diff", help="print the file-level and storage-plan difference of two releases, as Markdown")
     diff.add_argument("old", type=Path)
     diff.add_argument("new", type=Path)
@@ -271,7 +280,8 @@ def _spine(args: argparse.Namespace) -> int:
             print(f"{f.severity} {f.code} {f.path}: {f.message}", file=sys.stderr)
         return 1 if any(f.severity == "error" for f in findings) else 0
     if args.command == "release":
-        print(release.release(args.set_dir, args.previous, args.images, args.out))
+        compose = args.compose or args.set_dir / "docker-compose.yml"  # k2gen.model.COMPOSE
+        print(release.release(args.set_dir, args.previous, args.images, args.out, compose))
         return 0
     print(diff.diff(args.old, args.new))
     return 0
@@ -301,7 +311,7 @@ def main(argv: list[str] | None = None) -> int:
               f"the domain catalogs in {generate.CATALOGS} and {generate.TEST_CATALOGS}, and under {', '.join(generate.OWNED)}")
         return 0
     products = len(list((ROOT / "contracts").glob("*/*/product.yaml")))
-    contracts = len(list((ROOT / "contracts").glob(f"*/*/*{SUFFIX}")))
+    contracts = len(old_contracts(ROOT / "contracts"))
     print(f"k2gen validate: {products} products, {contracts} contracts")
     return 0
 

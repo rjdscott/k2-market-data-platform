@@ -1,11 +1,11 @@
-"""Emits compiled/trino/password-authenticator.properties (file authenticator, 5 s refresh). The password
-file itself holds hashes, so it lives under ${K2_SECRETS}, never in a release (the ruling on Q4).
-
+"""Emits compiled/trino/etc/password-authenticator.properties: the file authenticator,
+file.password-file=/run/k2-secrets/trino/password.db, file.refresh-period=5s. The password file
+itself is ${K2_SECRETS}/trino/password.db (model.SECRET_FILES), never in a release.
 Filled by step S13.
 """
 
-from k2gen.model import Model, Release
+from k2gen.model import Model
 
 
-def emit(model: Model, previous: Release | None) -> dict[str, str]:
+def emit(model: Model) -> dict[str, str]:
     raise NotImplementedError("S13")

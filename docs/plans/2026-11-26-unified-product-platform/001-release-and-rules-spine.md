@@ -124,8 +124,9 @@ Schemas, stubs and fixtures only, no behaviour, reviewed once:
   disabled. Every principal that reaches Trino has a password: writers, platform services and
   people under their pseudonymous ids. The REST API authenticates its callers by key and queries
   Trino as the caller under an impersonation rule that admits only its own service principal.
-  `make api-key PRINCIPAL=<id>` prints a key once and writes only its sha256 for a pull request;
-  the compiled key map is in the release, read by k2-api in `003`. Every client is moved here:
+  `make api-key PRINCIPAL=<id>` prints a key once and writes only its sha256, to
+  `${K2_SECRETS}/api/keys.json` outside every checkout and release, read by k2-api in `003`
+  (the secrets table of `docs/development/phase-001-interfaces.md`). Every client is moved here:
   the Trino CLI, dbt-trino, the `trino` Python client, Airflow tasks, the access test.
 - **Principals, grants and policies**: `contracts/access/roles.yaml` (`full_reader`,
   `delayed_reader`, `public_reader`), `principals.yaml`, a `grants.yaml` per product, policies

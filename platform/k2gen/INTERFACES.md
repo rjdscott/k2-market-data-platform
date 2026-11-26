@@ -1,36 +1,142 @@
 # k2gen interfaces, frozen for phase 001
 
 What steps S04 to S18 build against, so that each fills one module and none edits a shared
-file. The design is the phase 001 interfaces proposal, sections 1 and 2 (A1 to A13), under
-[`DECISIONS-FINAL.md`](../../docs/research/2026-11-26-unified-platform-architecture/DECISIONS-FINAL.md),
-[ADR-055](../../docs/adr/ADR-055-products-defined-once-in-odps-and-odcs-documents.md) and
-[ADR-056](../../docs/adr/ADR-056-unified-data-product-platform.md).
+file. S00a froze them; S00c finalised them after an independent review and the gate
+[`2026-11-26-tested-data-view-gate.md`](../../docs/research/2026-11-26-tested-data-view-gate.md),
+under [`DECISIONS-FINAL.md`](../../docs/research/2026-11-26-unified-platform-architecture/DECISIONS-FINAL.md),
+[ADR-055](../../docs/adr/ADR-055-products-defined-once-in-odps-and-odcs-documents.md),
+[ADR-056](../../docs/adr/ADR-056-unified-data-product-platform.md) and
+[ADR-061](../../docs/adr/ADR-061-readers-see-dbt-outputs-through-a-view-over-the-tested-tag.md).
+The design inputs are kept, dated, in
+[`docs/research/2026-11-26-phase-001-interfaces/`](../../docs/research/2026-11-26-phase-001-interfaces.md).
+The shared files outside k2gen, the run-time contracts of phase 002 and the collision list are in
+[`docs/development/phase-001-interfaces.md`](../../docs/development/phase-001-interfaces.md).
 
 **The rule.** A schema in `contracts/schema/`, or a type, constant or helper in
 `k2gen/model.py`, changes only through the orchestrator, who tells every dependent step. A
 step fills the bodies of its own module, adds failing fixtures only under
-`tests/fixtures/v2/bad/<its check>/`, and never edits `cli.py`, `checks/__init__.py`,
-`emit/__init__.py` or the good set. `make test-k2gen` holds the rule: `tests/test_interfaces.py`
-fails if a module goes missing or a signature drifts.
+`tests/fixtures/v2/bad/<its check>/` and golden files only under `tests/golden/<its emitter>/`,
+and never edits `cli.py`, `checks/__init__.py`, `emit/__init__.py`, `model.py`, the good set,
+`tests/fixtures/v2/bad/schema/cases.yaml` or `tests/test_interfaces.py`. That test holds the
+signatures, not the stubs: it finds every module by `pkgutil.iter_modules`, requires the ones
+phase 001 names (a superset, so a step may add a module), holds every module found to the frozen
+signature and type hints, and never asserts that a module is still a stub. Filling a module, or
+adding one with the right signature, leaves it green; a drifted signature fails it.
+
+## The two module shapes
+
+- **Emitter**, a module in `k2gen/emit/`: `emit(model: Model) -> dict[str, str]`, release-relative
+  path under `compiled/` to file text. Pure: no clock, git, network, secret, and no previous
+  release (an emitter that read it would give one set two ids, CI's and deploy's).
+  `emit.run(model)` calls them all: two emitters returning one path, or a path outside
+  `compiled/`, is an error; an emitter still raising `NotImplementedError` is skipped with a
+  `SKIP emitter <name>` line on stderr, until step S23 makes that an error.
+- **Check**, a module in `k2gen/checks/`: `check(docs: DocumentSet, previous: DocumentSet | None)
+  -> list[Finding]`, `Finding.code` spelt `<check module>.<kebab-case>`. `checks.run` runs `docs`
+  first and stops there on an error. `k2gen check --previous` takes a document set (a release's
+  `documents/` is one); `k2gen release --previous` takes a release directory.
+- Every v2 document is parsed by **`model.parse(path, bytes)`**, never `yaml.safe_load`: one
+  document, and no duplicate key (safe_load keeps the last, so a second `mask:` would win
+  silently), anchor, alias or merge key. A product model's `{{ config(...) }}` is read by
+  **`model.model_config(sql)`** alone (S05 takes `materialized` and `unique_key`, S07 refuses
+  `incremental_predicates`).
 
 ## Where each interface is frozen
 
 | Item | Frozen in |
 |---|---|
-| A1 release and manifest | `contracts/schema/manifest.schema.json` (`$defs/images` is also the `--images` input); `model.py`: `Manifest`, `Needs`, `Release`, `release_id`, `MANIFEST`, `PROVENANCE`, `DOCUMENTS_DIR`; `release.py`. Pointers, mounts and the deploy log are compose's and deploy's (S00b, S19) |
-| A2 documents and provenance | `odps-json-schema-v1.1.0.json` (vendored), the ODCS file, `k2-v2.schema.json` (`product`, `contract`, every custom property); `provenance.schema.json`; `model.py`: `DocumentSet`, `Provenance`, `set_sha256`, `DOCUMENT_ROOTS`, `document_kind`, `schema_errors`; `docset.py` |
-| A3 compiler and checks | `emit/__init__.py` and one module per output; `checks/__init__.py` and one module per check; `model.Finding`; `cli.py`: `docset`, `check`, `release`, `diff`; `diff.py` |
-| A4 connector configuration | `pipeline.schema.json`; `k2-v2.schema.json#/$defs/connector`, one definition per kind |
-| A5 landing and bronze | `model.py`: `LANDING_BUCKET`, `landing_key`, `landing_prefix`, `lake_relation`, `LANDING_FILES`, `AUDIT_CHECKS`, `AUDIT_BRANCH`, `SNAPSHOT_SUMMARY_KEYS`, `RESERVED_*`, `product_name_problem`, `domain_name_problem` |
-| A6 run records | `run-record.schema.json` (one row); the DDL is `platform/runs/run_record.sql` (S00b) |
-| A7 `k2_input` and the wrapper | `pipeline.schema.json` `build`; `model.View` and `model.VIEWS`; the macro is `dbt/macros/k2_input.sql` (S00b), the wrapper phase 002's |
-| A8 names | `model.py`: `fence`, the catalog, namespace, builder, publisher, group, DAG and relation helpers, `PIPELINE_PRINCIPALS`, `BUILD_CATALOG_PRINCIPALS`, `REFS_READERS`, `canary_user` |
-| A9 access expectations | `expectations.schema.json`; `model.py`: the five expectation types |
-| A10 roles, principals, grants, policies | `k2-v2.schema.json#/$defs/{roles,principals,grants,policies,rolePolicy}`; `model.py`: `RoleDef`, `Principal`, `Grant`, `RolePolicy` |
-| A11 catalog JSON | `catalog-product.schema.json`, and its `$defs/index` for `index.json` |
-| A12 REST | `services/k2-api/openapi.yaml` (S00b) |
-| A13 one-shots | compose stubs (S00b); `oneshots.json` is S16's, no schema frozen |
-| backup set | `backup-set.schema.json` |
+| A1 release and manifest | `manifest.schema.json` (`$defs/images` is also the `--images` input; no secret field); `deploy-record.schema.json` (one line of `model.DEPLOY_LOG`); `model.py`: `Manifest`, `Needs`, `Release`, `release_id`, the release paths below, `NEEDS_BY_PREFIX`, `need_of`; `release.release(set_dir, previous, images, out_root, compose)`; `k2gen release --compose` |
+| A2 documents and provenance | `odps-json-schema-v1.1.0.json` (vendored), the ODCS file, `k2-v2.schema.json`; `provenance.schema.json`; `model.py`: `DocumentSet`, `Provenance`, `set_sha256`, `DOCUMENT_ROOTS` (with `docker-compose.yml`; a root the tag lacks is skipped), `document_kind`, `schema_errors`, `parse`; `docset.py` |
+| A3 compiler and checks | the two module shapes above; `model.Finding`; `cli.py`: `docset`, `check`, `release`, `diff`; `diff.py` |
+| A4 connector configuration | `pipeline.schema.json`, `dags.schema.json`, `oneshots.schema.json`; `k2-v2.schema.json#/$defs/connector`, one definition per kind, url, path, key and params admitting `{{ds}}` and no other macro (`model.TEMPLATE`) |
+| A5 landing and bronze | `model.py`: `LANDING_BUCKET`, `landing_key`, `landing_prefix`, `lake_relation`, `PLATFORM_TABLES` (the columns of `landing_files`, `audit_checks`, `landing`), `LINEAGE_COLUMN`, `AUDIT_BRANCH`, `SNAPSHOT_SUMMARY_KEYS`, `RESERVED_*`, `product_name_problem`, `domain_name_problem`; `Column.pattern` (ODCS `logicalTypeOptions.pattern`) feeds the pipeline's `patterns` |
+| A6 run records | `run-record.schema.json` (one row, `dbt_invocation_id` and `openlineage_run_id` included); the DDL `platform/runs/run_record.sql` (`model.RUN_RECORD_SQL`), equal column for column (`tests/test_frozen_interfaces.py`) |
+| A7 `k2_input` and the wrapper | `pipeline.schema.json` `build`; `model.View`, `model.VIEWS`; `dbt/macros/k2_input.sql`; the wrapper's contract in the phase page |
+| A8 names | `model.py`: `fence`, the catalog, namespace, builder, publisher, group, DAG, dbt and relation helpers, the principal lists below, `canary_user` |
+| A9 access expectations | `expectations.schema.json` (a statement row may carry `session`, the header form); `model.py`: the five expectation types |
+| A10 roles, principals, grants, policies | `k2-v2.schema.json#/$defs/{roles,principals,grants,policies,rolePolicy}`; `model.py`: `RoleDef`, `Principal`, `Grant`, `RolePolicy`, the secrets table below |
+| A11 catalog JSON | `catalog-product.schema.json`, its `$defs/index` for `index.json` |
+| A12 REST | `services/k2-api/openapi.yaml` |
+| A13 one-shots | compose stubs; `oneshots.schema.json` |
+| backup set, storage plan | `backup-set.schema.json`, `storage-plan.schema.json` |
+
+## Release paths
+
+| Constant or helper | Path | Written by |
+|---|---|---|
+| `MANIFEST`, `PROVENANCE`, `DOCUMENTS_DIR` | `manifest.json`, `provenance.json`, `documents/` | S08 |
+| `RELEASE_COMPOSE` | `compose/docker-compose.yml`: the set's `docker-compose.yml`, byte for byte | S08 |
+| `ddl_path(engine, w, ns, t)` | `compiled/lake/ddl/<spark or trino>/<w>.<ns>.<t>.sql`: spark for warehouse `k2`, trino for platform tables | S15 |
+| `view_sql_path(relation)`, `VIEWS` | `compiled/trino/views/<domain>.<fence>.<table>.sql`, `compiled/trino/views.json` | S15 |
+| `CONTRACT_SCHEMAS`, `RETENTION`, `STORAGE_PLAN`, `BACKUP_SET` | `compiled/lake/{contract_schemas,retention,storage-plan,backup-set}.json`; retention has this one source | S15 |
+| `pipeline_path(id)`, `DAGS`, `ONESHOTS` | `compiled/products/<id>/pipeline.json`, `compiled/airflow/dags.json`, `compiled/oneshots.json` | S16 |
+| (S11, S12, S13) | `compiled/trino/etc/` (with `catalog/` and `password-authenticator.properties`), `compiled/trino/rules.json`, `compiled/trino/groups.txt` | S11, S13; S12 |
+| `API_PRINCIPALS` | `compiled/api/principals.json`, `{"principals": [id]}` | S14 |
+| `CATALOG_INDEX`, `catalog_path(id)` | `compiled/catalog/index.json`, `compiled/catalog/products/<id>.json` | S18 |
+| (S17) | `compiled/dbt/` | S17 |
+
+`need_of(path)`: `compose/docker-compose.yml` can set `recreate` (the services whose definition
+differs), `compiled/trino/etc/` sets `trinoRestart`, `compiled/airflow/dags.json` can set
+`dagShapeChange` (when a DAG's task list differs), `compiled/lake/ddl/` adds to `ddl`; everything
+else under `compiled/`, `documents/` and `provenance.json` needs nothing, being read through a
+pointer. A path no entry covers is a `KeyError`, so a new kind of file is classified first.
+
+## Names, dispatch and quoting
+
+**Relations by build kind.** `model.reader_relation(t)`, `model.input_relation(t)` and
+`model.tested_ref(t)` take a `Table`; nothing else re-derives them.
+
+| Build | A reader queries | Another product's builder reads | Tested ref |
+|---|---|---|---|
+| `connector` | `lake.<fence>.<table>` | the same | `main` (bronze moves only after its audit) |
+| `dbt`, `code` | the view `<domain>.<fence>.<table>` | the base `<domain>.<fence>__base.<table>` | `audited` |
+| `platform` | the table `<domain>.<fence>.<table>` | the same | `main` |
+| `serving` | its serving copy only (the output port's `serves`) | none | none: every helper raises, every lake emitter and the rules skip it (`LAKE_BUILDS`) |
+
+**dbt names.** One compiled project, `DBT_PROJECT = "k2"`. A table's model is
+`model.dbt_model(product, table)` = `<fence>__<table>` with `alias: <table>`; product SQL
+(`ref`) and `unit_tests.yml` (`model:`) name it so, while its file stays `models/<table>.sql`.
+Unique because a fence holds no `__` and a table name holds none either; S05 checks it all the
+same. The docs link is `model.dbt_docs` = `dbt-docs/#!/model/model.k2.<fence>__<table>`.
+
+**Quoting and grammar.** Every emitter writes SQL through `quote_ident`, `quote_relation` and
+`sql_literal`. The schema refuses first: an identifier is at most 63 characters
+(`MAX_IDENTIFIER`) and never a Trino 484 reserved word (`TRINO_RESERVED`, the parser's own
+list); a slug at most 40 (`MAX_SLUG`); a table name holds no `__` (`TABLE_NAME`); a
+`physicalType` follows `PHYSICAL_TYPE` (`physical_type_problem` adds the decimal scale); a
+rowScope string value follows `ROW_SCOPE_VALUE`. The review's five attack strings (`current_user`
+as a column, `north') OR (1=1` as a value, `varchar, injected bigint` as a type, `x__base` as a
+table, a 300-character name) are each refused, and each test is in `tests/test_interfaces.py`.
+
+**Principals** (A8, ADR-061, the gate's two amendments), all in `model.py`:
+`PIPELINE_PRINCIPALS` (resource group `pipeline`; alone may set `STATISTICS_PROPERTY`, by
+`SET SESSION` and by the session header alike), `BUILD_CATALOG_PRINCIPALS`, `READER_CATALOG_ALL`
+(`pub_.*` holds catalog access `all` on every reader catalog, which Trino's definer-view owner
+check demands; the read-only connector still refuses it every write, gate h1.02),
+`READER_NAMESPACE_OWNERS` (`pub_.*` alone holds a privilege in a dbt or code product's reader
+namespace; `svc.platform` holds none, gate h1.33), `RETENTION_PROPERTIES` for
+`RETENTION_PROPERTY_PRINCIPALS`, and `REFS_READERS` (with `svc.api`, which reads a base's
+`t$refs` and no other metadata of it; k2-api has no second identity). The release canary is
+`canary_user(setSha256)` = `k2_release_<setSha256[:12]>`, the one spelling; it is not a declared
+principal.
+
+## Local secrets
+
+The one table, `model.SECRET_FILES`, repeated in the phase page. Every credential lives under
+`${K2_SECRETS:-$HOME/k2-secrets}`, outside any checkout, generated on the host and never
+committed, compiled or hashed into a release; `manifest.json` has no place for one. A container
+mounts only what it reads, read-only, under `/run/k2-secrets/`.
+
+| Under `${K2_SECRETS}` | Read-only in a container at | Mounted by | Written by |
+|---|---|---|---|
+| `trino/password.db` | `/run/k2-secrets/trino/password.db` (the directory) | trino | S14 `scripts/principal-secret.py`; S19 adds each release's canary line |
+| `api/keys.json` | `/run/k2-secrets/api/keys.json` (the directory) | k2-api | S14 |
+| `principals/<principal>.password` | `/run/k2-secrets/<role>.password` (`model.password_mount`) | dbt-runner, k2-api, tools | S14 |
+| `tls/ca.pem` | `/run/k2-secrets/tls/ca.pem` | tools, dbt-runner, k2-api | S13 `scripts/tls.sh` |
+| `tls/ca.key` | never mounted | | S13 |
+| `tls/trino.pem` | `/run/k2-secrets/tls/trino.pem` | trino | S13 |
+| `alertmanager/slack-webhook-url` | `/run/k2-secrets/slack-webhook-url` (the directory) | alertmanager | S09 |
+| `canary/<canary>.password` | never mounted | | S19 |
 
 ## The stubs, and who fills them
 
@@ -51,23 +157,9 @@ fails if a module goes missing or a signature drifts.
 | `emit/dbt.py` | S17 |
 | `emit/catalog.py` | S18 |
 
-Each emitter is `emit(model: Model, previous: Release | None) -> dict[str, str]`, release-relative
-path to text, pure. Each check is `check(docs: DocumentSet, previous: DocumentSet | None) ->
-list[Finding]`, with `Finding.code` spelt `<check module>.<kebab-case>`. Both are found by
-`pkgutil.iter_modules`; `checks.run` runs `docs` first and stops there on an error.
-`k2gen check --previous` takes a document set (a release's `documents/` is one); `k2gen release
---previous` takes a release directory.
-
-## Provisional until S01
-
-Marked `provisional until S01` in the code, finalised in one follow-up when the gate
-`spine-h-tested-data-view` reports: `AUDITED_TAG`, `BASE_SUFFIX`, `VIEWS`, `View`, the reader,
-base, build and view relation helpers, `publisher`, the three principal pattern lists, and
-`pipeline.schema.json`'s `build.publisher`.
-
 ## Read one way where the proposal allowed two
 
-- Every schema sits in `contracts/schema/`, as this step's brief says, not `k2gen/schemas/`.
+- Every schema sits in `contracts/schema/`, not `k2gen/schemas/`.
 - `grants.yaml`, `principals.yaml`, `roles.yaml` and `expectations.yaml` each have one top-level
   key, as `domains.yaml` has: a bare list of records under a `fixtures/` path fails the data gate
   of `make check-docs`.
@@ -75,5 +167,14 @@ base, build and view relation helpers, `publisher`, the three principal pattern 
 - A table denial is always `denied: true`; `expect:` is for statements, probes and the drift row.
 - The catalog JSON and the backup set carry the set's `tag`, and the release canary hashes the
   set: a release id hashes those very files, so none of them can name it.
-- No credential or hash field exists anywhere; the Trino password file and key hashes live under
-  `${K2_SECRETS}`, so `trino_identity` emits only the authenticator properties.
+- No credential or hash field exists in any document or release file.
+- The compose file is a document of the set, taken from the tag, so a release deploys the
+  compose its tag approved; `k2gen release --compose` defaults to it.
+- Bronze: the pipeline's `patterns` come from the contract (`Column.pattern`); the lineage column
+  is the constant `LINEAGE_COLUMN`, so the pipeline has no `lineage` field.
+- Retention is the contract's, emitted once in `compiled/lake/retention.json`; the pipeline's
+  `maintain` has no `retainDays`.
+- A serving-only output (the paused hot tier) is `build: serving` with a `serves` port; its
+  catalog entry has `relation: null`.
+- Golden files are `tests/golden/<emitter>/<release path>`; Trino's `groups.txt` is kept as
+  `tests/golden/trino_rules/groups.yaml`, the parsed map.

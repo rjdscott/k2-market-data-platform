@@ -253,3 +253,7 @@ docker/prefect/
 # lands inside one out of git all the same; tests/test_secrets_untracked.py holds both.
 k2-secrets/
 *.password
+password.db
+slack-webhook-url
+*.pem
+*.key

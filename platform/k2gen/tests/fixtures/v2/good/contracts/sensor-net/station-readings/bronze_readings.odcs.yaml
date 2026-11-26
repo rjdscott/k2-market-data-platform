@@ -16,6 +16,9 @@ schema:
     properties:
       - name: station_id
         physicalType: varchar
+        logicalType: string
+        logicalTypeOptions:
+          pattern: "^s-[0-9]+$"
         required: true
         primaryKey: true
         primaryKeyPosition: 1

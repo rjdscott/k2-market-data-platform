@@ -26,6 +26,22 @@ def test_the_repository_validates():
     assert cli.validate() == []
 
 
+V2_GOOD = cli.ROOT / "platform/k2gen/tests/fixtures/v2/good/contracts"
+
+
+def test_a_v2_product_directory_is_left_to_k2gen_check(tree):
+    # The old validator and generate read only the old format; a directory holding
+    # product.odps.yaml is the v2 path's (k2gen check, S05) until S23 deletes these two.
+    before = generate.render(tree)
+    for product in ("sensor-net/station-readings", "ops-insight/daily-load"):
+        shutil.copytree(V2_GOOD / product, tree / "contracts" / product)
+    assert cli.validate(tree) == []
+    assert generate.render(tree) == before
+    # the skip is the product file, not the directory: without it the contracts are read as old ones
+    (tree / "contracts/sensor-net/station-readings/product.odps.yaml").unlink()
+    assert any("station-readings" in line for line in cli.validate(tree))
+
+
 def test_a_contract_that_references_lake_sql_fails(tree):
     # The schema still admits the reference form; the DDL it points at retired (ADR-056).
     def reference(doc):

@@ -126,6 +126,18 @@ def words(paths: list[str], terms=TERMS) -> list[str]:
 # - any binary file (zip, tar, sqlite, pickle, lz4, parquet, avro, under any
 #   name) fails unless NOTICE lists it, except images under docs/images/ and
 #   KNOWN_BINARY.
+#
+# Two narrow passes, for text only (a binary or an image fails as above):
+#
+# - a file under GOLDEN, the k2gen emitters' expected outputs, which the tests
+#   compare with what each emitter compiles from the synthetic fixture set: only
+#   while GOLDEN_MARKER is tracked and its first line is GOLDEN_MARK, the record
+#   that the directory holds generated test expectations and nothing else;
+# - a product's seed, contracts/<domain>/<product>/seeds/<name>.csv (at the
+#   repository root or inside a fixture set): only when the product file beside
+#   it, product.odps.yaml, declares it synthetic on one line in the flow form
+#   `- {path: seeds/<name>.csv, synthetic: true}` (k2-v2.schema.json#/$defs/seeds).
+#   Real reference data is never a seed; it is listed in NOTICE.
 
 DATA_EXT = {".jsonl", ".ndjson", ".csv", ".tsv", ".parquet", ".avro", ".pcap", ".pcapng",
             ".arrow", ".feather", ".orc", ".gz", ".zst", ".xz", ".bz2"}
@@ -142,6 +154,20 @@ OLD_EXT = {".json", ".jsonl", ".ndjson", ".csv", ".tsv", ".txt", ".parquet", ".a
            ".bin", ".gz", ".zst", ".sha256"}
 KNOWN_BINARY = {"legacy/v2-kotlin/gradle/wrapper/gradle-wrapper.jar"}  # the archived Gradle wrapper
 YAML_RECORD = re.compile(r"""-[ \t]+(\{|\[|("[^"]*"|'[^']*'|[^\s#:][^:#]*?)[ \t]*:([ \t]|$))""")
+GOLDEN = "platform/k2gen/tests/golden/"
+GOLDEN_MARKER = GOLDEN + "README.md"
+GOLDEN_MARK = "# Golden files: generated test expectations, synthetic by construction"
+SEED = re.compile(r"((?:.*/)?contracts/[a-z0-9-]+/[a-z0-9-]+/)seeds/([a-z0-9_]+\.csv)")
+
+
+def seed_declared(tracked: dict[str, bytes], path: str) -> bool:
+    """Whether `path` is a seed its product file declares synthetic, in the one flow form."""
+    match = SEED.fullmatch(path)
+    product = tracked.get(match.group(1) + "product.odps.yaml") if match else None
+    if product is None:
+        return False
+    line = re.compile(r"[ \t]*-[ \t]*\{path:[ \t]*seeds/" + re.escape(match.group(2)) + r",[ \t]*synthetic:[ \t]*true[ \t]*\}[ \t]*")
+    return any(line.fullmatch(x) for x in product.decode("utf-8", errors="replace").splitlines())
 
 
 def binary(head: bytes) -> bool:
@@ -217,6 +243,7 @@ def data_problems(tracked: dict[str, bytes], notice: str) -> list[str]:
     for row in tracked.get(MANIFEST, b"").decode().splitlines():
         digest, _, path = row.partition("  ")
         manifest[path] = digest
+    golden = tracked.get(GOLDEN_MARKER, b"").decode("utf-8", errors="replace").split("\n", 1)[0] == GOLDEN_MARK
     problems = []
     for path, content in sorted(tracked.items()):
         name, head = Path(path).name, content[:65536]
@@ -242,6 +269,8 @@ def data_problems(tracked: dict[str, bytes], notice: str) -> list[str]:
         if binary(head):
             if path not in KNOWN_BINARY and path not in listed:
                 problems.append(f"{path}: a binary file ({sniff(head) or 'format unknown'}) not listed in NOTICE")
+            continue
+        if (golden and path.startswith(GOLDEN)) or seed_declared(tracked, path):
             continue
         under = bool(FIXTURE_PATH.search(path))
         if under and records(path, content):

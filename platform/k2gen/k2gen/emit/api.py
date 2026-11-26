@@ -1,11 +1,12 @@
-"""Emits compiled/api/principals.json: the principals k2-api may act as. Key hashes stay under
-${K2_SECRETS}, never in a release (the ruling on Q4).
-
+"""Emits model.API_PRINCIPALS, compiled/api/principals.json: {"principals": [<id>, ...]}, sorted, the
+principals k2-api may act as (from contracts/access/principals.yaml; never dbt_*, pub_* or
+svc.runs, svc.platform, svc.catalog, svc.api). k2-api's key map, {sha256 of a key: principal},
+is ${K2_SECRETS}/api/keys.json (model.SECRET_FILES), never in a release.
 Filled by step S14.
 """
 
-from k2gen.model import Model, Release
+from k2gen.model import Model
 
 
-def emit(model: Model, previous: Release | None) -> dict[str, str]:
+def emit(model: Model) -> dict[str, str]:
     raise NotImplementedError("S14")

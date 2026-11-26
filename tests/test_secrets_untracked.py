@@ -1,8 +1,10 @@
 """Local secrets never enter git (docs/development/phase-001-interfaces.md, A10).
 
-They live in ${K2_SECRETS:-$HOME/k2-secrets}, outside any checkout: <principal>.password
-files, tls/, the Slack webhook URL file. .gitignore keeps a copy that lands inside a
-checkout out all the same. Both halves hold: git ignores the layout, and nothing
+They live in ${K2_SECRETS:-$HOME/k2-secrets}, outside any checkout, laid out as the secrets
+table of that page and of k2gen.model.SECRET_FILES says: trino/password.db, api/keys.json,
+principals/<id>.password, tls/{ca.pem,ca.key,trino.pem}, alertmanager/slack-webhook-url,
+canary/<canary>.password. .gitignore keeps a copy that lands inside a checkout out all the
+same, by directory and by each file's own name. Both halves hold: git ignores the layout, and nothing
 tracked matches it (a `git add -f` gets past .gitignore, not past this).
 """
 
@@ -11,11 +13,15 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 SAMPLES = ["k2-secrets/svc.runs.password", "k2-secrets/tls/ca.pem", "k2-secrets/alertmanager/slack-webhook-url",
-           "dbt/k2-secrets/tls/server.key", "pub_access_canary.password", "scripts/dbt_x.password"]
+           "dbt/k2-secrets/tls/server.key", "pub_access_canary.password", "scripts/dbt_x.password",
+           "k2-secrets/trino/password.db", "k2-secrets/api/keys.json", "trino/password.db", "copy/password.db",
+           "alertmanager/slack-webhook-url", "tls/trino.pem", "tls/ca.key", "principals/dbt_x.password"]
+NAMES = {"password.db", "slack-webhook-url"}
 
 
 def is_secret(path: str) -> bool:
-    return "k2-secrets" in Path(path).parts or path.endswith(".password")
+    p = Path(path)
+    return "k2-secrets" in p.parts or p.name in NAMES or p.suffix in (".password", ".pem", ".key")
 
 
 def git(*argv: str) -> str:

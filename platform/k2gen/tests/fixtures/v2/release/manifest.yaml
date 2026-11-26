@@ -20,6 +20,7 @@ products:
 files:
   provenance.json: dd0c2c70261f62045ff1b8d639a29b945c4bf822d852f96f1d68ee9e05f3bbbc
   documents/contracts/domains.yaml: 7e6e9877fff0dbcc576df15fd6e6de65a95d6dce6ced8fc47c4cf9dba3484195
+  compose/docker-compose.yml: 3f4e5d6c7b8a99887766554433221100ffeeddccbbaa00998877665544332211
   compiled/products/sensor-net.station-readings/pipeline.json: 4008294739162e8f0119134dd262e35165d4a3bda08f59f97b6fdb9c5b4e655d
 images:
   trino: trinodb/trino@sha256:b612467da0474aef0a681e4fa9481311414fa2344b7ff7a4f1f23440fde7535f

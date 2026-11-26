@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://k2.invalid/schema/oneshots.schema.json",
+  "title": "compiled/oneshots.json: how each one-shot container kind runs (A13)",
+  "description": "Frozen in phase 001. Emitted by k2gen.emit.pipeline (S16), read by the operator that starts one-shots (phase 002) and checked against compose by S22. Names only: an env entry is a variable's name, a secret entry a read-only path from k2gen.model.SECRET_FILES; no value is ever in a release.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["oneshots"],
+  "properties": {
+    "oneshots": {
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {
+        "tools": {"$ref": "#/$defs/kind"},
+        "dbt-runner": {"$ref": "#/$defs/kind"},
+        "fetch": {
+          "description": "Egress only: never on k2-catalog, no storage key, no secret file (A8).",
+          "allOf": [{"$ref": "#/$defs/kind"}, {"properties": {"networks": {"items": {"const": "k2-net"}}, "secrets": {"maxItems": 0}}}]
+        }
+      }
+    }
+  },
+  "$defs": {
+    "kind": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["image", "cpus", "memory", "networks", "env", "secrets"],
+      "properties": {
+        "image": {"description": "From k2gen release's --images.", "$ref": "manifest.schema.json#/$defs/imageRef"},
+        "cpus": {"description": "The CPU limit, as compose spells it.", "type": "string", "pattern": "^[0-9]+(\\.[0-9]+)?$"},
+        "memory": {"description": "The memory limit, as compose spells it.", "type": "string", "pattern": "^[0-9]+[MG]$"},
+        "networks": {"description": "The networks it joins.", "type": "array", "minItems": 1, "uniqueItems": true, "items": {"enum": ["k2-net", "k2-catalog"]}},
+        "env": {"description": "The only environment variables passed to it, by name.", "type": "array", "uniqueItems": true, "items": {"type": "string", "pattern": "^[A-Z][A-Z0-9_]*$"}},
+        "secrets": {"description": "The read-only container paths of the secret files it mounts (k2gen.model.SECRET_FILES, k2gen.model.password_mount).", "type": "array", "uniqueItems": true, "items": {"type": "string", "pattern": "^/run/k2-secrets/[a-z0-9._/-]+$"}}
+      }
+    }
+  }
+}

@@ -8,9 +8,13 @@
                                                     fixture's CTE (__dbt__cte__<source>__<table>), and a
                                                     CTE takes no FOR VERSION AS OF
       otherwise                                  -> source() FOR VERSION AS OF <snapshot>
+      a snapshot missing, null or not an integer -> a compiler error, never a guessed id
     The var is {"k2_inputs": {"<product_fence>/<table>": {"snapshot": <id>}}}, set by the wrapper only.
-    The snapshot goes through `int`, so the var can only ever add a number to the SQL, and is
-    typed BIGINT: an id under 2^31 is an integer literal, which Trino refuses as a table version.
+    The snapshot must be an integer (a JSON number, not a string, a float or a boolean), so the var
+    can only ever add a number to the SQL; it is typed BIGINT, since an id under 2^31 is an integer
+    literal, which Trino refuses as a table version. An optional input never audited has no
+    rendering in phase 001: the wrapper (phase 002) passes a snapshot for every input it lists,
+    and exits 4 before dbt runs when a required one has none.
     dbt/tests/k2_input/ proves each case with no warehouse (make test-dbt). -#}
 {% macro k2_input(product_fence, table) -%}
   {%- set rel = source(product_fence, table) -%}
@@ -23,6 +27,11 @@
   {%- elif model.resource_type == 'unit_test' -%}
     {{ rel }}
   {%- else -%}
-    {{ rel }} FOR VERSION AS OF BIGINT '{{ inputs[key]['snapshot'] | int }}'
+    {%- set entry = inputs[key] -%}
+    {%- set snapshot = entry.get('snapshot') if entry is mapping else none -%}
+    {%- if snapshot is not integer -%}
+      {{ exceptions.raise_compiler_error("k2_input: k2_inputs entry " ~ key ~ " has no integer snapshot: " ~ entry) }}
+    {%- endif -%}
+    {{ rel }} FOR VERSION AS OF BIGINT '{{ snapshot }}'
   {%- endif -%}
 {%- endmacro %}

@@ -1,0 +1,9 @@
+# A hand-written example of compiled/lake/storage-plan.json (contracts/schema/storage-plan.schema.json)
+# for the good set.
+warehouses:
+  - {name: k2, remoteSigningEnabled: false, namespaces: [station_readings]}
+  - {name: ops_insight, remoteSigningEnabled: false, namespaces: [daily_load, daily_load__base]}
+  - {name: sensor_net, remoteSigningEnabled: false, namespaces: [station_readings, station_readings__base]}
+landing:
+  bucket: k2-landing
+  prefixes: [sensor-net/station-readings/]

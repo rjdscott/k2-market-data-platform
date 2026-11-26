@@ -79,6 +79,13 @@
       "properties": {
         "principal": {"$ref": "#/$defs/principal"},
         "sql": {"description": "The statement, exactly as sent.", "type": "string", "minLength": 1},
+        "session": {
+          "description": "Session properties sent with the statement as X-Trino-Session headers (the CLI's --session), not by SET SESSION: the header form of a property denial (gate h1.24).",
+          "type": "object",
+          "minProperties": 1,
+          "propertyNames": {"type": "string", "pattern": "^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)?$"},
+          "additionalProperties": {"type": "string", "minLength": 1}
+        },
         "expect": {"description": "denied: an access denial; error: any other query error (a numeric version on a view); noBounds: SHOW STATS returns no low or high value.", "enum": ["denied", "error", "noBounds"]}
       }
     },

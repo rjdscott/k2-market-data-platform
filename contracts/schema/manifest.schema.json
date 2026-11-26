@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://k2.invalid/schema/manifest.schema.json",
   "title": "manifest.json of a release (A1)",
-  "description": "Frozen in phase 001. Written by k2gen release at <root>/<release>/manifest.json, last, before the tree is sealed read-only and renamed into place. A release id is <tag>-<sha12>, sha12 the first 12 hex of the sha256 of the canonical JSON of {files, images} (k2gen.model.release_id), so two compiles of one document set and one image set give one id. Secrets are named by environment variable only and never compiled.",
+  "description": "Frozen in phase 001. Written by k2gen release at <root>/<release>/manifest.json, last, before the tree is sealed read-only and renamed into place. A release id is <tag>-<sha12>, sha12 the first 12 hex of the sha256 of the canonical JSON of {files, images} (k2gen.model.release_id), so two compiles of one document set and one image set give one id. No secret, and no checksum of one, is in a release: deploy records the checksums of the secret files it found in its own deploy record (deploy-record.schema.json).",
   "type": "object",
   "additionalProperties": false,
   "required": ["schema", "release", "tag", "commit", "builtAt", "k2gen", "previous", "setSha256", "products", "files", "images", "needs"],
@@ -31,7 +31,7 @@
       }
     },
     "files": {
-      "description": "Every file of the release but manifest.json itself, path relative to the release directory, to its sha256.",
+      "description": "Every file of the release but manifest.json itself, path relative to the release directory, to its sha256: documents/, provenance.json, compose/docker-compose.yml and compiled/.",
       "type": "object",
       "minProperties": 1,
       "propertyNames": {"$ref": "#/$defs/relpath"},
@@ -50,16 +50,10 @@
           "uniqueItems": true,
           "items": {"$ref": "#/$defs/service", "not": {"anyOf": [{"enum": ["redpanda", "minio", "prefect-db", "lakekeeper"]}, {"pattern": "^capture-"}]}}
         },
-        "trinoRestart": {"description": "A catalog changed, so Trino restarts and the product DAGs drain first.", "type": "boolean"},
+        "trinoRestart": {"description": "A file under compiled/trino/etc/ changed, so Trino restarts and the product DAGs drain first (k2gen.model.NEEDS_BY_PREFIX).", "type": "boolean"},
         "dagShapeChange": {"description": "A DAG gained or lost a task, so the DAGs drain first.", "type": "boolean"},
-        "ddl": {"description": "Tables the additive DDL creates or widens, <warehouse>.<namespace>.<table>.", "type": "array", "uniqueItems": true, "items": {"type": "string", "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"}}
+        "ddl": {"description": "Tables the additive DDL creates or widens, <warehouse>.<namespace>.<table>: one per added or changed compiled/lake/ddl/<engine>/<warehouse>.<namespace>.<table>.sql (k2gen.model.ddl_path).", "type": "array", "uniqueItems": true, "items": {"type": "string", "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"}}
       }
-    },
-    "secrets": {
-      "description": "Optional: files under ${K2_SECRETS} the release expects, path relative to it, to the sha256 of the file. Never the content, and not part of the id (the orchestrator's ruling on Q4).",
-      "type": "object",
-      "propertyNames": {"$ref": "#/$defs/relpath"},
-      "additionalProperties": {"$ref": "#/$defs/sha256"}
     }
   },
   "$defs": {
@@ -71,17 +65,19 @@
     "relpath": {"description": "A relative path with / separators, no empty, . or .. segment.", "type": "string", "pattern": "^(?!.*(^|/)\\.\\.?(/|$))[A-Za-z0-9._$-]+(/[A-Za-z0-9._$-]+)*$"},
     "service": {"description": "A compose service name.", "type": "string", "pattern": "^[a-z][a-z0-9-]*$"},
     "images": {
-      "description": "Compose service to the image it runs: a registry image by digest, repo@sha256:<64 hex>, or a local build tagged <name>:<image id 12> at build and checked against docker inspect .Image. Also the shape of the --images input of k2gen release.",
+      "description": "Compose service to the image it runs. Also the shape of the --images input of k2gen release.",
       "type": "object",
       "minProperties": 1,
       "propertyNames": {"$ref": "#/$defs/service"},
-      "additionalProperties": {
-        "type": "string",
-        "anyOf": [
-          {"pattern": "^[a-z0-9][a-z0-9._:/-]*@sha256:[0-9a-f]{64}$"},
-          {"pattern": "^(k2-airflow|k2-capture|k2-spark-iceberg|tools|fetch|dbt-runner|k2-api):[0-9a-f]{12}$"}
-        ]
-      }
+      "additionalProperties": {"$ref": "#/$defs/imageRef"}
+    },
+    "imageRef": {
+      "description": "A registry image by digest, repo@sha256:<64 hex>, or a local build tagged <name>:<image id 12> at build and checked against docker inspect .Image.",
+      "type": "string",
+      "anyOf": [
+        {"pattern": "^[a-z0-9][a-z0-9._:/-]*@sha256:[0-9a-f]{64}$"},
+        {"pattern": "^(k2-airflow|k2-capture|k2-spark-iceberg|tools|fetch|dbt-runner|k2-api):[0-9a-f]{12}$"}
+      ]
     }
   }
 }

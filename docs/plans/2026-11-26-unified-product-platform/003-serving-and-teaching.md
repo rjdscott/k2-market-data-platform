@@ -84,4 +84,5 @@ make check-docs
 
 The data request returns the rows the same SQL returns as `p.analyst-a`; that pair is an
 expectation row, so `make access-verify` is the check and the `curl` shows it. The key is shown
-once by `make api-key` and is never in the repository; only its sha256 is.
+once by `make api-key` and is never in the repository; only its sha256 is kept, in
+`${K2_SECRETS}/api/keys.json`, outside the repository and every release.

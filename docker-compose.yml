@@ -1364,6 +1364,9 @@ services:
     image: alpine:3.20  # stub: phase 003 builds services/k2-api/ (its routes: services/k2-api/openapi.yaml)
     command: ["echo", "SKIP k2-api: built in phase 003"]
     networks:
+      # Trino only, as svc.api: it reads rows through the reader view and the tested
+      # snapshot id from `t$refs` over SQL, never Lakekeeper's REST API, so never
+      # k2-catalog, where a caller-facing service could forge a view (ADR-061 part 6).
       - k2-net
     volumes:
       - *k2-releases-ro
