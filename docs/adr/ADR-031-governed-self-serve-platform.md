@@ -1,6 +1,6 @@
 # ADR-031: A governed, self-serve platform layer over the lake
 
-**Status:** Proposed
+**Status:** Proposed; its remaining phases, P4 to P7, **superseded by [ADR-056](ADR-056-unified-data-product-platform.md)** (2026-11-26); P0 to P3 stand
 **Date:** 2026-11-24
 **Author:** Rob Scott
 **Category:** Architecture (umbrella)
