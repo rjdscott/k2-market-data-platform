@@ -686,3 +686,23 @@ PASS: bootstrap default within 25 CPU / 48 GiB; limits, pins and loopback ports 
 
 Headroom at the gated peak: 7.70 CPU and 18.188 GiB. The summary comment at the end of
 `docker-compose.yml` carries the same sums.
+
+### Outcome addendum (2026-11-26, the old lake ingest retired)
+
+`lake-metrics` (0.1 CPU / 128M, long-running) and the `lake-ddl` one-shot (0.5 CPU / 1G) leave
+the compose file with the old lake ingest they served, archived to `legacy/v3-lake-ingest/`
+([ADR-056](ADR-056-unified-data-product-platform.md)). No other limit changes. The scheduler no
+longer waits on `lake-ddl`, and nothing else named either
+(`docker compose config --services | grep -cxE 'lake-(ddl|metrics)'` prints 0).
+
+```
+$ python3 scripts/check-budget.py
+steady default         17 services   15.20 CPU   27.188 GiB
+bootstrap default      21 services   16.70 CPU   28.688 GiB
+bootstrap hot-gold     22 services   20.70 CPU   36.688 GiB
+PASS: bootstrap default within 25 CPU / 48 GiB; limits, pins and loopback ports hold across 4 Dockerfiles and 27 scripts and workflows
+```
+
+Headroom at the gated peak: 8.30 CPU and 19.312 GiB. The summary comment at the end of
+`docker-compose.yml` carries the same sums. The phase 000 plan named 17.30 CPU / 29.812 GiB as
+its exit figure; that was the peak with these two services still in it.

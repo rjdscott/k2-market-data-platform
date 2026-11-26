@@ -1,16 +1,17 @@
-# `scripts/chaos/` — fault injection for the capture and lake tiers
+# `scripts/chaos/`: fault injection for the capture tier
 
-Nine scripts: eight break the running stack on purpose, wait for the alert that is
+Five scripts: four break the running stack on purpose, wait for the alert that is
 supposed to notice, measure how long recovery took, and put the stack back; the
-ninth records an honest gap it cannot yet inject. They
+fifth records an honest gap it cannot yet inject. They
 are the `proof` column of
 [`docs/architecture/16-failure-modes.md`](../../docs/architecture/16-failure-modes.md):
 an FMEA whose recovery times are estimates is a wish list, and these are what turn
 that column into measurements.
 
 **Maintainer-run, never CI.** The GitHub-hosted runner has ~7 GB of RAM and this
-stack budgets ~22 GB, so a nightly chaos job could not host ClickHouse, Redpanda,
-Spark, MinIO and three capture containers at once — it would fail for resource
+stack budgets 28.688 GiB at its bootstrap peak (`python3 scripts/check-budget.py`), so a
+nightly chaos job could not host Redpanda, Spark, Trino, MinIO and three capture
+containers at once: it would fail for resource
 reasons more often than for real ones, and a flaky nightly everyone learns to
 ignore is worse than a gate someone actually runs
 ([requirements clarification Q3](../../docs/research/2026-08-26-v3-requirements-clarification.md#q3--fault-injection-where-does-it-run)).
@@ -47,16 +48,14 @@ it would destroy.
 Still unrun: `redpanda-stop.sh --cold-start` (the 2026-08-26 run took the default warm
 path) and `capture-corrupt-frame.sh` (SKIP by design until `k2-replay`).
 
-### The lake scripts are unrun
+### The lake scripts retired unrun
 
-**None of the four `lake-*.sh` scripts has been run.** They are committed unrun on
-purpose — the alert rules, the runbooks and the FMEA all already claim behaviour that
-only these scripts can check, and shipping the checker alongside the claim is the point.
-
-They were written during Phase D against a stack that was mid-burn-in, and every one of
-them stops a container the burn-in was using. Running them was therefore not an option at
-the time they were written, and pretending otherwise by reporting a plausible number is
-exactly what the `proof` column exists to prevent.
+The four `lake-*.sh` scripts were never run, and they retired with the old lake ingest
+they faulted ([ADR-056](../../docs/adr/ADR-056-unified-data-product-platform.md)). They
+are archived in [`legacy/v3-lake-ingest/scripts/chaos/`](../../legacy/v3-lake-ingest/scripts/chaos/);
+the ingest pause they called (`pause_lake_ingest` and its helpers) left `lib.sh` with them
+and is in that file's git history. `make chaos` prints a SKIP line in their place until
+phase 004 brings fault scripts for the new lake products.
 
 ---
 
@@ -69,10 +68,6 @@ exactly what the `proof` column exists to prevent.
 | `capture-queue-full.sh` | `docker pause` the broker so librdkafka's 32 MiB queue fills and capture starts dropping | `CaptureProduceErrors` — `reason="queue_full"` at binance/kraken rates, `reason="delivery"` at coinbase's, where `message.timeout.ms` binds first. The script prints which it expects and both counters | capture → Redpanda / producer queue full |
 | `redpanda-stop.sh` | `docker stop` the broker; `--cold-start` also recreates a capture container while it is down | `CaptureProduceErrors`, or `CaptureDown` under `--cold-start` (warm-up is fatal, so the container crash-loops rather than failing produces) | Redpanda / broker down; schema registry / down mid-run; schema registry / down at start |
 | `capture-corrupt-frame.sh` | none — prints SKIP and exits 0 | — | corrupt frame (**not automatable until `k2-replay`, Phase G**) |
-| `lake-lakekeeper-stop.sh` | `docker stop` the catalog, then run an ingest that must fail | `LakeIngestFailed` (opt-in: ~35 min bound) | Lakekeeper / down mid-commit |
-| `lake-minio-stop.sh` | `docker stop` the object store, then run an ingest that must fail | `LakeIngestFailed` | MinIO / down |
-| `lake-ingest-kill.sh` | `pkill -9` an ingest mid-run, re-run, audit | none expected — an alert here would mean the threshold is wrong | lake ingest / killed mid-run |
-| `lake-corrupt-payload.sh` | `rpk topic produce` one un-framed record onto a v3 topic | none expected | lake ingest / corrupt or un-framed Avro payload |
 
 The five `capture-*`/`redpanda-*` scripts take
 `--exchange binance|kraken|coinbase`, defaulting to `kraken`.
@@ -88,9 +83,9 @@ Four design notes worth knowing before reading them:
   different failure, two scripts.
 - **Those two scripts take down the whole stack, not just one container.**
   Redpanda is the single broker *and* the single schema registry, so all three
-  `capture-*` containers, ClickHouse's Kafka-engine consumers, Console and the lake ingest all lose it
-  too — the `--exchange` you pass is only the one being
-  measured. `capture-queue-full.sh
+  `capture-*` containers and Console lose it too (and ClickHouse's Kafka-engine
+  consumers, on a stack running the paused hot tier, ADR-057): the `--exchange`
+  you pass is only the one being measured. `capture-queue-full.sh
   --exchange coinbase` is the longest: 300 s to the predicted first loss plus the
   alert's `for: 5m` and the wait puts the broker under `docker pause` for up to
   ~28 minutes, and `redpanda-stop.sh` stops it for up to ~15. A pause beyond a
@@ -110,23 +105,6 @@ Four design notes worth knowing before reading them:
   pushing chosen bytes through the running binary is exactly what `k2-replay`
   (Phase G) is for. A unit test covers the adapter in the meantime and the script
   says so.
-
-Three notes on the lake scripts specifically:
-
-- **Two of them expect no alert, and that is the finding.** `lake-ingest-kill.sh`
-  and `lake-corrupt-payload.sh` inject failures the design absorbs: a killed run
-  recovers inside one 5-minute cycle, and an un-framed record is archived and
-  skipped. If either fired `LakeIngestFailed`, the threshold would be wrong. Their
-  assertion is the audit and the row counts, not `wait_for_alert`.
-- **`lake-lakekeeper-stop.sh` does not wait for its alert by default.**
-  `LakeIngestFailed` needs 30 minutes of commit age plus a 5-minute `for`, because
-  a shorter threshold pages on every slow backlog slice. The default run measures
-  the mechanism — the ingest fails and the table is byte-identical afterwards — in
-  about two minutes; `--wait-for-alert` sits out the full bound.
-- **`lake-corrupt-payload.sh` leaves one row behind, forever.** `raw.messages` is
-  never expired, so the injected record stays in the archive. That is the correct
-  outcome — the topic really did carry those bytes — and the script says so before
-  it runs rather than after.
 
 `lib.sh` holds everything that observes rather than breaks — `prom_query`,
 `alert_state`, `wait_for_alert`, `wait_for_alert_clear`, `wait_for_metric`,
@@ -155,8 +133,9 @@ venue.
   scripts measure exactly the numbers the alerts measure.
 - **Nothing you care about is running.** These scripts drop real market data, and
   public WebSocket feeds do not replay it. Every window a script breaks is
-  permanently absent from `raw.messages`. That includes any burn-in or parity
-  window in flight: a chaos run during one invalidates its evidence.
+  permanently absent from the topics and from everything read from them. That
+  includes any burn-in or parity window in flight: a chaos run during one
+  invalidates its evidence.
 
 Run them one at a time, from anywhere:
 
