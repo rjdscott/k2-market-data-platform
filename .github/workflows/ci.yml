@@ -224,9 +224,9 @@ jobs:
 
       # Prints the steady default, bootstrap default and bootstrap with
       # --profile governance and with --profile legacy (the Prefect rollback)
-      # limit sums, and fails when the bootstrap default is over the
-      # 25 CPU / 48 GiB ADR-045 states. Also fails a service in any
-      # config with no CPU or memory limit (it would escape the budget and
+      # limit sums, each service's limits times its replicas, and fails when the
+      # bootstrap default is over the 25 CPU / 48 GiB ADR-045 states. Also fails
+      # a service under any profile with no CPU or memory limit (it would escape the budget and
       # nothing else would notice), an untagged or `latest` image, an
       # unpinned FROM or pip install in a Dockerfile, and a published port not
       # bound to 127.0.0.1 (SECURITY.md). Stdlib only.

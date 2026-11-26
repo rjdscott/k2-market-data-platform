@@ -3,22 +3,24 @@
 
     python3 scripts/check-budget.py
 
-Resolves the compose file three times, plain, with `--profile governance` and
-with `--profile legacy`, prints four limit sums and exits 1 on any of:
+Resolves the compose file plain, with `--profile governance`, with
+`--profile legacy` and with `--profile '*'` (every service of every profile),
+prints four limit sums and exits 1 on any of:
 
 - the bootstrap default (every default-profile service, one-shots included,
-  because they run beside the rest at `docker compose up`) above 25 CPU /
+  because they run beside the rest at `docker compose up`; each service's
+  limits times its `deploy.replicas`, which compose also sets from `scale`) above 25 CPU /
   48 GiB, the ceiling ADR-045 sets in place of ADR-034's 20 CPU / 36 GiB
   (which replaced ADR-010's 16 CPU / 40 GB). The steady default and the two
   profiled bootstraps are reported only: no service has the governance profile
   today, so its line equals the default, and legacy is the Prefect rollback,
   run only in place of Airflow's writes.
-- a service in any config that does not declare both a CPU and a memory
+- a service under any profile that does not declare both a CPU and a memory
   limit, so a service behind a profile cannot ship without one.
-- a compose image, or a Dockerfile FROM, with no tag or the tag `latest`.
+- a compose image, in any profile, or a Dockerfile FROM, with no tag or the tag `latest`.
 - a `pip install` package in a Dockerfile with no `==` version.
 - a published port not bound to 127.0.0.1, or `network_mode: host`, in any
-  service of any profile (a fourth resolve, `--profile '*'`): a bare
+  service of any profile: a bare
   `9000:9000` listens on every interface, the local network included, and host
   networking publishes whatever the container listens on (SECURITY.md).
 
@@ -53,10 +55,18 @@ def limits(svc: dict) -> dict:
     return ((svc.get("deploy") or {}).get("resources") or {}).get("limits") or {}
 
 
+def replicas(svc: dict) -> int:
+    """Containers compose starts for a service: `config` writes `scale: N` into
+    deploy.replicas too; 0 is a service that starts none."""
+    n = (svc.get("deploy") or {}).get("replicas", svc.get("scale"))
+    return 1 if n is None else int(n)
+
+
 def total(services: dict) -> tuple[float, int]:
-    """CPU and memory bytes summed over limits. `config` normalises memory to bytes."""
-    cpu = sum(float(limits(s).get("cpus", 0)) for s in services.values())
-    mem = sum(int(limits(s).get("memory", 0)) for s in services.values())
+    """CPU and memory bytes summed over limits, times replicas. `config`
+    normalises memory to bytes."""
+    cpu = sum(float(limits(s).get("cpus", 0)) * replicas(s) for s in services.values())
+    mem = sum(int(limits(s).get("memory", 0)) * replicas(s) for s in services.values())
     return cpu, mem
 
 
@@ -90,9 +100,11 @@ def dockerfile_problems(path: str, text: str) -> list[str]:
 
 
 def check(
-    default: dict, governance: dict, legacy: dict, dockerfiles: list[tuple[str, str]]
+    default: dict, governance: dict, legacy: dict, every: dict, dockerfiles: list[tuple[str, str]]
 ) -> tuple[list[str], list[str]]:
-    """(report lines, failures). Pure, so a test can hand it dicts."""
+    """(report lines, failures). Pure, so a test can hand it dicts. `every` is
+    the `--profile '*'` resolve: limits and pins are held there, so a service
+    behind a profile nobody names here is still checked."""
     steady = {n: s for n, s in default.items() if s.get("restart") != "no"}
     report = []
     for label, services in (
@@ -111,7 +123,6 @@ def check(
             f"bootstrap default {cpu:.2f} CPU / {mem / GIB:.3f} GiB is over the "
             f"{CPU_CEILING:g} CPU / {MEM_CEILING / GIB:g} GiB ceiling"
         )
-    every = {**default, **governance, **legacy}
     no_limits = sorted(n for n, s in every.items() if not {"cpus", "memory"} <= limits(s).keys())
     if no_limits:
         failures.append("no cpus + memory in deploy.resources.limits: " + ", ".join(no_limits))
@@ -149,13 +160,15 @@ def main() -> int:
         for p in sorted((ROOT / d).glob("*/Dockerfile*"))
         if p.suffix != ".dockerignore"
     ]
+    every = compose_services("--profile", "*")
     report, failures = check(
         compose_services(),
         compose_services("--profile", "governance"),
         compose_services("--profile", "legacy"),
+        every,
         dockerfiles,
     )
-    failures += exposure_problems(compose_services("--profile", "*"))
+    failures += exposure_problems(every)
     print("\n".join(report))
     for f in failures:
         print(f"FAIL: {f}")

@@ -19,14 +19,19 @@ def svc(cpus, gib, image="k2-thing:v1", restart="unless-stopped"):
     return {"image": image, "restart": restart, "deploy": {"resources": {"limits": limits}}}
 
 
-def failures(default, governance=None, dockerfiles=(), legacy=None):
-    return budget.check(default, governance or default, legacy or default, list(dockerfiles))[1]
+def check(default, governance=None, legacy=None, every=None, dockerfiles=()):
+    governance, legacy = governance or default, legacy or default
+    return budget.check(default, governance, legacy, every or {**default, **governance, **legacy}, list(dockerfiles))
+
+
+def failures(default, governance=None, dockerfiles=(), legacy=None, every=None):
+    return check(default, governance, legacy, every, dockerfiles)[1]
 
 
 def test_one_shots_count_towards_the_gated_bootstrap_peak():
     # 24 CPU steady plus a 2 CPU one-shot: steady is under 25, bootstrap is not.
     default = {"a": svc(24.0, 20), "init": svc(2.0, 1, restart="no")}
-    report, fails = budget.check(default, default, default, [])
+    report, fails = check(default)
     assert "24.00 CPU" in report[0] and "26.00 CPU" in report[1]
     assert any("bootstrap default 26.00 CPU" in f and "ceiling" in f for f in fails)
 
@@ -43,7 +48,7 @@ def test_memory_over_48_gib_fails():
 def test_the_governance_profile_is_reported_not_gated():
     default = {"a": svc(10.0, 20)}
     governance = {**default, "catalog": svc(16.0, 20)}
-    report, fails = budget.check(default, governance, default, [])
+    report, fails = check(default, governance)
     assert fails == []
     assert "26.00 CPU" in report[2]
 
@@ -53,7 +58,7 @@ def test_the_legacy_profile_is_reported_not_gated_but_its_limits_and_pins_are():
     # purpose, so only its report line moves.
     default = {"a": svc(23.0, 30)}
     legacy = {**default, "prefect-server": svc(3.0, 8, image="prefecthq/prefect:3-python3.12")}
-    report, fails = budget.check(default, default, legacy, [])
+    report, fails = check(default, legacy=legacy)
     assert fails == []
     assert report[3].startswith("bootstrap legacy") and "26.00 CPU" in report[3]
     # A service only the legacy profile starts is still held to limits and pins.
@@ -65,7 +70,7 @@ def test_the_legacy_profile_is_reported_not_gated_but_its_limits_and_pins_are():
 def test_a_service_with_no_restart_key_is_reported_as_steady():
     default = {"a": svc(1.0, 1), "init": svc(0.5, 1, restart="no")}
     del default["a"]["restart"]
-    report, _ = budget.check(default, default, default, [])
+    report, _ = check(default)
     assert "1 services" in report[0] and "1.00 CPU" in report[0]
 
 
@@ -79,6 +84,29 @@ def test_untagged_or_latest_image_fails_and_a_digest_passes():
     }
     named = {f.split()[1].rstrip(":") for f in failures(default)}
     assert named == {"bare", "latest", "port"}
+
+
+def test_replicas_and_scale_multiply_the_limits():
+    # The audit's probe: 8 x 4 CPU / 8 GiB and 6 x 2 CPU / 4 GiB were summed as
+    # 6 CPU / 12 GiB and passed; they are 44 CPU / 88 GiB. `config` writes
+    # `scale: 6` into deploy.replicas too, so either key is read.
+    a = svc(4.0, 8)
+    a["deploy"]["replicas"] = 8
+    b = {**svc(2.0, 4), "scale": 6}
+    report, fails = check({"a": a, "b": b})
+    assert "44.00 CPU" in report[1] and "88.000 GiB" in report[1]
+    assert any("bootstrap default 44.00 CPU / 88.000 GiB is over" in f for f in fails)
+    off = svc(30.0, 60)
+    off["deploy"]["replicas"] = 0
+    assert failures({"a": svc(1.0, 1), "off": off}) == []
+
+
+def test_a_service_under_any_profile_is_held_to_limits_and_pins():
+    # `tools` is neither governance nor legacy: only the `--profile '*'` resolve has it.
+    default = {"a": svc(1.0, 1)}
+    every = {**default, "tools": {"image": "busybox:latest", "deploy": {}}}
+    named = " ".join(failures(default, every=every))
+    assert "limits: tools" in named and "service tools: image 'busybox:latest'" in named
 
 
 def test_a_profiled_service_without_limits_fails():
@@ -143,9 +171,12 @@ def test_main_gates_every_profile_not_only_the_three_it_sums(monkeypatch, capsys
     def fake(*profile):
         calls.append(profile)
         ok = {"a": {**svc(1.0, 1), "ports": [port(9000, host_ip="127.0.0.1")]}}
-        return {**ok, "tools": {**svc(0.1, 0.1), "ports": [port(9009)]}} if profile == ("--profile", "*") else ok
+        tools = {"image": "busybox:latest", "deploy": {}, "ports": [port(9009)]}
+        return {**ok, "tools": tools} if profile == ("--profile", "*") else ok
 
     monkeypatch.setattr(budget, "compose_services", fake)
     assert budget.main() == 1
     assert ("--profile", "*") in calls
-    assert "service tools: port 9009:9009 is published on every interface" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "service tools: port 9009:9009 is published on every interface" in out
+    assert "limits: tools" in out and "service tools: image 'busybox:latest'" in out
