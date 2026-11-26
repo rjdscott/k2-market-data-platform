@@ -146,3 +146,16 @@ time. Everything else goes to the hardening sprint after the infrastructure-as-c
 ## Resolutions
 
 Appended after publication; the table above is never edited.
+
+- HIGH `docker/spark/Dockerfile:28-31` (Spark event logs never deleted): Resolved in #242
+  (`43cd971`). The HistoryServer cleaner is on (two days kept, checked hourly) and the logs are
+  compressed. Measured on the live container after the rollout at 07:39 UTC: one ingest run's log
+  is about 4 MB, was about 37 MB. Still to confirm: the first deletion, which cannot happen before
+  logs are two days old.
+- HIGH `Makefile:75-82` (tests rebuilt the live Airflow tag): Resolved in #243 (`9c86ada`). The
+  tests build `k2-airflow:test`, and `tests/test_makefile_image_tags.py` fails if the default is a
+  tag a compose service runs. The live tag was rebuilt once from `main`; the running Airflow
+  containers still use the image they started from and take the recorded build at their next
+  recreate.
+- The four MED and six LOW findings are deferred to the hardening sprint, by the owner's standing
+  decision of 2026-11-26 that a phase audit fixes critical and high only.
