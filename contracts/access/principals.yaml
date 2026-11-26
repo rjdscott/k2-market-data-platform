@@ -1,0 +1,45 @@
+# Everyone who may call Trino or k2-api (A10), people under pseudonymous ids. No credential and
+# no hash of one is ever written here: `make password` puts a bcrypt line in
+# ${K2_SECRETS}/trino/password.db and `make api-key` a sha256 in ${K2_SECRETS}/api/keys.json,
+# outside any checkout (docs/runbooks/create-or-rotate-a-principal.md). The release canary,
+# k2_release_<setSha256[:12]>, is not declared: each release makes its own (model.canary_user).
+principals:
+  # The platform's own services, each logging in to Trino with a password file it mounts.
+  - id: svc.runs
+    kind: service
+    owner: platform-team
+    description: Writes the run records through governance_build; the dbt wrapper's third identity.
+  - id: svc.catalog
+    kind: service
+    owner: platform-team
+    description: Reads the run-time facts the catalog shows (newest audited publish, tests, freshness) from the run records.
+  - id: svc.platform
+    kind: service
+    owner: platform-team
+    description: Runs deploy DDL and Trino-side table maintenance; holds no privilege in a reader namespace.
+  - id: svc.api
+    kind: service
+    owner: platform-team
+    description: k2-api's one Trino identity, which runs every data request as its caller.
+  # The access canary's builder and publisher (model.builder, model.publisher).
+  - id: dbt_access_canary
+    kind: service
+    owner: platform-team
+    description: Builds governance.access_canary__base; holds no GRANT_SELECT.
+  - id: pub_access_canary
+    kind: service
+    owner: platform-team
+    description: Owns the canary's reader view and moves its audited tag.
+  # The access canary's readers, one per role (contracts/governance/access-canary/grants.yaml).
+  - id: p.canary-full
+    kind: person
+    owner: platform-team
+    description: A made-up reader holding full_reader on the access canary.
+  - id: p.canary-delayed
+    kind: person
+    owner: platform-team
+    description: A made-up reader holding delayed_reader on the access canary.
+  - id: p.canary-scoped
+    kind: person
+    owner: platform-team
+    description: A made-up reader holding public_reader, row-scoped to region north, on the access canary.
