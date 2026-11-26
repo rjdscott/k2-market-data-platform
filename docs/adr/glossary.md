@@ -22,7 +22,7 @@ warehouses and access.
 [dbt and the marts](#dbt-and-the-marts) · [quality and parity](#quality-and-parity) ·
 [Spark query mechanics](#spark-query-mechanics) ·
 [resources](#resources-memory-cpu-and-the-ceiling) · [tools](#tools) ·
-[plan labels](#plan-and-phase-labels)
+[the data product platform](#the-data-product-platform) · [plan labels](#plan-and-phase-labels)
 
 ---
 
@@ -463,7 +463,9 @@ the audit passes. It fits a source that keeps its data, such as a downloaded fil
 failed audit can simply wait. It does not fit the Redpanda ingest, where holding a batch holds
 the offsets while retention keeps deleting unread records; that is why stage 1 audits after
 publishing ([ADR-047](ADR-047-ingest-batch-audit-after-publish.md)), and WAP is reserved for
-file sources (ADR-036).
+file sources (ADR-036). In the target platform of
+[ADR-056](ADR-056-unified-data-product-platform.md) every product's bronze is published this way,
+while its [landing](#medallion-layers-of-a-product) still commits first and audits after.
 Where: [plan P4](../plans/2026-11-24-governed-self-serve-platform/004-fx-data-product.md).
 
 ### Copy-on-write MERGE
@@ -977,6 +979,130 @@ Where: [ADR-023](ADR-023-lakekeeper-rest-catalog.md),
 
 ---
 
+## The data product platform
+
+The terms of the target platform decided in [ADR-056](ADR-056-unified-data-product-platform.md).
+None of it runs yet; its phases build it. The target chapter,
+`../architecture/20-target-data-product-platform.md`, draws each one.
+
+### Data contract
+
+A data contract is the checkable promise about one table: its columns and types, keys, quality
+checks, freshness target and the roles that may read it. In K2 it is one ODCS file per table, and
+in the target its columns are the table's definition of record. A
+[data product](#data-domain-and-data-product) is the owned unit that publishes such tables.
+Where: [ADR-032](ADR-032-odcs-contracts-and-k2gen.md), [ADR-056](ADR-056-unified-data-product-platform.md).
+
+### ODCS and ODPS
+
+Two open standards of the Bitol project of the Linux Foundation, written as YAML and checked
+against their published JSON Schemas. ODCS, the Open Data Contract Standard (v3.2.0), describes one
+table; ODPS, the Open Data Product Standard (v1.1.0), describes one product: identity, owner, state,
+and its input and output ports, the tables it reads and publishes. A field neither standard has is a
+K2 custom property, with its reason.
+Where: `contracts/schema/` (ODCS today; ODPS from the release and rules spine).
+
+### Connector
+
+A connector is the code that reads one kind of source for one product: `kafka`, `public-api`,
+`https-file`, `s3-file`, `sftp` or `ftp`. It is configured in the product's ODPS file, lands what
+it read verbatim in the product's own landing, and never shares a landing with another product.
+File and API kinds run in a one-shot fetch container limited to the product's declared hosts.
+Where: [ADR-056](ADR-056-unified-data-product-platform.md) part 3.
+
+### Medallion layers of a product
+
+The layers a product's data passes through in the target: **landing** (exactly what the source
+sent, with its offsets or content hash), **bronze** (the source's shape, typed), **silver**
+(cleaned and keyed), **gold** (business grain) and **mart** (a consumer's SQL). A product has only
+the layers that add a distinct guarantee. They replace today's shared
+[raw, bronze, silver and gold](#raw-bronze-silver-gold) namespaces.
+Where: [ADR-056](ADR-056-unified-data-product-platform.md) part 2.
+
+### Tested-data marker
+
+An Iceberg [tag](#tag) on each table that dbt builds, moved by the build's wrapper only after the
+table's data tests pass. Interactive SQL readers, the REST API and other products read at the
+marker, so none of them sees a row that failed, or has not yet passed, its tests; the cost is a
+few seconds between a build and its rows becoming visible.
+Where: [ADR-056](ADR-056-unified-data-product-platform.md) part 4.
+
+### Registered code transform
+
+Logic that SQL cannot express, such as order-book replay or event bars, written as named,
+versioned code (`event_bars@1`) with fixtures and a reference implementation, and named by a
+contract instead of a dbt model. It runs on Spark into its domain's warehouse. Contracts hold no
+code of their own.
+Where: [ADR-056](ADR-056-unified-data-product-platform.md) part 4.
+
+### Release
+
+An immutable, content-hashed directory compiled from an approved set of product documents (in 3.0
+the `git archive` of a tag), holding the compiled documents, access rules, platform code, the
+compose file and pinned image digests. Services run only a release, never the working tree;
+`make deploy` moves one pointer per service to it and moves all of them back to the previous
+release if any part reports another.
+Where: [ADR-056](ADR-056-unified-data-product-platform.md) part 6.
+
+### Registry and the seam
+
+The seam is the rule that where product documents are stored may change without changing what
+runs. In 3.0 the store is git and approval is a reviewed pull request. After 3.0 the registry, a
+database of every document version behind an API (and then a UI) that runs the same checks and
+records who approved, becomes the store. The formats, checks, compiler, release and runtime stay.
+Where: [ADR-056](ADR-056-unified-data-product-platform.md) part 1.
+
+### Reader and writer catalogs
+
+In the target each domain has two Trino catalogs over its warehouse. Consumers query the **reader
+catalog**, read-only at the connector, so no statement or [table procedure](#table-procedure) can
+change a table through it. Builds use the **writer catalog** (`<domain>_build`), where each
+product's writer `dbt_<product>` may write only its own namespace and read only its declared
+inputs. They replace today's one writable catalog and one [writer per domain](#domain-writer).
+Where: [ADR-056](ADR-056-unified-data-product-platform.md) part 5.
+
+### Principal, role and grant
+
+A principal is whoever calls: a service, or a person under a pseudonymous id. A role is an access
+level a table's contract offers (`full_reader`, `delayed_reader`, `public_reader`). A grant gives
+one principal one role on one product, approved by that product's owner; a principal holds at most
+one role per product.
+Where: [ADR-056](ADR-056-unified-data-product-platform.md) part 5.
+
+### Named access policy
+
+One of three comparable rules that narrow a role, compiled into Trino row filters and column masks:
+`delay` (only rows older than so many minutes on a named column), `mask` (named columns returned as
+typed nulls) and `rowScope` (only rows whose column holds listed values). Because they compare, a
+check can refuse a product whose policy for a role is weaker than any of its inputs'. Free-form
+filters are not allowed.
+Where: [ADR-056](ADR-056-unified-data-product-platform.md) part 5.
+
+### Lineage
+
+Lineage is the record of what each table was made from. The target keeps it at product level (the
+input and output ports), at model level (the dbt manifest) and as OpenLineage events, an open
+standard event format that Airflow and dbt emit, including which snapshot of a reference product an
+enriched run read.
+Where: [ADR-056](ADR-056-unified-data-product-platform.md) part 7.
+
+### Conformed reference product
+
+A product many domains join to, such as a security master, a currency master or a calendar. It is
+an ordinary product; what makes it conformed is that other contracts declare their keys as ODCS
+relationships to its columns, so a check fails when a reference does not resolve.
+Where: [ADR-056](ADR-056-unified-data-product-platform.md) part 8.
+
+### Valid time and knowledge time
+
+The two points in time a join to history can use. Valid time takes the reference row that applied
+when the fact happened; knowledge time takes the row that could have been known then, which avoids
+using a rate published after the fact. Both use [ADR-030](ADR-030-scd2-security-master.md)'s
+half-open intervals and `9999-12-31` sentinel.
+Where: [ADR-056](ADR-056-unified-data-product-platform.md) part 8.
+
+---
+
 ## Plan and phase labels
 
 ### Phases A to G
@@ -997,6 +1123,18 @@ P4 file sources and the FX product, P5 access, entitlements, lineage and the cat
 controls and SLOs, P7 the release gate. "P3's second pull request" in an ADR is a pull request
 of that phase.
 Where: the `00N-*.md` files in that plan directory.
+
+### The unified platform's phases
+
+The phases of the two plans that build [ADR-056](ADR-056-unified-data-product-platform.md), which
+replace P4 to P7. To the demo tag `v3.0.0-beta.1`: clear the ground (pause ClickHouse, retire the
+old pipeline), the release and rules spine (releases, deploy, catalogs, policies, identity), the run
+spine (connector, landing, bronze, the dbt wrapper and marker, through the ECB rates), serving and
+teaching, Kraken trades and the security master, the enriched product, catalog and lineage, and the
+REST API. Then to `v3.0.0`: remaining connectors, wider crypto, controls, infrastructure as code,
+hardening and the release gate.
+Where: `../plans/2026-11-26-unified-product-platform/README.md` and
+`../plans/2026-11-26-unified-product-platform-to-release/README.md`.
 
 ### Scratch namespace and the P4 spike
 
