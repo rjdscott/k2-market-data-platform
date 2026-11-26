@@ -358,11 +358,15 @@ Where: `main_lineage` in [`docker/lake/offsets.py`](../../docker/lake/offsets.py
 ### Tag
 
 A tag is a named reference to one snapshot that no commit moves (unlike a
-[branch](#branch-and-main)), kept for a set age (`RETAIN 180 DAYS`). [Expiry](#snapshot-expiry-and-the-retention-floor) keeps every
+[branch](#branch-and-main)), kept for a set age (`RETAIN 180 DAYS`, counted from the snapshot's
+own commit time, not from tagging). [Expiry](#snapshot-expiry-and-the-retention-floor) keeps every
 snapshot a tag points at and its files, but removes the untagged snapshots around it, so a walk
 from `main` along parent links stops short of an old tagged snapshot that is still readable.
-K2 tags each [parity](#parity-three-way-and-pinned) pin, and the parity scripts accept a pin
-only if it is on `main`'s lineage or a tag names it: the tag is what keeps an old pin valid.
+K2 tags each [parity](#parity-three-way-and-pinned) pin `parity_<day>` (`parity_<day>_dbt` for
+the dbt side), and the parity scripts accept a pin only if it is on `main`'s lineage or its own
+tag names it; any other tag validates nothing. The tag is what keeps an old pin valid, and since
+nothing records after expiry whether a tagged snapshot was ever on `main`, a pin is tagged only
+after checking it is.
 Readers find tags in the catalog's `loadTable` answer (`refs`, `type: tag`) or in Trino's
 `"<table>$refs"`.
 Where: `tags` in [`notebooks/k2lake.py`](../../notebooks/k2lake.py);
@@ -630,8 +634,8 @@ lake's stored `gold.ohlcv_1m`, and DuckDB's candles computed from silver; bars p
 Spark, DuckDB and a Python reference. Each run reads the snapshot ids pinned in
 `tests/parity/pinned.json`, never the latest, which moves every 5 minutes, so a rerun reads the
 same data and a difference is a bug, not timing. A pinned id is used only if it is on `main`'s
-lineage or a [tag](#tag) names it; any other stops the run, with no fallback to the current
-snapshot. Marts are held to dbt tests instead of three engines
+lineage or its own [tag](#tag), `parity_<day>`, names it; any other stops the run, with no
+fallback to the current snapshot. Marts are held to dbt tests instead of three engines
 ([ADR-035](ADR-035-trino-and-dbt-for-marts.md)).
 Where: [ADR-029](ADR-029-research-production-parity-contract.md); `scripts/parity-ohlcv.sh`,
 `scripts/parity-bars.sh`.

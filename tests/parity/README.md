@@ -4,7 +4,8 @@ The pinned inputs of the last passing three-way OHLCV parity run
 (`scripts/parity-ohlcv.sh`; runbook `docs/runbooks/clickhouse-rebuild-from-lake.md` §4).
 `pinned.json` names the UTC day, the `lake.gold.ohlcv_1m` snapshot-id and the silver
 snapshot-id per venue that `gold.trades` was built from — literal ids, never a moving
-pointer, so the run is repeatable to the same answer. This is the seed of the Phase G CI
+pointer, so the run is repeatable to the same answer. `dbt_trades_snapshot` is the `--dbt`
+side's: the `gold.trades` snapshot D reads, recorded by `--pin-current <day> --dbt`. This is the seed of the Phase G CI
 parity job (plan 004).
 
 The `bars` block is `scripts/parity-bars.sh`'s: the UTC day, the `lake.gold.bars` and
@@ -105,25 +106,38 @@ snapshot needs.
 
 **The tag is what keeps a pin valid, not only what keeps it readable.** The scripts accept a
 pinned id only if it is on `main`'s lineage, the chain of parent links walked back from the
-snapshot `main` points at, or if a tag on that table points at it; both come from the
-catalog's `loadTable` answer (`refs`, `type: tag`). A snapshot only a branch reaches was never
-published and is refused. Expiry breaks the chain: once the snapshots after a pin are expired,
-the walk from `main` no longer reaches it, so about a week after pinning the tag is the only
-thing that still lets the run use the pin. A tagged snapshot whose ancestors are expired reads
-normally: on 2026-11-26 Trino read every pin below by id and by tag name, and Trino and DuckDB
-each read a snapshot whose parent was already expired, by id. DuckDB 1.4.4 reads by id only,
-which is what the scripts pass.
+snapshot `main` points at, or if the pin's own tag on that table points at it: `parity_<day>`,
+the pinned day with underscores, or `parity_<day>_dbt` for `dbt_trades_snapshot`. Any other
+tag validates nothing, so a scratch tag on a branch's commit cannot make it a pin. Both come
+from the catalog's `loadTable` answer (`refs`, `type: tag`). Expiry breaks the chain: once the
+snapshots after a pin are expired, the walk from `main` no longer reaches it, so about a week
+after pinning the tag is the only thing that still lets the run use the pin. A tagged snapshot
+whose ancestors are expired reads normally: on 2026-11-26 Trino read every pin below by id and
+by tag name, and Trino and DuckDB each read a snapshot whose parent was already expired, by
+id. DuckDB 1.4.4 reads by id only, which is what the scripts pass.
+
+**What the run cannot check:** once expiry has cut the chain, nothing in the table says
+whether a tagged snapshot was ever on `main` or only on a branch. So the tagging step checks it,
+before tagging, while the chain still reaches the pin (below).
 
 **A pin that cannot be resolved stops the run**, before anything is read at it, with the
 table, the id and the way out: restore the tag if the snapshot is still in the table, or
 re-pin with `--pin-current` on a green run and tag the new snapshots. There is no fallback:
 until 2026-11-26 the run fell back to `main`'s current snapshot and still exited 0. The one
 way to run at the current snapshot is `--pin-current`, which pins `main`'s head and writes it
-here. The dbt side has no pin of its own: it reads the newest of the day's `gold.trades`
-source snapshots the table still holds, which after a week is the `parity_<day>_dbt` tag's,
-and that snapshot must pass the same rule.
+here.
 
-So each pinned snapshot carries a tag, `parity_<day>`, kept for 180 days:
+**The dbt side reads `dbt_trades_snapshot` and nothing else.** `--pin-current <day> --dbt`
+records it while every `gold.trades` snapshot the day's lake candles were computed from is
+still held: the newest of them by sequence number, which holds every trade those candles
+counted. It is never re-derived, because a week later all of them but the tagged one are
+expired and "the newest still held" could be an older one. Every `--dbt` run requires that it
+is one of the day's source snapshots, that it passes the rule above under `parity_<day>_dbt`,
+and that no source snapshot still held is newer. A `--dbt` run with a pin that lacks it stops,
+saying to re-pin with `--dbt`; a re-pin without `--dbt` drops it.
+
+So each pinned snapshot carries its tag, `parity_<day>`. A tag's 180 days count from the
+snapshot's own commit time, not from tagging: these lapse about 2027-05-25.
 
 | Table | Tag | Pin field |
 |---|---|---|
@@ -131,7 +145,15 @@ So each pinned snapshot carries a tag, `parity_<day>`, kept for 180 days:
 | `lake.silver.trades_binance`, `_coinbase`, `_kraken` | `parity_2026_11_25` | `silver_snapshots` |
 | `lake.gold.bars` | `parity_2026_11_25` | `bars.bars_snapshot` |
 | `lake.gold.trades` | `parity_2026_11_25` | `bars.trades_snapshot` |
-| `lake.gold.trades` | `parity_2026_11_25_dbt` | the snapshot the `--dbt` side prints as `FOR VERSION AS OF` |
+| `lake.gold.trades` | `parity_2026_11_25_dbt` | `dbt_trades_snapshot` |
+
+Before tagging, check each id is on `main`'s lineage (read-only; 1 if it is, 0 for a branch's
+commit or an id from elsewhere; run 2026-11-26):
+
+```bash
+docker exec k2-trino trino --execute 'SELECT count(*) FROM lake.gold."trades$history" WHERE snapshot_id = 6911535457573800498 AND is_current_ancestor'
+#   "1"
+```
 
 Created on 2026-11-26 in one Spark session in `k2-spark-iceberg`, one statement per row:
 
