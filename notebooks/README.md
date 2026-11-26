@@ -124,7 +124,7 @@ A key's FIRST version opens at `1970-01-01`, not at the run that discovered it: 
 asserts what an instrument *is*, and that was true before K2 recorded it, so no trade is ever
 older than its dimension row. `recorded_at` dates when K2 learned it — on those seed rows
 `valid_from < recorded_at`, and the gap is the history nothing observed
-([ADR-030](../adr/ADR-030-scd2-security-master.md) Outcome). Later versions open at their run.
+([ADR-030](../docs/adr/ADR-030-scd2-security-master.md) Outcome). Later versions open at their run.
 
 Numbers printed by these notebooks are not published anywhere else; the published ones are
 in `docs/benchmarks/`. A notebook cell is a query, not a claim.

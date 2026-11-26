@@ -43,12 +43,23 @@ another host, check the first with `python3 scripts/check-env.py` and the second
 sizing arithmetic linked below.
 
 **`make up` and `make dev-up` refuse to start this stack.** Both run `scripts/check-env.py`
-first, which refuses a default or placeholder credential, and the live MinIO root credential is
-MinIO's own default pair ([SECURITY.md](../../SECURITY.md)). Run 2026-11-26 in the live checkout:
+first, which refuses a credential that is a placeholder, equal to its user, a known default or
+under 16 characters, and the live MinIO root credential is MinIO's own default pair
+([SECURITY.md](../../SECURITY.md)). It names each variable it refuses, never a value. What it
+prints for the shipped `.env.example`, where every secret is still its placeholder (run
+2026-11-26; never point it at the live `.env` to copy its output into a document):
 
 ```console
-$ python3 scripts/check-env.py
-check-env: FAIL .env: MINIO_ROOT_USER equals MINIO_ROOT_PASSWORD; set the password to `openssl rand -hex 24`
+$ python3 scripts/check-env.py --env-file .env.example
+check-env: FAIL .env.example: CLICKHOUSE_PASSWORD is unset, empty or still the .env.example placeholder
+check-env: FAIL .env.example: K2_QUANT_PASSWORD is unset, empty or still the .env.example placeholder
+check-env: FAIL .env.example: PREFECT_DB_PASSWORD is unset, empty or still the .env.example placeholder
+check-env: FAIL .env.example: MINIO_ROOT_PASSWORD is unset, empty or still the .env.example placeholder
+check-env: FAIL .env.example: LAKEKEEPER_ENCRYPTION_KEY is unset, empty or still the .env.example placeholder
+check-env: FAIL .env.example: AIRFLOW_DB_PASSWORD is unset, empty or still the .env.example placeholder
+check-env: FAIL .env.example: AIRFLOW_JWT_SECRET is unset, empty or still the .env.example placeholder
+check-env: FAIL .env.example: AIRFLOW_API_SECRET_KEY is unset, empty or still the .env.example placeholder
+check-env: FAIL .env.example: GRAFANA_PASSWORD is unset, empty or still the .env.example placeholder
 ```
 
 Do **not** edit the pair in `.env` to get past it: each Lakekeeper warehouse keeps its own
@@ -370,6 +381,16 @@ rule below). `-t <seconds>` gives the old container that long to stop cleanly.
 | `minio`, `lakekeeper`, `spark-iceberg`, `trino`, `prefect-db` | with the four DAGs paused and nothing running (steps 1 and 2 below): every lake and mart write goes through them, and `prefect-db` holds Airflow's and Lakekeeper's databases | a run cut mid-way commits nothing and fails or retries; pausing keeps the record clean | `minio`: healthy in 6 s; `trino` with `--force-recreate`: 10 s; `spark-iceberg`: seconds. `lakekeeper` and `prefect-db` not yet recreated on this stack |
 | `airflow-scheduler`, `airflow-api-server`, `airflow-dag-processor` | paused and nothing running: tasks run inside the scheduler and report to the api-server | a running task dies with them | not in this rollout; see [airflow-scheduling.md](../runbooks/airflow-scheduling.md) section 3 |
 | `airflow-statsd` | as the row above: after recreating it, restart the three Airflow services, which resolve its address only at start | every Airflow metric stops until they restart | [airflow-scheduling.md](../runbooks/airflow-scheduling.md) section 3 |
+
+**`prefect-db` will be recreated by the next `docker compose up -d` that includes it.** Since
+2026-11-26 its image is pinned by digest (`postgres@sha256:fe0737ba…`, the same 15.19 image the
+container already runs), and that changes the service's compose definition, so the first
+`docker compose up -d` naming `prefect-db`, or a bare one, or one for a service that depends on
+it without `--no-deps` (`airflow-migrate`, `lakekeeper-migrate`), replaces the container of the
+catalog database. The data is on the `postgres-data` volume and survives. Every service using
+it drops its connection: `lakekeeper`, the three Airflow services, and `prefect-server` when the
+legacy profile runs. Do it deliberately, with the pattern below (`prefect-db` as `<service>` in
+step 3), not as a side effect; until then, start or recreate other services with `--no-deps`.
 
 ### The pattern: pause, wait for idle, recreate, verify, unpause
 
