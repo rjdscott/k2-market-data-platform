@@ -285,3 +285,13 @@ def test_clickhouse_is_paused_behind_hot_gold_and_nothing_default_needs_it():
     assert services["clickhouse"]["image"].startswith("clickhouse/clickhouse-server:")
     needs = [n for n, s in services.items() if not s.get("profiles") and "clickhouse" in (s.get("depends_on") or {})]
     assert needs == []
+
+
+def test_the_old_lake_ingest_services_are_gone_and_nothing_waits_on_them():
+    # ADR-056: lake-ddl ran a DDL file and lake-metrics an exporter that are both
+    # archived in legacy/v3-lake-ingest/; brought back, either would start a
+    # script that is not there, and the scheduler would wait on it at boot.
+    services = yaml.safe_load(COMPOSE.read_text())["services"]
+    old = {"lake-ddl", "lake-metrics"}
+    assert old.isdisjoint(services)
+    assert [n for n, s in services.items() if old & set(s.get("depends_on") or {})] == []

@@ -1,21 +1,20 @@
 #!/usr/bin/env bash
 # "Is it up?" in one command: every container healthy, a message on every venue
-# in the last 2 minutes, a lake that is still committing, every capture doing
-# what the registry says about its order book, and, on a host where the nightly
-# backup is scheduled, a copy under 26 hours old.
+# in the last 2 minutes, every capture doing what the registry says about its
+# order book, and, on a host where the nightly backup is scheduled, a copy under
+# 26 hours old. The lake checks print one SKIP line until phase 004.
 #
 # `make health` runs this, and scripts/dev-up.sh calls it for its steps (e) and
 # (f) — one implementation, so a check added here is a check the bring-up does.
 #
-# The lake half is the point: before it existed the probe printed PASS with a
-# 141-hour-stale lake and every ingest run failing, because it only ever asked
-# ClickHouse. Exit status is 1 if anything printed FAIL, 0 otherwise (a WARN is
-# "warming up", not "broken").
+# The lake half exists because the probe once printed PASS with a 141-hour-stale
+# lake and every ingest run failing: it only ever asked ClickHouse. Exit status
+# is 1 if anything printed FAIL, 0 otherwise (a WARN is "warming up", not
+# "broken"; a SKIP is a check stood down, naming the phase that restores it).
 set -uo pipefail
 cd "$(git rev-parse --show-toplevel)"
 
 WAIT=${K2_HEALTH_WAIT:-300}          # seconds to wait for containers to go healthy
-LAKE_MAX_AGE=${K2_HEALTH_LAKE_MAX_AGE:-1800}   # 5-min ingest; 30 min is 6 missed runs
 
 fail=0
 step()   { printf '\n== %s ==\n' "$*"; }
@@ -30,10 +29,6 @@ set -a
 # shellcheck disable=SC1091 # .env is generated locally from .env.example
 . ./.env
 set +a
-# airflow_cli, airflow_task_in_flight and LAKE_DAG, the ones the chaos scripts
-# and lake-verify pause the ingest with.
-# shellcheck source=chaos/lib.sh
-. scripts/chaos/lib.sh
 
 # ── (1) every container healthy ──────────────────────────────────────────────
 step "(1) container health (<= $((WAIT / 60)) min)"
@@ -129,86 +124,20 @@ for venue in binance kraken coinbase; do
   fi
 done
 
-# ── (3) the lake is still committing ─────────────────────────────────────────
+# ── (3) the lake: stood down until phase 004 ──────────────────────────────────
+# The commit age came from the old pipeline's exporter (lake-metrics) and the
+# last run from its 5-minute ingest DAG, both retired with it
+# (legacy/v3-lake-ingest/, ADR-056). No live data lands in the lake until phase
+# 004, which brings freshness back per product. Nothing here is queried.
 step "(3) lake"
-age=$(curl -s --get localhost:9090/api/v1/query \
-  --data-urlencode 'query=time() - max(k2_lake_last_commit_ts_seconds)' 2>/dev/null \
-  | python3 -c 'import json,sys;r=json.load(sys.stdin)["data"]["result"];print(int(float(r[0]["value"][1])) if r else "")' 2>/dev/null || true)
-if [ -z "$age" ]; then
-  bad "(3) lake commit age" "FAIL (Prometheus has no k2_lake_last_commit_ts_seconds: Prometheus down, lake-metrics down, or the lake has never committed)"
-elif [ "$age" -gt "$LAKE_MAX_AGE" ]; then
-  bad "(3) lake commit age" "FAIL (last commit ${age}s ago = $((age / 3600))h: the lake is stale, see docs/runbooks/lake-ingest-lag.md section 2)"
-else
-  result "(3) lake commit age" "PASS (last commit ${age}s ago)"
-fi
+result "(3) lake" "SKIP (commit age and last ingest run: the old lake ingest and its exporter are retired, legacy/v3-lake-ingest/ and ADR-056; returns in phase 004)"
 
-# The last finished lake_ingest runs, through the Airflow CLI in the scheduler
-# (ADR-034): the scheduled ones of the last LAKE_MAX_AGE, newest first, so none
-# at all means the 5-min schedule has stopped firing, which is also what a
-# stale DAG folder looks like (runbook §5): healthy containers, no new runs.
-# Queued and running runs
-# are excluded on purpose: they say nothing about whether the last one worked.
-#
-# A run whose only task skipped is `success` to Airflow, so a success is read
-# again at the task: success, or skipped (ingest.py exit 75, another lake
-# writer holds the lock). One or two skips are the lock doing its job, and any
-# number while Airflow's lake_maintenance or lake_rebuild runs is the nightly
-# window; three in a row with neither running is a stuck lock, the case
-# AirflowLakeIngestSkippedRepeatedly pages on. A holder that ended in the last
-# 15 minutes still accounts for them, the alert's grace: its skips stay the
-# newest finished runs until the first run after it has finished.
-runbook=docs/runbooks/airflow-scheduling.md
-# holder_ended_recently <dag_id> -> 0 if a run of <dag_id> ended in the last 15 min.
-holder_ended_recently() {
-  airflow_cli dags list-runs "$1" -o json | python3 -c '
-import json, sys, time
-from datetime import datetime
-sys.exit(not any(r["end_date"] and time.time() - datetime.fromisoformat(r["end_date"]).timestamp() < 900
-                 for r in json.load(sys.stdin)))' 2>/dev/null
-}
-since=$(date -u -d "@$(( $(date +%s) - LAKE_MAX_AGE ))" +%FT%T+00:00)
-runs=$(airflow_cli dags list-runs "$LAKE_DAG" -o json --start-date "$since" | python3 -c '
-import json, sys
-done = [r for r in json.load(sys.stdin) if r["state"] in ("success", "failed")][:3]
-print("\n".join(r["run_id"] + " " + r["state"] for r in done) or "NONE")' 2>/dev/null || true)
-skips=0 last=""
-while read -r run_id state; do
-  [ -n "${run_id:-}" ] && [ "$run_id" != NONE ] || break
-  if [ "$state" = success ]; then
-    state=$(airflow_cli tasks states-for-dag-run "$LAKE_DAG" "$run_id" -o json \
-      | python3 -c 'import json,sys; print(json.load(sys.stdin)[0]["state"])' 2>/dev/null || echo unknown)
-  fi
-  if [ "$state" = skipped ]; then skips=$((skips + 1)); else last="$state $run_id"; break; fi
-done <<< "$runs"
-holder=""
-if [ "$skips" -gt 0 ] && [ -z "$last" ]; then
-  for dag in lake_maintenance lake_rebuild; do
-    if airflow_task_in_flight "$dag"; then holder="while $dag holds the lake lock"; break; fi
-    if holder_ended_recently "$dag"; then holder="under $dag, which ended in the last 15 min"; break; fi
-  done
-fi
-label="(3) last $LAKE_DAG run"
-if [ -z "$runs" ]; then
-  bad "$label" "FAIL (the Airflow CLI in $AIRFLOW_CONTAINER did not answer: is airflow-scheduler up? $runbook §1)"
-elif [ "$runs" = NONE ]; then
-  bad "$label" "FAIL (no $LAKE_DAG run finished in the last $((LAKE_MAX_AGE / 60)) min: the DAG is stale or paused, or the scheduler stopped, $runbook §5 and §1)"
-elif [ "${last%% *}" = success ]; then
-  result "$label" "PASS (${last#* } success$([ "$skips" -gt 0 ] && echo ", then $skips skipped: the lake lock was held"))"
-elif [ -n "$last" ]; then
-  bad "$label" "FAIL (${last#* } ${last%% *}: $runbook §2)"
-elif [ -n "$holder" ]; then
-  result "$label" "PASS ($skips skipped $holder, as it should)"
-elif [ "$skips" -ge 3 ]; then
-  bad "$label" "FAIL ($skips skipped in a row and no Airflow maintenance or rebuild running: the lake lock is stuck, $runbook §3)"
-else
-  result "$label" "WARN ($skips skipped in a row: another lake writer holds the lock; FAIL at 3, $runbook §3)"
-fi
-
-# ── (4) the order-book switch: process, host file and Spark's copy agree ─────
+# ── (4) the order-book switch: process and host file agree ───────────────────
 # ADR-050. Each capture reads config/instruments.yaml once, at start, and exports
-# what it read as k2_capture_book_capture; the lake's book-audit skip reads the
-# Spark container's mounted copy. A capture not recreated after a change, or a
-# stale mount, leaves the three disagreeing, and nothing else would show it.
+# what it read as k2_capture_book_capture. A capture not recreated after a
+# change leaves the two disagreeing, and nothing else would show it. (Spark's
+# mounted copy was compared too while the old lake's book audit read it; that
+# audit retired with the old lake ingest.)
 step "(4) order-book switch (ADR-050)"
 # book_capture's venue/value pairs from a registry on stdin. Python's re, not
 # PyYAML: the host need not have it, and the section is a flat map.
@@ -220,7 +149,6 @@ for venue, value in re.findall(r"^[ \t]+([a-z]+):[ \t]*([^\s#]+)", m.group(1) if
     print(venue, value)' 2>/dev/null
 }
 host_sw=$(book_switch 2>/dev/null < config/instruments.yaml)
-spark_sw=$(docker exec k2-spark-iceberg cat /home/iceberg/config/instruments.yaml 2>/dev/null | book_switch)
 # on/off from a registry value, "?" for anything that is not a YAML boolean.
 as_state() { case "$1" in true|True|TRUE) echo on ;; false|False|FALSE) echo off ;; "") echo missing ;; *) echo "?$1" ;; esac; }
 for venue in binance kraken coinbase; do
@@ -233,8 +161,7 @@ for venue in binance kraken coinbase; do
   gauge=$(printf '%s\n' "$metrics" | awk -v v="$venue" '$1 == "k2_capture_book_capture{exchange=\"" v "\"}" { print $2 }')
   case "$gauge" in 1|1.0) proc=on ;; 0|0.0) proc=off ;; "") proc=missing ;; *) proc="?$gauge" ;; esac
   host=$(as_state "$(printf '%s\n' "$host_sw" | awk -v v="$venue" '$1 == v { print $2 }')")
-  spark=$(as_state "$(printf '%s\n' "$spark_sw" | awk -v v="$venue" '$1 == v { print $2 }')")
-  states="process $proc, host file $host, spark-iceberg's copy $spark"
+  states="process $proc, host file $host"
   if [ "$proc" = missing ]; then
     bad "$label" "FAIL (capture-$venue exports no k2_capture_book_capture: an image older than ADR-050 subscribes to books whatever the file says; $states)"
     continue
@@ -242,15 +169,8 @@ for venue in binance kraken coinbase; do
     bad "$label" "FAIL (config/instruments.yaml book_capture.$venue is $host, not true or false; $states)"
     continue
   fi
-  problems=""
   if [ "$proc" != "$host" ]; then
-    problems="capture-$venue was not recreated since the registry changed: docker compose up -d --force-recreate --no-deps capture-$venue"
-  fi
-  if [ "$spark" != "$host" ]; then
-    problems="${problems:+$problems; }spark-iceberg's mounted copy is stale, and the audit skip reads it: when no ingest runs, docker compose up -d --force-recreate --no-deps spark-iceberg"
-  fi
-  if [ -n "$problems" ]; then
-    bad "$label" "FAIL ($states. $problems)"
+    bad "$label" "FAIL ($states. capture-$venue was not recreated since the registry changed: docker compose up -d --force-recreate --no-deps capture-$venue)"
   else
     result "$label" "PASS (books $proc: $states)"
   fi

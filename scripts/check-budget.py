@@ -252,8 +252,9 @@ def exposure_problems(services: dict) -> list[str]:
     return problems
 
 
-# Archived or immutable: legacy/ is built by nothing, docs/research/ holds the
-# spikes as they ran.
+# Archived or immutable: legacy/ is built by no service (CI builds the archived
+# lake-metrics Dockerfile only to keep its required check), docs/research/ holds
+# the spikes as they ran.
 NOT_BUILT = ("legacy/", "docs/research/")
 
 
