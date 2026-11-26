@@ -12,11 +12,11 @@ Numbered chapters, in reading order. Start at [00](00-start-here.md).
 | 05 | [Capture](05-capture.md) | one Rust process per venue: frame loop, sink, image |
 | 06 | [Capture, venues](06-capture-venues.md) | Binance, Kraken, Coinbase dialects; sequencing, checksum, resync |
 | 07 | [Wire contracts](07-wire-contracts.md) | topics, Avro records, keying, retention, registry |
-| 08 | [Lake ingest](08-lake-ingest.md) | Redpanda to Iceberg exactly once; incremental layers; audits |
-| 09 | [Lake layers](09-lake-layers.md) | raw, bronze, silver, gold, what each holds and why |
-| 10 | [ClickHouse gold](10-clickhouse-gold.md) | dedup contract, candles on read, reload from the lake |
-| 11 | [Observability](11-observability.md) | metrics, 36 rules as code with runbooks and promtool tests, chaos with timed recovery |
-| 12 | [Data strategy](12-data-strategy.md) | why four layers; what ClickHouse keeps; retention vs disk |
+| 08 | [Lake ingest](08-lake-ingest.md) | retired 2026-11-26: a stub pointing at the archived chapter in `legacy/v3-lake-ingest/` |
+| 09 | [Lake layers](09-lake-layers.md) | retired 2026-11-26: a stub pointing at the archived chapter in `legacy/v3-lake-ingest/` |
+| 10 | [ClickHouse gold](10-clickhouse-gold.md) | paused: dedup contract, candles on read, reload from the lake |
+| 11 | [Observability](11-observability.md) | metrics, rules as code with runbooks and promtool tests, chaos with timed recovery |
+| 12 | [Data strategy](12-data-strategy.md) | the v3 strategy, retired: why four layers; what ClickHouse keeps; retention vs disk |
 | 13 | [Schema design](13-schema-design.md) | every column, every layer, the wire contracts |
 | 14 | [Partitioning strategy](14-partitioning-strategy.md) | partitions, sort orders, file sizes, ClickHouse keys |
 | 15 | [Capacity model](15-capacity-model.md) | predicted vs measured bytes/day, CPU, disk runway |

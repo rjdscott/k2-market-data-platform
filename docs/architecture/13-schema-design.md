@@ -4,9 +4,11 @@
 > **Read this if** anyone writing a query or a schema change.
 > **Before this** chapter 07, 09.
 
-Two contracts live here at once. **v3** is the wire format going forward, three Avro records under `com.k2.market.v3`, described below, and the Iceberg lake they land in. **v2** (`NormalizedTrade` and the ClickHouse `k2` medallion) was dropped on 2026-08-27; its DDL is archived in [`legacy/v2-clickhouse/`](../../legacy/v2-clickhouse/README.md). Nothing runs against it.
+**Retired, 2026-11-26.** The v3 lake layers this chapter documents column by column (raw, bronze, silver, gold, audit) and the dbt marts read from them are retired: the ingest that wrote them was archived to [`legacy/v3-lake-ingest/`](../../legacy/v3-lake-ingest/) with its DDL and code, and the tables were backed up and dropped ([ADR-056](../adr/ADR-056-unified-data-product-platform.md), phase 000 of the [platform plan](../plans/2026-11-26-unified-product-platform/README.md)). No live crypto data lands in the lake until phase 004, where a table's schema lives in its product's contract ([chapter 20](20-target-data-product-platform.md)). The wire contract is unchanged and still runs; ClickHouse `gold` is paused ([ADR-057](../adr/ADR-057-clickhouse-hot-tier-paused-during-platform-build.md)). The lake sections below are kept as the record of the retired tables.
 
-DDL: [`docker/clickhouse/ddl/10-gold-tables.sql`](../../docker/clickhouse/ddl/10-gold-tables.sql) (served `gold`), [`legacy/v2-clickhouse/01-k2-schema.sql`](../../legacy/v2-clickhouse/01-k2-schema.sql) (v2 `k2`, dropped 2026-08-27), [`docker/lake/ddl/lake.sql`](../../docker/lake/ddl/lake.sql) (lake), [`schemas/avro/`](../../schemas/avro/) (wire).
+Two contracts live here at once. **v3** is the wire format going forward, three Avro records under `com.k2.market.v3`, described below, and the Iceberg lake they landed in until the v3 lake ingest retired. **v2** (`NormalizedTrade` and the ClickHouse `k2` medallion) was dropped on 2026-08-27; its DDL is archived in [`legacy/v2-clickhouse/`](../../legacy/v2-clickhouse/README.md). Nothing runs against it.
+
+DDL: [`docker/clickhouse/ddl/10-gold-tables.sql`](../../docker/clickhouse/ddl/10-gold-tables.sql) (served `gold`), [`legacy/v2-clickhouse/01-k2-schema.sql`](../../legacy/v2-clickhouse/01-k2-schema.sql) (v2 `k2`, dropped 2026-08-27), [`lake.sql`](../../legacy/v3-lake-ingest/lake/ddl/lake.sql) (lake, archived with the retired ingest), [`schemas/avro/`](../../schemas/avro/) (wire).
 
 ---
 
@@ -20,9 +22,9 @@ Three records, namespace `com.k2.market.v3`, registered under TopicNameStrategy 
 | `Trade` | `market.crypto.v3.trades.<ex>` | One execution, normalised |
 | `BookSnapshotL2` | `market.crypto.v3.book.<ex>` | Top-20 L2 snapshot at 1 Hz, parallel `bid_px/bid_qty/ask_px/ask_qty` arrays |
 
-The `v3` path segment is not decoration. `market.crypto.trades.<ex>` is the *v2* normalized topic: its `-value` subject holds `NormalizedTrade`, and posting `trade.avsc` against it returns `{"is_compatible":false}` (checked against the running stack, 2026-08-26). Reusing the name would have failed `redpanda-init` and blocked every feed handler from starting, and the parallel-run window needed the Rust and Kotlin producers on separate topics anyway. Its producers retired on 2026-08-26 ([ADR-019](../adr/ADR-019-rust-capture-tier.md)), and the six v2 topics were deleted at the Phase E cutover on 2026-08-27; the `v3` prefix stays because it is what the registry subjects and the lake's lineage columns carry. Reasoning and the cutover path are in [`schemas/README.md`](../../schemas/README.md).
+The `v3` path segment is not decoration. `market.crypto.trades.<ex>` is the *v2* normalized topic: its `-value` subject holds `NormalizedTrade`, and posting `trade.avsc` against it returns `{"is_compatible":false}` (checked against the running stack, 2026-08-26). Reusing the name would have failed `redpanda-init` and blocked every feed handler from starting, and the parallel-run window needed the Rust and Kotlin producers on separate topics anyway. Its producers retired on 2026-08-26 ([ADR-019](../adr/ADR-019-rust-capture-tier.md)), and the six v2 topics were deleted at the Phase E cutover on 2026-08-27; the `v3` prefix stays because it is what the registry subjects carry, as the retired lake's lineage columns did. Reasoning and the cutover path are in [`schemas/README.md`](../../schemas/README.md).
 
-**Fixed-point `int64` at 1e-8 replaces decimal strings.** Every price and quantity is `round(value × 1e8)`: 45285.2 on the wire is `4528520000000`. v2 carried decimals as strings, which was the right call for a JSON-readable topic nobody consumed programmatically; v3's topics are read by ClickHouse's `AvroConfluent`, by Spark, and by Rust, and a plain `long` is the one representation all three decode identically and do exact arithmetic on. Avro's `decimal` logical type would be more self-describing and costs a `BigDecimal` reconstruction in every consumer with three different sets of precision rules, the trade-off, and the >8-decimal-place rejection counter that guards it, are argued in full in [`schemas/README.md`](../../schemas/README.md#the-fixed-point-contract).
+**Fixed-point `int64` at 1e-8 replaces decimal strings.** Every price and quantity is `round(value × 1e8)`: 45285.2 on the wire is `4528520000000`. v2 carried decimals as strings, which was the right call for a JSON-readable topic nobody consumed programmatically; v3's topics were designed to be read by ClickHouse's `AvroConfluent`, by Spark, and by Rust, and a plain `long` is the one representation all three decode identically and do exact arithmetic on. Avro's `decimal` logical type would be more self-describing and costs a `BigDecimal` reconstruction in every consumer with three different sets of precision rules, the trade-off, and the >8-decimal-place rejection counter that guards it, are argued in full in [`schemas/README.md`](../../schemas/README.md#the-fixed-point-contract).
 
 **`recv_ts_ns` is in the record body, not just a header.** v2's only wall clock was taken after JSON parse and normalisation, so exchange-clock skew and platform latency were not separable in any stored row. In v3 it is the first statement on frame receipt, it is on all three records, and it is duplicated as a Kafka header so a lag monitor need not deserialise. The body copy is authoritative.
 
@@ -34,36 +36,37 @@ The `v3` path segment is not decoration. `market.crypto.trades.<ex>` is the *v2*
 
 ---
 
-## v3 layers: as built
+## v3 layers: as built, retired 2026-11-26
 
-The strategy is [data-strategy.md](12-data-strategy.md); this is the contract per layer. Every
-table is created by [`docker/lake/ddl/lake.sql`](../../docker/lake/ddl/lake.sql), applied by the
-`lake-ddl` one-shot; ClickHouse `gold` by [`docker/clickhouse/ddl/10-gold-tables.sql`](../../docker/clickhouse/ddl/10-gold-tables.sql).
+The strategy is [data-strategy.md](12-data-strategy.md); this is the contract per layer as it ran
+until the retirement, kept as the record of the dropped tables. Every lake table was created by
+[`lake.sql`](../../legacy/v3-lake-ingest/lake/ddl/lake.sql), applied by the `lake-ddl` one-shot, both retired;
+ClickHouse `gold` by [`docker/clickhouse/ddl/10-gold-tables.sql`](../../docker/clickhouse/ddl/10-gold-tables.sql).
 
 | Layer | Tables | Column contract | Lineage | Identifier |
 |---|---|---|---|---|
-| **Raw** | `raw.messages` (exists), `raw.pcap` (designed, not built) | frame bytes verbatim, `recv_ts_ns`, `conn_id`, `conn_msg_seq`, `topic`/`partition`/`offset`, `schema_id`, headers | Kafka coordinates | `(topic, partition, offset)` |
-| **Bronze** | seven, one per venue × message type plus one reference table: `bronze.kraken_trade`, `bronze.kraken_book`, `bronze.binance_trade`, `bronze.binance_depth20`, `bronze.coinbase_market_trades`, `bronze.coinbase_level2`, `bronze.kraken_instrument` | the venue's field names and JSON types as sent, strings stay strings, no renames, no unit changes; nested arrays as `ARRAY<STRUCT>` | `src_topic`, `src_partition`, `src_offset` → raw | raw lineage + position within the frame |
-| **Silver** | `silver.trades_<venue>`, `silver.book_<venue>` | bronze typed: `DECIMAL(28,10)` from strings, `TIMESTAMP` UTC micros, `canonical_symbol` *added* beside the native symbol, `side` normalised to `buy`/`sell` with the native value kept, flags `checksum_ok`, `venue_replay`, `seq_gap`, `precision_loss`; every delivery kept | `src_*` → bronze row | bronze lineage (every delivery is a row) |
-| **Gold** | `gold.trades`, `gold.book_top20`, `gold.dim_instrument`, `gold.dim_venue`, `gold.ohlcv_{1m,5m,1h,1d}`, `gold.bars`, `gold.bbo_1s` | one schema for all venues: `exchange`, `canonical_symbol`, fixed-point `BIGINT` @1e-8 (`price_e8`, `qty_e8`), `exchange_ts`, `recv_ts_ns`, `trade_id`, `side`; one row per logical trade (venue replays collapsed here) | `src_*` → silver row that won the dedup | `(exchange, canonical_symbol, trade_id)`, true here, and only here |
-| **ClickHouse gold** | `gold.trades`, `gold.book_top20`, `gold.ohlcv_{1m,5m,1h,1d}`, `gold.bars`, `gold.bbo_1s`, `gold.feed_errors`, plus the `ohlcv_live` / `bbo_live` views. `ReplacingMergeTree`, **no TTL**. **No `dim_*`**: the security master is a lake table only | the same values, not the same spellings: `price`/`qty`/`open`…`close` are `ALIAS` columns over the `_e8` integers, and the book arrays drop the `_e8` suffix | `src_snapshot_id` of the lake commit it was loaded from | as lake gold |
+| **Raw**, retired | the raw `messages` table, `raw.pcap` (designed, not built) | frame bytes verbatim, `recv_ts_ns`, `conn_id`, `conn_msg_seq`, `topic`/`partition`/`offset`, `schema_id`, headers | Kafka coordinates | `(topic, partition, offset)` |
+| **Bronze**, retired | seven, one per venue × message type plus one reference table: `bronze.kraken_trade`, `bronze.kraken_book`, `bronze.binance_trade`, `bronze.binance_depth20`, `bronze.coinbase_market_trades`, `bronze.coinbase_level2`, `bronze.kraken_instrument` | the venue's field names and JSON types as sent, strings stay strings, no renames, no unit changes; nested arrays as `ARRAY<STRUCT>` | `src_topic`, `src_partition`, `src_offset` → raw | raw lineage + position within the frame |
+| **Silver**, retired | `silver.trades_<venue>`, `silver.book_<venue>` | bronze typed: `DECIMAL(28,10)` from strings, `TIMESTAMP` UTC micros, `canonical_symbol` *added* beside the native symbol, `side` normalised to `buy`/`sell` with the native value kept, flags `checksum_ok`, `venue_replay`, `seq_gap`, `precision_loss`; every delivery kept | `src_*` → bronze row | bronze lineage (every delivery is a row) |
+| **Gold**, retired | `gold.trades`, `gold.book_top20`, `gold.dim_instrument`, `gold.dim_venue`, `gold.ohlcv_{1m,5m,1h,1d}`, `gold.bars`, `gold.bbo_1s` | one schema for all venues: `exchange`, `canonical_symbol`, fixed-point `BIGINT` @1e-8 (`price_e8`, `qty_e8`), `exchange_ts`, `recv_ts_ns`, `trade_id`, `side`; one row per logical trade (venue replays collapsed here) | `src_*` → silver row that won the dedup | `(exchange, canonical_symbol, trade_id)`, true here, and only here |
+| **ClickHouse gold**, paused, its lake source retired | `gold.trades`, `gold.book_top20`, `gold.ohlcv_{1m,5m,1h,1d}`, `gold.bars`, `gold.bbo_1s`, `gold.feed_errors`, plus the `ohlcv_live` / `bbo_live` views. `ReplacingMergeTree`, **no TTL**. **No `dim_*`**: the security master is a lake table only | the same values, not the same spellings: `price`/`qty`/`open`…`close` are `ALIAS` columns over the `_e8` integers, and the book arrays drop the `_e8` suffix | `src_snapshot_id` of the lake commit it was loaded from | as lake gold |
 
-| **Audit** | `audit.checks` | `run_ts`, `job`, `check_name`, `scope`, `passed`, `observed`, `detail`; one row per check per run, append-only. The ingest files `batch_offsets` here only when a batch misses its offsets ([ADR-047](../adr/ADR-047-ingest-batch-audit-after-publish.md)) | `job` names who asserted it | none: a failed check is never edited out |
-| **Marts** (domain warehouses, not the lake) | `market_analytics.candles.ohlcv_1m`, `market_analytics.delayed_candles.ohlcv_delayed_20m` (view), `market_analytics.venue_quality.venue_quality_scorecard`, `governance.quality_results.dq_results` (view) | SQL on Trino over lake tables, Trino's types (`decimal(38,10)`, `timestamp(6) with time zone`); defined by the dbt models under [`dbt/models/`](../../dbt/models/) | none on the row: a mart is rebuilt whole from the lake | its grain, declared in its product's `marts` entry and tested unique by dbt |
+| **Audit**, retired | the audit `checks` table | `run_ts`, `job`, `check_name`, `scope`, `passed`, `observed`, `detail`; one row per check per run, append-only. The ingest files `batch_offsets` here only when a batch misses its offsets ([ADR-047](../adr/ADR-047-ingest-batch-audit-after-publish.md)) | `job` names who asserted it | none: a failed check is never edited out |
+| **Marts**, retired (domain warehouses, not the lake) | `market_analytics.candles.ohlcv_1m`, `market_analytics.delayed_candles.ohlcv_delayed_20m` (view), `market_analytics.venue_quality.venue_quality_scorecard`, `governance.quality_results.dq_results` (view) | SQL on Trino over lake tables, Trino's types (`decimal(38,10)`, `timestamp(6) with time zone`); defined by the dbt models under [`dbt/models/`](../../dbt/models/) | none on the row: a mart is rebuilt whole from the lake | its grain, declared in its product's `marts` entry and tested unique by dbt |
 
-Per-table grain, partitioning, time columns, dedup keys and a runnable example each:
-[data-catalog.md](../operations/data-catalog.md).
+Per-table grain, partitioning, time columns, dedup keys and a runnable example each, as they
+were: [data-catalog.md, archived](../../legacy/v3-lake-ingest/docs/operations/data-catalog.md).
 
-**Marts and quality results, landed 2026-11-25.** A mart's columns are its dbt model's
-`SELECT`; there is no lake DDL for it. `market_analytics.candles.ohlcv_1m` has
-`gold.ohlcv_1m`'s grain and columns without `src_snapshot_id` and `computed_at`, and every
-arithmetic step casts, because Trino's decimal rules differ from Spark's
-([ADR-035](../adr/ADR-035-trino-and-dbt-for-marts.md), [`dbt/README.md`](../../dbt/README.md)).
-The quality results have two shapes. Each domain's `dq.dbt_test_results` is one row per dbt
+**Marts and quality results, landed 2026-11-25, retired 2026-11-26.** A mart's columns are its
+dbt model's `SELECT`; there is no lake DDL for it. The candles mart's `ohlcv_1m` had lake gold's
+`ohlcv_1m` grain and columns without `src_snapshot_id` and `computed_at`, and every
+arithmetic step cast, because Trino's decimal rules differ from Spark's
+([ADR-035](../adr/ADR-035-trino-and-dbt-for-marts.md), [`dbt/README.md`, archived](../../legacy/v3-lake-ingest/dbt/README.md)).
+The quality results had two shapes. Each domain's `dq.dbt_test_results` was one row per dbt
 test per run: `invocation_id`, `run_started_at`, `writer`, `unique_id`, `test_name`,
 `tested`, `status`, `failures`, `execution_time`, `message`
-([`record_test_results.sql`](../../dbt/macros/record_test_results.sql)). The view
-`governance.quality_results.dq_results` reads those and `audit.checks` in one shape:
+([`record_test_results.sql`](../../dbt/macros/record_test_results.sql)). The governance view
+`dq_results` read those and the lake's audit table in one shape:
 `checked_at`, `source_system`, `domain`, `subject`, `check_name`, `status`, `detail`
 ([ADR-046](../adr/ADR-046-governance-domain-and-quality-results.md)). The lake columns a mart
 reads are the contract between the two: `make generate` writes them, with Trino's types, into
@@ -72,38 +75,39 @@ reads are the contract between the two: `make generate` writes them, with Trino'
 
 Rules: each layer is derived only from the one above; lineage points one layer up; vendor
 fields are never dropped (bronze columns, kept through silver); dedup is a gold concern;
-schema evolution is add-nullable-only at every layer, with `raw.messages` frozen.
+schema evolution is add-nullable-only at every layer, with the raw table frozen.
 
-**Silver trades, landed 2026-08-27.** [`docker/lake/silver.py`](../../docker/lake/silver.py) and the three `silver.trades_<venue>` tables in [`lake.sql`](../../docker/lake/ddl/lake.sql): one typed row per trade with the frame position as the last identifier field, `canonical_symbol` resolved from `config/instruments.yaml`, `side` normalised beside `side_native`, and the flags as measurements, `venue_replay`, `seq_gap` + `missing_before` (trade ids are sequential per symbol on all three venues, so a jump is a hole), `precision_loss`. Books follow with Kraken's checksum verification ([`docker/lake/README.md`](../../docker/lake/README.md) § Silver).
+**Silver trades, landed 2026-08-27, retired 2026-11-26.** [`silver.py`](../../legacy/v3-lake-ingest/lake/silver.py) and the three `silver.trades_<venue>` tables in [`lake.sql`](../../legacy/v3-lake-ingest/lake/ddl/lake.sql): one typed row per trade with the frame position as the last identifier field, `canonical_symbol` resolved from `config/instruments.yaml`, `side` normalised beside `side_native`, and the flags as measurements, `venue_replay`, `seq_gap` + `missing_before` (trade ids are sequential per symbol on all three venues, so a jump is a hole), `precision_loss`. Books follow with Kraken's checksum verification ([the lake README, archived](../../legacy/v3-lake-ingest/lake/README.md) § Silver).
 
-**Silver books and gold book products, landed 2026-08-27.** [`docker/lake/books.py`](../../docker/lake/books.py): `silver.book_{binance,kraken,coinbase}` typed frames (Kraken `checksum_ok` verified by replaying the connection's book at the pair's precision from `bronze.kraken_instrument`), and from the same replay `gold.book_top20` (state at the end of every second, four `*_e8` arrays) and `gold.bbo_1s`; `gold.book_state` carries the replay between ticks ([`docker/lake/README.md`](../../docker/lake/README.md) § Books).
+**Silver books and gold book products, landed 2026-08-27, retired 2026-11-26** (the module is kept for the target). [`docker/lake/books.py`](../../docker/lake/books.py): `silver.book_{binance,kraken,coinbase}` typed frames (Kraken `checksum_ok` verified by replaying the connection's book at the pair's precision from `bronze.kraken_instrument`), and from the same replay `gold.book_top20` (state at the end of every second, four `*_e8` arrays) and `gold.bbo_1s`; `gold.book_state` carries the replay between ticks ([the lake README, archived](../../legacy/v3-lake-ingest/lake/README.md) § Books).
 
-**Gold in the lake, landed 2026-08-27.** [`docker/lake/gold.py`](../../docker/lake/gold.py): `gold.trades` is silver's first deliveries projected to one schema with `price_e8`/`qty_e8` fixed point (identifier `(exchange, canonical_symbol, trade_id)`), `gold.dim_instrument`/`dim_venue` from the registry, `gold.ohlcv_{1m,5m,1h,1d}` recomputed per touched bucket and MERGEd (copy-on-write) with the source snapshot on every row. `bbo_1s` and `book_top20` in the lake follow with silver books.
+**Gold in the lake, landed 2026-08-27, retired 2026-11-26.** [`gold.py`](../../legacy/v3-lake-ingest/lake/gold.py): `gold.trades` is silver's first deliveries projected to one schema with `price_e8`/`qty_e8` fixed point (identifier `(exchange, canonical_symbol, trade_id)`), `gold.dim_instrument`/`dim_venue` from the registry, `gold.ohlcv_{1m,5m,1h,1d}` recomputed per touched bucket and MERGEd (copy-on-write) with the source snapshot on every row. `bbo_1s` and `book_top20` in the lake follow with silver books.
 
-**The security master, landed 2026-08-29.** [`docker/lake/scd2.py`](../../docker/lake/scd2.py)
-and `gold.py`'s `load_dims()`: `gold.dim_instrument` and `gold.dim_venue` are Kimball type-2
-dimensions ([ADR-030](../adr/ADR-030-scd2-security-master.md)), one row per validity interval.
+**The security master, landed 2026-08-29, retired 2026-11-26.** [`scd2.py`](../../legacy/v3-lake-ingest/lake/scd2.py)
+and `gold.py`'s `load_dims()` (both archived): the dimensions `dim_instrument` and `dim_venue` were
+Kimball type-2 ([ADR-030](../adr/ADR-030-scd2-security-master.md)), one row per validity interval;
+phase 004 builds the security master again as a product, on the same conventions.
 
 | Column group | Columns | Contract |
 |---|---|---|
 | surrogate | `instrument_id` / `venue_id` | first 32 hex of `sha256(exchange ‖ 0x1F ‖ canonical_symbol)`. Deterministic, so it survives `rebuild.py`; a sequence would not |
 | natural key | `exchange`, `canonical_symbol` (`exchange` alone for the venue) | the half of the identity a venue rename does not touch. Unique per venue, asserted by `tests/test_contracts.py` |
 | registry attributes | `symbol` (native), `base`, `quote`, `book_depth`, `subscribed` | from `config/instruments.yaml`. `symbol` is **tracked, not key**: Kraken `XBT/USD` → `BTC/USD` opens a version under the same `instrument_id` |
-| venue attributes | `tick_size`, `qty_increment`, `price_precision`, `qty_precision`, `venue_status` | nullable. Populated for Kraken from `bronze.kraken_instrument` `data.pairs[]`; NULL for Binance and Coinbase, which publish them over REST that K2 does not capture |
+| venue attributes | `tick_size`, `qty_increment`, `price_precision`, `qty_precision`, `venue_status` | nullable. Populated for Kraken from the retired `bronze.kraken_instrument` `data.pairs[]`; NULL for Binance and Coinbase, which publish them over REST that K2 does not capture |
 | provenance | `source` | `registry` or `venue:kraken` — which authority supplied this version's venue attributes, so a NULL is never ambiguous |
 | validity | `attr_hash`, `valid_from`, `valid_to`, `is_current`, `recorded_at` | `valid_to` on the open row is the sentinel `9999-12-31 23:59:59`, **never NULL**: `ts < NULL` is not `TRUE`, so a NULL bound silently drops the current row from a range join. `attr_hash` is sha256 over the tracked attributes and is the whole change predicate |
 
 Read them with an as-of join, never with a bare `SELECT *`: a query that forgets
 `WHERE is_current` gets every historical version. `valid_from` ≤ `t` < `valid_to` tiles the
 timeline per key with no gap and no overlap, because the close and the open share one
-`run_ts`. These are the only gold tables not rebuildable from silver — nothing upstream is a
-source for what the registry said last month — so `rebuild.py --layer gold` leaves them alone.
-`gold.trades` deliberately carries **no** `instrument_id`: it is a pure function of `exchange`
-and `canonical_symbol`, both already on the row, and the join uses those.
+`run_ts`. These are the only gold tables not rebuildable from silver (nothing upstream is a
+source for what the registry said last month), so `rebuild.py --layer gold` left them alone.
+Lake gold trades deliberately carried **no** `instrument_id`: it is a pure function of `exchange`
+and `canonical_symbol`, both already on the row, and the join used those.
 
-**Event bars, landed 2026-08-28.** [`docker/lake/bars.py`](../../docker/lake/bars.py): `gold.bars` holds tick, volume and dollar bars at the one canonical threshold per symbol in [`config/bars.yaml`](../../config/bars.yaml), computed from every trade in `gold.trades` (the book is never an input). A bar is a *cumulative bucket*, trade → bar `k` of its UTC day when `k·T ≤ (day's total before it) < (k+1)·T` in the candles' `(exchange_ts, recv_ts_ns, trade_seq)` order, so it is one window expression in Spark, DuckDB and a twenty-line Python reference; `scripts/parity-bars.sh` holds the three to tolerance zero. Columns are exact fixed point in and out (`open_e8` … `volume_e8`, `quote_volume_e8` = the 1e-16 notional floor-divided to 1e-8), with no `DECIMAL` division on the path, because DuckDB turns a decimal quotient into a `DOUBLE`. A touched `(exchange, symbol, day)` is deleted and re-appended, not `MERGE`d: a late trade moves every later boundary in its day. Any other threshold is [`notebooks/k2lake.py`](../../notebooks/k2lake.py) `bars()` over `gold.trades`, never a second table. Served from ClickHouse `gold.bars` by the same pull as the candles.
+**Event bars, landed 2026-08-28, retired 2026-11-26** (the module is kept). [`docker/lake/bars.py`](../../docker/lake/bars.py): `gold.bars` holds tick, volume and dollar bars at the one canonical threshold per symbol in [`config/bars.yaml`](../../config/bars.yaml), computed from every trade in `gold.trades` (the book is never an input). A bar is a *cumulative bucket*, trade → bar `k` of its UTC day when `k·T ≤ (day's total before it) < (k+1)·T` in the candles' `(exchange_ts, recv_ts_ns, trade_seq)` order, so it is one window expression in Spark, DuckDB and a twenty-line Python reference; `scripts/parity-bars.sh` (archived; the gate prints a SKIP naming phase 004) held the three to tolerance zero. Columns are exact fixed point in and out (`open_e8` … `volume_e8`, `quote_volume_e8` = the 1e-16 notional floor-divided to 1e-8), with no `DECIMAL` division on the path, because DuckDB turns a decimal quotient into a `DOUBLE`. A touched `(exchange, symbol, day)` is deleted and re-appended, not `MERGE`d: a late trade moves every later boundary in its day. Any other threshold was [`notebooks/k2lake.py`](../../legacy/v3-lake-ingest/notebooks/k2lake.py) `bars()` over `gold.trades`, never a second table. Served from ClickHouse `gold.bars` by the same pull as the candles.
 
-**Gold in ClickHouse, landed 2026-08-27.** [`docker/clickhouse/ddl/10-gold-tables.sql`](../../docker/clickhouse/ddl/10-gold-tables.sql) is the served contract: `gold.trades` (`ReplacingMergeTree`, `ORDER BY (exchange, canonical_symbol, exchange_ts, trade_id)`, version = inverted `recv_ts_ns` so the earliest delivery wins, no TTL), `gold.book_top20` (one row per venue-symbol-second, later sample wins), and the on-read views `gold.ohlcv_live(bucket)` and `gold.bbo_live`. Prices and quantities are the wire's `Int64` at 1e-8 with exact `Decimal(38,10)` aliases. Fed by AvroConfluent Kafka engines for freshness (`20-gold-kafka.sql`) and by a pull from lake gold through `iceberg()` ([runbook](../runbooks/clickhouse-rebuild-from-lake.md)); CI asserts the semantics on every PR (`make test-clickhouse`, [`docker/clickhouse/README.md`](../../docker/clickhouse/README.md)).
+**Gold in ClickHouse, landed 2026-08-27.** [`docker/clickhouse/ddl/10-gold-tables.sql`](../../docker/clickhouse/ddl/10-gold-tables.sql) is the served contract: `gold.trades` (`ReplacingMergeTree`, `ORDER BY (exchange, canonical_symbol, exchange_ts, trade_id)`, version = inverted `recv_ts_ns` so the earliest delivery wins, no TTL), `gold.book_top20` (one row per venue-symbol-second, later sample wins), and the on-read views `gold.ohlcv_live(bucket)` and `gold.bbo_live`. Prices and quantities are the wire's `Int64` at 1e-8 with exact `Decimal(38,10)` aliases. Fed by AvroConfluent Kafka engines for freshness (`20-gold-kafka.sql`) and, until lake gold retired, by a pull from it through `iceberg()` ([runbook, archived](../../legacy/v3-lake-ingest/docs/runbooks/clickhouse-rebuild-from-lake.md)); paused since ADR-057; CI asserts the semantics on every PR (`make test-clickhouse`, [`docker/clickhouse/README.md`](../../docker/clickhouse/README.md)).
 
 **Why identifier uniqueness lives in gold and nowhere below.** The v3-D unified bronze
 declared `(exchange, symbol, trade_id)` unique and the data disproved it twice in a day
@@ -121,6 +125,6 @@ The v2 `NormalizedTrade` contract ([`schemas/avro/normalized-trade.avsc`](../../
 
 ## Evolution
 
-Adding a column: ClickHouse `ALTER TABLE … ADD COLUMN` is metadata-only on `MergeTree`, and Iceberg schema evolution is likewise metadata-only. On the lake side the ordering that works is the Avro schema first, then `docker/lake/ddl/lake.sql`, then the projection in `docker/lake/ingest.py`, reversed, the ingest projects a field the schema does not carry and fails the cycle. `tests/test_wire_format.py` fails if the first two drift apart, which is the point of running it in CI.
+Adding a column: ClickHouse `ALTER TABLE … ADD COLUMN` is metadata-only on `MergeTree`, and Iceberg schema evolution is likewise metadata-only. Until the v3 lake ingest retired, the ordering that worked on the lake side was the Avro schema first, then the lake DDL, then the ingest's projection (both archived in `legacy/v3-lake-ingest/lake/`); reversed, the ingest projected a field the schema did not carry and failed the cycle, and `tests/test_wire_format.py` failed if the first two drifted apart. In the target a lake table's schema lives in its product's contract ([chapter 20](20-target-data-product-platform.md)).
 
-Changing a type is not free anywhere and has not been done. Schema changes move together, Avro, lake DDL, ClickHouse DDL, the layer projections, docs and `tests/test_wire_format.py` in one PR (`/schema-change`); a half-migrated contract fails at the ingest boundary, not at build time.
+Changing a type is not free anywhere and has not been done. Schema changes move together, Avro, ClickHouse DDL, docs and `tests/test_wire_format.py` in one PR (`/schema-change`); a half-migrated contract fails at a consumer's boundary, not at build time.

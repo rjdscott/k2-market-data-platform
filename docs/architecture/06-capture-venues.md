@@ -90,9 +90,9 @@ the shallowest depth Kraken lets a checksummed book be kept at (`kraken.rs:40-42
 overridable per instrument via `book_depth`), while the emitted snapshot is top-20
 ([top-of-book sampling](02-market-data-concepts.md#top-of-book-sampling)); levels past the
 subscription depth are truncated on apply, because a level the venue stops reporting would
-corrupt a later checksum. The lake replays the same algorithm over every archived frame
-([09-lake-layers.md](09-lake-layers.md)), so a checksum that passed live and fails in
-[replay](02-market-data-concepts.md#trades-and-replays) means the archive has a hole.
+corrupt a later checksum. The v3 lake ingest, retired on 2026-11-26, replayed the same algorithm
+over every archived frame ([09-lake-layers.md](09-lake-layers.md)), so a checksum that passed live
+and failed in [replay](02-market-data-concepts.md#trades-and-replays) meant the archive had a hole.
 
 **Kraken's spellings moved with the v2 migration.** WS v1 spelled Bitcoin `XBT/USD` and
 Dogecoin `XDG/USD`; WS v2 spells them `BTC/USD` and `DOGE/USD` and answers
@@ -146,7 +146,7 @@ procedure is [operations/adding-new-exchanges.md](../operations/adding-new-excha
 | Test | a fixture from `k2-capture record --exchange <venue>` and a `tests/replay_<venue>.rs` (Kraken's is `tests/replay.rs`) hashing two passes against a committed golden value |
 | Topics | the three v3 topics and their Avro subjects in [`docker/redpanda/init.sh`](../../docker/redpanda/init.sh) |
 | Runtime | a `capture-<venue>` service in `docker-compose.yml` (0.25 CPU / 256M; Coinbase's full-depth book gets 512M, `docker-compose.yml:959-960`), and a scrape job with no `exchange` target label (`prometheus.yml:87`). Nothing else: the alerts select `up{job=~"capture-.*"}` and read `$labels.exchange`, and the dashboard's `$exchange` variable is `label_values(k2_capture_messages_total, exchange)`, so both pick the venue up from its first scrape |
-| Lake | **not nothing.** Stage 1 is free: `raw.messages` is unified with `exchange` as a column and [`docker/lake/ingest.py`](../../docker/lake/ingest.py) builds its topic list as `K2_EXCHANGES × {raw, trades, book}` ([08-lake-ingest.md](08-lake-ingest.md)). Everything downstream of it is per-venue and needs an edit: a `VenueTable` per stream in [`bronze.py`](../../docker/lake/bronze.py), a decoder in [`silver.py`](../../docker/lake/silver.py) (and [`books.py`](../../docker/lake/books.py) if the venue sends a book), the venue's book depth in `_VENUE_DEPTH` in [`gold.py`](../../docker/lake/gold.py) — which raises naming itself if you forget, asserted by `tests/test_lake_instruments.py` — and the lake DDL for each new table. Freshness metrics and alerts follow on their own: [`metrics.py`](../../docker/lake/metrics.py) enumerates the catalog, so a new table is scraped the refresh after it exists |
+| Lake | **retired, 2026-11-26.** The v3 ingest's per-venue stage code (a table per stream in bronze, a decoder in silver, a book depth in gold, the lake DDL, the freshness metrics) is archived in [`legacy/v3-lake-ingest/`](../../legacy/v3-lake-ingest/) ([08-lake-ingest.md](08-lake-ingest.md)). Nothing consumes a new venue's topics until the target gives it a product with its own connector and landing ([chapter 20](20-target-data-product-platform.md)); phase 004 of the plan adds the first, Kraken trades |
 
 Two traps, both hit for real. `config/instruments.yaml` is a file-level bind mount, so the
 container pins the inode and a write-then-rename edit leaves it reading the old one;
