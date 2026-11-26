@@ -1,0 +1,13 @@
+name: spike
+version: "0.1.0"
+profile: spike
+config-version: 2
+model-paths: ["models"]
+snapshot-paths: ["snapshots"]
+flags:
+  populate_cache: false
+models:
+  spike:
+    +materialized: table
+    +on_table_exists: replace
+    +view_security: definer

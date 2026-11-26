@@ -1,0 +1,32 @@
+{
+  "catalogs": [
+    {"catalog": "system", "allow": "read-only"},
+    {"catalog": "governance|spike_ro", "allow": "all"}
+  ],
+  "schemas": [
+    {"user": "dbt_governance", "catalog": "governance", "owner": true},
+    {"owner": false}
+  ],
+  "tables": [
+    {"user": "spike_reader", "catalog": "governance|spike_ro", "schema": "spike_acl_20261126", "table": "t",
+     "privileges": ["SELECT"],
+     "filter": "ts < current_timestamp - INTERVAL '20' MINUTE",
+     "columns": [{"name": "secret", "mask": "'CHANGED'"}]},
+    {"user": "spike_reader", "catalog": "governance", "schema": "spike_acl_20261126", "table": "v_ruled",
+     "privileges": ["SELECT"],
+     "filter": "ts < current_timestamp - INTERVAL '20' MINUTE",
+     "columns": [{"name": "secret", "mask": "'####'"}]},
+    {"user": "spike_hider", "catalog": "governance", "schema": "spike_acl_20261126", "table": "t",
+     "privileges": ["SELECT"],
+     "columns": [{"name": "hidden", "allow": false}]},
+    {"user": "dbt_governance", "catalog": "governance",
+     "privileges": ["SELECT", "INSERT", "DELETE", "UPDATE", "OWNERSHIP", "GRANT_SELECT"]},
+    {"privileges": ["SELECT", "GRANT_SELECT"]}
+  ],
+  "catalog_session_properties": [
+    {"property": "expire_snapshots_min_retention|remove_orphan_files_min_retention", "allow": false},
+    {"allow": true}
+  ],
+  "queries": [{"allow": ["execute"]}],
+  "system_information": [{"allow": ["read"]}]
+}

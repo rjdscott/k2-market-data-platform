@@ -1,0 +1,14 @@
+spike:
+  target: trino
+  outputs:
+    trino:
+      type: trino
+      method: none
+      http_scheme: http
+      host: localhost
+      port: 8088
+      user: dbt_market_analytics
+      database: market_analytics
+      schema: spike_runcost_20261126
+      timezone: UTC
+      threads: 4
