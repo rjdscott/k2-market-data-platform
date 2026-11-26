@@ -306,9 +306,10 @@ def real_secrets() -> None:
     for pid in ids:
         if pid.startswith("p."):
             secret = secrets.token_urlsafe(32)
-            line = f"{pid}:$2y${bcrypt.hashpw(secret.encode(), bcrypt.gensalt(ps.BCRYPT_COST)).decode().removeprefix('$2b$')}\n"
-            with ps.locked(SECRETS / ps.PASSWORD_DB) as db:
-                ps.write(db, ps.read(db) + line)
+            hashed = f"$2y${bcrypt.hashpw(secret.encode(), bcrypt.gensalt(ps.BCRYPT_COST)).decode().removeprefix('$2b$')}"
+            with ps.locked(SECRETS / ps.PASSWORD_DB) as db:  # principal-secret.py's slot writer, whole file checked
+                users = ps.entries(ps.read(db))
+                ps.write_db(db, "".join(f"{u}:{h}\n" for u, h in {**users, pid: hashed}.items()))
             with ps.locked(SECRETS / model.password_file(pid)) as f:
                 ps.write(f, secret)
         else:

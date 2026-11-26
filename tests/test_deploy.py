@@ -165,6 +165,7 @@ sys.exit(f"fake docker: no answer for {A}")
             self.s20: Any = lambda rel: (["drift clean"], [])
             monkeypatch.setattr(deploy, "release_suite", lambda ctx, rel: self.suite.append(rel.id) or ["suite passed"])
             monkeypatch.setattr(deploy, "s20_checks", lambda ctx, rel: self.s20(rel))
+            monkeypatch.setattr(deploy, "secrets_health", lambda ctx: None)  # its own test below
             # each release's own emitter runs in its tools image; here, k2gen's in process
             self.shaped: list[str] = []
             monkeypatch.setattr(deploy, "statements", lambda ctx, rel, v, old, new: self.shaped.append(rel.id) or view_update(v, old, new))
@@ -478,11 +479,12 @@ sys.exit(f"fake docker: no answer for {A}")
         deploy.canary_write(world.ctx, "k2_release_aaaaaaaaaaaa")
         deploy.canary_write(world.ctx, "k2_release_bbbbbbbbbbbb")
         deploy.canary_write(world.ctx, "k2_release_bbbbbbbbbbbb")  # a rerun replaces its own line
-        users = [x.split(":")[0] for x in db.read_text().splitlines()]
+        users = [x.split(":")[0] for x in db.read_text().splitlines() if x.strip()]  # a removed line is a blank slot
         assert users == ["svc.platform", "k2_release_aaaaaaaaaaaa", "k2_release_bbbbbbbbbbbb"] and db.stat().st_ino == inode
+        assert all(len(x) == deploy.ps.SLOT - 1 for x in db.read_text().splitlines()) and not deploy.ps.problems(db.read_text())
         assert oct((world.secrets / "canary/k2_release_bbbbbbbbbbbb.password").stat().st_mode & 0o777) == "0o600"
         assert deploy.canary_prune(world.ctx, "k2_release_bbbbbbbbbbbb") == ["k2_release_aaaaaaaaaaaa"]
-        assert [x.split(":")[0] for x in db.read_text().splitlines()] == ["svc.platform", "k2_release_bbbbbbbbbbbb"]
+        assert [x.split(":")[0] for x in db.read_text().splitlines() if x.strip()] == ["svc.platform", "k2_release_bbbbbbbbbbbb"]
         assert not (world.secrets / "canary/k2_release_aaaaaaaaaaaa.password").exists() and db.stat().st_ino == inode
 
     def test_every_record_meets_its_schema_and_holds_checksums_never_content(world: World) -> None:
@@ -494,7 +496,9 @@ sys.exit(f"fake docker: no answer for {A}")
         text = "\n".join(lines)
         assert "fixture" not in text and "$2y$" not in text
         last = json.loads(lines[-1])["secrets"]
-        assert last["trino/password.db"] == __import__("hashlib").sha256((world.secrets / "trino/password.db").read_bytes()).hexdigest()
+        db = (world.secrets / "trino/password.db").stat()
+        assert last["trino/password.db"] == {"mode": f"{db.st_mode & 0o777:04o}", "size": db.st_size}
+        assert not any(len(str(v)) == 64 for r in lines for v in json.loads(r)["secrets"].values())  # no digest
 
     def test_an_unsealed_or_altered_release_is_refused(world: World) -> None:
         r1 = world.release()
@@ -567,6 +571,19 @@ sys.exit(f"fake docker: no answer for {A}")
     ])
     def test_stored_and_generated_view_sql_compare_as_trino_formats_them(a: str, b: str, same: bool) -> None:
         assert (deploy.tokens(a) == deploy.tokens(b)) is same
+
+    @pytest.mark.parametrize("env_rc, status_rc, refused", [(0, 0, None), (1, 0, "check-env"), (0, 1, "principals-status")])
+    def test_preflight_refuses_a_loose_env_file_or_a_bad_password_db_line(world: World, monkeypatch: pytest.MonkeyPatch,
+                                                                           env_rc: int, status_rc: int, refused: str | None) -> None:
+        monkeypatch.undo()
+        answers = {"check-env.py": env_rc, "principals-status": status_rc}
+        monkeypatch.setattr(deploy, "run", lambda *a, **k: subprocess.CompletedProcess(
+            a, next(rc for key, rc in answers.items() if any(key in str(x) for x in a)), "", "STALE p.gone"))
+        if refused is None:
+            deploy.secrets_health(world.ctx)
+        else:
+            with pytest.raises(deploy.Refused, match=refused):
+                deploy.secrets_health(world.ctx)
 
     # --- the DDL comparison --------------------------------------------------------------
 

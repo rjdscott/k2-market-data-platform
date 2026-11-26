@@ -260,7 +260,10 @@ sequence, each proven on the rehearsal (`make deploy-rehearsal`, OUTCOME_RUN).
    `make access-verify LIVE=1` once the drift check finds every product published (a product not yet
    published is a visible SKIP: its rows ran at release time), and, in `make release-verify`,
    `scripts/verify/identity.sh` on the live Trino. Every failed step's record carries its `reason`
-   (`deploy-record.schema.json`, an additive field).
+   (`deploy-record.schema.json`, an additive field), and a secret file is recorded by its mode and size,
+   no longer by its sha256 (part 3 above; the review of identity). Preflight refuses first when
+   `scripts/check-env.py --mode-only` or `make principals-status` fails, and the canary's line is
+   written by principal-secret.py's own slot writer (fixed 128-byte lines, the whole file checked).
 5. **`make release` pins what deploy never recreates by what runs**: captures, Redpanda, MinIO,
    Postgres and Lakekeeper keep the running container's image (a warning names a tag that differs),
    so the one-time cutover needs no capture restart (`docs/runbooks/first-cutover-to-releases.md`).

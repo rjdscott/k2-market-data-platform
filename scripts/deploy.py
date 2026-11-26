@@ -61,7 +61,6 @@ import argparse
 import dataclasses
 import fcntl
 import getpass
-import hashlib
 import importlib.util
 import json
 import os
@@ -194,17 +193,18 @@ def lock(root: Path) -> Iterator[None]:
         os.close(fd)
 
 
-def secret_sums(ctx: Ctx, services: set[str]) -> dict[str, str]:
-    """sha256 of each secret file the release's services mount, and of the canary passwords; never
-    a byte of the content goes anywhere else."""
-    found: dict[str, str] = {}
+def secret_sums(ctx: Ctx, services: set[str]) -> dict[str, dict[str, Any]]:
+    """Each secret file the release's services mount, and the canary passwords, by presence, mode and
+    size: no byte of a secret, nor a digest of one, goes into the log."""
+    found: dict[str, dict[str, Any]] = {}
     for f in model.SECRET_FILES:
         if not (set(f.services) & services or f.path.startswith("canary/")):
             continue
         pattern = re.sub(r"<[a-z]+>", "*", f.path)
         for p in sorted(ctx.secrets.glob(pattern)):
             if p.is_file():
-                found[p.relative_to(ctx.secrets).as_posix()] = hashlib.sha256(p.read_bytes()).hexdigest()
+                st = p.stat()
+                found[p.relative_to(ctx.secrets).as_posix()] = {"mode": f"{st.st_mode & 0o777:04o}", "size": st.st_size}
     return found
 
 
@@ -523,8 +523,22 @@ def dropped_storage(ctx: Ctx, old: Release | None, new: Release) -> list[str]:
     return held
 
 
+def secrets_health(ctx: Ctx) -> None:
+    """Before anything touches the stack: the .env file's mode (scripts/check-env.py --mode-only) and every
+    password.db line well formed and known (`make principals-status`, exit 1 on a malformed or stale one)."""
+    env = compose_env(ctx)
+    mode = run(sys.executable, str(ctx.home / "scripts/check-env.py"), "--mode-only", "--env-file", str(ctx.home / ".env"),
+               env=env, check=False)
+    if mode.returncode:
+        raise Refused(f"scripts/check-env.py --mode-only: {tail(mode, 4)}")
+    status = make_target(ctx, "principals-status", env)
+    if status.returncode:
+        raise Refused(f"make principals-status exit {status.returncode}, a malformed or stale password.db line: {tail(status, 6)}")
+
+
 def preflight(ctx: Ctx, p: Plan) -> None:
     floors(ctx)
+    secrets_health(ctx)
     if missing := required_secrets(ctx, p):
         raise Refused(f"secret files missing under {ctx.secrets}: {', '.join(missing)}")
     if held := dropped_storage(ctx, p.sources[0], p.target):
@@ -788,30 +802,37 @@ def sync_views(ctx: Ctx, p: Plan, phase: str) -> list[str]:
 # --- step 6, the canary ------------------------------------------------------------------
 
 
+def password_db(ctx: Ctx, change: Any) -> list[str]:
+    """password.db rewritten to `change(users)` by principal-secret.py's own slot writer under the file's
+    lock: fixed 128-byte slots, in place, whole-file validation before and after (its write_db). Its
+    refusals (a malformed or unreadable line) are this deploy's failures, never a process exit."""
+    with ps.locked(ctx.secrets / PASSWORD_DB) as db:
+        old = ps.read(db)
+        if bad := ps.problems(old):
+            raise Failed(f"{PASSWORD_DB} has lines Trino refuses: " + "; ".join(f"line {n}: {why}" for n, _, why in bad)
+                         + " (make principals-status; docs/runbooks/create-or-rotate-a-principal.md)")
+        users = ps.entries(old)
+        want = change(dict(users))
+        try:
+            ps.write_db(db, "".join(f"{u}:{h}\n" for u, h in want.items()))
+        except SystemExit as e:
+            raise Failed(str(e)) from None
+    return sorted(set(users) - set(want))
+
+
 def canary_write(ctx: Ctx, user: str) -> None:
-    """A fresh 32-byte secret: its password file (mode 600, never mounted) first, then its bcrypt line in
-    trino/password.db, both in place under their flock, as scripts/principal-secret.py writes them."""
+    """A fresh 32-byte secret: its password file (mode 600, never mounted) first, in place under its
+    lock, then its bcrypt line in trino/password.db by the slot writer."""
     secret = secrets.token_urlsafe(32)
     with ps.locked(ctx.secrets / model.canary_password_file(user.removeprefix("k2_release_"))) as f:
         ps.write(f, secret)
-    hashed = bcrypt.hashpw(secret.encode(), bcrypt.gensalt(ps.BCRYPT_COST)).decode()
-    line = f"{user}:$2y${hashed.removeprefix('$2b$')}\n"
-    with ps.locked(ctx.secrets / PASSWORD_DB) as db:
-        lines = [x for x in ps.read(db).splitlines(keepends=True) if x.split(":", 1)[0] != user]
-        if lines and not lines[-1].endswith("\n"):
-            lines[-1] += "\n"
-        ps.write(db, "".join([*lines, line]))
+    hashed = "$2y$" + bcrypt.hashpw(secret.encode(), bcrypt.gensalt(ps.BCRYPT_COST)).decode().removeprefix("$2b$")
+    password_db(ctx, lambda users: {**{u: h for u, h in users.items() if u != user}, user: hashed})
 
 
 def canary_prune(ctx: Ctx, keep: str) -> list[str]:
     """Every other release canary's line and password file removed; the principals' lines untouched."""
-    gone = []
-    with ps.locked(ctx.secrets / PASSWORD_DB) as db:
-        lines = ps.read(db).splitlines(keepends=True)
-        kept = [x for x in lines if not (x.startswith("k2_release_") and x.split(":", 1)[0] != keep)]
-        gone = [x.split(":", 1)[0] for x in lines if x not in kept]
-        if gone:
-            ps.write(db, "".join(kept))
+    gone = password_db(ctx, lambda users: {u: h for u, h in users.items() if not (u.startswith("k2_release_") and u != keep)})
     for f in (ctx.secrets / "canary").glob("k2_release_*.password"):
         if f.name != f"{keep}.password":
             with ps.locked(f) as fd:

@@ -42,6 +42,8 @@ if [ "${1:-}" = --throwaway ]; then
 else
   C=${K2_TRINO_CONTAINER:-k2-trino} NET=${K2_IDENTITY_NETWORK:-k2-net} THROWAWAY=0
   SECRETS=${K2_SECRETS:-$HOME/k2-secrets}
+  # the live stack: the .env file's mode first, as every live-touching path checks it (scripts/check-env.py)
+  python3 scripts/check-env.py --mode-only || { echo "identity: .env is readable beyond its owner (scripts/check-env.py)" >&2; exit 2; }
 fi
 [[ "$USER_" == svc.* ]] || { echo "identity: K2_IDENTITY_USER must be a svc.* principal with a password file" >&2; exit 2; }
 PASSWORD_FILE=$SECRETS/principals/$USER_.password

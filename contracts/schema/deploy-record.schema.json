@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://k2.invalid/schema/deploy-record.schema.json",
   "title": "One line of <releases root>/deploy-log.jsonl (A1)",
-  "description": "Frozen in phase 001. Written by scripts/deploy.py (S19), one JSON object per line per step, appended, never rewritten. The log lives at the releases root, outside every release and every checkout. It is the only place a secret file's checksum is recorded: the release itself names no secret (k2gen.model.SECRET_FILES).",
+  "description": "Frozen in phase 001. Written by scripts/deploy.py (S19), one JSON object per line per step, appended, never rewritten. The log lives at the releases root, outside every release and every checkout. It records which secret files deploy found, by mode and size, never their content nor a digest of it: the release itself names no secret (k2gen.model.SECRET_FILES).",
   "type": "object",
   "additionalProperties": false,
   "required": ["at", "release", "from", "step", "outcome", "operator", "secrets"],
@@ -15,10 +15,18 @@
     "operator": {"description": "Who ran the deploy, as the host user name.", "type": "string", "minLength": 1},
     "reason": {"description": "Optional, on a failed step: why it failed, as deploy printed it, at most 2000 characters; never a secret (added by step S19b, additively).", "type": "string", "maxLength": 2000},
     "secrets": {
-      "description": "Each secret file the release's services mount, as deploy found it at the step: its path under ${K2_SECRETS} to the sha256 of its bytes. Never the content. A missing file is absent from the map.",
+      "description": "Each secret file the release's services mount, and the release canaries' passwords, as deploy found them at the step: its path under ${K2_SECRETS} to its mode and size. Never the content, nor a digest of it (a sha256 until step S19b, at the review of identity). A missing file is absent from the map.",
       "type": "object",
       "propertyNames": {"type": "string", "pattern": "^(trino|api|principals|tls|alertmanager|canary)/[A-Za-z0-9._-]+$"},
-      "additionalProperties": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["mode", "size"],
+        "properties": {
+          "mode": {"description": "Its permission bits, in octal: 0600.", "type": "string", "pattern": "^0[0-7]{3}$"},
+          "size": {"description": "Its size in bytes.", "type": "integer", "minimum": 0}
+        }
+      }
     }
   }
 }

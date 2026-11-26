@@ -74,9 +74,9 @@ bootstrap peak unchanged, 16.80 CPU / 28.750 GiB with S09's Alertmanager).
 
 Every credential is generated on the host into `${K2_SECRETS:-$HOME/k2-secrets}`, outside any
 checkout, and never committed, compiled into a release or hashed into one: no document, schema
-or release file has a field for a secret or a checksum of one. Deploy records the sha256 of each
-secret file it found in its own deploy record (`deploy-record.schema.json`, one line per step of
-`<releases root>/deploy-log.jsonl`), never the content. A container mounts only the files it
+or release file has a field for a secret or a checksum of one. Deploy records each
+secret file it found, by mode and size, in its own deploy record (`deploy-record.schema.json`, one line
+per step of `<releases root>/deploy-log.jsonl`), never the content nor a digest of it (step S19b). A container mounts only the files it
 reads, read-only, under `/run/k2-secrets/`. A file refreshed while its reader runs is mounted by
 its directory and rewritten in place under an exclusive `flock` on the file itself, never renamed
 over: through Docker Desktop's file sharing a container keeps reading the old file after a
