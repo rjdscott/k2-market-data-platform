@@ -84,7 +84,7 @@ def without(docs: dict[str, bytes], product_file: str) -> dict[str, bytes]:
 def test_each_pair_yields_exactly_its_code(case: str) -> None:
     found = run(layered(GOOD, CASES / case / "next"), layered(GOOD, CASES / case / "previous"))
     assert {f.code for f in found} == {f"versions.{case}"}, found
-    assert all(f.severity == "error" and f.message.startswith("/") for f in found), found
+    assert all(f.severity == "error" and f.message.startswith("$.") for f in found), found
 
 
 @pytest.mark.parametrize("side", sorted(f"{p.name}/{s}" for p in CASES.iterdir() for s in ("previous", "next")))
@@ -171,7 +171,7 @@ def test_outputs_removed_added_and_other_files_bump_the_product() -> None:
     del removed[bronze]
     (found,) = run(removed, good)
     assert (found.code, found.path) == (MAJOR, STATION)
-    assert "/outputPorts: output sensor-net.station-readings.bronze_readings 1.0.0 removed" in found.message
+    assert "$.outputPorts: output sensor-net.station-readings.bronze_readings 1.0.0 removed" in found.message
 
     extra = "contracts/ops-insight/daily-load/gold_extra.odcs.yaml"
     added = edited(DAILY, lambda d: d["outputPorts"].append(
@@ -179,14 +179,14 @@ def test_outputs_removed_added_and_other_files_bump_the_product() -> None:
     added[extra] = good[GOLD].replace(b"gold_daily_load", b"gold_extra")
     (found,) = run(added, good)
     assert (found.code, found.path) == (MINOR, DAILY)
-    assert "/outputPorts/1: output ops-insight.daily-load.gold_extra added" in found.message
+    assert "$.outputPorts[1]: output ops-insight.daily-load.gold_extra added" in found.message
     assert run(edited(DAILY, versioned("1.1.0"), added), good) == []
 
     grants = "contracts/ops-insight/daily-load/grants.yaml"
     regranted = dict(good, **{grants: good[grants].replace(b"svc.load-dashboard", b"svc.other-dashboard")})
     (found,) = run(regranted, good)
     assert (found.code, found.path, found.message) == (
-        PATCH, DAILY, "/version: 1.0.0 again, but a change: grants.yaml changed; make it 1.0.1 or higher")
+        PATCH, DAILY, "$.version: 1.0.0 again, but a change: grants.yaml changed; make it 1.0.1 or higher")
 
 
 STATES = ("active", "paused", "deprecated", "retired")
@@ -218,7 +218,7 @@ def test_retirement_waits_for_the_announced_sunset(since: str, early: bool) -> N
     found = run(retired, deprecated)
     assert [f.code for f in found] == (["versions.retired-before-sunset"] if early else [])
     if early:
-        assert found[0].message == (f"/customProperties/2/value/since: retired since {since}, before the sunset 2027-01-01 "
+        assert found[0].message == (f"$.customProperties[2].value.since: retired since {since}, before the sunset 2027-01-01 "
                                     "the previous release announced; retire on or after 2027-01-01")
 
 
@@ -234,14 +234,14 @@ def test_a_deprecated_product_keeps_its_readers_and_takes_no_new_one() -> None:
         since="2026-11-01", reason="r", decision="ADR-056", successor="sensor-net.next", sunset="2027-01-01")(d)))
     assert run(deprecated, deprecated) == []
     found = [f for f in run(deprecated, without(deprecated, DAILY)) if f.code == "versions.new-reader-of-deprecated"]
-    assert [(f.path, f.message) for f in found] == [(DAILY, "/inputPorts/0: sensor-net.station-readings is deprecated (sunset "
+    assert [(f.path, f.message) for f in found] == [(DAILY, "$.inputPorts[0]: sensor-net.station-readings is deprecated (sunset "
                                                      "2027-01-01, successor sensor-net.next) and takes no new reader; read sensor-net.next instead")]
 
 
 def test_a_reader_that_acknowledges_the_new_major_passes() -> None:
     case = CASES / "input-major-unacknowledged" / "next"
     (found,) = run(layered(GOOD, case), layered(GOOD))
-    assert found.message == ("/inputPorts/0/version: input port silver_readings was written against "
+    assert found.message == ("$.inputPorts[0].version: input port silver_readings was written against "
                              "sensor-net.station-readings.silver_readings 1.0.0, but the set has it at 2.0.0, 1.0.0 in the "
                              "previous release; read what major 2 changed, then set this version to 2.0.0")
     acknowledged = edited(DAILY, lambda d: d.update(version="1.0.1", inputPorts=[{**d["inputPorts"][0], "version": "2.0.0"}]),

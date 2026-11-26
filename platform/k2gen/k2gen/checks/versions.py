@@ -18,11 +18,12 @@ A product's version covers every document in its directory and takes its tables'
 its own. Across the set, previous release or not: a live product's input port names the major
 its input table is at (the port's `version`, the frozen schema's one input constraint;
 `inputContracts` repeats it as lineage and is left to the documents check); no live product
-reads a table that is retired or gone; a deprecated product takes no new reader; a paused
+reads a table that is retired; a deprecated product takes no new reader; a paused
 product builds nothing, so its columns and outputs stay as they were. `previous` None (a first
 release): every product is new.
 
-A finding's message starts with the JSON pointer, in the finding's document, of what to fix.
+A finding's message starts with the JSONPath, in the finding's document, of what to fix, as
+model.schema_errors and the documents check write it.
 """
 
 from __future__ import annotations
@@ -129,21 +130,21 @@ def _transitions(new: _Set, old: _Set | None) -> list[Finding]:
             k, change = _property(new.products[pid].doc, "lifecycleChange")
             if sunset and change.get("since", sunset) < sunset:
                 found.append(Finding("versions.retired-before-sunset", "error", path,
-                                     f"/customProperties/{k}/value/since: retired since {change['since']}, before the sunset "
+                                     f"$.customProperties[{k}].value.since: retired since {change['since']}, before the sunset "
                                      f"{sunset} the previous release announced; retire on or after {sunset}"))
     return found
 
 
 def _transition_text(pid: str, was: str | None, now: str | None) -> str:
     if was is None:
-        return f"/status: a new product enters active or paused, not {now}"
+        return f"$.status: a new product enters active or paused, not {now}"
     if now is None:
-        return (f"/status: {pid} is gone from the set while {was}; only a retired product's documents may go, "
+        return (f"$.status: {pid} is gone from the set while {was}; only a retired product's documents may go, "
                 "so deprecate it, then retire it")
     if was == "retired":
-        return f"/status: retired -> {now} is not allowed: retired is final"
+        return f"$.status: retired -> {now} is not allowed: retired is final"
     may = " or ".join(sorted(s for s in ALLOWED[was] if s not in (was, None)))
-    return f"/status: {was} -> {now} is not allowed; from {was} a product may become {may}" + (
+    return f"$.status: {was} -> {now} is not allowed; from {was} a product may become {may}" + (
         "; retired follows deprecated only" if now == "retired" else "")
 
 
@@ -160,34 +161,28 @@ def _inputs(new: _Set, old: _Set | None) -> list[Finding]:
         read_before = {p["contractId"] for p in before.doc.get("inputPorts", [])} if before else set()
         for i, port in enumerate(consumer.doc.get("inputPorts", [])):
             cid, name, have = port["contractId"], port["name"], port["version"]
-            where = f"{consumer.path} /inputPorts/{i}"
+            where = f"{consumer.path} $.inputPorts[{i}]"
             table = new.tables.get(cid)
-            if table is None:
-                gone = old.tables.get(cid) if old else None
-                if gone is not None:  # else an unresolved port, which is not a version question
-                    owner = new.producer(gone) or (old.producer(gone) if old else None)
-                    found.append(Finding("versions.removed-while-input", "error", owner.path if owner else gone.path,
-                                         f"/outputPorts: {cid} {gone.doc['version']} is gone from the set, but {cons} still "
-                                         f"declares it as input port {name} ({where}); remove that port first, or keep the output"))
+            if table is None:  # unresolved, an error of the documents check, which runs first
                 continue
             producer = new.producer(table)
             status = producer.doc["status"] if producer else None
             if producer and status == "retired":
                 found.append(Finding("versions.retired-while-input", "error", producer.path,
-                                     f"/status: retired, but {cons} still declares {cid} as input port {name} ({where}); "
+                                     f"$.status: retired, but {cons} still declares {cid} as input port {name} ({where}); "
                                      "remove that port first, or keep this product deprecated"))
             elif producer and status == "deprecated" and cid not in read_before:
                 change = _property(producer.doc, "lifecycleChange")[1]
                 successor = change.get("successor")
                 found.append(Finding("versions.new-reader-of-deprecated", "error", consumer.path,
-                                     f"/inputPorts/{i}: {producer.doc['id']} is deprecated (sunset {change.get('sunset')}, "
+                                     f"$.inputPorts[{i}]: {producer.doc['id']} is deprecated (sunset {change.get('sunset')}, "
                                      f"successor {successor}) and takes no new reader; read {successor} instead"))
             want = table.doc["version"]
             if _semver(have)[0] != _semver(want)[0]:
                 was = old.tables.get(cid) if old else None
                 history = f", {was.doc['version']} in the previous release" if was and was.doc["version"] != want else ""
                 found.append(Finding("versions.input-major-unacknowledged", "error", consumer.path,
-                                     f"/inputPorts/{i}/version: input port {name} was written against {cid} {have}, but the "
+                                     f"$.inputPorts[{i}].version: input port {name} was written against {cid} {have}, but the "
                                      f"set has it at {want}{history}; read what major {_semver(want)[0]} changed, then set "
                                      f"this version to {want}"))
     return found
@@ -218,7 +213,7 @@ def _versions(new: _Set, old: _Set) -> list[Finding]:
         moved = [c.text for c in changes if c.structural]
         if product.doc["status"] == "paused" and moved:
             found.append(Finding("versions.paused-contract-changed", "error", product.path,
-                                 f"/status: paused, so nothing builds and its tables cannot follow: {'; '.join(moved)}; "
+                                 f"$.status: paused, so nothing builds and its tables cannot follow: {'; '.join(moved)}; "
                                  "keep its columns and outputs while paused, or make it active in this release"))
     return found
 
@@ -230,21 +225,21 @@ def _bump(path: str, was: str, now: str, changes: list[_Change]) -> list[Finding
     fix = {MAJOR: f"{o[0] + 1}.0.0", MINOR: f"{o[0]}.{o[1] + 1}.0", PATCH: f"{o[0]}.{o[1]}.{o[2] + 1}"}.get(need, was)
     if n < o:
         return [Finding("versions.version-backwards", "error", path,
-                        f"/version: {was} -> {now}: a version never goes backwards; make it {fix} or higher")]
+                        f"$.version: {was} -> {now}: a version never goes backwards; make it {fix} or higher")]
     have = 0 if n == o else MAJOR if n[0] > o[0] else MINOR if n[1] > o[1] else PATCH
     if have >= need:
         return []
     kind = {MAJOR: "a major change", MINOR: "a minor change", PATCH: "a change"}[need]
     why = "; ".join(c.text for c in changes if c.level == need)
     moved = f"{was} -> {now}" if have else f"{now} again"
-    return [Finding(BUMP_CODE[need], "error", path, f"/version: {moved}, but {kind}: {why}; make it {fix} or higher")]
+    return [Finding(BUMP_CODE[need], "error", path, f"$.version: {moved}, but {kind}: {why}; make it {fix} or higher")]
 
 
 def _outputs(old: Any, new: Any) -> list[_Change]:
     was = {p["contractId"]: p["version"] for p in old.get("outputPorts", [])}
     now = {p["contractId"]: j for j, p in enumerate(new.get("outputPorts", []))}
-    return ([_Change(MAJOR, True, f"/outputPorts: output {cid} {was[cid]} removed") for cid in sorted(was.keys() - now.keys())]
-            + [_Change(MINOR, True, f"/outputPorts/{now[cid]}: output {cid} added") for cid in sorted(now.keys() - was.keys())])
+    return ([_Change(MAJOR, True, f"$.outputPorts: output {cid} {was[cid]} removed") for cid in sorted(was.keys() - now.keys())]
+            + [_Change(MINOR, True, f"$.outputPorts[{now[cid]}]: output {cid} added") for cid in sorted(now.keys() - was.keys())])
 
 
 def _key(columns: list[Any]) -> str:
@@ -259,23 +254,23 @@ def _columns(old: Any, new: Any) -> list[_Change]:
     out = []
     for name, c in was.items():
         if name not in now:
-            out.append(_Change(MAJOR, True, f"/schema/0/properties: column {name} ({c['physicalType']}) is gone, dropped or renamed"))
+            out.append(_Change(MAJOR, True, f"$.schema[0].properties: column {name} ({c['physicalType']}) is gone, dropped or renamed"))
             continue
         j, d = now[name]
         if c["physicalType"] != d["physicalType"]:
-            out.append(_Change(MAJOR, True, f"/schema/0/properties/{j}/physicalType: column {name} retyped "
+            out.append(_Change(MAJOR, True, f"$.schema[0].properties[{j}].physicalType: column {name} retyped "
                                             f"{c['physicalType']} -> {d['physicalType']}"))
         r_old, r_new = bool(c.get("required")), bool(d.get("required"))
         if r_old != r_new:
-            out.append(_Change(MAJOR, True, f"/schema/0/properties/{j}/required: column {name} required "
+            out.append(_Change(MAJOR, True, f"$.schema[0].properties[{j}].required: column {name} required "
                                             f"{str(r_old).lower()} -> {str(r_new).lower()}"))
     for name, (j, d) in now.items():
         if name not in was:
             required = bool(d.get("required"))
             how = "as required, which the rows already published cannot meet" if required else "nullable"
-            out.append(_Change(MAJOR if required else MINOR, True, f"/schema/0/properties/{j}: column {name} ({d['physicalType']}) added {how}"))
+            out.append(_Change(MAJOR if required else MINOR, True, f"$.schema[0].properties[{j}]: column {name} ({d['physicalType']}) added {how}"))
     if _key(was_list) != _key(now_list):
-        out.append(_Change(MAJOR, True, f"/schema/0/properties: primary key {_key(was_list)} -> {_key(now_list)}"))
+        out.append(_Change(MAJOR, True, f"$.schema[0].properties: primary key {_key(was_list)} -> {_key(now_list)}"))
     return out
 
 
@@ -318,13 +313,13 @@ def _policy_moves(old: RolePolicy, new: RolePolicy) -> tuple[list[str], list[str
 def _access(old: Any, new: Any) -> list[_Change]:
     was = {r["role"] for r in old.get("roles", [])}
     now = {r["role"]: j for j, r in enumerate(new.get("roles", []))}
-    out = [_Change(MAJOR, False, f"/roles: role {r} no longer offered") for r in sorted(was - now.keys())]
-    out += [_Change(MINOR, False, f"/roles/{now[r]}: role {r} offered") for r in sorted(now.keys() - was)]
+    out = [_Change(MAJOR, False, f"$.roles: role {r} no longer offered") for r in sorted(was - now.keys())]
+    out += [_Change(MINOR, False, f"$.roles[{now[r]}]: role {r} offered") for r in sorted(now.keys() - was)]
     _, before = _property(old, "policies")
     k, after = _property(new, "policies")
     for role in sorted(was & now.keys()):
         tighter, looser = _policy_moves(_role_policy(before.get(role)), _role_policy(after.get(role)))
-        at = f"/customProperties/{k}/value/{role}" if k is not None else "/customProperties"
+        at = f"$.customProperties[{k}].value.{role}" if k is not None else "$.customProperties"
         if tighter:
             out.append(_Change(MAJOR, False, f"{at}: role {role}'s policy tightened: {'; '.join(tighter + looser)}"))
         elif looser:
