@@ -1,9 +1,12 @@
 """The compiler, `k2gen release` (A1, A3), filled by step S08.
 
 Pure: its only inputs are a document set, the previous release, the image refs and the set's
-compose file. Every file is made in memory first: documents/ (the set, as docset.write writes
-it: each document at its path and provenance.json), provenance.json, model.RELEASE_COMPOSE (the
-compose file, byte for byte) and every emitter's files through k2gen.emit.run (a stub is skipped
+compose file. The checks library runs first, on the set and the previous release's documents/
+(the set it was compiled from), and any error finding refuses the compile before anything is
+made: compiling never depends on `k2gen check` having been run, and nothing skips it. Every file
+is made in memory first: documents/ (the set, as docset.write writes it: each document at its
+path and provenance.json), provenance.json, model.RELEASE_COMPOSE (the compose file, byte for
+byte) and every emitter's files through k2gen.emit.run (a stub is skipped
 with a line on stderr until S23; two emitters writing one path is an error). Every emitted file
 with a schema (model.SCHEMAS) is validated against it, then manifest.json, whose `files` hash
 every other file and whose `needs` follow model.need_of against `previous`. Only then is
@@ -27,7 +30,7 @@ from typing import Any
 
 import yaml
 
-from k2gen import docset, emit, model
+from k2gen import checks, docset, emit, model
 from k2gen.model import Manifest, ManifestProduct, Needs, Release
 
 # Services deploy never recreates (A1, manifest.schema.json needs.recreate): captures, Redpanda,
@@ -115,13 +118,21 @@ def release(set_dir: Path, previous: Path | None, images: Path, out_root: Path, 
     first), with `images` a JSON file of service to image ref (model.SCHEMAS["images"]) and
     `compose` the compose file the release runs (the CLI's default: the set's own
     model.COMPOSE); return the new release id (model.release_id). Compiling one set twice
-    gives one id."""
+    gives one id. Every finding of checks.run is printed to stderr first; an error one is a
+    ValueError, with nothing written."""
     refs = dict(_json(images.read_bytes(), "images", f"{images} (each image by digest, or a local build <name>:<image id 12>)"))
     docs = docset.read(set_dir)
     prov = docs.provenance
     if model.set_sha256(docs.documents) != prov.set_sha256:
         raise ValueError(f"{set_dir}: its documents do not hash to its provenance's setSha256")
     provenance = (set_dir / model.PROVENANCE).read_bytes()  # copied unchanged into the release
+    prev = read(previous) if previous else None
+    findings = checks.run(docs, docset.read(prev.root / model.DOCUMENTS_DIR) if prev else None)
+    for f in findings:  # as `k2gen check` prints them
+        where = f"{f.path} {f.pointer}" if f.pointer else f.path
+        print(f"{f.severity} {f.code} {where}: {f.message}", file=sys.stderr)
+    if refused := [f for f in findings if f.severity == "error"]:
+        raise ValueError(f"{set_dir}: {len(refused)} error finding(s) from the checks library; nothing compiled, nothing written")
     loaded = model.load(docs, refs)
 
     files = {f"{model.DOCUMENTS_DIR}/{p}": data for p, data in docs.documents.items()}
@@ -137,7 +148,6 @@ def release(set_dir: Path, previous: Path | None, images: Path, out_root: Path, 
     if clash := sorted({str(d) for p in files for d in PurePosixPath(p).parents} & files.keys()):
         raise ValueError(f"{clash[0]}: both a file and a directory of the release")
 
-    prev = read(previous) if previous else None
     hashes = {p: _sha(data) for p, data in files.items()}
     rid = model.release_id(prov.tag, hashes, refs)
     need = needs(prev, files, refs)
