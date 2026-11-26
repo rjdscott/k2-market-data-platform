@@ -283,11 +283,22 @@ Where: [ADR-025](ADR-025-clickhouse-derived-hot-tier.md),
 
 A landing zone is where a fetched source file is kept exactly as downloaded, before anything
 loads it, so every load can be re-run and audited from the same bytes. For the Redpanda feeds
-that role was played by `raw.messages` until the old ingest retired. For file sources (FX rates and the like) the P4 plan puts
-it at `landing/<domain>/<product>/<fetch date>/<sha256>.<ext>` in a versioned, locked bucket;
-that pattern is planned under ADR-036 and not built yet.
-Where: [plan P4](../plans/2026-11-24-governed-self-serve-platform/004-fx-data-product.md);
-the reserved row 036 in [ADR-031](ADR-031-governed-self-serve-platform.md).
+that role was played by `raw.messages` until the old ingest retired. In the target each product
+owns its landing: a file or API response lands at
+`k2-landing/<domain>/<product>/<YYYY-MM-DD>/<sha256>.<ext>` by a [conditional write](#conditional-write),
+with a row in the product's `landing_files` table, and a topic product lands the records it keeps
+in its own landing table. The P4 plan's versioned, locked bucket was tested and does not stop an
+overwrite, so the conditional write is the guarantee. Decided, not built yet.
+Where: [ADR-036](ADR-036-connectors-land-verbatim-then-publish-bronze-after-audit.md) part 4.
+
+### Conditional write
+
+An S3 `PUT` carrying the header `If-None-Match: *` asks the object store to write only if no
+object of that name exists, and to answer 412 Precondition Failed otherwise. Since a landed
+object is named by the sha256 of its bytes, an existing name means the same bytes already landed,
+so the refusal is a harmless no-op, and no write through that path can replace a landed file.
+MinIO at the pinned `RELEASE.2025-09-07T16-13-09Z` was tested to honour it on 2026-11-26.
+Where: [ADR-036](ADR-036-connectors-land-verbatim-then-publish-bronze-after-audit.md) part 4.
 
 ### Lineage columns
 
@@ -1031,7 +1042,22 @@ A connector is the code that reads one kind of source for one product: `kafka`, 
 `https-file`, `s3-file`, `sftp` or `ftp`. It is configured in the product's ODPS file, lands what
 it read verbatim in the product's own landing, and never shares a landing with another product.
 File and API kinds run in a one-shot fetch container limited to the product's declared hosts.
-Where: [ADR-056](ADR-056-unified-data-product-platform.md) part 3.
+Where: [ADR-056](ADR-056-unified-data-product-platform.md) part 3,
+[ADR-036](ADR-036-connectors-land-verbatim-then-publish-bronze-after-audit.md).
+
+### Fetch container and host allow-list
+
+The fetch container is a one-shot container that runs one fetch for one product: it downloads a
+file or an API response, writes the bytes and a fetch record (URL, final URL, sha256, size, time)
+to the run's spool directory before anything parses them, then parses them with the product's
+registered parser. It holds no storage key and cannot reach MinIO or Lakekeeper. Its **host
+allow-list** is the product's `allowHosts`: it connects only to addresses resolved from those
+names and checked to be public, and follows a redirect only over `https` to a host on the list.
+That stops a **server-side request forgery** (SSRF), where a server is made to request an address
+an outsider chose, such as an internal service behind a redirect. Nothing a source sends is ever
+executed.
+Where: [ADR-036](ADR-036-connectors-land-verbatim-then-publish-bronze-after-audit.md) parts 2
+and 3.
 
 ### Medallion layers of a product
 
@@ -1066,6 +1092,26 @@ compose file and pinned image digests. Services run only a release, never the wo
 `make deploy` moves one pointer per service to it and moves all of them back to the previous
 release if any part reports another.
 Where: [ADR-056](ADR-056-unified-data-product-platform.md) part 6.
+
+### Document set and provenance
+
+A document set is the exact set of product documents a release is compiled from: in 3.0 the
+`git archive` of a release tag's `contracts/` and `domains/`, byte-identical however often it is
+taken. Its **provenance record** says where the set came from: the source (git, or later the
+registry), the tag, commit and tagger, a hash of the whole set and of each document, and each
+document's last commit and pull request. The compiler reads nothing else.
+Where: [ADR-055](ADR-055-products-defined-once-in-odps-and-odcs-documents.md) part 6.
+
+### Lifecycle state and operator hold
+
+A product's lifecycle state is the one value of its ODPS `status`: `active` (scheduled,
+consuming), `paused` (released, consuming nothing, rows still readable), `deprecated` (still
+running, readers told the sunset date and successor) or `retired` (not built, rows kept). Every
+state but `active` records since when, why and by what decision, and the checks refuse a change the
+previous release does not allow, such as retiring a product another declares as an input. An
+**operator hold** is not a state: it stops a product's runs for an incident, without a release, and
+is recorded.
+Where: [ADR-055](ADR-055-products-defined-once-in-odps-and-odcs-documents.md) part 4.
 
 ### Registry and the seam
 
