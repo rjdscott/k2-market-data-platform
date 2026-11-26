@@ -474,4 +474,3 @@ def test_a_status_changes_exactly_its_own_products_rules() -> None:
     rules, groups = emitted(m)
     assert not groups and not [r for r in rules["tables"] if "group" in r and r["catalog"] != "system"]
     assert not re.search(r"station_readings|daily_load", json.dumps(rules)), json.dumps(rules)[:400]
-
