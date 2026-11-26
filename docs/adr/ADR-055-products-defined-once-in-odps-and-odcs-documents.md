@@ -18,7 +18,7 @@ contracts and its rule that k2gen checks them stand.
 
 A data product needs one definition that says what it is, who owns it, where its data comes
 from, what each of its tables promises and who may read it; K2 had a format of its own for half
-of that, and the running system read none of it. We will define every product as a set of
+of that, which described the old pipeline without driving it. We will define every product as a set of
 documents in git written to two open standards, one product file (ODPS) and one contract per
 table (ODCS), with the product's SQL, tests, grants and named access policies beside them. A
 compiler turns an approved, tagged set of those documents into a sealed release, and the running
@@ -181,8 +181,8 @@ each add a distinct guarantee; a layer that would only copy its parent is left o
 model in the product's directory, run on Trino) or `code: <name>@<major>` (a registered code
 transform on Spark). Documents hold no code of their own.
 
-**One product, one pipeline.** The compiler generates one Airflow DAG (a scheduled pipeline of
-tasks, [glossary](glossary.md#airflow-dag-and-cosmos)) per product, holding its connector, builds,
+**One product, one pipeline.** Each product gets one Airflow DAG (a scheduled pipeline of
+tasks, [glossary](glossary.md#airflow-dag-and-cosmos)), generated from its release and holding its connector, builds,
 audits, publish and run records, so each product runs, fails, pauses and is permissioned on its own
 ([`ADDENDUM-3.md`](../research/2026-11-26-unified-platform-architecture/ADDENDUM-3.md) L). A
 product built from others reads them only through its input ports, at their
