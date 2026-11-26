@@ -94,7 +94,7 @@ Open: <http://localhost:3000/d/k2-airflow>. Leads to: [airflow-scheduling.md](..
 
 *Captured 2026-11-26 at `v3.0.0-alpha.1-58-g3d8495b`.*
 
-Every alert rule, grouped by file, with its state. There is no Alertmanager: this page and Grafana are where a firing alert is seen, and each rule's annotations name its runbook.
+Every alert rule, grouped by file, with its state. A firing alert also goes to Slack through Alertmanager; each rule's annotations name its runbook.
 
 Open: <http://localhost:9090/alerts>. Leads to: [README.md](../runbooks/README.md).
 

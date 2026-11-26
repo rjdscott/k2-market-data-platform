@@ -44,6 +44,9 @@ volumes:
     driver: local
   grafana-data:
     driver: local
+  # Alertmanager's silences and notification log, so a silence outlives a recreate
+  alertmanager-data:
+    driver: local
 
   # Orchestration data
   postgres-data:
@@ -484,6 +487,61 @@ services:
     healthcheck:
       test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8080/healthz"]
       interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+    labels:
+      com.k2.service: "monitoring"
+      com.k2.tier: "observability"
+      com.k2.version: "v3"
+
+  # ───────────────────────────────────────────────────────────────────────
+  # Alertmanager - every alert Prometheus fires, to one Slack channel
+  # ───────────────────────────────────────────────────────────────────────
+  # Routing, inhibition and the message: docker/alertmanager/alertmanager.yml.
+  # Path, install, test and silence: docs/runbooks/where-an-alert-goes.md.
+  #
+  # The Slack webhook URL is a local secret, never in git: the directory
+  # ${K2_SECRETS}/alertmanager/ is mounted read-only, and only it, so the
+  # container sees that one file and none of the other secrets. A directory, not
+  # the file: a file mount pins the inode (CLAUDE.md). On Docker Desktop even the
+  # directory mount kept serving the old file after a rename over it (2026-11-26),
+  # so `make alerts-install-webhook` writes the file in place. Alertmanager reads
+  # it at every notification, so a new URL takes effect with no restart. If the directory
+  # is missing Docker creates it empty (on Docker Desktop, owned by the user),
+  # Alertmanager starts, and `make alert-test` says the webhook is not installed.
+  #
+  # On k2-net only: it must reach Slack, and never joins k2-catalog. Clustering
+  # off (one instance, no gossip port). Measured on 2026-11-26 in the throwaway
+  # copy `make alert-test-standin` runs: 19.5 MiB, CPU ~0%.
+  alertmanager:
+    logging: *k2-logging
+    image: prom/alertmanager:v0.35.1@sha256:4e3d029e69c7f61dd53a2b31a3dc427a2b81736cffca185c0854075e07969e36
+    container_name: k2-alertmanager
+    hostname: alertmanager
+    networks:
+      - k2-net
+    ports:
+      - "127.0.0.1:9093:9093"
+    volumes:
+      - alertmanager-data:/alertmanager
+      - ./docker/alertmanager:/etc/alertmanager:ro
+      - ${K2_SECRETS:-${HOME}/k2-secrets}/alertmanager:/run/k2-secrets:ro
+    command:
+      - '--config.file=/etc/alertmanager/alertmanager.yml'
+      - '--storage.path=/alertmanager'
+      - '--web.external-url=http://localhost:9093'
+      - '--cluster.listen-address='
+      - '--auto-gomemlimit'
+    deploy:
+      resources:
+        limits:
+          cpus: '0.1'
+          memory: 64M
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:9093/-/healthy"]
+      interval: 15s
       timeout: 5s
       retries: 3
       start_period: 10s
@@ -1328,6 +1386,7 @@ services:
 # prometheus            | 1.0       | 2G           | Metrics collection
 # grafana               | 0.5       | 512M         | Visualization
 # cadvisor              | 0.1       | 128M         | Per-container CPU and memory (Prometheus job cadvisor)
+# alertmanager          | 0.1       | 64M          | Alerts to Slack (docs/runbooks/where-an-alert-goes.md)
 # prefect-db            | 1.0       | 1536M        | Airflow and Lakekeeper metadata DB
 # airflow-api-server    | 1.0       | 1536M        | Airflow 3 UI, REST and execution API (ADR-034)
 # airflow-scheduler     | 1.5       | 3G           | Airflow 3 scheduler + LocalExecutor, 4 slots
@@ -1348,7 +1407,7 @@ services:
 # (`${K2_CAPTURE_CPUSET-12-14}`, .env.example). A cpuset is placement, not quota:
 # it does not change the limit sums below. See the ADR-010 Outcome addendum.
 # ----------------------|-----------|--------------|---------------------------
-# STEADY STATE (17 long-running) | 15.20 CPU | 27.188 GiB | v3 capture, lake catalog and engines, Airflow, Trino
+# STEADY STATE (18 long-running) | 15.30 CPU | 27.250 GiB | v3 capture, lake catalog and engines, Airflow, Trino
 #
 # One-shots are NOT free. They declare limits and they run concurrently with
 # the steady state at boot, so the budget that matters at `docker compose up` is
@@ -1361,15 +1420,15 @@ services:
 #   ----------------------------------------------------------------------------
 #   one-shot subtotal  1.5  | 1.5G
 #
-# Bootstrap peak: 16.70 CPU / 28.688 GiB, all 21 default-profile services,
+# Bootstrap peak: 16.80 CPU / 28.750 GiB, all 22 default-profile services,
 # against the 25 CPU / 48 GiB ceiling ADR-045 sets at the bootstrap peak
 # (superseding ADR-034's 20 CPU / 36 GiB, which superseded ADR-010's 16 CPU /
-# 40 GB). scripts/check-budget.py fails CI over it. Headroom: 8.30 CPU and
-# 19.312 GiB. With `--profile hot-gold` (clickhouse, paused by ADR-057) the
-# peak is 20.70 CPU / 36.688 GiB over 22 services; the script reports that line
-# and gates only the default, as it does for the stub profiles tools (16.95 /
-# 28.938 GiB), fetch and api (17.20 / 29.188 GiB each) and build (17.70 /
-# 30.188 GiB). The host gives Docker 28 CPU / 49.5 GiB; 3 cores
+# 40 GB). scripts/check-budget.py fails CI over it. Headroom: 8.20 CPU and
+# 19.250 GiB. With `--profile hot-gold` (clickhouse, paused by ADR-057) the
+# peak is 20.80 CPU / 36.750 GiB over 23 services; the script reports that line
+# and gates only the default, as it does for the stub profiles tools (17.05 /
+# 29.000 GiB), fetch and api (17.30 / 29.250 GiB each) and build (17.80 /
+# 30.250 GiB). The host gives Docker 28 CPU / 49.5 GiB; 3 cores
 # and 1.5 GiB stay outside the ceiling for the OS and the engine (ADR-045 says why that is enough).
 #
 # History: retiring the three Kotlin feed handlers (ADR-019) gave back the
@@ -1388,5 +1447,5 @@ services:
 # Target: 25 CPU / 48 GiB at the bootstrap peak (ADR-045)
 #
 # Instrument config: see config/instruments.yaml (single source of truth)
-# Last updated: 2026-11-26 (the phase 001 stubs tools, fetch, dbt-runner and k2-api behind profiles; before it lake-ddl and lake-metrics retired with the old lake ingest, ADR-056 and the ADR-010 Outcome; before it clickhouse behind the profile hot-gold, ADR-057)
+# Last updated: 2026-11-26 (alertmanager, phase 001 step S09; before it the phase 001 stubs tools, fetch, dbt-runner and k2-api behind profiles; before it lake-ddl and lake-metrics retired with the old lake ingest, ADR-056 and the ADR-010 Outcome; before it clickhouse behind the profile hot-gold, ADR-057)
 #############################################################################

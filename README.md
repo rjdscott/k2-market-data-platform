@@ -62,7 +62,7 @@ runs today**. Each phase of the plan updates them in the pull request that makes
 | Complete | One Rust process per venue holds a single socket carrying trades and L2 book, stamps `recv_ts_ns` before parsing, verifies Kraken's CRC32 on every update, tracks each venue's sequence numbers, and publishes every frame verbatim. The L2 book is paused on every venue while the platform is built, by a per-venue switch ([ADR-050](./docs/adr/ADR-050-order-book-capture-paused-during-platform-build.md)). |
 | Retained | Redpanda keeps the raw topics for 48 hours or 2 GiB per partition, and trades and book for 7 days, so phase `004`'s first lake product starts at the log start; nothing older is recovered. The old lake ingest, its four layers and its dbt marts are archived in [`legacy/v3-lake-ingest/`](./legacy/v3-lake-ingest/), and their tables were dropped after a verified copy (`make drop`). |
 | Disposable serving | ClickHouse `gold` is paused behind the compose profile `hot-gold` while the platform is built, its DDL still tested by `make test-clickhouse` ([ADR-057](./docs/adr/ADR-057-clickhouse-hot-tier-paused-during-platform-build.md)). Dedup is a `ReplacingMergeTree` key; candles are computed on read, so a replay cannot corrupt one. |
-| Proven | 14 alert rules as code, chaos scripts with measured recovery, a fresh-clone release check before every tag. Every gate that read the old lake tables prints a `SKIP` line naming the phase that restores it. |
+| Proven | 16 alert rules as code, routed by Alertmanager to Slack, chaos scripts with measured recovery, a fresh-clone release check before every tag. Every gate that read the old lake tables prints a `SKIP` line naming the phase that restores it. |
 
 [![K2 Pipeline Overview on a live run: every scrape target up, trade records per venue, Redpanda throughput, and the pipeline's CPU and memory](docs/images/dashboards/01-pipeline-overview.png)](docs/operations/dashboards.md)
 
@@ -83,7 +83,7 @@ flowchart TB
     S["Airflow 3 · Spark 3.5<br/>no DAG until phase 002"]:::sp
     T["Trino 484 · SQL over the lake, read-only<br/>one warehouse per domain"]:::nb
   end
-  O["Prometheus · 14 rules<br/>Grafana · 4 dashboards"]:::ob
+  O["Prometheus · 16 rules<br/>Alertmanager to Slack<br/>Grafana · 4 dashboards"]:::ob
 
   E --> F --> R
   R -.->|Kafka engine, paused| C
@@ -98,8 +98,8 @@ flowchart TB
   classDef ob fill:#f3f4f6,stroke:#6b7280,color:#111827
 ```
 
-17 long-running services and 4 one-shot init containers, 15.20 CPU / 27.188 GiB of declared
-limits at steady state and 16.70 CPU / 28.688 GiB at the bootstrap peak, under a 25 CPU / 48 GiB
+18 long-running services and 4 one-shot init containers, 15.30 CPU / 27.250 GiB of declared
+limits at steady state and 16.80 CPU / 28.750 GiB at the bootstrap peak, under a 25 CPU / 48 GiB
 ceiling ([ADR-045](./docs/adr/ADR-045-ceiling-25-cpu-48-gib.md); [how the numbers are produced](./docs/operations/docker-resources.md#how-these-numbers-are-produced)).
 The scheduler Airflow replaced is archived in [`legacy/prefect/`](./legacy/prefect/README.md), with no rollback path in the compose file.
 
@@ -207,7 +207,7 @@ of 68 / 287 / 10). A gate that read the old lake tables prints `SKIP` and the ph
 | ClickHouse schema: 10 assertions [^ch], including the v2 OHLCV regression | `make test-clickhouse` |
 | Trino: the real `docker/trino/etc` starts, catalog `lake` refuses every commit and table procedure, only a domain's writer changes its tables with SQL statements (table procedures are not fenced per user, ADR-044); 134 checks [^trino], no stack | `make test-trino` |
 | dbt: lint, parse and compile of a project with no marts; the marts retired with the old pipeline and dbt builds again in phase `002`; no stack | `make test-dbt` |
-| Prometheus rule unit tests (8 of 14 alerts) and 11 documentation gates | `bash scripts/check-docs.sh` |
+| Prometheus rule unit tests (10 of 16 alerts) and 11 documentation gates | `bash scripts/check-docs.sh` |
 | Live stack: chaos against the captures and Redpanda. `make lake-verify`, `make parity-ohlcv` and `make parity-bars` print `SKIP` until phase `004` | `make chaos` |
 
 [^rust]: `grep -rc '#\[test\]' services/capture-rust/src services/capture-rust/tests --include='*.rs' | awk -F: '{s+=$2} END {print s}'`
@@ -228,7 +228,8 @@ docker/airflow/            the Airflow image; no DAG until phase 002
 docker/lake/               modules the new connectors reuse: offsets, wire framing, bars, books
 docker/clickhouse/ddl/     gold contract (CI-tested) and Kafka feeds; the tier is paused (ADR-057)
 docker/trino/              Trino config: catalog lake (read-only), one generated catalog per domain, access rules
-docker/prometheus/rules/   14 alert rules, 8 with unit tests
+docker/prometheus/rules/   16 alert rules, 10 with unit tests
+docker/alertmanager/       routing to Slack; the webhook URL is a local secret, never in git
 schemas/avro/              raw-message, trade, book-snapshot-l2
 config/instruments.yaml    instrument registry, the single source of truth
 contracts/                 the domains file and the contract schemas; the old product contracts are archived
@@ -242,7 +243,7 @@ legacy/                    v1, v2 Kotlin handlers, v2 ClickHouse DDL, v2 offload
 ## Not built
 
 No query API. No replication or failover: one broker, one host. No
-Alertmanager routing. No load test above 1×. A pcap sidecar and a cross-venue security
+paging: alerts go to one Slack channel. No load test above 1×. A pcap sidecar and a cross-venue security
 master are designed ([ADR-026](./docs/adr/ADR-026-four-layer-lake-and-gold-served-from-clickhouse.md),
 [data strategy](./docs/architecture/12-data-strategy.md)) and not started.
 

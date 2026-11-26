@@ -5,9 +5,10 @@
 > **Before this** chapter 04.
 
 Prometheus scrapes every running tier, the rules in `docker/prometheus/rules/` carry runbooks
-and most of them (8 of 14) carry `promtool` cases, the Grafana dashboards in `docker/grafana/dashboards/` ship from
-the repo, and the failure modes those rules watch are induced on purpose with timed recovery. No
-Alertmanager: rules are evaluated and shown, not routed. Operator detail:
+and most of them (10 of 16) carry `promtool` cases, the Grafana dashboards in `docker/grafana/dashboards/` ship from
+the repo, and the failure modes those rules watch are induced on purpose with timed recovery.
+Alertmanager routes every firing alert to one Slack channel, so each runbook can follow its alert
+to where it arrives ([where-an-alert-goes.md](../runbooks/where-an-alert-goes.md)). Operator detail:
 [operations/observability.md](../operations/observability.md); FMEA:
 [failure-modes.md](16-failure-modes.md).
 
@@ -48,7 +49,7 @@ growing without bound whether the exporter is up, frozen, or gone.
 |---|---|---|
 | Alert on rates going to zero | Silent exactly when the fault is total: a stopped process takes its series with it, and `absent()` per stream per venue is more rules than gauges | [`rules/capture-alerts.yml`](../../docker/prometheus/rules/capture-alerts.yml) |
 | Hosted APM / SaaS | Per-series billing against a three-venue book feed, egress off a single host, and a demo that expires with the trial; the budget (16 CPU / 40 GB then, 25 CPU / 48 GiB since ADR-045) is a stated constraint | [ADR-010](../adr/ADR-010-resource-budget.md) |
-| Alertmanager routing now | One operator, no rotation, nowhere to page. Routing config that nobody is on the other end of is untested config | `alerting.alertmanagers[].targets: []` in [`prometheus.yml`](../../docker/prometheus/prometheus.yml) |
+| Alertmanager routing with nobody on the other end | Routing config that nobody receives is untested config, so until phase 001 there was none. It came with a destination, one Slack channel the owner reads, and a test of the whole path to a stand-in for it (`make alert-test-standin`) | [`alertmanager.yml`](../../docker/alertmanager/alertmanager.yml) |
 | **Alert rules as code, each with a runbook and a unit test, proven by chaos** (chosen) | Every rule is reviewable in a diff, its threshold is asserted by `promtool`, and the fault it names has been injected and timed | [`rules/`](../../docker/prometheus/rules/), [`scripts/chaos/`](../../scripts/chaos/), [failure-modes.md](16-failure-modes.md) |
 
 ## Decision
@@ -70,8 +71,10 @@ flowchart TB
   A["cAdvisor · :8080<br/>CPU, memory, cgroup limits per container"]
   P["Prometheus v3.2<br/>rules/*.yml"]
   G["Grafana 11.5<br/>dashboards from the repo"]
+  M["Alertmanager v0.35<br/>to one Slack channel"]
   X["scripts/chaos/*.sh<br/>induce · time · record"]
   C & R & S & A --> P --> G
+  P -->|"firing alerts"| M
   X -.->|"proves"| P
 ```
 
@@ -93,8 +96,9 @@ flowchart TB
   `ClickHouseProfileEvents_KafkaMessagesFailed` and topic movement versus table growth, until
   the pause removed the scrape job, the rules and the dashboard (ADR-057).
 - **Rules** are one file per running tier, capture and Airflow, plus `platform-alerts.yml` for the
-  disk the Docker volumes share (Redpanda's own disk gauges), each rule with a severity and,
-  bar `AirflowTaskFailed`, a `for`; the lake and ClickHouse files went with their tiers. Every
+  disk the Docker volumes share (Redpanda's own disk gauges) and `alertmanager-alerts.yml` for the
+  path to Slack itself, each rule with a severity and, bar `AirflowTaskFailed` and
+  `AlertmanagerNotificationsFailing`, a `for`; the lake and ClickHouse files went with their tiers. Every
   rule carries a `runbook` annotation that gate (d) of `check-docs.sh` resolves to a file and
   gate (d2) requires; unit tests sit in `docker/prometheus/tests/*.test.yml` and
   `rules/tests/*_test.yml`, both run by gate (c2).
@@ -129,7 +133,9 @@ flowchart TB
 
 ## Trade-offs
 
-- **No routing.** Alerts show in Prometheus and Grafana, not paged: deliberate for one operator.
+- **One channel, no paging.** Every alert goes to one Slack channel, with no rotation or escalation:
+  deliberate for one operator. While Alertmanager or the host is down nothing is routed, and no
+  watcher outside the host notices; `AlertmanagerDown` shows only in Prometheus and Grafana.
 - **No SLOs.** Thresholds are per-alert `for` windows sized from measurement, not error
   budgets; the burn-in that would justify SLOs is a Phase F item.
 - **Scrape gaps during chaos** are part of the record: a stopped broker shows as `up == 0`

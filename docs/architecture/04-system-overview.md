@@ -178,7 +178,7 @@ The long-running services, the one-shot init containers and their limits are wha
 
 ## Not built
 
-No HTTP query API (SQL is served by Trino); no replication or failover; no Alertmanager routing; no load test above 1×. Designed
+No HTTP query API (SQL is served by Trino); no replication or failover; no paging, alerts go to one Slack channel; no load test above 1×. Designed
 and deferred: pcap sidecar with kernel timestamps
 ([ADR-026](../adr/ADR-026-four-layer-lake-and-gold-served-from-clickhouse.md), `raw.pcap`,
 deferred) and a cross-venue security

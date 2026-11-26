@@ -117,18 +117,20 @@ phase 004, the order-book switch, the backup timer; the
 [operator guide](../operations/README.md#3-check-it-is-healthy) has every line).
 
 Underneath it,
-`docker compose ps -a` shows **21 containers: 17 long-running and 4 one-shots** (plain
-`docker compose ps` hides the exited one-shots). Only 16 of
-the 17 ever report `healthy`; `spark-iceberg` has no healthcheck defined and stays at plain
+`docker compose ps -a` shows **22 containers: 18 long-running and 4 one-shots** (plain
+`docker compose ps` hides the exited one-shots). Only 17 of
+the 18 ever report `healthy`; `spark-iceberg` has no healthcheck defined and stays at plain
 `Up`, which is correct and not a degraded state. Read from `docker ps -a` on the live stack on
 2026-11-26, not from a fresh install, less `clickhouse`, which the ClickHouse pause removes
 (ADR-057), and less `lake-metrics` and `lake-ddl`, which the retirement of the v3 lake removes;
 it agrees with the healthchecks and `restart: "no"` in the compose file, which no longer has
-those two.
+those two. `alertmanager` joined the compose file after that reading: its row is from the
+throwaway copy `make alert-test-standin` runs, `Up (healthy)` with no webhook installed, and
+not yet from the live stack.
 
 | State | Count | Containers |
 |---|---|---|
-| `Up (healthy)` | 16 | `redpanda`, `redpanda-console`, `minio`, `prometheus`, `grafana`, `cadvisor`, `prefect-db`, `lakekeeper`, `trino`, `capture-binance`, `capture-kraken`, `capture-coinbase`, `airflow-api-server`, `airflow-scheduler`, `airflow-dag-processor`, `airflow-statsd` |
+| `Up (healthy)` | 17 | `redpanda`, `redpanda-console`, `minio`, `prometheus`, `alertmanager`, `grafana`, `cadvisor`, `prefect-db`, `lakekeeper`, `trino`, `capture-binance`, `capture-kraken`, `capture-coinbase`, `airflow-api-server`, `airflow-scheduler`, `airflow-dag-processor`, `airflow-statsd` |
 | `Up`, no healthcheck | 1 | `spark-iceberg` |
 | `Exited (0)` | 4 | `lakekeeper-migrate`, `redpanda-init`, `lake-init`, `airflow-migrate` |
 
