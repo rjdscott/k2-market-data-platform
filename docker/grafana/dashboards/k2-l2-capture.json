@@ -888,6 +888,79 @@
           "refId": "A"
         }
       ]
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
+          },
+          "unit": "short",
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": {
+                  "text": "off"
+                },
+                "1": {
+                  "text": "on"
+                }
+              }
+            }
+          ]
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 8,
+        "x": 0,
+        "y": 44
+      },
+      "id": 33,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "value_and_name"
+      },
+      "pluginVersion": "9.0.0",
+      "title": "Book Capture (registry switch, read at start)",
+      "type": "stat",
+      "targets": [
+        {
+          "expr": "k2_capture_book_capture{exchange=~\"$exchange\"}",
+          "legendFormat": "{{exchange}}",
+          "refId": "A"
+        }
+      ],
+      "description": "k2_capture_book_capture per venue: 1 if the capture subscribed to the venue's order book, 0 if not (ADR-050). The panels beside it show no data for a venue that is off. scripts/health.sh compares it with config/instruments.yaml."
     }
   ],
   "refresh": "30s",

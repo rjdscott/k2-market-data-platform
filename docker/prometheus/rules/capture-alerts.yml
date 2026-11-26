@@ -134,9 +134,16 @@ groups:
           runbook: docs/runbooks/capture-sequence-gaps.md
 
       # CRITICAL: Kraken's CRC32 over our local book did not match the published one.
+      #
+      # Book-only, so it reads the switch the capture reports (ADR-050): with
+      # book_capture false nothing is checksummed, the counter is not even seeded,
+      # and this cannot fire for a venue that is off nor needs an edit at resume.
+      # CaptureSequenceGaps and CaptureResyncStorm stay unconditioned on purpose:
+      # Coinbase's connection-wide gaps are trade-path signals too.
       - alert: CaptureChecksumFailure
         expr: |
-          increase(k2_capture_checksum_failures_total[10m]) > 0
+          (increase(k2_capture_checksum_failures_total[10m]) > 0)
+            and on (exchange) (k2_capture_book_capture == 1)
         for: 5m
         labels:
           severity: critical
@@ -315,9 +322,14 @@ groups:
       # is a severe degradation that stays far above this floor. Detecting that
       # needs a per-venue, per-symbol baseline. Revisit when Phase F publishes
       # measured depth distributions per venue in 15-capacity-model.md.
+      #
+      # Conditioned on the switch the capture reports (ADR-050): a venue whose
+      # book_capture is false seeds no depth gauge, and a depth series left over
+      # from before the recreate must not page for a book nobody asked for.
       - alert: CaptureBookDepthDegraded
         expr: |
-          max_over_time(k2_capture_book_depth[10m]) < 20
+          (max_over_time(k2_capture_book_depth[10m]) < 20)
+            and on (exchange) (k2_capture_book_capture == 1)
         for: 10m
         labels:
           severity: warning
@@ -327,7 +339,7 @@ groups:
           summary: "Book collapsed below 20 total levels for {{ $labels.exchange }} {{ $labels.symbol }}"
           description: |
             {{ $labels.exchange }} {{ $labels.symbol }} did not reach 20 resting
-            levels across both sides at any point in the last 10 minutes — under
+            levels across both sides at any point in the last 10 minutes, under
             10 a side, against a canonical top-20-per-side product (ADR-027).
 
             Two causes, and they need opposite responses: a genuinely thin

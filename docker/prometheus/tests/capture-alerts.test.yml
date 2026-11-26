@@ -17,6 +17,11 @@
 #   CaptureBookDepthDegraded  used min_over_time, which latches on the empty book
 #                             a successful resync leaves behind.
 #
+# And the switch (ADR-050): CaptureBookDepthDegraded and CaptureChecksumFailure
+# fire only for a venue whose k2_capture_book_capture is 1, each pinned both ways
+# below; with the switch at 0 the venue's probe streams, `pong` for Binance, are
+# still judged by CaptureFeedStale.
+#
 # `time()` in a unit test is seconds since the epoch at eval_time, so a gauge
 # pinned at 0 is "last seen at the epoch" and reads as exactly eval_time stale.
 rule_files:
@@ -182,6 +187,8 @@ tests:
     input_series:
       - series: 'k2_capture_book_depth{job="capture-kraken",exchange="kraken",symbol="ADA/USD"}'
         values: '4+0x40'
+      - series: 'k2_capture_book_capture{job="capture-kraken",exchange="kraken"}'
+        values: '1+0x40'
     alert_rule_test:
       - eval_time: 25m
         alertname: CaptureBookDepthDegraded
@@ -198,7 +205,7 @@ tests:
               runbook: docs/runbooks/capture-checksum-failure.md
               description: |
                 kraken ADA/USD did not reach 20 resting
-                levels across both sides at any point in the last 10 minutes — under
+                levels across both sides at any point in the last 10 minutes, under
                 10 a side, against a canonical top-20-per-side product (ADR-027).
 
                 Two causes, and they need opposite responses: a genuinely thin
@@ -234,3 +241,131 @@ tests:
         exp_samples:
           - labels: '{job="capture-kraken",exchange="kraken",symbol="BTC/USD"}'
             value: 50
+
+  # ── the book switch (ADR-050) ────────────────────────────────────────────
+  # Binance with book_capture 0: trades and the pong probe fresh, and a depth
+  # series at 0 left from before the recreate. Neither alert fires: the venue
+  # was not asked for its book.
+  - interval: 30s
+    name: a venue with its book switched off fires no book alert
+    input_series:
+      - series: 'k2_capture_book_capture{job="capture-binance",exchange="binance"}'
+        values: '0+0x60'
+      - series: 'k2_capture_book_depth{job="capture-binance",exchange="binance",symbol="BTCUSDT"}'
+        values: '0+0x60'
+      - series: 'k2_capture_last_message_ts_seconds{job="capture-binance",exchange="binance",stream="trade"}'
+        values: '0+30x60'
+      - series: 'k2_capture_last_message_ts_seconds{job="capture-binance",exchange="binance",stream="pong"}'
+        values: '0+30x60'
+      - series: 'k2_capture_checksum_failures_total{job="capture-kraken",exchange="kraken",symbol="BTC/USD"}'
+        values: '0+1x60'
+      - series: 'k2_capture_book_capture{job="capture-kraken",exchange="kraken"}'
+        values: '0+0x60'
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: CaptureBookDepthDegraded
+        exp_alerts: []
+      - eval_time: 25m
+        alertname: CaptureFeedStale
+        exp_alerts: []
+      - eval_time: 25m
+        alertname: CaptureChecksumFailure
+        exp_alerts: []
+
+  # The same series with the switch at 1: the condition is what silenced them.
+  - interval: 30s
+    name: the same venue with its book switched on fires both
+    input_series:
+      - series: 'k2_capture_book_capture{job="capture-binance",exchange="binance"}'
+        values: '1+0x60'
+      - series: 'k2_capture_book_depth{job="capture-binance",exchange="binance",symbol="BTCUSDT"}'
+        values: '0+0x60'
+      - series: 'k2_capture_checksum_failures_total{job="capture-kraken",exchange="kraken",symbol="BTC/USD"}'
+        values: '0+1x60'
+      - series: 'k2_capture_book_capture{job="capture-kraken",exchange="kraken"}'
+        values: '1+0x60'
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: CaptureBookDepthDegraded
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              component: capture
+              tier: ingestion
+              job: capture-binance
+              exchange: binance
+              symbol: BTCUSDT
+            exp_annotations:
+              summary: "Book collapsed below 20 total levels for binance BTCUSDT"
+              runbook: docs/runbooks/capture-checksum-failure.md
+              description: |
+                binance BTCUSDT did not reach 20 resting
+                levels across both sides at any point in the last 10 minutes, under
+                10 a side, against a canonical top-20-per-side product (ADR-027).
+
+                Two causes, and they need opposite responses: a genuinely thin
+                instrument is correct data and the fix is an exclusion for that symbol,
+                not a lower threshold; a book that thinned after a resync or a
+                reconnect is a capture bug. Check k2_capture_resyncs_total and the
+                conn_id in recent snapshots before changing anything.
+      - eval_time: 25m
+        alertname: CaptureChecksumFailure
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              component: capture
+              tier: ingestion
+              job: capture-kraken
+              exchange: kraken
+              symbol: BTC/USD
+            exp_annotations:
+              summary: "Book checksum mismatch on kraken BTC/USD (20 in 10m)"
+              runbook: docs/runbooks/capture-checksum-failure.md
+              description: |
+                The CRC32 computed over the local book did not match the checksum
+                kraken published, 20 time(s) in the
+                last 10 minutes. The book had drifted from the exchange's.
+
+                Snapshots emitted around this window carry checksum_ok=false and are
+                excludable in query; the resync itself is automatic (per-symbol
+                resubscribe, ADR-027). What is not automatic is deciding whether this
+                was a transient reordering or a formatting bug in the checksum path -
+                spike S1 established that formatting from f64 desyncs the book silently
+                while the checksum still reports success on some updates.
+
+  # Binance's probe with books off: a pong silent past 60 s is a dead socket.
+  - interval: 30s
+    name: a stale pong fires CaptureFeedStale on a venue with its book off
+    input_series:
+      - series: 'k2_capture_book_capture{job="capture-binance",exchange="binance"}'
+        values: '0+0x20'
+      - series: 'k2_capture_last_message_ts_seconds{job="capture-binance",exchange="binance",stream="trade"}'
+        values: '0+30x20'
+      - series: 'k2_capture_last_message_ts_seconds{job="capture-binance",exchange="binance",stream="pong"}'
+        values: '0+0x20'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: CaptureFeedStale
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              component: capture
+              tier: ingestion
+              job: capture-binance
+              exchange: binance
+              stream: pong
+            exp_annotations:
+              summary: "No pong frames from binance for 4m 0s"
+              runbook: docs/runbooks/capture-feed-stale.md
+              description: |
+                The capture process for binance is up and scrapeable, but
+                its pong stream last delivered a frame
+                4m 0s ago.
+
+                This is the failure mode a liveness check misses: the process is
+                healthy, the WebSocket is open, and the exchange has gone quiet or the
+                subscription was silently dropped. The bound is per stream and is the
+                same one the process enforces on itself (`CONTINUOUS`, main.rs): 60s
+                for book and heartbeat channels, which all three venues run at 1 Hz or
+                better whatever the market is doing, and 300s for trade channels,
+                where silence can be a thin instrument rather than a dead feed.
