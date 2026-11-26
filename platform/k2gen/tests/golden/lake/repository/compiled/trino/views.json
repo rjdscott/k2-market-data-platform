@@ -1,0 +1,15 @@
+{
+  "views": [
+    {
+      "base": "governance.access_canary__base.events",
+      "columns": [
+        "id",
+        "region",
+        "note",
+        "event_ts"
+      ],
+      "owner": "pub_access_canary",
+      "relation": "governance.access_canary.events"
+    }
+  ]
+}

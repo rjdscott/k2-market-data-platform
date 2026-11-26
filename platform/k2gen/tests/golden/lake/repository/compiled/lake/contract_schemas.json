@@ -1,0 +1,30 @@
+{
+  "governance.access_canary__base.events": {
+    "columns": [
+      {
+        "name": "id",
+        "required": true,
+        "type": "bigint"
+      },
+      {
+        "name": "region",
+        "required": true,
+        "type": "varchar"
+      },
+      {
+        "name": "note",
+        "required": true,
+        "type": "varchar"
+      },
+      {
+        "name": "event_ts",
+        "required": true,
+        "type": "timestamp(6) with time zone"
+      }
+    ],
+    "partitioning": [
+      "region"
+    ],
+    "sort": []
+  }
+}

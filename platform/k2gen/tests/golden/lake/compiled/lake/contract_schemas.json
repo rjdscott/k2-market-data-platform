@@ -1,0 +1,99 @@
+{
+  "k2.station_readings.bronze_readings": {
+    "columns": [
+      {
+        "name": "station_id",
+        "required": true,
+        "type": "varchar"
+      },
+      {
+        "name": "read_at",
+        "required": true,
+        "type": "timestamp(6) with time zone"
+      },
+      {
+        "name": "value_text",
+        "required": true,
+        "type": "varchar"
+      },
+      {
+        "name": "region",
+        "required": false,
+        "type": "varchar"
+      },
+      {
+        "name": "operator_note",
+        "required": false,
+        "type": "varchar"
+      },
+      {
+        "name": "source_file_sha256",
+        "required": true,
+        "type": "varchar"
+      }
+    ],
+    "partitioning": [],
+    "sort": []
+  },
+  "ops_insight.daily_load__base.gold_daily_load": {
+    "columns": [
+      {
+        "name": "load_date",
+        "required": true,
+        "type": "date"
+      },
+      {
+        "name": "station_id",
+        "required": true,
+        "type": "varchar"
+      },
+      {
+        "name": "readings",
+        "required": true,
+        "type": "bigint"
+      },
+      {
+        "name": "mean_value",
+        "required": false,
+        "type": "decimal(12,3)"
+      }
+    ],
+    "partitioning": [],
+    "sort": []
+  },
+  "sensor_net.station_readings__base.silver_readings": {
+    "columns": [
+      {
+        "name": "station_id",
+        "required": true,
+        "type": "varchar"
+      },
+      {
+        "name": "read_at",
+        "required": true,
+        "type": "timestamp(6) with time zone"
+      },
+      {
+        "name": "value",
+        "required": true,
+        "type": "decimal(12,3)"
+      },
+      {
+        "name": "region",
+        "required": false,
+        "type": "varchar"
+      },
+      {
+        "name": "operator_note",
+        "required": false,
+        "type": "varchar"
+      }
+    ],
+    "partitioning": [
+      "day(read_at)"
+    ],
+    "sort": [
+      "station_id"
+    ]
+  }
+}
