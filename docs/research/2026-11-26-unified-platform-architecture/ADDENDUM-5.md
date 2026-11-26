@@ -1,12 +1,14 @@
 # Addendum 5 (owner, 2026-11-26, after the three entries were written). For the judge and reviewer.
 
+*A tidied record of requirements given on 2026-11-26: quotations of the owner's chat messages are restated as plain statements with the same meaning.*
+
 The platform is a lab until its release gate: its data is disposable during the build and must be
 treated as business-critical once the build is finished.
 
 P. **Standing permission to drop and rebuild**, when the accepted plan calls for it, without asking
    each time: every lake table (bronze, silver, gold, marts), the raw archive (`raw.messages`),
    catalog warehouses and namespaces, storage buckets, ClickHouse data, Redpanda topics and their
-   layout, Airflow run history. The owner's guide is "whatever is best practice": naming, layout,
+   layout, Airflow run history. The owner's guide is best practice: naming, layout,
    partitioning and table design may be redone to the new product model instead of inherited.
 Q. **Crypto migration is a clean rebuild**, not a side-by-side move. Build the per-venue products
    fresh on the new framework; prove correctness against independent references (the DuckDB

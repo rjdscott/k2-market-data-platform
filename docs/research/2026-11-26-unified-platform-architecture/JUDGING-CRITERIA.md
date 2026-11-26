@@ -1,8 +1,10 @@
 # Judging criteria (owner, 2026-11-26)
 
-The owner's words: "I would like this platform to be best practice and latest and greatest
-philosophy while being robust and easy to manage, and use by stakeholders. Please make sure that
-the technology is modern yet tried and tested."
+*A tidied record of requirements given on 2026-11-26: quotations of the owner's chat messages are restated as plain statements with the same meaning.*
+
+The owner's requirement: the platform follows current best practice and the latest thinking,
+while being robust, easy to manage and easy for stakeholders to use, and its technology is modern
+yet tried and tested.
 
 Score every design, and every technology it adds, against these, in this order:
 1. **Robust.** Fails loudly, recovers without hand repair, never publishes unaudited data; the

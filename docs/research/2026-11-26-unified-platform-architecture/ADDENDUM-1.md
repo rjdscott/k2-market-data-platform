@@ -1,10 +1,11 @@
 # Addendum 1 to the brief (owner, 2026-11-26, later the same day). It overrides the brief where they differ.
 
-The owner's words: "I would like to keep the crypto captures as their own standalone thing. However,
-the Red Panda message bus and or a Kafka could be seen as a connector, which will need to be
-configured through this unified ingestion framework, which would be Airflow backed and config
-driven. All we need to focus on now is how we go and define the products end to end using public
-APIs, Kafka or Red Panda, FTP and or files."
+*A tidied record of requirements given on 2026-11-26: quotations of the owner's chat messages are restated as plain statements with the same meaning.*
+
+The owner's requirement: the crypto captures stay a standalone component of their own. The
+Redpanda message bus, or Kafka, is treated as a connector, configured through the unified ingestion
+framework, which is Airflow-backed and config-driven. The focus for now is defining products end to
+end using public APIs, Kafka or Redpanda, FTP, and files.
 
 What this changes:
 A. **The Rust captures are outside the platform's ingestion framework.** They are standalone

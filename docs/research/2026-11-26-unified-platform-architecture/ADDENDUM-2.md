@@ -1,11 +1,13 @@
 # Addendum 2 (owner's answers, 2026-11-26). Overrides the brief and addendum 1 where they differ.
 
+*A tidied record of requirements given on 2026-11-26: quotations of the owner's chat messages are restated as plain statements with the same meaning.*
+
 F. **Latency.** Scheduled micro-batches now. The design reserves a second run mode (an always-on
    consumer) for a later product that needs seconds, without building it. Show where it would plug in.
 
-G. **The ETL design is now the centre of your entry.** The owner's words: "please help me design
-   the ETL process for this. I would like medallion architecture and config driven transforms.
-   Please help me work out how to best do this." Design it concretely:
+G. **The ETL design is now the centre of your entry.** The owner asks for help designing the ETL
+   process, with a medallion architecture and config-driven transforms, and for a recommendation
+   on how best to do it. Design it concretely:
    - The layers a product's data passes through (the repo's medallion is landing/raw, bronze,
      silver, gold: see ADR-026 and `docker/lake/`), what each layer guarantees, and which layers a
      connector fills versus which a transform fills.

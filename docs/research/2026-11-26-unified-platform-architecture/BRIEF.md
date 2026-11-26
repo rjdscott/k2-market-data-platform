@@ -1,14 +1,16 @@
 # Architecture tournament brief: K2 as a unified, product- and service-oriented data platform
 
+*A tidied record of requirements given on 2026-11-26: quotations of the owner's chat messages are restated as plain statements with the same meaning.*
+
 You are one of three independent architects. Each writes a competing target architecture and a
 phased plan. A fourth, independent judge picks or synthesises. Do not look for the other entries.
 
-## The owner's vision (their words)
-"My dream for this k2 market data platform is to be product and service orientated with a unified
-ingestion layer, unified storage layers, a unified catalog, and a unified service layer or query
-layer." And: "treat this platform as an aggregator of unified ingestion, cataloging, and serving of
-data, where end users can easily define, create, and serve data sets from various sources."
-They note today's platform has "very concrete coupled pipelines and layering".
+## The owner's vision
+The owner wants the K2 market data platform to be product- and service-oriented, with a unified
+ingestion layer, unified storage layers, a unified catalog, and a unified service (query) layer.
+The platform should act as an aggregator of unified ingestion, cataloguing and serving of data,
+where end users can easily define, create and serve data sets from various sources. The owner notes
+that today's platform has rigidly coupled pipelines and layering.
 
 ## Fixed decisions (owner, 2026-11-26). Honour all; do not re-litigate.
 1. A product is defined once, in a YAML contract in a pull request (ODCS contracts, generator
@@ -35,7 +37,7 @@ They note today's platform has "very concrete coupled pipelines and layering".
 10. Process rules: one review round per pull request; a phase audit fixes critical and high only;
     a hardening sprint exists after the infrastructure-as-code phase for deferred items.
 
-## Ground truth to read (repo at /home/rjdscott/Documents/projects/k2-market-data-platform, READ-ONLY:
+## Ground truth to read (repo at `.`, the repository root, READ-ONLY:
 ## no edits, no commits, no branch switches, no Docker writes; reading the running stack is fine)
 - `CLAUDE.md`, `docs/architecture/README.md` and chapters, `docs/adr/README.md`, ADR-031 to ADR-050
   (especially 032, 033, 034, 035, 044, 046, 047, 050), `docs/adr/glossary.md`.

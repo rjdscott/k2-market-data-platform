@@ -1,7 +1,9 @@
 # Addendum 4 (owner, 2026-11-26)
 
-The owner's words: "be sure to also have the architecture documented with mermaid diagrams clearly
-explaining the platform design ethos."
+*A tidied record of requirements given on 2026-11-26: quotations of the owner's chat messages are restated as plain statements with the same meaning.*
+
+The owner's requirement: the architecture is also documented with Mermaid diagrams that clearly
+explain the platform's design ethos.
 
 N. Open your entry with a short **design ethos**: five to eight principles, one sentence each, that
    a new engineer could use to predict a design choice (for example "a product is defined once";

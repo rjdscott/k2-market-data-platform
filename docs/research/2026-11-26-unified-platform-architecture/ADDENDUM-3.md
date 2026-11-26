@@ -1,12 +1,13 @@
 # Addendum 3 (owner, 2026-11-26). Final. Overrides earlier text where they differ.
 
-The owner's words: "the connector to Redpanda is one form of ingestion, which will be our crypto
-trades, and we will have an ETL pipeline for crypto for each of the venues. Each venue will be its
-own product and its own contract, because we will need to define the schema and enable
-permissioning and everything else through the catalog and query layer. Another pipeline will be the
-end of day FX extraction from the ECB. This too will need to be defined in the ingestion, product,
-catalog, and query layer. This is just going to be another form of data set and data product that
-we need to map and be able to onboard for our users of the platform."
+*A tidied record of requirements given on 2026-11-26: quotations of the owner's chat messages are restated as plain statements with the same meaning.*
+
+The owner's requirement: the Redpanda connector is one form of ingestion, carrying the crypto
+trades, and crypto has an ETL pipeline for each venue. Each venue is its own product with its own
+contract, because its schema must be defined, and permissions and everything else enabled, through
+the catalog and query layer. Another pipeline is the end-of-day FX extraction from the ECB, which
+must also be defined in the ingestion, product, catalog and query layers. It is one more data set
+and data product to map and onboard for the platform's users.
 
 J. **Two acceptance cases.** Your design must walk each one through all four layers, showing every
    file a user writes and everything generated: (1) one venue's crypto trades from its Redpanda
