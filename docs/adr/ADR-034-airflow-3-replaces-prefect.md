@@ -464,3 +464,58 @@ finish in under 60 percent of the slot.
 poor trigger: at 3 threads on a 3.0 CPU quota it is met permanently and says nothing about
 the backlog. It is withdrawn. The trigger that stands is **p90 `lake_ingest` duration above
 240 s over a day**.
+
+---
+
+## Outcome (2026-11-26, the duration trigger fired)
+
+**The trigger.** The Outcome above leaves one standing trigger: **p90 `lake_ingest` duration
+above 240 s over a day**. p90 is the 90th percentile, the duration that nine runs in ten finish
+within. `lake_ingest` is the Airflow DAG that runs the lake ingest (`docker/lake/ingest.py` in
+the Spark container) every 5 minutes, so a run has a 300 s slot before the next one is due, and
+240 s is 80 percent of it.
+
+**It fired on 2026-11-25.** Measured by the phase P3 audit,
+`docs/audits/2026-11-26-p3-trino-dbt-marts.md` (on branch `docs/audit-p3-phase` until that pull
+request merges), read-only on the live stack:
+
+| Figure, 2026-11-25 | Value | Command |
+|---|---|---|
+| Finished scheduled runs, 02:11 to 22:16 UTC | 231 | `docker exec k2-airflow-scheduler airflow dags list-runs lake_ingest -o json`, end minus start per run |
+| p90 duration | **253 s** | the same list |
+| Longest run; runs over the 300 s slot | 581 s; 11 | the same list |
+| Hourly median | 168 s at 08h, rising to 251 s at 22h | the same list, grouped by hour |
+| p90 by Airflow's own timer | 254.98 s | `airflow_dagrun_duration_success{dag_id="lake_ingest",run_type="scheduled",quantile="0.9"}` in Prometheus |
+| Runs failed `java.lang.OutOfMemoryError: Java heap space` | 2, at 17:41 and 18:36 | the task logs; both before the driver heap went from 768m to 1536m (#205) |
+| Spark CPU, 6 h peak | 3.005 cores of the 3.0 quota | cAdvisor in Prometheus |
+
+The same day P3 raised the per-run cap threefold (#203: 600,000 offsets per partition per run,
+from 200,000) and added a per-run batch audit (#206). The growth through the day is not those:
+it is stage 2d, the step of each run that rebuilds the day's candles and event bars from
+`gold.trades`, whose input grows from midnight UTC to the end of the day.
+
+**The response is [ADR-048](ADR-048-gold-step-reads-touched-data-writes-bars-once.md)**,
+Accepted 2026-11-26: stage 2d reads only the trades added since it last finished, computes the
+bars once, and publishes them in one atomic step. It is not yet built at this writing (main at
+`26fc22a`), so the trigger has not been cleared. A first reading after the host's
+out-of-memory kill of the Docker VM on 2026-11-25 (ADR-045's 2026-11-26 Outcome) does not clear
+it either: 18 scheduled runs from 23:56 to 01:21 UTC had a median of 172 s, p90 238 s and a
+longest run of 240 s, none over the slot, but that is the start of a UTC day, when stage 2d's
+input is smallest. Command, run 2026-11-26:
+
+```bash
+docker exec -e PYTHONWARNINGS=ignore k2-airflow-scheduler airflow dags list-runs lake_ingest -o json \
+  --start-date 2026-11-25T23:55:00+00:00 2>/dev/null | tail -n 1 | python3 -c '
+import json, sys, statistics
+from datetime import datetime
+rs = [r for r in json.load(sys.stdin) if r["state"] in ("success", "failed") and r["run_id"].startswith("scheduled__")]
+d = sorted((datetime.fromisoformat(r["end_date"]) - datetime.fromisoformat(r["start_date"])).total_seconds() for r in rs)
+print(len(d), "runs, median %.0f, p90 %.0f, max %.0f" % (statistics.median(d), statistics.quantiles(d, n=10)[8], max(d)))'
+```
+
+No alert reads run duration, so until a rule does, the first signal of a run outgrowing its slot
+is `LakeIngestLagHigh` at 900 s of lag.
+
+**Revisit when** ADR-048's change has run through one whole UTC day: the p90 of that day's
+scheduled runs, by the command above with that day's `--start-date`, is the measurement that
+clears this trigger (at or under 240 s) or keeps it open.
