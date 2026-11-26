@@ -126,5 +126,11 @@ expectations:
               planning_time_ms, created, started, last_heartbeat, end, error_type, error_code]
     mustAppear: {where: "\"user\" = 'p.canary-full'", minRows: 1}
 
+  # The catalog fence (ADR-059 part 7): Lakekeeper has no authentication, so nothing reaches it
+  # but the catalog's own network. Run on the stack by scripts/verify/catalog-fence.sh.
+  - {probe: {from: k2-net, target: "lakekeeper:8181"}, expect: refused}
+  - {probe: {from: host, target: "127.0.0.1:18181"}, expect: refused}
+  - {probe: {from: k2-catalog, target: "lakekeeper:8181"}, expect: open}
+
   # The catalog equals the release: no planted view, table or tag (ADR-061 part 6).
   - {drift: catalog, expect: clean}

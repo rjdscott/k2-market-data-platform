@@ -53,8 +53,9 @@ rules() {  # trino-rules-test.sh's lake, with the review's C1 rows on it before 
   state=$(bash "$L" state "$P")
   id=$(bash "$L" py "$P" scripts/trino_rules_test.py compile /work/build | tail -1)
   bash "$L" up "$P" "$state/build/releases/$id" p.nobody svcxplatform pxanalyst-full k2_release_000000000000 || return 1
-  for s in suite negative control; do bash "$L" py "$P" scripts/trino_rules_test.py "$s" || rc=1; done
-  bash "$L" py "$P" scripts/trino_rules_c1_test.py || rc=1
+  for s in suite negative; do bash "$L" py "$P" scripts/trino_rules_test.py "$s" || rc=1; done
+  bash "$L" py "$P" scripts/trino_rules_c1_test.py || rc=1  # before control, which drops a fixture's schema (destructive, so last)
+  bash "$L" py "$P" scripts/trino_rules_test.py control || rc=1
   bash scripts/verify/identity.sh --throwaway "$P" || rc=1
   bash "$L" down "$P" >/dev/null
   echo "rules: suite, negative, control, c1 and identity on one lake: exit $rc"

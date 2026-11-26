@@ -739,7 +739,7 @@ def expectations(m: model.Model) -> None:
             record(rid, f"{e.principal} is denied {e.table}", denied(err), short(err))
         elif isinstance(e, model.StatementExpectation):
             rows, err, _ = tq(e.principal, e.sql, session=dict(e.session) or None)
-            passed = {"denied": denied(err), "error": err is not None, "noBounds": err is None and no_bounds(rows)}[e.expect]
+            passed = {"denied": denied(err), "error": err is not None, "noBounds": err is None and no_bounds(rows), "ok": err is None}[e.expect]
             record(rid, f"{e.principal}: {e.sql[:90]}{' (session header)' if e.session else ''} is {e.expect}", passed, short(err) if err else rows[:4])
         else:
             record(rid, "a probe or drift row: S22's catalog-fence.sh and S20's drift check run it, not this suite", None, repr(e))

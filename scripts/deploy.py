@@ -24,7 +24,7 @@ first failure:
  2 images        every image of the manifest present by its digest (registry images pulled)
  3 plan          k2gen's needs from the live release (and any attempt since it) to this one, printed;
                  PLAN=1 stops here
- 4 ddl           the storage plan's missing namespaces, the one-shots the plan names, and each table of
+ 4 ddl           the one-shots the plan names (lake-init reads the target's storage plan), the storage plan's missing namespaces, and each table of
                  needs.ddl compared with the catalog: missing is queued, equal is satisfied, different
                  is refused (never an alter or a drop); Spark's tables created now if Spark runs
  5 views-narrow  before any rule can change, each reader view whose contract columns or SQL change loses
@@ -1097,13 +1097,16 @@ def resolve(ctx: Ctx) -> tuple[Release | None, list[str]]:
 
 
 def ddl(ctx: Ctx, p: Plan) -> list[str]:
-    """Step 4: the storage plan's namespaces, the one-shots, then the tables (all additive)."""
-    out = tools(ctx, p.target, "namespaces", CATALOG_URI,
-                f"{model.RELEASES_MOUNT}/{p.target.id}/{model.STORAGE_PLAN}").splitlines() or ["every namespace exists"]
+    """Step 4: the one-shots, the storage plan's namespaces, then the tables (all additive)."""
+    plan = f"{model.RELEASES_MOUNT}/{p.target.id}/{model.STORAGE_PLAN}"
+    out = []
+    # The one-shots first: lake-init makes the warehouses the namespaces go into. It reads the TARGET's
+    # plan (K2_STORAGE_PLAN), not the pointer, which still names the previous release, or nothing yet.
     for s in p.oneshots:  # a fresh container each time, so an old exit is never read as this run's
         run(*compose(ctx, p.target, "up", "-d", "--no-deps", "--no-build", "--pull", "never", "--force-recreate", s),
-            env=compose_env(ctx))
+            env={**compose_env(ctx), "K2_STORAGE_PLAN": plan})
         out.append(f"one-shot {s} exited 0 in {wait_service(ctx, s, True):.1f} s")
+    out += tools(ctx, p.target, "namespaces", CATALOG_URI, plan).splitlines() or ["every namespace exists"]
     return out + compare_ddl(ctx, p) + create_tables(ctx, p, late=False)
 
 
