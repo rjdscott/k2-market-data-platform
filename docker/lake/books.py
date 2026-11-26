@@ -1,21 +1,27 @@
 #!/usr/bin/env python3
 """
-Books — silver per venue and the gold 1 Hz top-20 product, from one replay.
+Books: silver per venue and the gold 1 Hz top-20 product, from one replay.
 
-    silver.book_binance    <- bronze.binance_depth20       typed frames (each IS a top-20 snapshot)
-    silver.book_kraken     <- bronze.kraken_book           typed frames + checksum_ok by replay
-    silver.book_coinbase   <- bronze.coinbase_level2       typed events (one row per events[i])
-    gold.book_top20        <- silver.book_*                the book at the end of every second, top 20
-    gold.bbo_1s            <- gold.book_top20              a SQL projection
-    gold.book_state        the replay's carry-over per (venue, symbol, connection)
+Retired with the old pipeline (ADR-056). Every table below was dropped in phase
+000; their DDL, and the silver stage and rebuild that called this module, are
+archived in legacy/v3-lake-ingest/. Nothing runs it now: it stays in place for
+reuse, as plan 000-clear-the-ground (Wave 3, step 5) says.
+
+    layer   table           built from
+    silver  book_binance    bronze binance_depth20    typed frames (each IS a top-20 snapshot)
+    silver  book_kraken     bronze kraken_book        typed frames + checksum_ok by replay
+    silver  book_coinbase   bronze coinbase_level2    typed events (one row per events[i])
+    gold    book_top20      silver book_*             the book at the end of every second, top 20
+    gold    bbo_1s          gold book_top20           a SQL projection
+    gold    book_state      the replay's carry-over per (venue, symbol, connection)
 
 **One replay, two outputs.** A venue's book is a state machine over a connection's
 frames in `conn_msg_seq` order (docker/lake/book.py). Walking it once yields the
 per-frame checksum verdict — silver's flag — and the state at every second
 boundary — gold's snapshot. Walking it twice, once per layer, would double the
-biggest job in the lake for no information. So `replay()` is called from the
-silver stage on freshly typed frames and writes both; `rebuild --layer gold`
-calls the same function over silver's rows (gold stays a function of silver).
+biggest job in the lake for no information. So `replay()` was called from the
+silver stage on freshly typed frames and wrote both; `rebuild --layer gold`
+called the same function over silver's rows (gold stays a function of silver).
 
 **Streamed, not materialised.** Kraken delivers ~13 M book frames per venue-day
 and a BTC/USD connection can run for half a day; a `groupBy(...).applyInPandas`
@@ -25,8 +31,8 @@ conn_msg_seq, and walked by a Python generator over the partition iterator —
 constant memory per partition, one book dict per open connection.
 
 **State between ticks.** A 5-minute tick sees the middle of a connection. The
-book after the last frame of each (symbol, conn_id) — top 25 levels for Kraken,
-the whole book for Coinbase — is written to gold.book_state and read back as the
+book after the last frame of each (symbol, conn_id), top 25 levels for Kraken and
+the whole book for Coinbase, is written to STATE and read back as the
 starting point next time, so a tick re-reads five minutes, not the connection's
 life. A frame that arrives before the connection's snapshot (no state, not a
 snapshot) is typed into silver but yields no book: checksum_ok NULL, no
@@ -56,10 +62,11 @@ from pyspark.sql import functions as F
 import offsets as O
 from spark_conf import CATALOG
 
-BRONZE_INSTRUMENT = f"{CATALOG}.bronze.kraken_instrument"
-GOLD_BOOK = f"{CATALOG}.gold.book_top20"
-GOLD_BBO = f"{CATALOG}.gold.bbo_1s"
-STATE = f"{CATALOG}.gold.book_state"
+# Retired tables, dropped in phase 000 (see the module docstring).
+BRONZE_INSTRUMENT = f"{CATALOG}.bronze.kraken_instrument"  # retired
+GOLD_BOOK = f"{CATALOG}.gold.book_top20"  # retired
+GOLD_BBO = f"{CATALOG}.gold.bbo_1s"  # retired
+STATE = f"{CATALOG}.gold.book_state"  # retired
 TOP = 20
 KRAKEN_DEPTH = 25  # config/instruments.yaml default; the checksum is defined over the top 10 of it
 NS = 1_000_000_000
@@ -74,11 +81,11 @@ class BookSpec:
 
     @property
     def table(self) -> str:
-        return f"{CATALOG}.silver.book_{self.exchange}"
+        return f"{CATALOG}.silver.book_{self.exchange}"  # retired
 
     @property
     def source(self) -> str:
-        return f"{CATALOG}.bronze.{self.bronze}"
+        return f"{CATALOG}.bronze.{self.bronze}"  # retired
 
 
 _LVL = "transform({arr}, l -> struct(CAST(l[0] AS DECIMAL(28,10)) AS px, CAST(l[1] AS DECIMAL(28,10)) AS qty))"
@@ -197,7 +204,7 @@ def replay_partition(rows, exchange: str, precisions: dict, states: dict, run_ts
 
     Yields `("verdict", key, checksum_ok)` per Kraken frame, `("book", Row)` per
     second boundary crossed, and `("state", Row)` at the end of each connection
-    seen. `states` is {(symbol, conn_id): Row} from gold.book_state.
+    seen. `states` is {(symbol, conn_id): Row} from STATE.
     """
     current = None  # (symbol, conn_id)
     book = None
@@ -295,7 +302,7 @@ def replay_partition(rows, exchange: str, precisions: dict, states: dict, run_ts
     if current is not None and st is not None and st["live"]:
         # Emit every second BEFORE the one containing the last frame. That last
         # second is incomplete — a later frame may still land in it — so it is
-        # carried in gold.book_state and emitted by the next tick's first flush.
+        # carried in STATE and emitted by the next tick's first flush.
         # A connection that never sends another frame therefore never gets its
         # final second: one sample per connection end, by design, not a hole in
         # a live book.
@@ -375,7 +382,7 @@ def bbo(spark, books: DataFrame, src_snapshot_id) -> DataFrame:
     )
 
 
-# The IDENTIFIER FIELDS of gold.book_top20 and gold.bbo_1s in ddl/lake.sql.
+# The IDENTIFIER FIELDS of GOLD_BOOK and GOLD_BBO in the archived lake.sql.
 GOLD_KEY = ("exchange", "canonical_symbol", "second")
 # binance_books()' own order for "the last frame": a matched row is replaced only by a later one.
 _LATER = "(s.recv_ts_ns > t.recv_ts_ns OR (s.recv_ts_ns = t.recv_ts_ns AND s.conn_msg_seq > t.conn_msg_seq))"
@@ -396,12 +403,12 @@ def merge_sql(target: str, source: str, since: str, later: bool) -> str:
 
 
 def merge_binance(spark, books: DataFrame) -> dict:
-    """Binance's top-of-second rows into gold.book_top20, then their bbo_1s rows.
+    """Binance's top-of-second rows into GOLD_BOOK, then their GOLD_BBO rows.
 
     binance_books() sees one tick's frames, so a second that straddles two ticks
     has a row in each batch; appending both duplicated the identity on every
     tick boundary. Kraken and Coinbase do not hit this: replay() never emits a
-    connection's last second, it carries it in gold.book_state to the next tick.
+    connection's last second, it carries it in STATE to the next tick.
     bbo_1s is recomputed from what book_top20 holds for the batch's keys, after
     the merge, so it follows whichever frame won.
 
@@ -521,7 +528,7 @@ def stage(spark, run_ts: datetime) -> int:
 
 
 def rebuild(spark, run_ts: datetime, exchanges=None) -> dict:
-    """Whole archive, one bronze day per venue in order (the state carries across days through gold.book_state)."""
+    """Whole archive, one bronze day per venue in order (the state carries across days through STATE)."""
     registry = instruments.load()
     precisions = kraken_precisions(spark)
     totals = {}

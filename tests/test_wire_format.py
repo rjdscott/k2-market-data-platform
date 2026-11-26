@@ -1,15 +1,18 @@
 """
-Unit tests for the wire format the lake reads: docker/lake/wire.py, and the
-contract between schemas/avro/*.avsc and docker/lake/ddl/lake.sql.
+Unit tests for the wire format: docker/lake/wire.py, and the contract between
+schemas/avro/*.avsc and the ClickHouse queue tables that read them.
 
-Pure python — the .avsc files and the .sql file are parsed as text. No Spark, no
-catalog, no Avro library.
+Pure python: the .avsc and .sql files are parsed as text. No Spark, no catalog,
+no Avro library.
 
 The second half is the one that earns its place. CLAUDE.md's schema-change rule
 says the Avro schema, the DDL and the docs move in one PR or not at all, and the
 failure mode it warns about is silence: a field added to trade.avsc that never
-reaches a bronze table does not break a build, it produces a column of nothing at
-the ingest boundary hours later. These tests are that rule, executable.
+reaches a queue table does not break a build, it stalls the feed at the decode
+boundary hours later. These tests are that rule, executable.
+
+The lake DDL half (the old pipeline's lake.sql) is retired with it and archived
+in legacy/v3-lake-ingest/lake/ddl/ (ADR-056).
 """
 
 import json
@@ -17,13 +20,11 @@ import re
 from pathlib import Path
 
 import pytest
-from k2gen import ddl
 
 import wire
 
 _ROOT = Path(__file__).resolve().parent.parent
 _AVRO = _ROOT / "schemas" / "avro"
-_DDL = _ROOT / "docker" / "lake" / "ddl" / "lake.sql"
 
 
 def _avro_fields(name):
@@ -95,10 +96,10 @@ class TestFramingExpressions:
     def test_the_guard_rejects_everything_parse_confluent_rejects(self, frame, why):
         # The two readers have to agree, and this is the list they disagreed on.
         # The SQL guard used to check the magic byte alone, so `00 00 01` came
-        # back with a FABRICATED schema id of 1 and an empty body — which
-        # `parse_confluent` calls a BadFrame, `stage_bronze` sent to the
-        # registry, and the registry answered 404 to. Permanently: the record is
-        # in raw.messages, never expired, and re-read every cycle.
+        # back with a FABRICATED schema id of 1 and an empty body, which
+        # `parse_confluent` calls a BadFrame, the old `stage_bronze` sent to the
+        # registry, and the registry answered 404 to. Permanently: the record
+        # was in the never-expired archive and re-read every cycle.
         with pytest.raises(wire.BadFrame):
             wire.parse_confluent(frame)
 
@@ -110,8 +111,8 @@ class TestFramingExpressions:
         assert "> 0" in guard, why
 
     def test_the_guard_yields_null_rather_than_a_value_for_a_bad_frame(self):
-        # CASE WHEN with no ELSE is NULL, which is what raw.messages.schema_id
-        # is nullable for and what stage 2's `schema_id IS NOT NULL` filters on.
+        # CASE WHEN with no ELSE is NULL: one answer for every bad frame, which
+        # a reader filters on with `schema_id IS NOT NULL`.
         guard = wire.schema_id_guarded_expr("value")
         assert guard.startswith("CASE WHEN") and "ELSE" not in guard
 
@@ -156,45 +157,8 @@ class TestFixedPoint:
             "before the divide can use them"
         )
 
-    def test_decimal_28_10_holds_the_whole_int64_range(self):
-        # The wire is int64 at 1e-8 (schemas/avro/trade.avsc). Shrinking either
-        # half of DECIMAL(28,10) silently truncates real prices, so the DDL's
-        # numbers are asserted against the arithmetic rather than trusted.
-        declared = re.search(r"price\s+DECIMAL\((\d+),(\d+)\)", _DDL.read_text())
-        assert declared, "the lake price column is no longer DECIMAL(p,s)"
-        precision, scale = int(declared.group(1)), int(declared.group(2))
 
-        assert scale >= wire.FIXED_POINT_SCALE, "scale drops digits the wire carries"
-        max_wire = (2**63 - 1) / 10**wire.FIXED_POINT_SCALE  # ~9.22e10
-        integer_digits = len(str(int(max_wire)))
-        assert precision - scale >= integer_digits, "precision cannot hold int64 at 1e-8"
-
-
-# ── Avro schema to lake DDL ─────────────────────────────────────────────────
-
-
-class TestRawMessages:
-    def test_carries_the_nine_archive_columns(self):
-        # The columns the plan names for raw.messages. This table is frozen by
-        # policy (no schema evolution beyond nullable adds), so the list is
-        # written out rather than derived.
-        assert set(ddl.parse(_DDL)["raw.messages"].columns) == {
-            "topic",
-            "partition",
-            "offset",
-            "kafka_ts",
-            "ingest_ts",
-            "key",
-            "schema_id",
-            "payload",
-            "headers",
-        }
-
-    def test_payload_is_binary_not_string(self):
-        # A string forces UTF-8 validation and would corrupt a malformed frame —
-        # which is precisely the frame worth keeping (raw-message.avsc).
-        assert re.search(r"payload\s+BINARY\s+NOT NULL", _DDL.read_text())
-
+# ── Avro schema to the ClickHouse queue tables ──────────────────────────────
 
 _CH_KAFKA = Path(__file__).parent.parent / "docker" / "clickhouse" / "ddl" / "20-gold-kafka.sql"
 
@@ -213,8 +177,9 @@ def _ch_queue_columns(table):
 class TestTradeContract:
     """trade.avsc is consumed by ClickHouse's AvroConfluent queue table, column for column.
 
-    Since the Phase E cutover the lake decodes the venue JSON and never the Avro
-    topics, so the Avro contract's reader is the served tier. AvroConfluent maps
+    The lake read the venue JSON, never the Avro topics, so the Avro contract's
+    one reader is this queue table, paused with ClickHouse (ADR-057) and kept in
+    step with the schema while it is. AvroConfluent maps
     fields to columns BY NAME and rejects a record whose columns it cannot fill,
     so a field added to the schema and not to the queue table is a stalled feed
     (gold.feed_errors), and a column added to the queue table that no field
@@ -234,48 +199,3 @@ class TestBookContract:
     def test_every_avro_field_is_a_queue_column_and_nothing_else(self):
         avro, cols = set(_avro_fields("book-snapshot-l2.avsc")), set(_ch_queue_columns("q_book"))
         assert avro == cols, f"book-snapshot-l2.avsc vs gold.q_book: missing {sorted(avro - cols)}, extra {sorted(cols - avro)}"
-
-    def test_the_lake_levels_are_decimal_pairs(self):
-        # silver.book_* keeps levels as struct<px, qty> decimals; gold.book_top20
-        # keeps the wire's parallel int64 arrays so ClickHouse loads it as is.
-        ddl = _DDL.read_text()
-        assert "ARRAY<STRUCT<px: DECIMAL(28,10), qty: DECIMAL(28,10)>>" in ddl
-        assert "bid_px_e8        ARRAY<BIGINT> NOT NULL" in ddl
-
-
-class TestTablePolicies:
-    @pytest.mark.parametrize(
-        "table",
-        [
-            "raw.messages",
-            "bronze.binance_trade",
-            "bronze.kraken_book",
-            "bronze.coinbase_level2",
-            "silver.trades_kraken",
-            "silver.book_kraken",
-            "gold.trades",
-            "gold.ohlcv_1m",
-            "gold.book_top20",
-            "audit.checks",
-        ],
-    )
-    def test_every_table_is_copy_on_write(self, table):
-        # Merge-on-read would put positional delete files in front of readers
-        # that have not been shown to handle them on this stack. Flipping one of
-        # these is a spike, not an edit (the note at the head of lake.sql).
-        block = re.search(
-            rf"CREATE TABLE IF NOT EXISTS lake\.{re.escape(table)} \(.*?\n\);",
-            _DDL.read_text(),
-            re.DOTALL,
-        )
-        assert block, f"no CREATE TABLE block for lake.{table}"
-        for mode in ("delete", "update", "merge"):
-            assert f"'write.{mode}.mode'" in block.group(0)
-            assert "copy-on-write" in block.group(0)
-
-    def test_raw_messages_targets_larger_files_than_bronze(self):
-        # 256 MB for the archive, 128 MB for bronze: raw is scanned in bulk by
-        # replay, bronze is pruned by symbol and benefits from finer files.
-        text = _DDL.read_text()
-        assert "'write.target-file-size-bytes'              = '268435456'" in text
-        assert "'write.target-file-size-bytes'                  = '134217728'" in text

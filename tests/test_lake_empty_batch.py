@@ -19,4 +19,4 @@ def test_every_symbol_map_is_typed_before_it_is_indexed():
             if re.search(r"F\.create_map\(", line) and not line.lstrip().startswith("#"):
                 found += 1
                 assert '.cast("map<string,string>")' in line, f"{path.name}: {line.strip()}"
-    assert found == 2, "books.py and silver.py each build one symbol map"
+    assert found == 1, "books.py builds one symbol map (silver.py's is archived)"

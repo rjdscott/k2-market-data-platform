@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """
-Catalog-side helpers shared by every lake writer: snapshot bookkeeping, the
-registry fetch, and the one way an audit row gets filed from a running job.
+Catalog-side helpers for a Spark job on the lake: snapshot bookkeeping, the
+broker's offsets and the registry fetch.
 
-Split out of ingest.py when bronze.py (the per-venue decode) needed the same
-five functions and importing ingest.py for them would have been a cycle. Every
-name here is still re-exported from ingest.py, so the chaos scripts and
-scripts/lake-verify.sh that import them from there keep working.
+Split out of the old ingest job so its stages could share them without an
+import cycle. That pipeline is retired and archived in legacy/v3-lake-ingest/
+(ADR-056); these helpers stay with offsets.py for the Kafka connector of the
+plan's phase 004, and books.py imports two of them. The audit-row writer went
+with the audit table it wrote to.
 """
 
 from __future__ import annotations
@@ -16,9 +17,7 @@ import urllib.error
 import urllib.request
 
 import offsets as O
-from spark_conf import CATALOG, KAFKA_BROKERS, SCHEMA_REGISTRY_URL
-
-CHECKS_TABLE = f"{CATALOG}.audit.checks"
+from spark_conf import KAFKA_BROKERS, SCHEMA_REGISTRY_URL
 
 
 def main_snapshots(spark, table: str) -> list:
@@ -157,59 +156,8 @@ def fetch_schema(schema_id: int) -> str:
             return json.load(response)["schema"]
     except urllib.error.HTTPError as exc:
         # 404 is a real state, not a bug: a record framed with an id this
-        # registry has never held. Raising it as its own type is what lets
-        # stage 2 skip that id and file an audit row instead of dying on every
-        # cycle for as long as the record stays in the archive — which, since
-        # raw.messages is never expired, is forever.
+        # registry has never held. Raising it as its own type is what let the
+        # old decode stage skip that id and record it, instead of dying on
+        # every cycle for as long as the record stayed in its never-expired
+        # archive.
         raise UnresolvableSchema(f"schema id {schema_id}: {exc}") from exc
-
-
-def write_audit_rows(spark, rows: list, properties: dict, job: str = "ingest") -> bool:
-    """This run's findings into `audit.checks`, in ONE commit. True if it landed.
-
-    Same table as the nightly audit, so "what did the pipeline find and when"
-    stays one query. `job` is the `k2.job` property the commit carries and names
-    the writer: `ingest` for the pipeline's own findings (the default), or
-    `replay` / `operator` for the rows record_check.py writes from the command
-    line.
-
-    Three properties ride on the commit and all three are load-bearing.
-    `k2.job` — anything but `maintenance` — is what keeps this snapshot out of
-    `k2_lake_audit_failures_total`: that gauge is the nightly audit's count, and
-    an ingest row landing as the current snapshot used to zero a firing
-    `LakeAuditFailed` with no audit having passed. `k2.audit-failures` is the
-    same property `maintenance.run_audits` writes, and it is why this is one
-    commit rather than one per row — per row the count in the newest summary is
-    always 1, and a gauge reading it would report "at least one" while claiming
-    to be a count. `properties` carries the per-finding count that the gauge for
-    THIS finding is read from (`k2.unresolvable-schema-ids`, `k2.offset-gaps`,
-    `k2.batch-audit-failures`):
-    the ingest-side findings share this table, and one shared count would
-    have each of them setting the other's gauge — the case
-    docker/lake/offsets.py names next to those two constants.
-
-    **Returning rather than raising is the point.** The schema-id path treats a
-    failed write as best-effort — a finding that cannot be recorded must not
-    become a second failure on top of the one it was reporting — while
-    `_accept_data_loss` treats it as fatal, because there the record is what
-    licenses the skip.
-    """
-    failures = sum(1 for r in rows if not r["passed"])
-    # The DataFrame is built inside the try as well: a finding that cannot be
-    # filed returns False wherever in the write it failed, so a caller that
-    # treats the write as best-effort (the batch audit, ADR-047) cannot be
-    # failed by it.
-    try:
-        writer = (
-            spark.createDataFrame(rows)
-            .writeTo(CHECKS_TABLE)
-            .option(f"snapshot-property.{O.JOB}", job)
-            .option(f"snapshot-property.{O.AUDIT_FAILURES}", str(failures))
-        )
-        for name, value in properties.items():
-            writer = writer.option(f"snapshot-property.{name}", value)
-        writer.append()
-    except Exception as exc:  # noqa: BLE001 - the finding already printed above
-        print(f"could not write {len(rows)} audit row(s) ({exc})")
-        return False
-    return True

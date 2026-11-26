@@ -270,8 +270,8 @@ class TestLatestSummary:
 
     def test_a_later_compaction_does_not_hide_the_ingest(self):
         # The whole reason the job is stamped as a property. After a nightly
-        # rewrite the newest snapshot on raw.messages carries no offsets, and
-        # taking it would restart the next ingest from the beginning of time.
+        # rewrite the newest snapshot on the ingested table carries no offsets,
+        # and taking it would restart the next ingest from the beginning of time.
         snapshots = [(1, self.INGEST_B), (2, self.COMPACTION)]
         assert O.latest_summary(snapshots, O.JOB_INGEST) is self.INGEST_B
 
@@ -369,11 +369,11 @@ def catalog(monkeypatch):
 class TestSnapshotHistoryIsMainOnly:
     def test_resume_position_is_mains_not_a_branchs(self, catalog):
         """Over every snapshot, the newest decode is 5's: a dropped branch's position."""
-        summary = O.latest_summary(catalog.snapshot_history(FakeSpark(), "lake.bronze.t"), O.JOB_DECODE)
+        summary = O.latest_summary(catalog.snapshot_history(FakeSpark(), "lake.ns.t"), O.JOB_DECODE)
         assert summary[O.SRC_SNAPSHOT_ID] == "20"
 
     def test_main_snapshots_are_mains_rows(self, catalog):
-        assert sorted(r["snapshot_id"] for r in catalog.main_snapshots(FakeSpark(), "lake.bronze.t")) == [1, 2, 3]
+        assert sorted(r["snapshot_id"] for r in catalog.main_snapshots(FakeSpark(), "lake.ns.t")) == [1, 2, 3]
 
 
 class TestOffsetGaps:
@@ -433,7 +433,7 @@ class TestRecordedGaps:
         assert O.recorded_gaps([("t/0", "operator: we lost some records"), ("t/0", None)]) == []
 
     def test_a_scope_without_a_partition_is_skipped(self):
-        assert O.recorded_gaps([("lake.raw.messages", KRAKEN_GAP_ROW[1])]) == []
+        assert O.recorded_gaps([("lake.ns.table", KRAKEN_GAP_ROW[1])]) == []
 
 
 class TestUncoveredHoles:
@@ -463,7 +463,7 @@ class TestUncoveredHoles:
 
     def test_two_abutting_records_cover_one_merged_hole(self):
         # Two evictions with no successful ingest between them leave one hole
-        # in the data and two rows in audit.checks. Neither row contains it.
+        # in the data and two recorded gap rows. Neither row contains it.
         gaps = [("t", 0, 100, 200), ("t", 0, 201, 300)]
         assert O.uncovered_holes([("t", 0, 100, 300)], gaps) == []
         assert O.uncovered_holes([("t", 0, 100, 301)], gaps) == [("t", 0, 100, 301)]

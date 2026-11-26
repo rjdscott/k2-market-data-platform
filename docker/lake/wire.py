@@ -34,8 +34,8 @@ class BadFrame(ValueError):
 def parse_confluent(frame: bytes):
     """`(schema_id, body)` from a framed payload. Raises BadFrame otherwise.
 
-    Used by `ingest.py --probe`, which pulls one record per topic to the driver
-    and reports the schema id before a decode job is submitted. Failing here
+    Used by the old ingest's `--probe` (archived), which pulled one record per
+    topic to the driver and reported the schema id before a decode job ran. Failing here
     gives "magic byte 0x7b, not 0x00 — this looks like unframed JSON" instead of
     an Avro deserialiser error inside an executor, on a topic name nobody logged.
     """
@@ -71,7 +71,7 @@ MAGIC_OK_SQL = "hex(substring({col}, 1, 1)) = '00'"
 #
 # All three rejections are the three `parse_confluent` makes: too short, wrong
 # magic, id not a registered (positive) one. NULL is the single answer for all
-# of them, which is exactly what lake.raw.messages.schema_id is nullable for.
+# of them, which is why the old archive table's `schema_id` column was nullable.
 SCHEMA_ID_GUARDED_SQL = (
     "CASE WHEN length({col}) >= {header} AND {magic} AND ({sid}) > 0"
     " THEN ({sid}) END"

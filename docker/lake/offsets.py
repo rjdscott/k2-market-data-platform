@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 """
-Offset bookkeeping for docker/lake/ingest.py. Pure functions — no Spark, no
+Offset bookkeeping for a Kafka-to-lake job. Pure functions: no Spark, no
 network, no clock. tests/test_lake_offsets.py runs against this file directly.
+Written for the old ingest, retired and archived in legacy/v3-lake-ingest/
+(ADR-056), and kept in place for the Kafka connector of the plan's phase 004.
+The comments below still describe that ingest where it is the reason for a rule.
 
 **The exactly-once contract lives here.** There is no watermark table. The Kafka
 offsets a run consumed are written into the Iceberg snapshot summary *by the
@@ -13,7 +16,7 @@ offload watermark table had to be careful about and this design does not
 
 Reading back is therefore "what does the latest ingest snapshot say", and the
 word *ingest* is load-bearing: compaction and snapshot expiry also produce
-snapshots on `raw.messages`, and those carry no offsets. They are skipped by
+snapshots on the table the ingest writes, and those carry no offsets. They are skipped by
 `k2.job`, a property this code sets on every commit it makes, rather than by
 guessing from Iceberg's own `operation` field.
 """
@@ -39,9 +42,10 @@ SRC_SNAPSHOT_ID = "k2.src-snapshot-id"
 AUDIT_FAILURES = "k2.audit-failures"
 
 # Per-finding counts, written by the ingest-side audit paths. They are
-# separate properties rather than one shared `k2.audit-failures` because
-# docker/lake/metrics.py reads each gauge off the newest ingest snapshot that
-# CARRIES ITS KEY: with one shared count, an offset_gap commit would set
+# separate properties rather than one shared `k2.audit-failures` because the
+# archived metrics exporter (legacy/v3-lake-ingest/lake/metrics.py) read each
+# gauge off the newest ingest snapshot that CARRIES ITS KEY: with one shared
+# count, an offset_gap commit would set
 # `k2_lake_unresolvable_schema_ids_total` to the number of evicted partitions,
 # and vice versa. One key per gauge is what keeps the two findings independent.
 UNRESOLVABLE_IDS = "k2.unresolvable-schema-ids"
@@ -52,11 +56,10 @@ BATCH_AUDIT_FAILURES = "k2.batch-audit-failures"
 BATCH_AUDIT = "batch_offsets"
 
 # A check that could not run, as against one that ran and failed: passed false,
-# observed -1, and a detail starting with this prefix. maintenance.run_audits
-# and ingest.audit_batch both file it through `check_raised`, and
-# dbt/models/governance/marts/quality_results/dq_results.sql maps exactly that
-# pair to status `error`; reword it and those rows read as `fail`.
-# tests/test_lake_batch_audit.py pins the prefix against the SQL.
+# observed -1, and a detail starting with this prefix. The archived maintenance
+# and ingest jobs filed it through `check_raised`, and the archived governance
+# mart mapped exactly that pair to status `error`
+# (legacy/v3-lake-ingest/tests/test_lake_batch_audit.py pinned the two together).
 CHECK_RAISED = "check raised"
 
 
@@ -69,8 +72,8 @@ JOB_INGEST = "ingest"
 JOB_DECODE = "decode"
 JOB_MAINTENANCE = "maintenance"
 
-# The partition count per topic is read from the broker, not configured — see
-# `ingest.broker_offsets`. It matters because a partition that has never
+# The partition count per topic is read from the broker, not configured: see
+# `catalog.broker_offsets`. It matters because a partition that has never
 # carried a record produces no row, so it never appears in a committed offset
 # map, and a startingOffsets JSON that omits a partition leaves where it starts
 # up to Spark. Filling the gap with EARLIEST makes it explicit and correct for
@@ -142,7 +145,7 @@ def bounded_offsets(
     `{topic: remaining records}` for the log line and the
     `k2_lake_ingest_backlog_offsets` gauge.
 
-    `earliest` and `latest` come from the broker (`ingest.broker_offsets`);
+    `earliest` and `latest` come from the broker (`catalog.broker_offsets`);
     `until` is the offset of the first record at or after `--end-timestamp`,
     or None when there is no such bound.
 
@@ -221,9 +224,9 @@ def evicted(starts: dict, earliest: dict) -> list:
     It never repairs. Advancing the start to `log_start` here would be Spark's
     `failOnDataLoss=false` behaviour written by hand — an unrecorded hole, the
     one outcome the design exists to prevent. `skip_evicted` below is the
-    repair, and it is reachable only from `--accept-data-loss` and only after
-    the loss has been written into `audit.checks`
-    (docs/runbooks/lake-ingest-lag.md §3).
+    repair. The old ingest reached it only from `--accept-data-loss` and only
+    after the loss was recorded as an `offset_gap` audit row (its runbook,
+    archived: legacy/v3-lake-ingest/docs/runbooks/lake-ingest-lag.md §3).
     """
     losses = []
     for topic, partitions in starts.items():
@@ -252,8 +255,8 @@ def skip_evicted(starts: dict, losses: list) -> dict:
     end below its start.
 
     The caller is responsible for the audit row. This function does not know
-    whether one was written, which is why it is not called from anywhere but
-    the flag's own branch in `ingest.stage_raw`.
+    whether one was written, which is why the old ingest called it from the
+    flag's own branch of `stage_raw` and nowhere else.
     """
     repaired = {topic: dict(parts) for topic, parts in starts.items()}
     for topic, partition, _start, log_start, _lost in losses:
@@ -286,11 +289,10 @@ def main_lineage(parents: dict, head) -> list:
     A table's snapshot list is not main's history once the table has a branch:
     it holds the branch's unpublished commits, and the commits of a branch since
     dropped, and either can be the newest by commit time (spike on
-    `lake.scratch_p4.wap_bronze`, 2026-11-25). The lake jobs' "newest snapshot
-    with property X" reads go through this (`catalog.snapshot_history`). Two
-    readers still order by time and need not: `parity_ohlcv.py --dbt` orders
-    only the ids the candles name, and `spark_conf`'s smoke check reads a table
-    it just wrote, which has no branch.
+    `lake.scratch_p4.wap_bronze`, 2026-11-25, since dropped). A "newest
+    snapshot with property X" read goes through this (`catalog.snapshot_history`).
+    `spark_conf`'s smoke check orders by time and need not: it reads a table it
+    just wrote, which has no branch.
 
     **A branch is published to main only by fast-forward.** A cherry-pick
     writes a new snapshot on main that carries `source-snapshot-id` but not the
@@ -429,15 +431,15 @@ def offset_gaps(rows: list) -> list:
 
 
 # The two offsets an `offset_gap` row is netted out by, as they appear in its
-# `detail`. `ingest._accept_data_loss` writes this substring and
-# `recorded_gaps` reads it back — one format, two directions, so that a drift
+# `detail`. The old ingest's `_accept_data_loss` wrote this substring and
+# `recorded_gaps` reads it back: one format, two directions, so that a drift
 # in the wording cannot silently switch the netting off and relight a critical
 # alert nobody can act on. tests/test_lake_offsets.py round-trips the pair.
 #
-# ponytail: the range lives in prose because audit.checks has no columns for
-# it, and adding two nullable columns to an append-only table for one row is
-# the bigger change. If a third writer ever files offset_gap rows, give the
-# table `first_missing`/`last_missing` and delete this regex.
+# ponytail: the range lives in prose because the old audit table had no
+# columns for it, and two nullable columns on an append-only table for one row
+# was the bigger change. If gaps are ever recorded in a table with
+# `first_missing`/`last_missing` columns, delete this regex.
 GAP_OFFSETS = "committed {committed}, broker LOG-START {log_start}"
 _GAP_OFFSETS_RE = re.compile(r"committed (\d+), broker LOG-START (\d+)")
 
@@ -445,7 +447,7 @@ _GAP_OFFSETS_RE = re.compile(r"committed (\d+), broker LOG-START (\d+)")
 def recorded_gaps(rows: list) -> list:
     """`offset_gap` rows -> the offset ranges they acknowledge as gone.
 
-    `rows` is `[(scope, detail)]` as `audit.checks` holds them; the result is
+    `rows` is `[(scope, detail)]` as the old audit table held them; the result is
     `[(topic, partition, first_missing, last_missing)]`.
 
     `log_start` is the first offset that *survived*, so the acknowledged hole
@@ -466,9 +468,9 @@ def recorded_gaps(rows: list) -> list:
 
 
 def uncovered_holes(holes: list, gaps: list) -> list:
-    """The holes in `raw.messages` that no recorded `offset_gap` accounts for.
+    """The holes in a landed topic's offsets that no recorded `offset_gap` accounts for.
 
-    Both arguments are `[(topic, partition, first_missing, last_missing)]` —
+    Both arguments are `[(topic, partition, first_missing, last_missing)]`:
     `holes` observed in the data, `gaps` acknowledged by `--accept-data-loss`.
 
     A hole is covered when the recorded gaps for its own (topic, partition)
@@ -496,8 +498,9 @@ def uncovered_holes(holes: list, gaps: list) -> list:
     return out
 
 
-# An operator acknowledgement of a window of checksum failures (docs/runbooks/
-# lake-audit-failed.md §13) is a detail string of the form
+# An operator acknowledgement of a window of checksum failures (archived
+# runbook legacy/v3-lake-ingest/docs/runbooks/lake-audit-failed.md §13) is a
+# detail string of the form
 #   "from 2026-08-26T16:00:00Z to 2026-08-26T18:00:00Z: <why>"
 # The audit nets failures inside [from, to) out, exactly as offset_continuity
 # nets a recorded offset_gap. Reword the format and the audit stops recognising
