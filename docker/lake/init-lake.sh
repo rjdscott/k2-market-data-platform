@@ -56,12 +56,12 @@ echo "  warehouse: $WAREHOUSE"
 echo "  bucket:    s3://$BUCKET"
 echo "=========================================="
 
-echo "[1/5] MinIO bucket"
+echo "[1/4] MinIO bucket"
 mc alias set k2 "$S3_ENDPOINT" "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" > /dev/null
 mc mb --ignore-existing "k2/$BUCKET"
 
 # 4xx here means "already bootstrapped" — the endpoint closes after first use.
-echo "[2/5] Lakekeeper bootstrap"
+echo "[2/4] Lakekeeper bootstrap"
 post "$LK/management/v1/bootstrap" '{"accept-terms-of-use":true}' "400 401 403 409"
 
 # Ask first, then create. The old version tolerated ANY 400 on create, on the
@@ -72,7 +72,6 @@ post "$LK/management/v1/bootstrap" '{"accept-terms-of-use":true}' "400 401 403 4
 #
 # ponytail: bash glob match, not grep/jq — this image ships mc, curl and bash and
 # NOT grep (verified: `grep: command not found` from this very line, 2026-08-26).
-# Same constraint the namespace parser below is written around.
 # ensure_warehouse <name>: bucket $BUCKET, key prefix warehouse/<name>.
 ensure_warehouse() {
   local name=$1 existing
@@ -107,38 +106,13 @@ JSON
 )"   # no tolerated codes: 2xx or fail
 }
 
-echo "[3/5] Warehouse '$WAREHOUSE'"
+echo "[3/4] Warehouse '$WAREHOUSE'"
 ensure_warehouse "$WAREHOUSE"
 
-# Namespaces over the REST catalog API rather than a Spark `lake-ddl` one-shot:
-# three HTTP calls against a service that is already up, versus a ~20 s JVM
-# start. Table DDL arrives in Phase C and can pay for a JVM then.
-#
-# The catalog path prefix is the warehouse UUID, not its name — Lakekeeper hands
-# it out as `defaults.prefix` from the config endpoint, which is exactly what the
-# Iceberg REST client asks for on connect. Using the name gives a 400
-# WarehouseIdIsNotUUID.
-#
-# ponytail: bash parameter expansion, not jq/grep/sed — this image ships mc, curl
-# and coreutils only. `prefix` is a flat string field, so the two trims below are
-# the whole parser. If a second field is ever needed, switch images rather than
-# growing this.
-echo "[4/5] Namespaces"
-cfg=$(curl -fsS "$LK/catalog/v1/config?warehouse=$WAREHOUSE")
-prefix=${cfg#*\"prefix\":\"}
-prefix=${prefix%%\"*}
-[[ -n $prefix && $prefix != "$cfg" ]] || {
-  echo "✗ no defaults.prefix in config response: $cfg" >&2; exit 1; }
-echo "  prefix: $prefix"
-for ns in raw bronze silver gold audit; do
-  echo "  $ns"
-  post "$LK/catalog/v1/$prefix/namespaces" "{\"namespace\":[\"$ns\"]}" "409"
-done
-
-# Last, after the lake's namespaces exist, so a failure here cannot leave them
-# half made. It still exits 1, and lake-init failing holds back what waits for it
-# (lake-ddl, then airflow-scheduler; trino): docker/trino/README.md says what to do.
-echo "[5/5] Domain warehouses ($DOMAIN_WAREHOUSES)"
+# Last, after the lake's own warehouse, so a failure here cannot leave it half
+# made. It still exits 1, and lake-init failing holds back what waits for it
+# (trino): docker/trino/README.md says what to do.
+echo "[4/4] Domain warehouses ($DOMAIN_WAREHOUSES)"
 domains=()
 # `|| [[ -n $w ]]`: a last line with no newline is still read (the generator writes one).
 while read -r w || [[ -n $w ]]; do
@@ -148,4 +122,4 @@ for w in "${domains[@]}"; do
   ensure_warehouse "$w"
 done
 
-echo "✓ lake ready: catalog $LK/catalog, warehouse $WAREHOUSE (raw/bronze/silver/gold/audit), domain warehouses ${domains[*]}"
+echo "✓ lake ready: catalog $LK/catalog, warehouse $WAREHOUSE, domain warehouses ${domains[*]}"

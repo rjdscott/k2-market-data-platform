@@ -1,6 +1,7 @@
 """
-docker/lake/bars.py: the threshold loader and the Python reference — the
-arbiter the SQL in two engines is compared against (scripts/parity_bars.py).
+docker/lake/bars.py: the threshold loader and the Python reference, the
+arbiter the SQL in two engines was compared against (the parity script,
+archived: legacy/v3-lake-ingest/scripts/parity_bars.py).
 """
 
 from datetime import datetime, timezone
@@ -94,8 +95,8 @@ def test_bars_restart_at_the_utc_day_boundary():
 
 
 def test_sql_is_generated_for_both_dialects():
-    spark = bars.bars_sql("lake.gold.trades", "__th", "spark")
-    duck = bars.bars_sql("lake.gold.trades", "__th", "duckdb")
+    spark = bars.bars_sql("trades", "__th", "spark")
+    duck = bars.bars_sql("trades", "__th", "duckdb")
     assert " DIV " in spark and "struct(" in spark and "DECIMAL(38,0)" in spark
     assert " // " in duck and "arg_min(" in duck and "HUGEINT" in duck
     assert "ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW" in spark

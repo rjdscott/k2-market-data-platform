@@ -2,10 +2,12 @@
 """
 K2 v3 — the one Spark session builder for the Iceberg lake.
 
-Every v3 Spark job (raw ingest, bronze build, maintenance) gets its session from
-`lake_session()`, so the `lake` catalog config lives here and nowhere else. It
-is the only catalog on the stack: v2's `k2` hadoop catalog and the offload that
-built its own session went in Phase D.
+Every Spark job on the lake gets its session from `lake_session()`, so the
+`lake` catalog config lives here and nowhere else. It is the only catalog on the
+stack: v2's `k2` hadoop catalog and the offload that built its own session went
+in Phase D. The old ingest and maintenance jobs that used it are retired and
+archived in legacy/v3-lake-ingest/ (ADR-056); much of the sizing below is their
+record.
 
 Smoke test (the runnable check for this file):
 
@@ -38,7 +40,7 @@ S3_REGION = os.environ.get("K2_S3_REGION", "local-01")
 # straight into a Spark conf value.
 S3_PATH_STYLE = os.environ.get("K2_S3_PATH_STYLE", "true")
 
-# Redpanda's schema registry. Stage 2 fetches Avro schemas by id from here.
+# Redpanda's schema registry. `catalog.fetch_schema` reads Avro schemas by id from here.
 SCHEMA_REGISTRY_URL = os.environ.get("K2_SCHEMA_REGISTRY_URL", "http://redpanda:8081")
 KAFKA_BROKERS = os.environ.get("K2_BROKERS", "redpanda:9092")
 
@@ -94,30 +96,30 @@ KAFKA_BROKERS = os.environ.get("K2_BROKERS", "redpanda:9092")
 # Revisit trigger (2026-08, fired 2026-11-25, see below): raise it back to `1g` if `lake-ingest-5min` fails with an
 # OOM-kill or `java.lang.OutOfMemoryError`. It did exactly that once, on
 # 2026-08-26, and the cause was a `persist(DISK_ONLY)` on a DataFrame carrying
-# 5.2 MB payload rows rather than an undersized heap — read
-# docker/lake/README.md, "What one run may read, and why nothing is cached",
-# before touching this value.
+# 5.2 MB payload rows rather than an undersized heap. Read the archived
+# legacy/v3-lake-ingest/lake/README.md, "What one run may read, and why nothing
+# is cached", before touching this value.
 #
-# The other consumer is the `lake-ddl` one-shot, which gets its own container
-# with a 1 GiB limit — too small for 768m plus JVM overhead, so
-# docker-compose.yml sets `K2_LAKE_DRIVER_MEMORY: 512m` for that service only.
+# The other consumer was the `lake-ddl` one-shot (retired with the pipeline), in
+# its own container with a 1 GiB limit: too small for 768m plus JVM overhead, so
+# docker-compose.yml set `K2_LAKE_DRIVER_MEMORY: 512m` for that service only.
 #
 # **The trigger fired, 2026-11-25: 768m to 1536m.** From 17:12 UTC the ingest died of
 # `java.lang.OutOfMemoryError: Java heap space` on most first attempts: 10 driver runs
 # with a failed stage among the History Server's last 40, and two DAG runs failed on
 # both tries. Each failed in the same place, the sort under the aggregate that feeds
-# the `gold.bars` append in stage 2d (`UnsafeSorterSpillReader.<init>`; the failed
+# the event-bars append in stage 2d (`UnsafeSorterSpillReader.<init>`; the failed
 # stage is `append at DataFrameWriterV2`, `curl localhost:18080/api/v1/applications/
-# <id>/stages?status=failed` in the container). Stage 2d recomputes every touched
-# symbol-day of bars from all of that day's `gold.trades`, and the failed stages'
+# <id>/stages?status=failed` in the container). Stage 2d recomputed every touched
+# symbol-day of bars from all of that day's canonical trades, and the failed stages'
 # shuffle read was the size of the whole UTC day so far. So the input grows from
 # 00:00 UTC to 24:00 whatever the batch size, and is largest on a busy day's evening.
 # Nothing payload-bearing is cached; this is not the 2026-08-26 failure.
 #
 # `1g` above was written when the container was capped at 4 GiB. It is 8 GiB now and
-# the maintenance driver holds the ingest lock, so 1536m fits with room: measured on
-# the next run, by DAG param before this default moved (`airflow dags trigger
-# lake_ingest --conf '{"driver_memory": "1536m"}'`): one attempt, 253 s, no
+# the maintenance driver held the ingest lock, so 1536m fits with room: measured on
+# the next run, by DAG param before this default moved (a trigger of the retired
+# ingest DAG with `--conf '{"driver_memory": "1536m"}'`): one attempt, 253 s, no
 # OutOfMemoryError, peak driver RSS 2,259 MiB sampled every 20 s with `ps -o rss=` in
 # the container. The scheduled run before it, at 768m, failed on both tries.
 #
@@ -125,14 +127,6 @@ KAFKA_BROKERS = os.environ.get("K2_BROKERS", "redpanda:9092")
 # 3 GiB. More heap buys time only: the bars recompute is linear in the day's trades,
 # and the fix for that is an incremental recompute, not a third raise.
 DRIVER_MEMORY = os.environ.get("K2_LAKE_DRIVER_MEMORY", "1536m")
-
-# maintenance.py gets a bigger heap: rewriting raw.messages file groups whose
-# rows are up to 5 MB each OOM'd at 768m twice on 2026-08-26 (22:16Z with five
-# concurrent groups, 22:28Z with one). It can afford it because it holds the
-# ingest lock for its whole run, so it is never in the container with an ingest
-# driver: 2g + ~550 MiB JVM overhead + the 633 MiB idle baseline is ~3.2 GiB of
-# an 8 GiB cap (4 GiB when measured).
-MAINTENANCE_DRIVER_MEMORY = os.environ.get("K2_LAKE_MAINTENANCE_DRIVER_MEMORY", "2g")
 
 
 def lake_session(app_name: str, driver_memory: str = DRIVER_MEMORY) -> SparkSession:
@@ -161,35 +155,35 @@ def lake_session(app_name: str, driver_memory: str = DRIVER_MEMORY) -> SparkSess
         .config(f"spark.sql.catalog.{CATALOG}.s3.secret-access-key", secret_key)
         .config(f"spark.sql.catalog.{CATALOG}.s3.region", S3_REGION)
         .config("spark.sql.defaultCatalog", CATALOG)
-        # Pinned, not inherited from the image's TZ. Two places read it and
-        # disagree if it moves: maintenance.expire() builds `older_than =>
-        # TIMESTAMP '...'` from a UTC datetime and Spark interprets it in the
-        # session zone, while the compaction predicate uses
-        # `timestamp_seconds(<epoch>)`, which is absolute. One non-UTC session
-        # zone and expiry silently shifts by the offset while compaction does
-        # not. metrics._epoch reads `k2.max-kafka-ts` as UTC-naive for the same
-        # reason. The image happens to be Etc/UTC today; this makes it a
-        # contract instead of a coincidence.
+        # Pinned, not inherited from the image's TZ. The archived maintenance
+        # job showed why: its expiry built `older_than => TIMESTAMP '...'` from
+        # a UTC datetime, which Spark interprets in the session zone, while its
+        # compaction predicate used `timestamp_seconds(<epoch>)`, which is
+        # absolute. One non-UTC session zone and expiry silently shifts by the
+        # offset while compaction does not. A naive timestamp read in any job
+        # means UTC because of this line. The image happens to be Etc/UTC
+        # today; this makes it a contract instead of a coincidence.
         .config("spark.sql.session.timeZone", "UTC")
         # Case-sensitive column resolution, for one reason: Binance's trade
-        # payload carries both `e` (event type) and `E` (event time), and
-        # bronze.binance_trade keeps the venue's field names as sent. With the
-        # default (insensitive) resolver the two are one duplicate column and
-        # the CREATE TABLE fails. Every other lake column is lowercase and
+        # payload carries both `e` (event type) and `E` (event time), and a
+        # table that keeps the venue's field names as sent (the old Binance
+        # trade frames table, retired) holds both. With the default
+        # (insensitive) resolver the two are one duplicate column and the
+        # CREATE TABLE fails. Every other lake column is lowercase and
         # referenced as written, so nothing else notices the switch.
         .config("spark.sql.caseSensitive", "true")
         # LAST_WIN, not the default EXCEPTION. `map_from_entries` over Kafka
         # headers throws on a duplicate key, and it throws on the *archive*
-        # write — so one foreign producer sending two headers of the same name
-        # would block raw.messages at that offset forever, which is precisely
-        # what lake.sql promises cannot happen. capture sets exactly one header
+        # write: one foreign producer sending two headers of the same name
+        # would block the archive at that offset forever, which the old
+        # archive's DDL promised could not happen. capture sets exactly one header
         # (services/capture-rust/src/sink.rs); keeping the last of a duplicate
         # pair loses nothing we wrote and costs nothing we did.
         .config("spark.sql.mapKeyDedupPolicy", "LAST_WIN")
         # 256 rows per columnar cache batch, not the default 10,000. A backstop,
-        # deliberately: no lake job caches a payload-bearing DataFrame any more
-        # (docker/lake/ingest.py says why at each site), so on today's code this
-        # setting is never reached.
+        # deliberately: no lake job caches a payload-bearing DataFrame (the
+        # archived ingest, legacy/v3-lake-ingest/lake/ingest.py, says why at
+        # each site), so this setting is not expected to be reached.
         #
         # It is here because the failure it bounds was not obvious from the code
         # that caused it. `persist(DISK_ONLY)` reads as "spill to disk"; Spark
@@ -220,29 +214,32 @@ def _smoke() -> None:
     data commit, so it is the part worth proving before Phase C builds on it.
     """
     spark = lake_session("k2-lake-smoke")
+    # Its own namespace, dropped with the table: a smoke leaves the lake as it found it.
+    namespace = f"{CATALOG}.smoke"
+    table = f"{namespace}.t"
     # try/finally so a failed assert still drops the table and stops the session.
-    # Without it the first failure leaves lake.audit.smoke behind, and the NEXT
-    # run's CREATE TABLE fails on the leftover instead of on the real problem —
-    # a debugging dead end on the very path you only walk when something is wrong.
+    # Without it the first failure leaves the table behind, and the NEXT run's
+    # CREATE TABLE fails on the leftover instead of on the real problem: a
+    # debugging dead end on the very path you only walk when something is wrong.
     try:
         # No PURGE on the drops: Lakekeeper 0.13.3 answers a purge-drop with
         # `BadRequestException: Table does not exist ... at location <metadata.json>`
         # (verified 2026-08-26). It expires dropped tables through its own task queue,
         # so a plain DROP is both what works and what we want.
-        spark.sql(f"CREATE NAMESPACE IF NOT EXISTS {CATALOG}.audit")
-        spark.sql(f"DROP TABLE IF EXISTS {CATALOG}.audit.smoke")
-        spark.sql(f"CREATE TABLE {CATALOG}.audit.smoke (id bigint, note string) USING iceberg")
+        spark.sql(f"CREATE NAMESPACE IF NOT EXISTS {namespace}")
+        spark.sql(f"DROP TABLE IF EXISTS {table}")
+        spark.sql(f"CREATE TABLE {table} (id bigint, note string) USING iceberg")
 
         (
             spark.createDataFrame([(1, "smoke")], "id bigint, note string")
-            .writeTo(f"{CATALOG}.audit.smoke")
+            .writeTo(table)
             .option("snapshot-property.k2.smoke", "1")
             .append()
         )
 
-        count = spark.sql(f"SELECT count(*) FROM {CATALOG}.audit.smoke").collect()[0][0]
+        count = spark.sql(f"SELECT count(*) FROM {table}").collect()[0][0]
         summary = spark.sql(
-            f"SELECT summary FROM {CATALOG}.audit.smoke.snapshots "
+            f"SELECT summary FROM {table}.snapshots "
             "ORDER BY committed_at DESC LIMIT 1"
         ).collect()[0][0]
 
@@ -255,7 +252,8 @@ def _smoke() -> None:
         print("✓ lake smoke passed")
     finally:
         try:
-            spark.sql(f"DROP TABLE IF EXISTS {CATALOG}.audit.smoke")
+            spark.sql(f"DROP TABLE IF EXISTS {table}")
+            spark.sql(f"DROP NAMESPACE IF EXISTS {namespace}")
         finally:
             spark.stop()
 
