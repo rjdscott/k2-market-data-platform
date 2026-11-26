@@ -30,7 +30,11 @@ uv sync --locked -q
 uv run --locked sqlfluff lint models
 echo "ok lint: sqlfluff over $(find models -name '*.sql' | wc -l) model file(s), dbt/.sqlfluff"
 
-export K2_TRINO_HOST=127.0.0.1 K2_TRINO_PORT=${K2_TRINO_TEST_PORT:-18089}
+# The profile's names (dbt/profiles.yml: password login over HTTPS, ADR-060) with values
+# that reach nothing: no Trino listens on this port, so the password is a placeholder, not a
+# secret, and the CA path only has to exist (a refused connection never reads it).
+export K2_TRINO_HOST=127.0.0.1 K2_TRINO_INTERNAL_PORT=${K2_TRINO_TEST_PORT:-18089}
+export DBT_ENV_SECRET_K2_TRINO_PASSWORD=nothing-listens K2_TRINO_CA=/dev/null
 uv run --locked dbt deps -q
 uv run --locked dbt parse -q
 uv run --locked dbt compile -q --target trino
@@ -39,8 +43,8 @@ echo "ok parse: dbt deps, parse and compile, and the manifest check"
 
 echo "SKIP dbt build with unit tests: no model to build until phase 002 lands the first (ADR-056)"
 
-if (exec 3<>"/dev/tcp/$K2_TRINO_HOST/$K2_TRINO_PORT") 2>/dev/null; then
-  echo "FAIL k2_input: something listens on $K2_TRINO_HOST:$K2_TRINO_PORT, and this step must reach no warehouse"; exit 1
+if (exec 3<>"/dev/tcp/$K2_TRINO_HOST/$K2_TRINO_INTERNAL_PORT") 2>/dev/null; then
+  echo "FAIL k2_input: something listens on $K2_TRINO_HOST:$K2_TRINO_INTERNAL_PORT, and this step must reach no warehouse"; exit 1
 fi
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
 k2i() {  # k2i <out dir> <dbt command> [args]: the test project, a fresh target and log each time

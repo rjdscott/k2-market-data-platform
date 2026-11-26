@@ -1,17 +1,26 @@
-# One target, the stack's Trino. No authentication exists, so there is no secret: the
-# user is the X-Trino-User header and decides which domain catalog may be written
-# (docker/trino/etc/rules.json). Run a domain's models as its writer:
-#   K2_TRINO_USER=dbt_<catalog> uv run dbt build --selector <catalog>
+# One target, Trino, logged in with a password over HTTPS and verified against the
+# platform's own CA (ADR-060). dbt-trino calls password login `ldap`: HTTP basic
+# authentication, which Trino 484's file authenticator answers; `ldap` is HTTPS only.
+# The profile holds no secret, only names: the password comes from
+# DBT_ENV_SECRET_K2_TRINO_PASSWORD, which dbt scrubs from its logs and artifacts as it
+# does every DBT_ENV_SECRET_* value. In dbt-runner the dbt wrapper sets it from the
+# builder's password file and the CA is mounted at the default below
+# (docs/development/phase-001-interfaces.md); from the host, name the CA with
+# K2_TRINO_CA and connect by name (localhost), never by address: Trino shows a client
+# that connects by address a certificate no client trusts.
+#   K2_TRINO_USER=dbt_<fence> DBT_ENV_SECRET_K2_TRINO_PASSWORD=... uv run dbt build --selector <fence>
 k2:
   target: trino
   outputs:
     trino:
       type: trino
-      method: none
-      http_scheme: http
+      method: ldap
       host: "{{ env_var('K2_TRINO_HOST', 'localhost') }}"
-      port: "{{ env_var('K2_TRINO_PORT', '8088') | int }}"
+      # Trino's port on the network, 8443; the host publishes it on the same number by default.
+      port: "{{ env_var('K2_TRINO_INTERNAL_PORT', '8443') | int }}"
       user: "{{ env_var('K2_TRINO_USER', 'dbt_market_analytics') }}"
+      password: "{{ env_var('DBT_ENV_SECRET_K2_TRINO_PASSWORD') }}"
+      cert: "{{ env_var('K2_TRINO_CA', '/run/k2-secrets/tls/ca.pem') }}"
       # The writer's own catalog, for anything that is not a model (macros/naming.sql).
       database: "{{ env_var('K2_TRINO_USER', 'dbt_market_analytics') | replace('dbt_', '', 1) }}"
       schema: staging
