@@ -40,6 +40,13 @@ differently by the two engines is a failure (ADR-035).
 
 Exit 0 when every side run equals B on every bucket of the day, non-zero with the
 first differences printed otherwise.
+
+`--known-gaps` (the wrapper passes `known_gaps` from the pin) takes listed windows out
+of the comparisons each one names, and nothing else: a loss window recorded in
+`audit.checks`, where the stores cannot be made equal without deleting data
+(tests/parity/README.md). Every gap is printed with its cause and the buckets it
+removed, a gap that removes none fails the run, and a run with a gap applied ends
+`PARITY: ok (...)`, never `PARITY: PASS`.
 """
 
 from __future__ import annotations
@@ -49,6 +56,7 @@ import json
 import os
 import subprocess
 import sys
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 
@@ -64,6 +72,13 @@ SCALE = 100_000_000
 
 KEY = ["exchange", "canonical_symbol", "window_start"]
 COLS = ["open_e8", "high_e8", "low_e8", "close_e8", "trade_count", "volume"]
+
+# Known gaps: the comparisons a gap may name (each is the lake against this side),
+# its fields, and the bounds that keep an exclusion narrow and few.
+SIDES = ("clickhouse", "silver", "dbt")
+GAP_FIELDS = {"start", "end", "sides", "cause", "recorded", "audit_ref"}
+MAX_GAPS = 5
+MAX_GAP = timedelta(minutes=60)
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "notebooks"))  # for k2lake, once
 
@@ -248,7 +263,7 @@ def normalise(rows: list, exact: bool = False) -> dict:
     return out
 
 
-def lake_vs_dbt(lake_rows: list, dbt_rows: list, lake_type: str) -> int:
+def lake_vs_dbt(lake_rows: list, dbt_rows: list, lake_type: str, gaps: list = ()) -> int:
     """B against D, exactly; quote_volume must be typed alike by both engines (ADR-035).
 
     `dbt_rows` carry Trino's typeof(quote_volume) as an eleventh column. Returns the
@@ -257,16 +272,96 @@ def lake_vs_dbt(lake_rows: list, dbt_rows: list, lake_type: str) -> int:
     types = sorted({r[10] for r in dbt_rows})
     alike = types == [lake_type]
     print(f"quote_volume: lake {lake_type}, dbt {types}" + ("" if alike else ": FAIL, the engines type it differently"))
-    return (0 if alike else 1) + diff("lake.gold.ohlcv_1m", normalise(lake_rows, exact=True), "dbt.ohlcv_1m", normalise(dbt_rows, exact=True))
+    return (0 if alike else 1) + diff("lake.gold.ohlcv_1m", normalise(lake_rows, exact=True), "dbt.ohlcv_1m", normalise(dbt_rows, exact=True), gaps)
 
 
-def diff(name_a: str, a: dict, name_b: str, b: dict, limit: int = 5) -> int:
-    keys = sorted(set(a) | set(b))
+def utc_minute(text) -> datetime:
+    """'2001-01-01T00:00Z' as a naive UTC datetime, like the bucket keys; ValueError unless UTC, to the minute."""
+    try:
+        t = datetime.fromisoformat(text)
+    except (TypeError, ValueError):
+        t = None
+    if t is None or t.utcoffset() != timedelta(0) or t.second or t.microsecond:
+        raise ValueError(f"{text!r} is not a UTC time to the minute, such as 2001-01-01T00:00Z")
+    return t.replace(tzinfo=None)
+
+
+def gap_problem(g, first: datetime) -> str | None:
+    """Why one `known_gaps` entry is refused for the day starting at `first`, or None."""
+    if not isinstance(g, dict):
+        return "is not an object"
+    if set(g) != GAP_FIELDS:
+        return f"unknown keys {sorted(set(g) - GAP_FIELDS)}, missing keys {sorted(GAP_FIELDS - set(g))}"
+    try:
+        lo, hi = utc_minute(g["start"]), utc_minute(g["end"])
+        date.fromisoformat(g["recorded"])
+    except (TypeError, ValueError) as e:
+        return str(e)
+    if hi <= lo:
+        return f"end {g['end']} is not after start {g['start']}"
+    if hi - lo > MAX_GAP:
+        return f"{g['start']} to {g['end']} is longer than {MAX_GAP // timedelta(minutes=1)} minutes"
+    if lo < first or hi > first + timedelta(days=1):
+        return f"{g['start']} to {g['end']} is not inside the day compared, {first:%Y-%m-%d}"
+    sides = g["sides"]
+    if not isinstance(sides, list) or not sides or not all(s in SIDES for s in sides) or len(set(sides)) != len(sides):
+        return f"sides {sides!r} is not a non-empty list of distinct names from {list(SIDES)}"
+    for k in ("cause", "audit_ref"):
+        if not isinstance(g[k], str) or not g[k].strip():
+            return f"{k} is not a non-empty string"
+    return None
+
+
+def load_gaps(gaps, day: str) -> list:
+    """The pin's `known_gaps`, validated, each with `lo` and `hi` as naive UTC datetimes.
+
+    A gap takes buckets out of a comparison, so every rule exits rather than warns:
+    a wide, vague, misdated or undocumented exclusion must never pass quietly.
+    """
+    if not isinstance(gaps, list):
+        raise SystemExit("known_gaps is not a list")
+    if len(gaps) > MAX_GAPS:
+        raise SystemExit(f"known_gaps has {len(gaps)} entries, more than {MAX_GAPS}: that many is an incident to fix, not to list")
+    first = datetime.fromisoformat(day)
+    for i, g in enumerate(gaps):
+        problem = gap_problem(g, first)
+        if problem:
+            raise SystemExit(f"known_gaps[{i}]: {problem}")
+    return [{**g, "lo": utc_minute(g["start"]), "hi": utc_minute(g["end"])} for g in gaps]
+
+
+def gaps_for(gaps: list, side: str) -> list:
+    return [g for g in gaps if side in g["sides"]]
+
+
+def diff(name_a: str, a: dict, name_b: str, b: dict, gaps: list = (), limit: int = 5) -> int:
+    """Buckets that differ, after `gaps` take their windows out; plus one per gap that removed nothing."""
+    keys = set(a) | set(b)
+    stale = 0
+    for g in gaps:
+        inside = {k for k in keys if g["lo"] <= k[2] < g["hi"]}
+        differing = sum(1 for k in inside if a.get(k) != b.get(k))
+        keys -= inside
+        line = f"known gap {g['start']} to {g['end']} ({g['cause']}): {len(inside)} buckets removed, {differing} of them differing"
+        if not inside:
+            stale += 1
+            line += ": FAIL, it matches no bucket, so it is stale or mistyped: fix or remove it"
+        elif not differing:
+            line += ": notice, the window now matches in full: remove this gap from tests/parity/pinned.json"
+        print(f"  {name_a} vs {name_b} {line}")
+    keys = sorted(keys)
     bad = [k for k in keys if a.get(k) != b.get(k)]
     for k in bad[:limit]:
         print(f"  {name_a} vs {name_b} {k}: {a.get(k)} != {b.get(k)}")
-    print(f"{name_a} vs {name_b}: {len(keys)} buckets, {len(bad)} differ")
-    return len(bad)
+    print(f"{name_a} vs {name_b}: {len(keys)} buckets, {len(bad)} differ" + (f" (and {len(gaps)} known gap(s) applied)" if gaps else ""))
+    return len(bad) + stale
+
+
+def verdict(bad: int, applied: int) -> str:
+    """The last line. `PASS` only for a run that left nothing out."""
+    if not applied:
+        return "PARITY: " + ("PASS" if bad == 0 else "FAIL")
+    return f"PARITY: {'ok' if bad == 0 else 'FAIL'} ({applied} known gap{'s' if applied > 1 else ''} applied, see above)"
 
 
 def not_empty(**sides) -> int:
@@ -290,6 +385,7 @@ def main() -> int:
     ap.add_argument("--skip-silver", action="store_true", help="leave out C, DuckDB over silver")
     ap.add_argument("--dbt", action="store_true", help="add D, dbt's ohlcv_1m SQL through Trino at the gold.trades snapshot B was computed from")
     ap.add_argument("--write-pin", action="store_true", help="on success, record the ids in tests/parity/pinned.json")
+    ap.add_argument("--known-gaps", default="[]", help="JSON: the pin's known_gaps, which the wrapper passes (tests/parity/README.md)")
     args = ap.parse_args()
     if not args.skip_silver and not args.silver_snapshots:
         ap.error("--silver-snapshots is required unless --skip-silver")
@@ -297,6 +393,12 @@ def main() -> int:
         ap.error("--write-pin records the silver ids, so it needs side C: drop --skip-silver")
     if args.skip_silver and args.skip_clickhouse and not args.dbt:
         ap.error("nothing to compare lake.gold.ohlcv_1m with: keep side A or C, or add --dbt")
+    gaps = load_gaps(json.loads(args.known_gaps), args.day)
+    compared = {"clickhouse": not args.skip_clickhouse, "silver": not args.skip_silver, "dbt": args.dbt}
+    applied = sum(1 for g in gaps if any(compared[s] for s in g["sides"]))
+    for g in gaps:
+        if not any(compared[s] for s in g["sides"]):
+            print(f"known gap {g['start']} to {g['end']} not applied: {', '.join(g['sides'])} not compared in this run")
 
     c = duck(os.environ["MINIO_ROOT_USER"], os.environ["MINIO_ROOT_PASSWORD"])
 
@@ -317,7 +419,7 @@ def main() -> int:
         cc = normalise(silver_candles(c, args.day, silver_snaps))
         if not_empty(**{"duckdb-over-silver": cc}):
             return 1
-        bad += diff("lake.gold.ohlcv_1m", b, "duckdb-over-silver", cc)
+        bad += diff("lake.gold.ohlcv_1m", b, "duckdb-over-silver", cc, gaps_for(gaps, "silver"))
     if args.dbt:
         src = [r[0] for r in q(f"""SELECT DISTINCT src_snapshot_id FROM lake.gold.ohlcv_1m AT (VERSION => {ohlcv_snapshot})
                                    WHERE CAST(window_start AS DATE) = DATE '{args.day}'""")]
@@ -327,12 +429,12 @@ def main() -> int:
         if not_empty(**{"dbt.ohlcv_1m": d_rows}):
             return 1
         lake_type = q("SELECT typeof(quote_volume) FROM lake.gold.ohlcv_1m LIMIT 1")[0][0].lower()  # Iceberg's, for B
-        bad += lake_vs_dbt(lake_rows, d_rows, lake_type)
+        bad += lake_vs_dbt(lake_rows, d_rows, lake_type, gaps_for(gaps, "dbt"))
     if not args.skip_clickhouse:
         a = normalise(clickhouse_candles(args.day, os.environ["CLICKHOUSE_PASSWORD"]))
         if not_empty(**{"clickhouse.ohlcv_live": a}):
             return 1
-        bad += diff("clickhouse.ohlcv_live", a, "lake.gold.ohlcv_1m", b)
+        bad += diff("clickhouse.ohlcv_live", a, "lake.gold.ohlcv_1m", b, gaps_for(gaps, "clickhouse"))
     if bad == 0 and args.write_pin:
         # Read-modify-write: scripts/parity_bars.py keeps its ids in the `bars`
         # block of the same file, and a plain overwrite here deleted them.
@@ -340,7 +442,7 @@ def main() -> int:
         doc = json.loads(pin.read_text()) if pin.exists() else {}
         doc.update({"day": args.day, "ohlcv_1m_snapshot": ohlcv_snapshot, "silver_snapshots": silver_snaps})
         pin.write_text(json.dumps(doc, indent=2) + "\n")
-    print("PARITY: " + ("PASS" if bad == 0 else "FAIL"))
+    print(verdict(bad, applied))
     return 0 if bad == 0 else 1
 
 

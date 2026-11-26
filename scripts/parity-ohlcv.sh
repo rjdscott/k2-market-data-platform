@@ -4,10 +4,13 @@
 #   scripts/parity-ohlcv.sh --pin-current [YYYY-MM-DD]  # pin the lake's current gold snapshots, for yesterday or that day
 #   scripts/parity-ohlcv.sh --dbt          # and dbt's ohlcv_1m SQL through Trino (needs dbt/ synced)
 # Any other argument goes to parity_ohlcv.py, after --pin-current and its day too.
+# Both forms pass the pin's known_gaps (tests/parity/README.md), so a pin for a day with
+# a recorded loss window can be written once the gap is listed for that day.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 set -a; . ./.env; set +a
 PIN=tests/parity/pinned.json
+GAPS=$(python3 -c "import json, os; print(json.dumps(json.load(open('$PIN')).get('known_gaps', []) if os.path.exists('$PIN') else []))")
 if [ "${1:-}" = "--pin-current" ]; then
   shift
   DAY=$(date -u -d yesterday +%F)
@@ -17,10 +20,11 @@ if [ "${1:-}" = "--pin-current" ]; then
   T=$(meta trades); O=$(meta ohlcv_1m)
   SILVER=$(echo "$T" | python3 -c "import sys,json; s=json.load(sys.stdin)['summary']; print(json.dumps({k.split('.')[-1]: int(v) for k,v in s.items() if k.startswith('k2.src-snapshot-id.')}))")
   OHLCV=$(echo "$O" | python3 -c "import sys,json; print(json.load(sys.stdin)['snapshot'])")
-  set -- --day "$DAY" --ohlcv-snapshot "$OHLCV" --silver-snapshots "$SILVER" --write-pin "$@"
+  set -- --day "$DAY" --ohlcv-snapshot "$OHLCV" --silver-snapshots "$SILVER" --known-gaps "$GAPS" --write-pin "$@"
 else
   set -- --day "$(python3 -c "import json; print(json.load(open('$PIN'))['day'])")" \
          --ohlcv-snapshot "$(python3 -c "import json; print(json.load(open('$PIN'))['ohlcv_1m_snapshot'])")" \
-         --silver-snapshots "$(python3 -c "import json; print(json.dumps(json.load(open('$PIN'))['silver_snapshots']))")" "$@"
+         --silver-snapshots "$(python3 -c "import json; print(json.dumps(json.load(open('$PIN'))['silver_snapshots']))")" \
+         --known-gaps "$GAPS" "$@"
 fi
 exec uv run --no-project --with duckdb==1.4.4 --with clickhouse-connect==0.8.18 --with trino==0.340.0 python scripts/parity_ohlcv.py "$@"
