@@ -165,7 +165,9 @@ its, `maintenance._rewrite`); and a contract merged whose DDL was never applied 
   difference. The jobs read a generated file because `contracts/` is not mounted in the Spark
   container.
 - A nightly audit, `contract_schema`, first in `maintenance.py`'s `AUDITS`, so it runs at
-  03:00 UTC under the writer lock with the others. Per contracted table it loads the live table
+  03:00 UTC under the writer lock with the others, after compaction, snapshot expiry and orphan
+  removal like every audit: it can block none of them, and the worst it does is make the run
+  exit 1 and fire `LakeAuditFailed`. Per contracted table it loads the live table
   through the Spark session's Iceberg catalog and compares Iceberg's own JSON for the current
   schema, the default partition spec and the default sort order, which is catalog metadata
   only, no data file read, with that file. It files one row per table in `lake.audit.checks`:
@@ -178,9 +180,9 @@ its, `maintenance._rewrite`); and a contract merged whose DDL was never applied 
 - The rules. An extra live column fails: the contract is the interface. Column order is
   compared, over the columns both sides have: Iceberg readers resolve a column by name or field
   id, but a positional `INSERT` binds by position. A contracted table the catalog lacks fails. A
-  table with no contract fails if it sits in a namespace some contract names (`raw`, `bronze`,
-  `silver`, `gold`, `audit`); any other namespace is not read, so a spike's scratch namespace is
-  no finding. Live types are rendered in Spark SQL's spelling (`timestamptz` is `TIMESTAMP`,
+  table with no contract fails in any namespace but a `scratch_` one, which is not read, so a
+  spike's scratch tables are no finding and a namespace nobody declared is. Not compared: column
+  docs, field ids, table properties, the format version. Live types are rendered in Spark SQL's spelling (`timestamptz` is `TIMESTAMP`,
   `timestamp` is `TIMESTAMP_NTZ`, `decimal(28, 10)` is `DECIMAL(28,10)`), nested fields and
   their `NOT NULL` included. k2gen had no Spark-to-Iceberg type mapping to reuse (its one
   mapping, `_TRINO_TYPES`, turns Spark scalars into Trino types for dbt), so this direction is
@@ -189,13 +191,15 @@ its, `maintenance._rewrite`); and a contract merged whose DDL was never applied 
   Lakekeeper REST catalog, which serves the JSON the Spark job reads
   (`python3 docker/lake/contract_schema.py`): 26 of 26 contracted tables match their contracts,
   and the two tables in the scratch namespace `scratch_p4` are not read.
+- `k2gen validate` no longer exempts `audit`: every table in `lake.sql` needs a contract, where
+  the Decision said every table outside `audit`. The nightly audit fails a table without one in
+  `audit` as in any other namespace, so a table CI let through would have failed every night.
+  `audit.checks` already had its contract.
 
 **Still true.** Enforcement is a report, not a refusal: CI fails a pull request, and the
 nightly audit finds a drifted table up to a day later, after rows were written to it. No writer
-compares a write with its contract. And `k2gen validate` lets a table in `audit` go without a
-contract while this audit fails one; none exists today.
+compares a write with its contract.
 
 **Revisit when:** a `contract_schema` failure turns out to be a false positive (two spellings of
 one type the comparison does not equate); or a table drifted and was written to for more than a
-day before the audit found it, which would argue for a check before each commit; or the first
-table in `audit` without a contract, when `validate` and this audit must be made to agree.
+day before the audit found it, which would argue for a check before each commit.

@@ -34,8 +34,7 @@ boundaries are declared and checked, not yet exercised by a second team.
 A **product** is a directory, `contracts/<domain>/<product>/`: a descriptor, `product.yaml`
 (owner, purpose, kind, lifecycle, inputs, outputs, known consumers), and one Open Data
 Contract Standard v3 contract per output table beside it. `k2gen validate` reports 13
-products and 26 contracts: one for every table in `lake.sql` outside `audit`, and one for
-`audit.checks`, which marts read. A product may build only marts, as `delayed-candles`,
+products and 26 contracts: one for every table in `lake.sql`, `audit.checks` included. A product may build only marts, as `delayed-candles`,
 `venue-quality` and `quality-results` do, with `outputs: []`.
 
 ```mermaid
@@ -116,7 +115,8 @@ steps 2 to 4 report together.
    keeps for the platform (`staging`, `intermediate`, `dq`).
 3. Each contract against `lake.sql`: the table exists and its partitioning and sort order are
    the declared ones; or, with inline columns, the table is one `lake.sql` does not create and
-   its partitioning and sort name its own columns. Every table outside `audit` has one contract.
+   its partitioning and sort name its own columns. Every table has one contract, `audit` tables
+   included, since the nightly `contract_schema` audit fails one without.
 4. Across products: a table another table reads keeps snapshots for the seven-day floor
    `maintenance.py` enforces; a table is at least as restricted as anything it reads; every
    input resolves to another product's output or a declared external source.
@@ -154,7 +154,7 @@ fixes. How a team adds a product, step by step: [the golden path](../development
 |---|---|---|---|
 | `k2gen validate` (CI job `contracts`, `make test-k2gen`) | every pull request | `lake.sql`, the file | a contract and the DDL file disagreeing on the table, its partitioning or its sort order; a lake table with no contract |
 | The drift gate (`make generate`, then no diff) | every pull request | the generated files | a generated file edited by hand, or left stale |
-| `contract_schema` in `maintenance.py` ([runbook](../runbooks/lake-audit-failed.md#15-contract_schema-a-live-table-is-not-what-its-contract-states) section 15) | nightly, 03:00 UTC, under the writer lock | the live Iceberg table: columns, types, nullability, order, partition spec, sort order, identifier fields | an `ALTER` run by hand, DDL applied only in part, a contract merged and never applied, a table with no contract in a namespace the lake owns |
+| `contract_schema` in `maintenance.py` ([runbook](../runbooks/lake-audit-failed.md#15-contract_schema-a-live-table-is-not-what-its-contract-states) section 15) | nightly, 03:00 UTC, under the writer lock | the live Iceberg table: columns, types, nullability, order, partition spec, sort order, identifier fields | an `ALTER` run by hand, DDL applied only in part, a contract merged and never applied, a table with no contract outside a `scratch_` namespace |
 
 Each check reports; none refuses anything. The CI checks fail a pull request on an
 unprotected `main`, and the nightly audit files a failed row in `audit.checks` and fires
@@ -168,7 +168,7 @@ writes with the contract. The nightly audit reads catalog metadata only and open
 
 | Practice | Where it is enforced |
 |---|---|
-| Every lake table outside `audit` has exactly one contract | `k2gen validate` step 3; `test_every_table_outside_audit_has_exactly_one_contract` |
+| Every lake table has exactly one contract | `k2gen validate` step 3; `test_every_table_has_exactly_one_contract`, `test_an_audit_table_without_a_contract_fails` |
 | A contract and `lake.sql` agree on partitioning and sort | `k2gen validate` step 3; `test_a_wrong_partition_spec_fails`, `test_a_wrong_sort_order_fails` |
 | The live table and its contract agree, column by column | nightly `contract_schema` audit; `tests/test_lake_contract_schema.py`, and `test_contract_schemas_state_every_table_as_its_contract_does` for what it compares against |
 | A table another reads keeps the seven-day snapshot floor | `k2gen validate` step 4; `test_a_parent_with_expiry_under_the_floor_fails` |

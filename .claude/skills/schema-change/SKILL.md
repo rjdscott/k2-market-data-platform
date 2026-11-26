@@ -50,6 +50,10 @@ Work top to bottom; do not skip a row because "nothing reads it yet".
    Any lake.sql column change needs `make generate` too: it rewrites
    `docker/lake/generated/contract_schemas.json`, which the nightly `contract_schema`
    audit holds the live table to, so DDL merged but never applied fails that audit.
+   `docker/lake` is bind-mounted from the live checkout, so that file is live the
+   moment the checkout moves: develop the change in a worktree, not the live
+   checkout, and run `apply_ddl.py` in the same sitting as the pull, never with
+   03:00 UTC (the nightly run) between the two.
 4. **ClickHouse DDL** — the served `gold` tier, two files, both idempotent
    (`CREATE TABLE IF NOT EXISTS`, `ALTER TABLE … ADD COLUMN IF NOT EXISTS`);
    they are mounted at `/docker-entrypoint-initdb.d` and run on a fresh

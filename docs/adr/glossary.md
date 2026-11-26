@@ -617,8 +617,7 @@ where `k2gen validate` holds the contract only to the DDL file. It compares the 
 (names, Spark SQL types with nested fields, `NOT NULL`, order), its partition spec, sort order
 and identifier fields, as the Iceberg catalog holds them, with what `k2gen generate` wrote to
 `docker/lake/generated/contract_schemas.json`, and files one `audit.checks` row per table. A
-table with no contract in a namespace the lake owns fails too; a namespace no contract names is
-not read. It finds a drifted table up to a day after the drift; nothing refuses a bad write when
+table with no contract fails too, in any namespace but a `scratch_` one, which is not read. It finds a drifted table up to a day after the drift; nothing refuses a bad write when
 it is made.
 Where: [`docker/lake/contract_schema.py`](../../docker/lake/contract_schema.py);
 [runbook](../runbooks/lake-audit-failed.md#15-contract_schema-a-live-table-is-not-what-its-contract-states) section 15;

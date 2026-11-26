@@ -8,6 +8,7 @@ The contract side is an entry of docker/lake/generated/contract_schemas.json.
 """
 
 import copy
+import re
 
 import contract_schema as C
 import pytest
@@ -180,14 +181,15 @@ def test_a_map_value_and_a_type_spark_cannot_declare_differ():
 CONTRACTS = {"gold.trades": CONTRACT, "gold.bars": CONTRACT, "raw.messages": CONTRACT}
 
 
-def test_one_row_per_contracted_table_and_one_per_uncontracted_table_in_an_owned_namespace():
-    listed = {"gold.trades", "raw.messages", "gold.handmade", "scratch_p4.wap_bronze", "scratch_p4.wap_silver"}
+def test_one_row_per_contracted_table_and_one_per_uncontracted_table_outside_scratch():
+    listed = {"gold.trades", "raw.messages", "gold.handmade", "spike.tmp", "scratch_p4.wap_bronze", "scratch_p4.wap_silver"}
     rows = C.check(CONTRACTS, listed, lambda t: live())
     assert rows == [
         ("gold.bars", False, 1, "table missing: the contract names a table the catalog does not hold"),
         ("gold.trades", True, 0, "matches its contract: 6 columns, partitioning, sort order and identifier fields"),
         ("raw.messages", True, 0, "matches its contract: 6 columns, partitioning, sort order and identifier fields"),
         ("gold.handmade", False, 1, "no contract: gold.handmade is in namespace gold, which the contracts own, and no contract describes it"),
+        ("spike.tmp", False, 1, "no contract: spike.tmp is in namespace spike, which no contract names and which is not a scratch_ namespace, and no contract describes it"),
     ]
 
 
@@ -195,6 +197,7 @@ def test_a_scratch_namespace_no_contract_names_is_not_the_lakes():
     rows = C.check(CONTRACTS, {*CONTRACTS, "scratch_p4.wap_bronze"}, lambda t: live())
     assert [r[0] for r in rows] == sorted(CONTRACTS) and all(r[1] for r in rows)
     assert C.owned(CONTRACTS) == {"gold", "raw"}
+    assert C.audited({"gold", "raw", "spike", "scratch_p4"}) == ["gold", "raw", "spike"]
 
 
 def test_a_failing_tables_detail_is_every_difference_and_observed_counts_them():
@@ -221,3 +224,61 @@ def test_the_committed_contracts_load_and_each_names_its_columns():
     contracts = C.load()
     assert "gold.trades" in contracts and "audit.checks" in contracts
     assert all(c["columns"] and {"partitioning", "sort", "identifier"} <= c.keys() for c in contracts.values())
+
+
+# What a contract may spell, for the comparison to render the same: the Spark SQL words
+# contract_schema._SPARK maps Iceberg's primitives to, plus the type constructors; every
+# DECIMAL with its precision and scale; a partition or sort term as Spark DDL writes it.
+# A `lake.sql` type like INTEGER, VARCHAR(10) or lower-case `string`, or a transform like
+# day(ts) or truncate(col, 4), passes k2gen and the wire-format test and then fails every
+# night, so it fails here instead.
+_WORD = re.compile(r"\b[A-Za-z_]\w*\b(?!\s*:)")  # not a struct field's name, which a colon follows
+_SPELLED = set(C._SPARK.values()) | {"DECIMAL", "ARRAY", "STRUCT", "MAP", "NOT", "NULL"}
+_TIME = sorted(v.split("(")[0] for v in C._TRANSFORMS.values() if "(" in v)  # years, months, days, hours
+_TERM = re.compile(rf"(?:(?P<plain>\w+)|(?:{'|'.join(_TIME)})\((?P<timed>\w+)\)|(?:bucket|truncate)\(\d+, ?(?P<sized>\w+)\))")
+_ORDER = re.compile(r"(?: DESC| ASC NULLS LAST| DESC NULLS FIRST)?")
+
+
+def unrenderable(contracts):
+    bad = []
+    for table, c in contracts.items():
+        names = {col["name"] for col in c["columns"]}
+        for col in c["columns"]:
+            bad += [f"{table}.{col['name']}: {w}" for w in _WORD.findall(col["type"]) if w not in _SPELLED]
+            bad += [f"{table}.{col['name']}: DECIMAL without (precision,scale)" for _ in re.finditer(r"DECIMAL(?!\(\d+, ?\d+\))", col["type"])]
+        for key, order in (("partitioning", ""), ("sort", _ORDER.pattern)):
+            for term in c[key]:
+                m = re.fullmatch(_TERM.pattern + order, term)
+                if not m or (m["plain"] or m["timed"] or m["sized"]) not in names:
+                    bad.append(f"{table} {key}: {term}")
+    return bad
+
+
+def test_every_committed_contract_uses_spellings_the_comparison_renders():
+    contracts = C.load()
+    assert len(contracts) >= 26 and unrenderable(contracts) == []
+
+
+def test_a_spelling_the_comparison_cannot_render_is_caught():
+    contract = {
+        "columns": [
+            {"name": "a", "type": "INTEGER", "required": True},
+            {"name": "b", "type": "VARCHAR(10)", "required": False},
+            {"name": "c", "type": "string", "required": False},
+            {"name": "d", "type": "ARRAY<STRUCT<timestamp: STRING, px: DECIMAL>>", "required": False},
+            {"name": "ts", "type": "TIMESTAMP", "required": True},
+        ],
+        "partitioning": ["day(ts)", "truncate(c, 4)", "days(ts)", "bucket(16, a)"],
+        "sort": ["ts DESC", "c DESCENDING", "nope"],
+        "identifier": [],
+    }
+    assert unrenderable({"x.y": contract}) == [
+        "x.y.a: INTEGER",
+        "x.y.b: VARCHAR",
+        "x.y.c: string",
+        "x.y.d: DECIMAL without (precision,scale)",
+        "x.y partitioning: day(ts)",
+        "x.y partitioning: truncate(c, 4)",
+        "x.y sort: c DESCENDING",
+        "x.y sort: nope",
+    ]

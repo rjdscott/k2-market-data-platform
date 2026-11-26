@@ -689,8 +689,8 @@ def _iceberg_json(spark, table: str) -> dict:
 def audit_contract_schema(spark) -> list:
     """Every contracted table's live schema, partitioning, sort order and identifier fields == its contract.
 
-    One row per contracted table, and one per table with no contract in a namespace the
-    contracts own; the comparison and its rules are docker/lake/contract_schema.py. The
+    One row per contracted table, and one per table with no contract in any namespace but a
+    scratch one; the comparison and its rules are docker/lake/contract_schema.py. The
     contracts arrive as generated/contract_schemas.json (`make generate`), since contracts/
     is not mounted here.
     """
@@ -699,7 +699,7 @@ def audit_contract_schema(spark) -> list:
     namespaces = {r[0] for r in spark.sql(f"SHOW NAMESPACES IN {CATALOG}").collect()}
     listed = {
         f"{ns}.{r['tableName']}"
-        for ns in sorted(contract_schema.owned(contracts) & namespaces)
+        for ns in contract_schema.audited(namespaces)
         for r in spark.sql(f"SHOW TABLES IN {CATALOG}.{ns}").collect()
     }
     rows = contract_schema.check(contracts, listed, lambda t: _iceberg_json(spark, t))
@@ -725,7 +725,8 @@ INFORMATIONAL = {"silver_flags"}
 # (check name, scope, callable). The scope is here rather than only inside the
 # check so that a check which RAISES still has somewhere to file its failure.
 AUDITS = (
-    # First: metadata only, and a table that has drifted from its contract explains a later check failing on it.
+    # First of the audits, which all run after compaction, expiry and orphan removal: metadata
+    # only, and a table that has drifted from its contract explains a later check failing on it.
     (contract_schema.CHECK, CATALOG, audit_contract_schema),
     ("offset_continuity", RAW_TABLE, audit_offset_continuity),
 ) + tuple(

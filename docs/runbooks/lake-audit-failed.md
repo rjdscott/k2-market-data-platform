@@ -648,11 +648,19 @@ function.
 | `sort differs: contract [...], live [...]` | its default sort order, the one compaction sorts by |
 | `identifier fields differ: contract [...], live [...]` | its `SET IDENTIFIER FIELDS` |
 | `table missing: ...` | a contract names a table the catalog does not hold |
-| `no contract: ...` | a table with no contract in a namespace the contracts own (`raw`, `bronze`, `silver`, `gold`, `audit`). Other namespaces, such as a spike's `scratch_p4`, are not read |
+| `no contract: ...` | a table with no contract, in a namespace the contracts own (`raw`, `bronze`, `silver`, `gold`, `audit`) or in a namespace none names. Only a `scratch_` namespace, such as a spike's `scratch_p4`, is not read |
 
 `observed = -1` with a `check raised` detail is a table the audit could not read; the
 governance view `dq_results` shows it as `error`. If the whole audit raises, one row has
 `scope = 'lake'`.
+
+**Not compared**: column docs (`COMMENT`), field ids, so a column dropped and re-added under
+its old name and type in its old place passes; table properties (`TBLPROPERTIES`, such as the
+metrics and compression settings); and the format version.
+
+**What it cannot do**: block anything. It is the first of the audits, and all of them run
+after compaction, snapshot expiry and orphan removal (`main()` in `maintenance.py`); the worst
+it does is make the run exit 1 and fire `LakeAuditFailed`.
 
 **What it means**, `k2gen validate` holds every contract to `lake.sql`, the file, in CI; this
 holds it to the live catalog, nightly. The contracts reach the Spark container as
@@ -661,7 +669,13 @@ schema, partition spec and sort order as Iceberg's own JSON, metadata only. A di
 of four things: an `ALTER` run on the live table by hand; DDL applied only in part (a `WRITE
 ORDERED BY` or `SET IDENTIFIER FIELDS` that never ran: `gold.bbo_1s` once shipped without its
 sort order, see `maintenance._rewrite`); a contract and `lake.sql` change merged but never
-applied to this stack; or a table created by hand in a namespace the lake owns.
+applied to this stack; or a table created by hand outside a `scratch_` namespace.
+
+**It is live the moment the checkout moves.** `docker/lake` is bind-mounted from the live
+checkout, so a pull that brings a new `lake.sql` and `contract_schemas.json` holds the live
+tables to them at the next 03:00 UTC run, applied or not. Apply the DDL in the same sitting as
+the pull, never with 03:00 UTC between the two, and develop a schema change in a worktree, not
+in the live checkout.
 
 **See the differences**, the rows first, then the live table itself:
 
@@ -699,11 +713,12 @@ git log --oneline -- docker/lake/ddl/lake.sql contracts/   # did the declared sh
 | nothing changed for this table | the live table: a hand-run `ALTER` or a half-applied DDL | put the live table back to the declared shape (below) |
 | `lake.sql` or the contract changed, the live table has the old shape | the stack: the change was never applied here | apply it (below) |
 | the live change was deliberate and nobody wrote it down | the contract | the contract and `lake.sql` catch up through `/schema-change`, in one pull request. Never edit only the contract to clear the row |
-| `no contract` on a table nobody owns | the table | a person decides: give it a product and a contract (`make new-product`, [golden path](../development/golden-path.md)), or move it to a scratch namespace. Do not create tables in the lake's namespaces by hand |
+| `no contract` on a table nobody owns | the table | a person decides: give it a product and a contract (`make new-product`, [golden path](../development/golden-path.md)), or move it to a `scratch_` namespace. Create no table by hand anywhere else |
 
 **Recovery**, the schema-change procedure is the only way to move either side
 (`.claude/skills/schema-change/SKILL.md`): `lake.sql`, the contract, `make generate`, tests and
-docs in one pull request, then the DDL applied to the stack:
+docs in one pull request, then, in the same sitting as the pull into the live checkout and not
+across 03:00 UTC, the DDL applied to the stack:
 
 ```bash
 docker exec k2-spark-iceberg python3 /home/iceberg/lake/apply_ddl.py   # idempotent; takes no writer lock, so not during maintenance

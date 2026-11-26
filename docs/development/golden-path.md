@@ -46,7 +46,7 @@ uv run --project platform/k2gen k2gen validate
 ```
 
 ```
-k2gen validate: 10 products, 26 contracts, every lake table outside audit covered
+k2gen validate: 14 products, 27 contracts, every lake table covered
 ```
 
 The scaffold passes as written. The rules that bite once inputs are added are in

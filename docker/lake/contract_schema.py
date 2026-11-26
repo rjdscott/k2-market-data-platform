@@ -24,8 +24,10 @@ What counts as a difference, and why:
   compared, so one missing column does not also report every column after it as moved.
 - Nested fields are compared whole, as part of the column's type, required flags included.
 - A contracted table the catalog does not hold fails, and so does a table with no contract in
-  a namespace the contracts own. A namespace no contract names (a spike's scratch space) is
-  not the lake's and is not read.
+  any namespace but a `scratch_` one (a spike's scratch space, such as `scratch_p4`), which is
+  not the lake's and is not read. A new namespace is a failure until a contract names it.
+- Not compared: column docs, field ids (a column dropped and re-added under its old name and
+  type, in its old place, passes), table properties, and the format version.
 """
 
 from __future__ import annotations
@@ -40,6 +42,7 @@ from pathlib import Path
 import offsets as O
 
 CHECK = "contract_schema"
+SCRATCH = "scratch_"  # the prefix of a namespace no job writes and no contract covers
 CONTRACTS = Path(__file__).resolve().parent / "generated" / "contract_schemas.json"
 
 # Iceberg's primitive types in Spark SQL's spelling, the one lake.sql and inline contracts use.
@@ -168,11 +171,16 @@ def owned(contracts: dict) -> set[str]:
     return {t.split(".")[0] for t in contracts}
 
 
+def audited(namespaces) -> list[str]:
+    """The namespaces whose tables are listed: all but the scratch ones."""
+    return sorted(ns for ns in namespaces if not ns.startswith(SCRATCH))
+
+
 def check(contracts: dict, listed: set[str], load_live) -> list[tuple[str, bool, int, str]]:
     """(table, passed, observed, detail): one per contracted table, then one per uncontracted table.
 
-    `listed` is every `<namespace>.<table>` the catalog holds (any namespace; those the
-    contracts do not own are ignored). `load_live(table)` returns the live table's Iceberg JSON
+    `listed` is every `<namespace>.<table>` the catalog holds (a scratch namespace's tables are
+    ignored if present). `load_live(table)` returns the live table's Iceberg JSON
     as `differences` takes it. A load that raises files that table's row the way
     maintenance.run_audits files a check that raises: not passed, observed -1, `check raised`.
     """
@@ -189,8 +197,10 @@ def check(contracts: dict, listed: set[str], load_live) -> list[tuple[str, bool,
         n = len(contracts[table]["columns"])
         rows.append((table, not found, len(found), "; ".join(found) or f"matches its contract: {n} columns, partitioning, sort order and identifier fields"))
     mine = owned(contracts)
-    for table in sorted(t for t in listed if t.split(".")[0] in mine and t not in contracts):
-        rows.append((table, False, 1, f"no contract: {table} is in namespace {table.split('.')[0]}, which the contracts own, and no contract describes it"))
+    for table in sorted(t for t in listed if t not in contracts and not t.startswith(SCRATCH)):
+        ns = table.split(".")[0]
+        where = "which the contracts own" if ns in mine else f"which no contract names and which is not a {SCRATCH} namespace"
+        rows.append((table, False, 1, f"no contract: {table} is in namespace {ns}, {where}, and no contract describes it"))
     return rows
 
 
@@ -206,7 +216,7 @@ def main() -> int:
     contracts = load()
     namespaces = {n[0] for n in get(f"{prefix}/namespaces")["namespaces"]}
     # ponytail: one page of each listing (Lakekeeper's is 100); a namespace past 100 tables wants next-page-token.
-    listed = {f"{ns}.{i['name']}" for ns in sorted(owned(contracts) & namespaces) for i in get(f"{prefix}/namespaces/{ns}/tables")["identifiers"]}
+    listed = {f"{ns}.{i['name']}" for ns in audited(namespaces) for i in get(f"{prefix}/namespaces/{ns}/tables")["identifiers"]}
 
     def live(table: str) -> dict:
         m = get(f"{prefix}/namespaces/{table.replace('.', '/tables/', 1)}")["metadata"]
@@ -220,7 +230,7 @@ def main() -> int:
     for table, passed, observed, detail in rows:
         print(f"{'ok  ' if passed else 'FAIL'} {table:<30} {observed:>3}  {detail}")
     failed = sum(1 for r in rows if not r[1])
-    print(f"{len(rows) - failed} of {len(rows)} match; namespaces read: {', '.join(sorted(owned(contracts) & namespaces))}")
+    print(f"{len(rows) - failed} of {len(rows)} match; namespaces read: {', '.join(audited(namespaces))}")
     return 1 if failed else 0
 
 
