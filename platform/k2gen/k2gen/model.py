@@ -1102,7 +1102,200 @@ PLATFORM_TABLES: Mapping[str, PlatformTable] = {
 }
 
 
+# --- Loading (S04): private to load() ----------------------------------------------------
+#
+# Every refusal is one line, `<path>: <why>`, and a schema error's `<path>` carries the JSON
+# pointer into the document (`<file>#/schema/0/properties/3/name`), the form a relationship's
+# `to` already uses. load() reports every line it finds, then raises once.
+
+_PRODUCT_PARTS = ("models", "seeds", "unit_tests.yml")  # a product's files that are not documents
+
+
+def _pointer(parts: Any) -> str:
+    """RFC 6901: each key or index after a `/`, with `~` and `/` escaped."""
+    return "".join("/" + str(p).replace("~", "~0").replace("/", "~1") for p in parts)
+
+
+def _schema_findings(path: str, kind: str, doc: Any) -> list[str]:
+    """schema_errors' validation, in its order (the published standard, then K2's profile),
+    each error located by JSON pointer."""
+    found = []
+    for ref in SCHEMAS[kind]:
+        for e in sorted(_validator(ref).iter_errors(doc), key=lambda e: e.json_path):
+            found.append(f"{path}#{_pointer(e.absolute_path)}: {ref.partition('#')[0]}: {e.message}")
+    return found
+
+
+def _props(entries: Any, where: str, errors: list[str]) -> dict[str, Any]:
+    """A `customProperties` list as {property: value}. Each property at most once: the model
+    holds one value, and taking either of two would read the document one way of two."""
+    props: dict[str, Any] = {}
+    for i, entry in enumerate(entries or ()):
+        if entry["property"] in props:
+            errors.append(f"{where}/{i}: custom property {entry['property']} appears twice")
+        props[entry["property"]] = entry["value"]
+    return props
+
+
+def _text(path: str, data: bytes, errors: list[str]) -> str:
+    try:
+        return data.decode("utf-8")
+    except UnicodeDecodeError as e:
+        errors.append(f"{path}: not UTF-8 text ({e.reason} at byte {e.start})")
+        return ""
+
+
+def _column(c: Mapping[str, Any], where: str, errors: list[str]) -> Column:
+    props = _props(c.get("customProperties"), f"{where}/customProperties", errors)
+    if "quality" in c:  # ODCS allows it; the model, the emitters and S05 read the table's only
+        errors.append(f"{where}/quality: K2 reads quality on the table, schema/0/quality; move it there")
+    relationships = tuple(
+        Relationship(r["to"], _props(r.get("customProperties"), f"{where}/relationships/{i}/customProperties", errors).get("asOf"))
+        for i, r in enumerate(c.get("relationships", ())))
+    return Column(
+        name=c["name"], physical_type=c["physicalType"], logical_type=c.get("logicalType"),
+        pattern=c.get("logicalTypeOptions", {}).get("pattern"), description=c.get("description"),
+        required=c.get("required", False), primary_key=c.get("primaryKey", False),
+        primary_key_position=c.get("primaryKeyPosition"), unique=c.get("unique", False),
+        classification=c.get("classification"), unit=props.get("unit"), time=props.get("time"),
+        relationships=relationships)
+
+
+def _table(path: str, doc: Mapping[str, Any], errors: list[str]) -> Table:
+    (schema,) = doc["schema"]  # the profile holds exactly one
+    props = _props(doc["customProperties"], f"{path}#/customProperties", errors)
+    build = props["build"]
+    policies = {
+        role: RolePolicy(
+            delay=Delay(p["delay"]["column"], p["delay"]["minutes"]) if "delay" in p else None,
+            mask=tuple(p.get("mask", ())),
+            row_scope=RowScope(p["rowScope"]["column"], tuple(p["rowScope"]["values"])) if "rowScope" in p else None)
+        for role, p in props.get("policies", {}).items()}
+    return Table(
+        path=path, contract_id=doc["id"], name=doc["name"], version=doc["version"],
+        physical_name=schema["physicalName"], purpose=doc["description"]["purpose"], owner=doc["team"]["name"],
+        layer=props["layer"], build=Build("code", build["code"]) if isinstance(build, dict) else Build(build, None),
+        backup=props["backup"], retention=props.get("retention"),
+        partitioning=tuple(props.get("partitioning", ())), sort=tuple(props.get("sort", ())),
+        columns=tuple(_column(c, f"{path}#/schema/0/properties/{i}", errors) for i, c in enumerate(schema["properties"])),
+        roles=tuple(TableRole(r["role"], r.get("firstLevelApprovers")) for r in doc.get("roles", ())),
+        policies=policies,
+        quality=tuple(Quality(q.get("name"), q.get("type", "library"), q.get("engine"), q.get("description"), q.get("implementation"))
+                      for q in schema.get("quality", ())),  # ODCS's default type is library
+        sla=tuple(Sla(s["property"], s.get("value"), s.get("unit"), s.get("element")) for s in doc.get("slaProperties", ())))
+
+
+def _product(pdir: str, parsed: Mapping[str, Any], documents: Mapping[str, bytes], errors: list[str]) -> Product:
+    """The product in directory `pdir`: its product file, the contracts and grants beside it,
+    models/*.sql, unit_tests.yml as written, and each seed its `seeds` property declares."""
+    path = f"{pdir}/{V2_PRODUCT_FILE}"
+    doc = parsed[path]
+    files = {p.removeprefix(f"{pdir}/"): data for p, data in documents.items() if p.startswith(f"{pdir}/")}
+    props = _props(doc.get("customProperties"), f"{path}#/customProperties", errors)
+    licences = [d["url"] for d in doc.get("authoritativeDefinitions", ()) if d.get("type") == "licence"]
+    if len(licences) > 1:
+        errors.append(f"{path}#/authoritativeDefinitions: {len(licences)} entries of type licence; a product has one")
+    inputs = []
+    for i, port in enumerate(doc.get("inputPorts", ())):
+        pp = _props(port.get("customProperties"), f"{path}#/inputPorts/{i}/customProperties", errors)
+        inputs.append(InputPort(port["name"], port["version"], port["contractId"], pp.get("required", True), pp.get("maxLagMinutes")))
+    outputs = []
+    for i, port in enumerate(doc["outputPorts"]):
+        serves = _props(port.get("customProperties"), f"{path}#/outputPorts/{i}/customProperties", errors).get("serves")
+        outputs.append(OutputPort(
+            port["name"], port["version"], port["contractId"],
+            tuple(ContractRef(c["id"], c["version"]) for c in port.get("inputContracts", ())),
+            Serves(serves["engine"], serves["profile"], serves["status"]) if serves else None))
+    declared = {s["path"].removeprefix("seeds/") for s in props.get("seeds", ())}
+    present = {f.removeprefix("seeds/") for f in files if f.startswith("seeds/")}
+    errors += [f"{path}#/customProperties: declares seed seeds/{s}, which the set does not hold" for s in sorted(declared - present)]
+    errors += [f"{pdir}/seeds/{s}: not declared by the product's seeds property" for s in sorted(present - declared)]
+    unit_tests = None
+    if "unit_tests.yml" in files:
+        unit_tests = _text(f"{pdir}/unit_tests.yml", files["unit_tests.yml"], errors)
+        try:  # kept as written, but read one way only, as every v2 YAML document is
+            parse(f"{pdir}/unit_tests.yml", files["unit_tests.yml"])
+        except DocumentError as e:
+            errors.append(str(e))
+    connector, schedule, terms, change = (props.get(k) for k in ("connector", "schedule", "terms", "lifecycleChange"))
+    grants = parsed.get(f"{pdir}/grants.yaml", {"grants": []})["grants"]
+    return Product(
+        path=pdir, id=doc["id"], name=doc["name"], domain=doc["domain"], version=doc["version"],
+        status=doc["status"], type=doc["type"], owner=doc["team"]["name"],
+        purpose=doc["description"]["purpose"], limitations=doc["description"].get("limitations"),
+        usage=doc["description"].get("usage"), licence=licences[0] if licences else None,
+        tags=tuple(doc.get("tags", ())), input_ports=tuple(inputs), output_ports=tuple(outputs),
+        connector=Connector(connector["kind"], {k: v for k, v in connector.items() if k != "kind"}) if connector else None,
+        schedule=Schedule(schedule["cron"], schedule.get("timeoutMinutes")) if schedule else None,
+        terms=Terms(terms["redistribution"], terms.get("attribution")) if terms else None,
+        lifecycle_change=LifecycleChange(change["since"], change["reason"], change["decision"], change.get("successor"),
+                                         change.get("sunset"), change.get("resume")) if change else None,
+        examples=tuple(Example(e["description"], e["sql"]) for e in props.get("examples", ())),
+        tables=tuple(_table(p, parsed[p], errors) for p in sorted(parsed) if p.startswith(f"{pdir}/") and document_kind(p) == "contract"),
+        grants=tuple(Grant(g["principal"], g["role"]) for g in grants),
+        models={f.removeprefix("models/"): _text(f"{pdir}/{f}", data, errors)
+                for f, data in sorted(files.items()) if f.startswith("models/") and f.endswith(".sql")},
+        unit_tests=unit_tests,
+        seeds={s: files[f"seeds/{s}"] for s in sorted(declared & present)})
+
+
+def _expectation(row: Mapping[str, Any]) -> Expectation:
+    """One row, told apart by its keys as the schema tells the five shapes apart."""
+    via = tuple(row.get("via", ("sql",)))  # REST joins in phase 003 (expectations.schema.json)
+    if "probe" in row:
+        return ProbeExpectation(row["probe"]["from"], row["probe"]["target"], row["expect"])
+    if "drift" in row:
+        return DriftExpectation(row["drift"], row["expect"])
+    if "sql" in row:
+        return StatementExpectation(row["principal"], row["sql"], row["expect"], dict(row.get("session", {})))
+    if row.get("denied"):
+        return DeniedExpectation(row["principal"], row["table"], via)
+    return TableExpectation(row["principal"], row["table"], via, tuple(row["visible"]), tuple(row.get("masked", ())),
+                            row.get("minRowAgeMinutes"), row.get("mustNotAppear"))
+
+
 def load(docs: DocumentSet, images: Mapping[str, str] | None = None) -> Model:
     """Parse a document set into the model, every document through `parse`, refusing any
     document `schema_errors` rejects."""
-    raise NotImplementedError("S04")
+    errors: list[str] = []
+    parsed: dict[str, Any] = {}
+    for path in sorted(docs.documents):
+        kind = document_kind(path)
+        if kind is None:
+            continue
+        try:
+            doc = parse(path, docs.documents[path])
+        except DocumentError as e:
+            errors.append(str(e))
+            continue
+        found = _schema_findings(path, kind, doc)
+        errors += found
+        if not found:
+            parsed[path] = doc
+    if errors:  # the model below assumes schema-valid documents
+        raise DocumentError("\n".join(errors))
+
+    # A contract, grants, model, seed or unit test belongs to the product file beside it.
+    pdirs = sorted(p.removesuffix(f"/{V2_PRODUCT_FILE}") for p in parsed if document_kind(p) == "product")
+    for path in sorted(docs.documents):
+        parts = path.split("/")
+        pdir = "/".join(parts[:3])
+        in_domain = len(parts) >= 4 and parts[0] == "contracts" and parts[1] not in RESERVED_DOMAIN_NAMES
+        if in_domain and (document_kind(path) in ("contract", "grants") or parts[3] in _PRODUCT_PARTS) and pdir not in pdirs:
+            errors.append(f"{path}: {pdir}/ holds no {V2_PRODUCT_FILE}, so it belongs to no product")
+    products = tuple(_product(pdir, parsed, docs.documents, errors) for pdir in pdirs)
+    domains = parsed.get(DOMAINS, {"domains": {}})["domains"]
+    roles = parsed.get(ROLES, {"roles": {}})["roles"]
+    model = Model(
+        domains=tuple(Domain(name, d["owner"], d["kind"], d["description"]) for name, d in domains.items()),
+        products=products,
+        roles=tuple(RoleDef(name, r["description"], tuple(r.get("requires", ()))) for name, r in roles.items()),
+        principals=tuple(Principal(p["id"], p["kind"], p["owner"], p.get("description"))
+                         for p in parsed.get(PRINCIPALS, {"principals": []})["principals"]),
+        expectations=tuple(_expectation(r) for r in parsed.get(EXPECTATIONS, {"expectations": []})["expectations"]),
+        provenance=docs.provenance,
+        images=dict(images or {}),
+    )
+    if errors:
+        raise DocumentError("\n".join(errors))
+    return model
