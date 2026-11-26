@@ -14,7 +14,8 @@ for the data engineering concepts, [chapter 08](../architecture/08-lake-ingest.m
 ingest and [chapter 19](../architecture/19-lakehouse-and-domain-warehouses.md) for catalogs,
 warehouses and access.
 
-**Areas:** [the lake ingest](#the-lake-ingest-stage-by-stage) ·
+**Areas:** [capture](#capture-connections-streams-and-the-book) ·
+[the lake ingest](#the-lake-ingest-stage-by-stage) ·
 [layers and what they hold](#layers-and-what-they-hold) ·
 [Iceberg versions and housekeeping](#iceberg-versions-commits-and-housekeeping) ·
 [catalogs and access](#catalogs-warehouses-and-who-may-write) ·
@@ -22,6 +23,66 @@ warehouses and access.
 [Spark query mechanics](#spark-query-mechanics) ·
 [resources](#resources-memory-cpu-and-the-ceiling) · [tools](#tools) ·
 [plan labels](#plan-and-phase-labels)
+
+---
+
+## Capture: connections, streams and the book
+
+### Order book and L2
+
+An order book is the list of resting buy orders (bids) and sell orders (asks) at each price. L2
+("level 2") is the book aggregated per price level, a price and the total quantity resting there,
+without the individual orders (that would be L3, which K2 does not capture). Each venue publishes
+it on its own channel: Binance `depth20` (a whole top-20 book every 100 ms), Kraken `book` (a
+snapshot then deltas), Coinbase `level2` (a full-depth snapshot then deltas). K2's queryable book
+product is the top 20 levels per side at the end of every second, `gold.book_top20`, with the best
+bid and offer projected from it in `gold.bbo_1s`.
+Where: [ADR-027](ADR-027-book-snapshot-and-sequencing.md); `services/capture-rust/src/exchanges/`.
+
+### Connection and conn_id
+
+Each capture process holds one WebSocket connection to its venue and gives every connection a
+fresh UUID, `conn_id`, stamped on every record with `conn_msg_seq`, the frame's position on that
+connection. A reconnect or a container restart starts a new `conn_id`, and the venue's book and
+sequence numbers start again with it, so every book replay and sequence check is scoped to one
+connection. Frames the venue sent while no connection was open are never received.
+Where: `session` in `services/capture-rust/src/main.rs`;
+[lineage columns](#lineage-columns).
+
+### Continuous stream and session watchdog
+
+A continuous stream is a channel that keeps delivering while its subscription is healthy, as
+opposed to a one-off subscribe acknowledgement. The capture holds one table of them, `CONTINUOUS`
+in `main.rs`, with a silence bound each: 60 s for book and heartbeat channels, 300 s for trade
+channels, where a quiet market is not a fault. Three things read that table: the session
+watchdog, which closes and reopens the connection when a stream passes its bound; the container
+health check (`k2-capture healthcheck`); and the `CaptureFeedStale` alert. A stream in the table
+that the venue was never asked for would trip all three.
+Where: `CONTINUOUS`, `stale_after` and `healthcheck` in `services/capture-rust/src/main.rs`.
+
+### Seeded series
+
+A seeded series is a metric the capture creates at zero when it starts, rather than at its first
+event. Prometheus cannot see a change in a series that does not exist yet, so an alert on "this
+counter went up" or "this gauge is low" could never fire for the first event, or for a feed that
+never delivered. The capture seeds what an alert reads (`zero` in `metrics.rs`), and seeds only
+what the venue can produce: Binance and Coinbase get no checksum counters, because they publish no
+checksum.
+Where: `zero` in [`services/capture-rust/src/metrics.rs`](../../services/capture-rust/src/metrics.rs).
+
+### Book switch
+
+Proposed in [ADR-050](ADR-050-order-book-capture-paused-during-platform-build.md), not built:
+`book_capture.<venue>` in `config/instruments.yaml`, `true` or `false`, required for every venue
+(a capture without it refuses to start). Each capture reports what it read as the gauge
+`k2_capture_book_capture{exchange}`, so a capture never recreated after a change, or a stale file
+mount, shows as a difference between file and gauge. A capture with `false` does not subscribe to
+its venue's book channel, does not watch or seed the book stream, and skips the once-a-second book
+sample; it still decodes any frame exactly as before, so replay and the fixture tests do not depend
+on it. The lake reads the same switch to skip the book audits and to record it in
+`gold.dim_venue`. Binance, which has no heartbeat channel, also sends a WebSocket Ping every 15 s
+and watches the Pong as a 60 s stream, so a dead connection is still noticed within a minute.
+Where: `config/instruments.yaml`, `services/capture-rust/src/config.rs` once built.
 
 ---
 
@@ -322,6 +383,18 @@ ingest whose commit also records where it stopped reading, it is a duplicate, he
 [writer lock](#writer-lock-and-exit-75).
 Where: [chapter 19](../architecture/19-lakehouse-and-domain-warehouses.md#first-principles).
 
+### Empty commit
+
+An empty commit is an append that adds no rows but still publishes a new snapshot, carrying its
+`k2.*` properties. Stage 2b makes one on every bronze table of a venue each run, rows or not, so
+the venue's tables always record the same raw snapshot as their resume point; a quiet table such
+as `bronze.kraken_instrument` takes one most runs. Two consequences: a table's last-commit time
+(`k2_lake_last_commit_ts_seconds`) says it committed, not that it gained data; and a step must keep
+committing, because a resume point older than the 7-day [snapshot expiry](#snapshot-expiry-and-the-retention-floor)
+can no longer be read from.
+Where: `decode` in [`docker/lake/bronze.py`](../../docker/lake/bronze.py);
+[ADR-050](ADR-050-order-book-capture-paused-during-platform-build.md).
+
 ### Snapshot summary and k2 properties
 
 Every snapshot carries a summary: a map of string properties written in the same atomic commit
@@ -354,6 +427,23 @@ every reader sees; a branch is another named line of snapshots whose commits sta
 table's snapshot list also holds a branch's unpublished commits and those of dropped branches.
 Branches are the mechanism for [write-audit-publish](#write-audit-publish).
 Where: `main_lineage` in [`docker/lake/offsets.py`](../../docker/lake/offsets.py).
+
+### Tag
+
+A tag is a named reference to one snapshot that no commit moves (unlike a
+[branch](#branch-and-main)), kept for a set age (`RETAIN 180 DAYS`, counted from the snapshot's
+own commit time, not from tagging). [Expiry](#snapshot-expiry-and-the-retention-floor) keeps every
+snapshot a tag points at and its files, but removes the untagged snapshots around it, so a walk
+from `main` along parent links stops short of an old tagged snapshot that is still readable.
+K2 tags each [parity](#parity-three-way-and-pinned) pin `parity_<day>` (`parity_<day>_dbt` for
+the dbt side), and the parity scripts accept a pin only if it is on `main`'s lineage or its own
+tag names it; any other tag validates nothing. The tag is what keeps an old pin valid, and since
+nothing records after expiry whether a tagged snapshot was ever on `main`, a pin is tagged only
+after checking it is.
+Readers find tags in the catalog's `loadTable` answer (`refs`, `type: tag`) or in Trino's
+`"<table>$refs"`.
+Where: `tags` in [`notebooks/k2lake.py`](../../notebooks/k2lake.py);
+[`tests/parity/README.md`](../../tests/parity/README.md#keeping-the-pinned-snapshots-alive).
 
 ### Fast-forward
 
@@ -594,6 +684,15 @@ writes the files the contracts imply (the domain catalogs, `rules.json`, `wareho
 left stale.
 Where: [`platform/k2gen/`](../../platform/k2gen/); [ADR-032](ADR-032-odcs-contracts-and-k2gen.md).
 
+### Paused table
+
+Proposed in [ADR-050](ADR-050-order-book-capture-paused-during-platform-build.md), not built: a
+table whose contract carries the custom property `paused: {since, adr}`. It receives no new data
+by decision and its rows stay readable. k2gen refuses a freshness target on it and prints the
+pause on its product page; a product's `lifecycle` (its maturity) is left as it was. The property
+is removed when the table is fed again.
+Where: `contracts/schema/k2.schema.json` once built.
+
 ---
 
 ## Quality and parity
@@ -610,6 +709,26 @@ failed nightly audit exits non-zero and fires `LakeAuditFailed`.
 Where: `AUDITS` in [`docker/lake/maintenance.py`](../../docker/lake/maintenance.py);
 [chapter 08](../architecture/08-lake-ingest.md#proof).
 
+### Operator row
+
+An operator row is a row in `audit.checks` with `job = 'operator'`: a person's record of a
+decision or an event, such as an outage window (`capture_outage`) or an acknowledged run of
+checksum failures, written with `docker/lake/record_check.py --job operator`. It is a record, not
+a check: the nightly audits read only the ones they are told to net out, and the venue quality
+mart ignores them.
+Where: [`docker/lake/record_check.py`](../../docker/lake/record_check.py);
+[`docs/runbooks/failure-recovery.md`](../runbooks/failure-recovery.md).
+
+### Kraken book checksum
+
+Kraken attaches to every book frame a CRC32 over the top 10 levels of each side, each price and
+quantity written at the pair's published precision. Recomputing it from our own copy of the book
+and comparing is a proof, frame by frame, that the book was applied exactly as the venue holds it;
+a mismatch means a lost or misapplied update. The capture checks it live
+(`k2_capture_checksum_failures_total`), and the lake checks it again by replay (`checksum_ok` in
+`silver.book_kraken`, the nightly `kraken_checksum` audit). Binance and Coinbase publish no
+checksum, so their `checksum_ok` is NULL, meaning "not measurable".
+Where: [ADR-027](ADR-027-book-snapshot-and-sequencing.md); `docker/lake/book.py`.
 ### Contract schema audit
 
 `contract_schema` is the nightly audit that holds each live lake table to its data contract,
@@ -630,8 +749,10 @@ Parity is computing a product again, independently, and requiring the answers to
 lake's stored `gold.ohlcv_1m`, and DuckDB's candles computed from silver; bars parity compares
 Spark, DuckDB and a Python reference. Each run reads the snapshot ids pinned in
 `tests/parity/pinned.json`, never the latest, which moves every 5 minutes, so a rerun reads the
-same data and a difference is a bug, not timing. Marts are held to dbt tests instead of three
-engines ([ADR-035](ADR-035-trino-and-dbt-for-marts.md)).
+same data and a difference is a bug, not timing. A pinned id is used only if it is on `main`'s
+lineage or its own [tag](#tag), `parity_<day>`, names it; any other stops the run, with no
+fallback to the current snapshot. Marts are held to dbt tests instead of three engines
+([ADR-035](ADR-035-trino-and-dbt-for-marts.md)).
 Where: [ADR-029](ADR-029-research-production-parity-contract.md); `scripts/parity-ohlcv.sh`,
 `scripts/parity-bars.sh`.
 
@@ -640,7 +761,8 @@ Where: [ADR-029](ADR-029-research-production-parity-contract.md); `scripts/parit
 A known gap is one window of the pinned day, at most 60 minutes, that the candle parity leaves
 out of ClickHouse against the lake, because a capture outage left the two stores with
 different trades there and they cannot be made equal without deleting some. It is allowed only
-inside an outage already recorded as a row in `audit.checks`, which its `audit_ref` names; at
+inside an outage already recorded as a row in `audit.checks`, which its `audit_ref` names and
+the run reads before comparing anything (a missing row, or a lake it cannot read, stops it); at
 most one may be listed, it is printed on every run, a run with it ends `PARITY: ok`, not
 `PARITY: PASS`, and a gap with no difference left in its window fails the run. Every other
 minute is still compared three ways at tolerance zero. It was built for minute 22:33 UTC of

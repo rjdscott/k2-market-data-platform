@@ -112,7 +112,7 @@ works, and the practices that enforce it.
 | [027](./docs/adr/ADR-027-book-snapshot-and-sequencing.md) | Top-20 snapshots at 1 Hz; per-venue sequencing and resync | Raw keeps the deltas; the product is what research joins against |
 | [008](./docs/adr/ADR-008-eliminate-prefect-orchestration.md) | Remove Prefect: reversed | A wrong call kept on the record with its outcome |
 
-All 41 ADRs: [`docs/adr/`](./docs/adr/README.md).
+All 42 ADRs: [`docs/adr/`](./docs/adr/README.md).
 
 ## Measured
 
