@@ -210,13 +210,13 @@ def test_pin_pins_the_snapshot_main_points_at(rest, capsys):
 
 def test_tags_are_the_tag_refs_only_never_a_branch():
     meta = {**METADATA, "refs": {**METADATA["refs"], "parity_x": {"snapshot-id": 1, "type": "tag", "max-ref-age-ms": 1}}}
-    assert k2lake.tags(meta) == {1: "parity_x"}
+    assert k2lake.tags(meta) == {"parity_x": 1}
     assert k2lake.tags(METADATA) == {}
 
 
 def test_pin_refuses_a_head_the_metadata_does_not_list(monkeypatch, capsys):
     """The one way pin() could serve something other than main's head: the walk finds
-    nothing and the table would be read unpinned under an "(empty, unpinned)" label."""
+    nothing and the table would be read unpinned under an empty-table label."""
     k2lake._prefix.cache_clear()
     broken = {**METADATA, "current-snapshot-id": 9}
     monkeypatch.setattr(k2lake, "_get", lambda url: {"defaults": {"prefix": "PFX"}} if "/config" in url else {"metadata": broken})
@@ -224,4 +224,16 @@ def test_pin_refuses_a_head_the_metadata_does_not_list(monkeypatch, capsys):
     with pytest.raises(RuntimeError, match="main points at snapshot 9, which the table's metadata does not list"):
         k2lake.pin(con, ("gold",))
     assert not any("CREATE OR REPLACE VIEW" in q for q in con.sql)
+    k2lake._prefix.cache_clear()
+
+
+def test_an_empty_table_is_held_empty_not_left_live(monkeypatch, capsys):
+    """No snapshot to pin: the view must not start serving the moving head after the table's first commit."""
+    k2lake._prefix.cache_clear()
+    empty = {"current-snapshot-id": -1, "refs": {}, "snapshots": []}
+    monkeypatch.setattr(k2lake, "_get", lambda url: {"defaults": {"prefix": "PFX"}} if "/config" in url else {"metadata": empty})
+    con = FakeLake()
+    assert k2lake.pin(con, ("gold",)) == {"gold.trades": None}
+    assert "CREATE OR REPLACE VIEW pinned.gold_trades AS SELECT * FROM lake.gold.trades WHERE false" in con.sql
+    assert "(empty when pinned, held empty)" in capsys.readouterr().out
     k2lake._prefix.cache_clear()

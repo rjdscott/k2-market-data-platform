@@ -811,60 +811,74 @@ def test_v2_only_json_carries_the_truncation_the_exit_code_reports(monkeypatch, 
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
 
-from parity_ohlcv import resolve_snapshot  # noqa: E402
+from parity_ohlcv import pin_tag, resolve_snapshot  # noqa: E402
 
 # main's lineage, current first (notebooks/k2lake.py `lineage`). 444 is a commit on
-# a branch, in the table but never on main. 100 is kept by the tag parity_x, and
-# expiry removed the snapshot after it, so the walk from main no longer reaches it.
+# a branch, in the table but never on main, and someone's scratch tag points at it.
+# 100 is kept by the pin's own tag, parity_2001_01_01, and expiry removed the
+# snapshot after it, so the walk from main no longer reaches it.
 _LINEAGE = [999, 222, 111]
 _BRANCH = 444
 _TAGGED = 100
-_TAGS = {_TAGGED: "parity_x"}
+_TAG = "parity_2001_01_01"
+_TAGS = {_TAG: _TAGGED, "scratch": _BRANCH}
 _STALE = 1622213366608023449  # the 2026-08-27 pin: in no table today
 
 
+def test_the_pins_own_tag_is_named_for_its_day():
+    assert pin_tag("2001-01-01") == _TAG
+    assert pin_tag("2001-01-01", "_dbt") == "parity_2001_01_01_dbt"
+
+
 def test_a_pin_on_mains_lineage_is_used_as_is(capsys):
-    assert resolve_snapshot(_LINEAGE, _TAGS, "lake.gold.ohlcv_1m", 111) == 111
+    assert resolve_snapshot(_LINEAGE, _TAGS, "lake.gold.ohlcv_1m", 111, _TAG) == 111
     assert capsys.readouterr().out == "", "an intact pin must say nothing"
 
 
 def test_a_tagged_pin_off_mains_walk_is_used_and_says_why(capsys):
     """The 2026-12-03 case: the tag kept the pin, expiry cut the walk above it."""
-    assert resolve_snapshot(_LINEAGE, _TAGS, "lake.gold.ohlcv_1m", _TAGGED) == _TAGGED
-    assert "held by tag parity_x" in capsys.readouterr().out
+    assert resolve_snapshot(_LINEAGE, _TAGS, "lake.gold.ohlcv_1m", _TAGGED, _TAG) == _TAGGED
+    assert f"held by its tag {_TAG}" in capsys.readouterr().out
 
 
-def test_a_pin_only_a_branch_reaches_stops_the_run():
+@pytest.mark.parametrize("tag", ["parity_2001_01_02", "parity_2001_01_01_dbt"])  # another day's; the dbt side's
+def test_a_pin_held_only_by_some_other_tag_stops_the_run(tag):
+    with pytest.raises(SystemExit, match=f"100 is not on main's lineage and its tag {tag} does not point at it"):
+        resolve_snapshot(_LINEAGE, _TAGS, "lake.gold.ohlcv_1m", _TAGGED, tag)
+
+
+def test_a_pin_only_a_branch_reaches_stops_the_run_even_under_a_scratch_tag():
     """A branch's snapshot is in the table (`iceberg_snapshots` lists it) but was never
-    published: parity over it would compare rows main never served (spike, 2026-11-25)."""
-    with pytest.raises(SystemExit, match="444 is not on main's lineage and no tag names it"):
-        resolve_snapshot(_LINEAGE, _TAGS, "lake.gold.ohlcv_1m", _BRANCH)
+    published: parity over it would compare rows main never served (spike, 2026-11-25).
+    The scratch tag on it validates nothing: only the pin's own tag counts."""
+    with pytest.raises(SystemExit, match=f"444 is not on main's lineage and its tag {_TAG} does not point at it"):
+        resolve_snapshot(_LINEAGE, _TAGS, "lake.gold.ohlcv_1m", _BRANCH, _TAG)
 
 
 def test_an_unresolvable_pin_stops_the_run_instead_of_falling_back(capsys):
     """No other snapshot is returned, and the message carries the table, the id and both ways out."""
     with pytest.raises(SystemExit) as stop:
-        resolve_snapshot(_LINEAGE, _TAGS, "lake.gold.ohlcv_1m", _STALE)
+        resolve_snapshot(_LINEAGE, _TAGS, "lake.gold.ohlcv_1m", _STALE, _TAG)
     message = str(stop.value.code)
     assert f"lake.gold.ohlcv_1m: pinned snapshot {_STALE}" in message
-    assert "restore the tag" in message and "re-pin with --pin-current" in message
+    assert f"restore the tag {_TAG}" in message and "re-pin with --pin-current" in message
     assert capsys.readouterr().out == ""
 
 
 def test_a_table_with_no_snapshots_stops_the_run():
     with pytest.raises(SystemExit):
-        resolve_snapshot([], {}, "lake.gold.ohlcv_1m", 111)
+        resolve_snapshot([], {}, "lake.gold.ohlcv_1m", 111, _TAG)
 
 
 # The entry points: main() of both parity scripts resolve every pin through main's
-# lineage and the tags, and nothing else. Lakekeeper answers every table with main
-# at 3, a live branch's commit 4 and a dropped branch's 5 (the newest), and 7, kept
-# by a tag, whose parent 6 expiry removed. The DuckDB stand-in answers
+# lineage and the pin's own tag, and nothing else. Lakekeeper answers every table with
+# main at 3, a live branch's commit 4 (under a scratch tag) and a dropped branch's 5 (the
+# newest), and 7, kept by parity_2026_01_01, whose parent 6 expiry removed. The DuckDB stand-in answers
 # `iceberg_snapshots` as DuckDB does: every snapshot in the metadata.
 _REST = {
     "current-snapshot-id": 3,
     "refs": {"main": {"snapshot-id": 3, "type": "branch"}, "audit_1": {"snapshot-id": 4, "type": "branch"},
-             "parity_x": {"snapshot-id": 7, "type": "tag"}},
+             "parity_2026_01_01": {"snapshot-id": 7, "type": "tag"}, "scratch": {"snapshot-id": 4, "type": "tag"}},
     "snapshots": [{"snapshot-id": 1}] + [{"snapshot-id": s, "parent-snapshot-id": p} for s, p in ((2, 1), (3, 2), (4, 3), (5, 2), (7, 6))],
 }
 
@@ -948,7 +962,13 @@ def test_both_scripts_stop_on_a_pin_they_cannot_resolve_before_reading_anything(
 # without a stack: which snapshot, and the SQL that reads nothing at `latest`.
 # ─────────────────────────────────────────────────────────────────────────────
 
-from parity_ohlcv import lake_vs_dbt, latest_source_snapshot, normalise, pinned_sql  # noqa: E402
+from parity_ohlcv import (  # noqa: E402
+    confirm_dbt_snapshot,
+    lake_vs_dbt,
+    newest_source_snapshot,
+    normalise,
+    pinned_sql,
+)
 
 _TRADES = '"lake"."gold"."trades"'
 _STAGING = '"market_analytics"."staging"."stg_gold__trades"'
@@ -973,28 +993,52 @@ def _manifest():
     }
 
 
+_DBT_TAG = "parity_2001_01_01_dbt"
+
+
 def test_the_newest_source_snapshot_is_the_highest_sequence_number_not_the_highest_id():
-    # 999 is the highest id; 222 has the highest sequence number among the ids asked for.
-    assert latest_source_snapshot([111, 222], [(13, 111), (44, 999), (27, 222)], [999, 222, 111], {}) == 222
+    # What --dbt --write-pin records. 999 is the highest id; 222 has the highest sequence number among the ids asked for.
+    assert newest_source_snapshot([111, 222], [(13, 111), (44, 999), (27, 222)]) == 222
 
 
-def test_a_week_on_the_dbt_side_reads_the_tagged_newest_once_the_rest_are_expired(capsys):
-    # 2026-12-03 for 2026-11-25: of the day's source snapshots only the parity_<day>_dbt tag's is left, off the walk.
-    assert latest_source_snapshot([111, 333, 555], [(50, 555), (90, 999)], [999], {555: "parity_x_dbt"}) == 555
-    assert "2 of the day's 3 gold.trades source snapshots are expired; reading the newest held, 555" in capsys.readouterr().out
-
-
-def test_the_dbt_side_refuses_a_newest_source_snapshot_only_a_branch_reaches():
-    # 444 is the newest the table holds, but on a branch: D must not read it, and must not pick 111 instead.
-    with pytest.raises(SystemExit, match="444 is not on main's lineage"):
-        latest_source_snapshot([111, 444], [(13, 111), (60, 444)], [111], {})
-
-
-def test_the_dbt_side_stops_when_the_table_holds_none_of_the_source_snapshots():
-    with pytest.raises(SystemExit, match="holds none of the 2 snapshots .* Restore the parity_<day>_dbt tag, or re-pin"):
-        latest_source_snapshot([111, 333], [(13, 999)], [999], {})
+@pytest.mark.parametrize("src", [[111, 333], [111, None], []])  # one expired; a NULL; none
+def test_nothing_is_pinned_for_d_unless_every_source_snapshot_is_held(src):
     with pytest.raises(SystemExit):
-        latest_source_snapshot([], [(13, 111)], [111], {})
+        newest_source_snapshot(src, [(13, 111)])
+
+
+def test_a_week_on_the_recorded_dbt_snapshot_is_read_under_its_own_tag(capsys):
+    # 2026-12-03 for 2026-11-25: of the day's source snapshots only the pinned one is left, off the walk, tagged.
+    assert confirm_dbt_snapshot(555, [111, 333, 555], [(50, 555), (90, 999)], [999], {_DBT_TAG: 555}, _DBT_TAG) == 555
+    assert f"held by its tag {_DBT_TAG}" in capsys.readouterr().out
+
+
+def test_an_older_tagged_snapshot_never_stands_in_for_the_recorded_one():
+    # The pin recorded 2, the newest; 2 has expired and 1, older, is tagged by mistake. The old
+    # "newest still held" rule read 1 and could pass a candle that missed a late trade.
+    with pytest.raises(SystemExit, match="pinned snapshot 2 is not on main's lineage"):
+        confirm_dbt_snapshot(2, [1, 2], [(10, 1), (90, 9)], [9], {_DBT_TAG: 1}, _DBT_TAG)
+
+
+def test_a_recorded_dbt_snapshot_with_a_newer_source_snapshot_held_stops_the_run():
+    with pytest.raises(SystemExit, match=r"not the newest source snapshot: lake.gold.trades holds newer ones \[222\]"):
+        confirm_dbt_snapshot(111, [111, 222], [(13, 111), (27, 222)], [222, 111], {}, _DBT_TAG)
+
+
+def test_a_recorded_dbt_snapshot_the_days_candles_do_not_name_stops_the_run():
+    with pytest.raises(SystemExit, match="999 is not one of the gold.trades snapshots"):
+        confirm_dbt_snapshot(999, [111, 222], [(13, 111), (27, 222), (44, 999)], [999, 222, 111], {}, _DBT_TAG)
+
+
+def test_a_recorded_dbt_snapshot_only_a_branch_reaches_stops_the_run():
+    with pytest.raises(SystemExit, match="444 is not on main's lineage"):
+        confirm_dbt_snapshot(444, [111, 444], [(13, 111), (60, 444)], [111], {"scratch": 444}, _DBT_TAG)
+
+
+def test_a_null_source_snapshot_stops_the_dbt_side():
+    # The old code stopped on it; skipping it as "expired" would hide a broken lake row.
+    with pytest.raises(SystemExit, match="NULL"):
+        confirm_dbt_snapshot(111, [111, None], [(13, 111)], [111], {}, _DBT_TAG)
 
 
 def test_pinned_sql_inlines_the_staging_view_and_reads_the_source_at_the_snapshot():
@@ -1124,7 +1168,7 @@ def test_pin_current_pins_mains_head_which_the_strict_resolver_then_reads(tmp_pa
     pin = int(given[given.index("--ohlcv-snapshot") + 1])
     assert pin == 7
     meta = json.loads(_CURL_TABLE)["metadata"]
-    assert resolve_snapshot(k2lake.lineage(meta), k2lake.tags(meta), "lake.gold.ohlcv_1m", pin) == 7
+    assert resolve_snapshot(k2lake.lineage(meta), k2lake.tags(meta), "lake.gold.ohlcv_1m", pin, pin_tag("2001-01-02")) == 7
 
 
 def test_pin_current_takes_a_day_then_the_rest(tmp_path):
@@ -1196,7 +1240,8 @@ class _Q:
         return type("Result", (), {"fetchall": lambda self: rows})()
 
 
-def _main(monkeypatch, capsys, gaps, *, clickhouse=_CLEAN, silver=_CLEAN, dbt=_CLEAN, flags=("--dbt",), audit=_OUTAGE_ROW):
+def _main(monkeypatch, capsys, gaps, *, clickhouse=_CLEAN, silver=_CLEAN, dbt=_CLEAN, flags=("--dbt", "--dbt-trades-snapshot", "7"),
+          audit=_OUTAGE_ROW):
     """main() with all four sides stubbed, the lake's always _CLEAN. Returns (exit code, stdout)."""
     import parity_ohlcv as p
 
@@ -1374,10 +1419,17 @@ def test_a_missing_audit_row_stops_the_run():
         confirm_audit_row(_Q(audit=[]), _REF)
 
 
-@pytest.mark.parametrize("row", [("operator", True), ("decode", False)])  # passed; not an operator's
-def test_a_row_that_is_not_a_failed_operator_row_stops_the_run(row):
+@pytest.mark.parametrize(
+    "ref,row",
+    [
+        (_REF, ("operator", True)),  # it passed
+        (_REF, ("operator", None)),  # no verdict: NULL is not a failure
+        (_REF.replace("job=operator", "job=decode"), ("decode", False)),  # a real failed row, but a job's, not an operator's
+    ],
+)
+def test_a_row_that_is_not_a_failed_operator_row_stops_the_run(ref, row):
     with pytest.raises(SystemExit, match="is not a failed operator row"):
-        confirm_audit_row(_Q(audit=[row]), _REF)
+        confirm_audit_row(_Q(audit=[row]), ref)
 
 
 def test_an_unreachable_lake_is_an_error_not_a_pass_and_not_a_missing_row():
@@ -1393,3 +1445,46 @@ def test_main_stops_on_an_invented_audit_ref_before_comparing_anything(monkeypat
         _main(monkeypatch, capsys, [_gap()], clickhouse=_differs_at(1), audit=[])
     assert "vs" not in capsys.readouterr().out, "no comparison may run before the row is found"
 
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# The dbt side's pin: `dbt_trades_snapshot` in tests/parity/pinned.json
+#
+# Recorded by --dbt --write-pin while every source snapshot is held, passed back by
+# the wrapper, and required, never re-derived, on every --dbt run.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def test_a_dbt_run_whose_pin_lacks_the_dbt_snapshot_stops_and_says_to_re_pin(monkeypatch, capsys):
+    with pytest.raises(SystemExit, match=r"the pin has no dbt_trades_snapshot.*--pin-current <day> --dbt"):
+        _main(monkeypatch, capsys, [], flags=("--dbt",))
+
+
+@pytest.mark.parametrize("dbt", [True, False])
+def test_write_pin_records_the_dbt_snapshot_with_dbt_and_drops_a_stale_one_without(monkeypatch, capsys, tmp_path, dbt):
+    pin = tmp_path / "tests/parity/pinned.json"
+    pin.parent.mkdir(parents=True)
+    pin.write_text(json.dumps({"dbt_trades_snapshot": 5, "bars": {"day": _DAY}}))
+    monkeypatch.chdir(tmp_path)
+    code, _ = _main(monkeypatch, capsys, [], flags=("--dbt", "--write-pin") if dbt else ("--write-pin",))
+    assert code == 0
+    doc = json.loads(pin.read_text())
+    assert doc.get("dbt_trades_snapshot") == (7 if dbt else None)  # 7: the stand-in's only source snapshot
+    assert doc["bars"] == {"day": _DAY}
+
+
+@pytest.mark.parametrize("pin_current", [False, True])
+def test_the_wrapper_passes_the_pins_dbt_snapshot_but_not_when_re_pinning(tmp_path, pin_current):
+    pin = {"day": _DAY, "ohlcv_1m_snapshot": 1, "silver_snapshots": {"x": 5}, "dbt_trades_snapshot": 6911535457573800498}
+    given = _wrapper(tmp_path, *(["--pin-current", _DAY] if pin_current else []), "--dbt", pin=pin)
+    if pin_current:
+        assert "--dbt-trades-snapshot" not in given  # a new day: --write-pin records a new one
+    else:
+        assert given[given.index("--dbt-trades-snapshot") + 1] == "6911535457573800498"
+        assert given[-1] == "--dbt"
+
+
+def test_the_committed_pin_records_the_dbt_snapshot():
+    # Verified read-only 2026-11-26: the newest of the day's source snapshots, all held, and tagged parity_2026_11_25_dbt.
+    pin = json.loads((Path(__file__).parent / "parity" / "pinned.json").read_text())
+    assert isinstance(pin["dbt_trades_snapshot"], int)

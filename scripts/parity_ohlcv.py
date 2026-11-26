@@ -30,8 +30,9 @@ volume and quote_volume as decimals, digit for digit:
 
   D  dbt on Trino  the compiled SQL of dbt's market_analytics.candles.ohlcv_1m,
                    its staging view inlined and lake.gold.trades read FOR VERSION
-                   AS OF the newest gold.trades snapshot B's rows for the day
-                   were computed from (their src_snapshot_id)
+                   AS OF the pin's dbt_trades_snapshot: the newest gold.trades
+                   snapshot B's rows for the day were computed from (their
+                   src_snapshot_id), recorded by --dbt --write-pin
 
 D is the SQL dbt builds the mart with, run on the trades Spark last read for the
 day, not the table dbt last built: that table holds the lake as it was at build
@@ -90,8 +91,13 @@ AUDIT_REF = re.compile(r"lake\.audit\.checks job=([a-z_]+) check_name=([a-z_]+) 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "notebooks"))  # for k2lake, once
 
 
+def pin_tag(day: str, suffix: str = "") -> str:
+    """The one tag that validates a pin for `day`: `parity_2026_11_25`, or `parity_2026_11_25_dbt` (tests/parity/README.md)."""
+    return f"parity_{day.replace('-', '_')}{suffix}"
+
+
 def table_refs(table: str) -> tuple:
-    """(main's snapshot ids, current first; {snapshot id: tag name}) for `table`, from one loadTable.
+    """(main's snapshot ids, current first; {tag name: snapshot id}) for `table`, from one loadTable.
 
     notebooks/k2lake.py's `lineage` and `tags`, the one copy.
     """
@@ -101,15 +107,19 @@ def table_refs(table: str) -> tuple:
     return k2lake.lineage(meta), k2lake.tags(meta)
 
 
-def resolve_snapshot(lineage: list, tags: dict, table: str, pinned: int) -> int:
-    """The pinned snapshot if it is on `main`'s lineage or a tag names it; otherwise the run stops.
+def resolve_snapshot(lineage: list, tags: dict, table: str, pinned: int, tag: str) -> int:
+    """The pinned snapshot if it is on `main`'s lineage or the pin's own tag `tag` points at it; otherwise the run stops.
 
     `lineage` walks `parent-snapshot-id` from main's head and stops at the first
     parent that expiry removed. Expiry keeps a tagged snapshot, so a pin a week old
     is still in the table and readable, but off the walk: a resolver that read the
     walk alone took it for stale. The tag is what keeps a pin valid, not only what
-    keeps it readable (tests/parity/README.md). A snapshot only a branch reaches was
-    never published to main and stays refused.
+    keeps it readable (tests/parity/README.md). Only the pin's own tag counts,
+    `pin_tag(day)`: any tag on the table would let a scratch tag on a branch's commit
+    validate it. A snapshot neither on the walk nor under that tag, a branch's
+    commit among them, is refused. What this cannot check: once expiry has cut the
+    walk, nothing records whether the tagged snapshot was ever on main, so the
+    tagging step checks that before it tags.
 
     Anything else stops the run, naming the table, the id and the way out. Until
     2026-11-26 this fell back to main's current snapshot with one printed line and
@@ -122,14 +132,14 @@ def resolve_snapshot(lineage: list, tags: dict, table: str, pinned: int) -> int:
     """
     if pinned in lineage:
         return pinned
-    if pinned in tags:
-        print(f"pin {pinned} of {table}: held by tag {tags[pinned]}, off main's walk because expiry removed snapshots after it")
+    if tags.get(tag) == pinned:
+        print(f"pin {pinned} of {table}: held by its tag {tag}, off main's walk because expiry removed snapshots after it")
         return pinned
     raise SystemExit(
-        f"{table}: pinned snapshot {pinned} is not on main's lineage and no tag names it (expired, a branch's commit, "
-        f"or from another table or host), so this run cannot read the pin. Nothing was compared. Either restore the tag "
-        f"on {pinned} if the snapshot is still in the table, or re-pin with --pin-current on a green run and tag the "
-        f"new snapshots (tests/parity/README.md, 'Keeping the pinned snapshots alive')."
+        f"{table}: pinned snapshot {pinned} is not on main's lineage and its tag {tag} does not point at it (expired, "
+        f"a branch's commit, or from another table or host), so this run cannot read the pin. Nothing was compared. "
+        f"Either restore the tag {tag} on {pinned} if the snapshot is still in the table, or re-pin with --pin-current "
+        f"on a green run and tag the new snapshots (tests/parity/README.md, 'Keeping the pinned snapshots alive')."
     )
 
 
@@ -200,33 +210,48 @@ def clickhouse_candles(day: str, password: str) -> list:
     return rows
 
 
-def latest_source_snapshot(src_ids, snapshots, lineage: list, tags: dict) -> int:
-    """The newest of the gold.trades snapshots `src_ids` names that the table still holds, by sequence number.
+def _source_seq(src_ids, snapshots) -> dict:
+    """{snapshot id: sequence number} from `iceberg_snapshots` rows; a NULL source id stops the run."""
+    if not src_ids or None in src_ids:
+        raise SystemExit("lake.gold.ohlcv_1m names no gold.trades snapshot, or a NULL one, for the day: D has nothing it can be pinned to")
+    return {sid: n for n, sid in snapshots}
+
+
+def newest_source_snapshot(src_ids, snapshots) -> int:
+    """The newest of the gold.trades snapshots `src_ids` names, by sequence number: what `--dbt --write-pin` records.
 
     `snapshots` is (sequence_number, snapshot_id) rows, as `iceberg_snapshots`
     returns them. Snapshot ids are random, so the newest is the highest sequence
     number, never the highest id. Every bucket of a finished day was last computed
     at one of `src_ids`, and a trade landing later would have recomputed its bucket
-    at a later one, so the newest holds every trade B counted.
-
-    A week after the pin, expiry has removed every one of them but the tagged
-    newest (tests/parity/README.md, `parity_<day>_dbt`), so the newest still held
-    is the one read, and it must pass `resolve_snapshot` like any pin: on main or
-    tagged, never a branch's. Were an expired one newer, its buckets hold trades
-    the one read lacks, their trade counts differ and the run fails: this choice
-    can fail a run, never pass one. None held stops the run.
+    at a later one, so the newest holds every trade B counted. Every one must still
+    be held: with one expired, the newest cannot be told, so nothing is pinned.
     """
-    seq = {sid: n for n, sid in snapshots}
-    held = [s for s in set(src_ids) if s in seq]
-    if not held:
-        raise SystemExit(
-            f"lake.gold.trades holds none of the {len(set(src_ids))} snapshots the day's lake candles were computed from: "
-            f"D cannot read the trades B counted. Restore the parity_<day>_dbt tag, or re-pin (tests/parity/README.md)"
-        )
-    newest = resolve_snapshot(lineage, tags, "lake.gold.trades", max(held, key=seq.__getitem__))
-    if len(held) < len(set(src_ids)):
-        print(f"dbt side: {len(set(src_ids)) - len(held)} of the day's {len(set(src_ids))} gold.trades source snapshots are expired; reading the newest held, {newest}")
-    return newest
+    seq = _source_seq(src_ids, snapshots)
+    gone = sorted(set(src_ids) - set(seq))
+    if gone:
+        raise SystemExit(f"gold.trades snapshot(s) {gone} are expired or from another table: the newest source snapshot cannot be told, so D cannot be pinned for this day")
+    return max(set(src_ids), key=seq.__getitem__)
+
+
+def confirm_dbt_snapshot(pinned, src_ids, snapshots, lineage: list, tags: dict, tag: str) -> int:
+    """`pinned`, the pin's `dbt_trades_snapshot`, if it is still the snapshot D must read; otherwise the run stops.
+
+    Recorded by `--dbt --write-pin` while every source snapshot was held, and never
+    re-derived: a week later expiry has removed all of them but the tagged one, and
+    "the newest still held" could then be an older snapshot, at which a candle that
+    missed a late trade would match the lake and pass. So it must be one of the
+    day's source snapshots, pass `resolve_snapshot` under its own tag, and no held
+    source snapshot may be newer.
+    """
+    seq = _source_seq(src_ids, snapshots)
+    if pinned not in set(src_ids):
+        raise SystemExit(f"dbt_trades_snapshot {pinned} is not one of the gold.trades snapshots the day's lake candles were computed from: re-pin with --pin-current <day> --dbt")
+    resolve_snapshot(lineage, tags, "lake.gold.trades", pinned, tag)
+    newer = sorted(s for s in set(src_ids) if s in seq and seq[s] > seq.get(pinned, -1))
+    if pinned not in seq or newer:
+        raise SystemExit(f"dbt_trades_snapshot {pinned} is not the newest source snapshot: lake.gold.trades holds newer ones {newer}; re-pin with --pin-current <day> --dbt")
+    return pinned
 
 
 def pinned_sql(manifest: dict, unique_id: str, snapshots: dict) -> str:
@@ -350,7 +375,7 @@ def confirm_audit_row(c, ref: str) -> None:
         raise SystemExit(f"known gap: could not read lake.audit.checks to find {ref}: {e}. The gap is applied only once its row is read") from e
     if not rows:
         raise SystemExit(f"known gap: lake.audit.checks has no row job={job} check_name={check} scope=stack/{lo}..{hi}; a gap needs a recorded outage")
-    if any(row_job != "operator" or passed for row_job, passed in rows):
+    if any(row_job != "operator" or passed is not False for row_job, passed in rows):  # NULL is not a failure
         raise SystemExit(f"known gap: the row {ref} names is not a failed operator row (job, passed: {sorted(set(rows))})")
     print(f"known gap: audit row found, {ref}")
 
@@ -455,6 +480,7 @@ def main() -> int:
     ap.add_argument("--skip-clickhouse", action="store_true", help="leave out A, ClickHouse")
     ap.add_argument("--skip-silver", action="store_true", help="leave out C, DuckDB over silver")
     ap.add_argument("--dbt", action="store_true", help="add D, dbt's ohlcv_1m SQL through Trino at the gold.trades snapshot B was computed from")
+    ap.add_argument("--dbt-trades-snapshot", type=int, help="the pin's dbt_trades_snapshot, which the wrapper passes; --dbt needs it unless --write-pin records it")
     ap.add_argument("--write-pin", action="store_true", help="on success, record the ids in tests/parity/pinned.json")
     ap.add_argument("--known-gaps", default="[]", help="JSON: the pin's known_gaps, which the wrapper passes (tests/parity/README.md)")
     args = ap.parse_args()
@@ -476,7 +502,7 @@ def main() -> int:
     def q(sql):
         return c.execute(sql).fetchall()
 
-    ohlcv_snapshot = resolve_snapshot(*table_refs("lake.gold.ohlcv_1m"), "lake.gold.ohlcv_1m", args.ohlcv_snapshot)
+    ohlcv_snapshot = resolve_snapshot(*table_refs("lake.gold.ohlcv_1m"), "lake.gold.ohlcv_1m", args.ohlcv_snapshot, pin_tag(args.day))
     lake_rows = lake_candles(c, args.day, ohlcv_snapshot)
     b = normalise(lake_rows)
     if not_empty(**{"lake.gold.ohlcv_1m": b}):
@@ -484,7 +510,7 @@ def main() -> int:
     bad = 0
     if not args.skip_silver:
         silver_snaps = {
-            venue: resolve_snapshot(*table_refs(f"lake.silver.trades_{venue}"), f"lake.silver.trades_{venue}", snap)
+            venue: resolve_snapshot(*table_refs(f"lake.silver.trades_{venue}"), f"lake.silver.trades_{venue}", snap, pin_tag(args.day))
             for venue, snap in json.loads(args.silver_snapshots).items()
         }
         cc = normalise(silver_candles(c, args.day, silver_snaps))
@@ -494,10 +520,14 @@ def main() -> int:
     if args.dbt:
         src = [r[0] for r in q(f"""SELECT DISTINCT src_snapshot_id FROM lake.gold.ohlcv_1m AT (VERSION => {ohlcv_snapshot})
                                    WHERE CAST(window_start AS DATE) = DATE '{args.day}'""")]
-        trades_snapshot = latest_source_snapshot(
-            src, q("SELECT sequence_number, snapshot_id FROM iceberg_snapshots('lake.gold.trades')"), *table_refs("lake.gold.trades")
-        )
-        print(f"dbt side: lake.gold.trades FOR VERSION AS OF {trades_snapshot}, the newest of the {len(src)} snapshots the day's lake candles name")
+        snaps = q("SELECT sequence_number, snapshot_id FROM iceberg_snapshots('lake.gold.trades')")
+        pinned = args.dbt_trades_snapshot
+        if pinned is None:
+            if not args.write_pin:
+                raise SystemExit("--dbt: the pin has no dbt_trades_snapshot, so D has no snapshot to read: re-pin with scripts/parity-ohlcv.sh --pin-current <day> --dbt")
+            pinned = newest_source_snapshot(src, snaps)
+        trades_snapshot = confirm_dbt_snapshot(pinned, src, snaps, *table_refs("lake.gold.trades"), pin_tag(args.day, "_dbt"))
+        print(f"dbt side: lake.gold.trades FOR VERSION AS OF {trades_snapshot}, the pin's dbt_trades_snapshot: the newest of the snapshots the day's lake candles name, as recorded when pinned")
         d_rows = dbt_candles(args.day, trades_snapshot)
         if not_empty(**{"dbt.ohlcv_1m": d_rows}):
             return 1
@@ -515,6 +545,10 @@ def main() -> int:
         pin = Path("tests/parity/pinned.json")
         doc = json.loads(pin.read_text()) if pin.exists() else {}
         doc.update({"day": args.day, "ohlcv_1m_snapshot": ohlcv_snapshot, "silver_snapshots": silver_snaps})
+        if args.dbt:
+            doc["dbt_trades_snapshot"] = trades_snapshot
+        else:
+            doc.pop("dbt_trades_snapshot", None)  # another day's, which a --dbt run would refuse
         pin.write_text(json.dumps(doc, indent=2) + "\n")
         print(f"pinned in {pin}: tag these snapshots now (tests/parity/README.md); an untagged pin fails the gate once expiry removes it")
     print(verdict(bad, applied))
