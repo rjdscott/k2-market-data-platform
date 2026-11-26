@@ -63,7 +63,7 @@ jobs:
       - uses: astral-sh/setup-uv@v10.4.0
 
       - name: Ruff
-        run: uv run --no-project --with ruff ruff check docker/lake docker/airflow scripts/airflow_shadow_check.py scripts/screenshots tests
+        run: uv run --no-project --with ruff ruff check docker/lake docker/airflow scripts/airflow_shadow_check.py scripts/screenshots scripts/check_docs.py scripts/check-budget.py scripts/check-env.py scripts/make-synthetic-fixtures.py tests
 
       - name: Pytest
         run: uv run --no-project --with pytest --with pyyaml --with fastavro==1.12.2 --with duckdb==1.4.4 pytest tests -q
@@ -240,12 +240,16 @@ jobs:
 
     steps:
       # Full history: gate (h) diffs against the merge base with origin/main,
-      # which a depth-1 checkout does not have.
+      # which a depth-1 checkout does not have. On a push to main that merge
+      # base is the pushed commit itself, so the push run diffs from the commit
+      # main was at before it instead.
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
       - run: bash scripts/check-docs.sh
+        env:
+          K2_DIFF_BASE: ${{ github.event_name == 'push' && github.event.before || '' }}
 
   security:
     name: Security (Trivy)

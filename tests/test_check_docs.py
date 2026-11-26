@@ -4,7 +4,10 @@ test, because the point of hashing them is that none is readable in the tree."""
 
 import hashlib
 import io
+import os
 import re
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -174,3 +177,43 @@ def test_a_manifest_entry_for_a_file_not_tracked_fails():
 
 def test_the_tree_as_committed_passes():
     assert check_docs.data_problems(check_docs.tracked_files(), (ROOT / "NOTICE").read_text()) == []
+
+
+# ── gate (h): em-dash on added lines, on a push to main too ─────────────────
+
+
+def git(repo, *args):
+    return subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True, text=True).stdout.strip()
+
+
+def gate_h(repo, **env):
+    """Gate (h)'s verdict line from check-docs.sh run in `repo`. The other gates
+    run too and fail on the bare repo; only (h)'s line is read. A `docker` that
+    fails at once keeps promtool out of it."""
+    stub = repo / ".bin"
+    stub.mkdir(exist_ok=True)
+    (stub / "docker").write_text("#!/bin/sh\nexit 1\n")
+    (stub / "docker").chmod(0o755)
+    base = {k: v for k, v in os.environ.items() if k in ("HOME", "PATH")}
+    run = subprocess.run(["bash", "scripts/check-docs.sh"], cwd=repo, capture_output=True, text=True,
+                         env={**base, "PATH": f"{stub}:{base['PATH']}", **env})
+    return next(x for x in run.stdout.splitlines() if "(h)" in x)
+
+
+def test_gate_h_reads_a_commit_pushed_straight_to_main(tmp_path):
+    repo = tmp_path / "r"
+    (repo / "scripts").mkdir(parents=True)
+    for f in ("check-docs.sh", "check_docs.py"):
+        shutil.copy(ROOT / "scripts" / f, repo / "scripts" / f)
+    (repo / ".gitignore").write_text(".bin/\n")
+    git(repo, "init", "-q", "-b", "main")
+    git(repo, "-c", "user.email=t@t", "-c", "user.name=t", "add", ".")
+    git(repo, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "base")
+    before = git(repo, "rev-parse", "HEAD")
+    (repo / "doc.md").write_text(f"a dash {chr(0x2014)} here\n")  # built, so this file holds none
+    git(repo, "add", "doc.md")
+    git(repo, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "pushed to main")
+    git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")  # CI's checkout of a push: origin/main is HEAD
+    assert gate_h(repo).startswith("PASS")  # the bypass: the merge base is HEAD, nothing to read
+    assert gate_h(repo, K2_DIFF_BASE=before).startswith("FAIL: (h) em-dash")
+    assert gate_h(repo, K2_DIFF_BASE="0" * 40).startswith("FAIL: (h) K2_DIFF_BASE")

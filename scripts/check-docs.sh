@@ -194,9 +194,17 @@ rm -f "$out"
 # uncommitted edits (`git diff <base>` reads the working tree) and untracked
 # files. CI checks out with fetch-depth 0 so the merge base exists there. The
 # character is built from its UTF-8 bytes so this file does not contain one.
+#
+# On a push to main the merge base is HEAD itself, so the diff was empty and a
+# commit pushed straight to main was never read. CI's push run sets
+# K2_DIFF_BASE to the commit main was at before the push (github.event.before)
+# and the diff starts there; one this clone does not have (a force push) fails
+# rather than checking nothing.
 emdash=$(printf '\342\200\224')
 exts=('*.md' '*.py' '*.sh' '*.sql' '*.yml' '*.yaml')
-if base=$(git merge-base origin/main HEAD 2>/dev/null); then
+if [ -n "${K2_DIFF_BASE:-}" ] && ! git cat-file -e "${K2_DIFF_BASE}^{commit}" 2>/dev/null; then
+  bad "(h) K2_DIFF_BASE $K2_DIFF_BASE is not a commit in this clone: nothing to diff the push against"
+elif base=${K2_DIFF_BASE:-$(git merge-base origin/main HEAD 2>/dev/null)}; [ -n "$base" ]; then
   out=$(mktemp)
   {
     git diff --unified=0 --no-color --no-ext-diff "$base" -- "${exts[@]}" | awk -v d="$emdash" '
