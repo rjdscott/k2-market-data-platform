@@ -110,7 +110,7 @@ added that has no column. Both in `docs/runbooks/lake-audit-failed.md` §6–§7
 and `E`. The session builder sets it for every lake job; every other column is
 lowercase and referenced as written.
 
-Measured 2026-08-27: the whole archive (six tables) rebuilt in
+Measured 2026-08-27: the whole archive (3,326,927,766 B of raw frames, six tables) rebuilt in
 **520 s** at the 2g heap, peak driver RSS 2,643 MiB; the nightly audit set, now
 23 checks plus the informational replay rate, ran in 290 s including lock wait,
 all green; every slice balanced (`docs/benchmarks/2026-08-27.md` § Lake).
@@ -193,10 +193,9 @@ rule), lineage to the bronze row plus `src_index`, the position in the frame.
   keeps the first.
 - `seq_gap` / `missing_before`, the previous `trade_seq` for the symbol is not
   adjacent. All three venues number trades sequentially per symbol (measured
-  2026-08-27 over the archive: Binance 8,667,843 consecutive ids vs 144 jumps,
-  Coinbase 1,586,733 vs 72, Kraken 155,303 vs 141), so a jump is trades the archive
-  never received, a capture restart, a produce-error drop, a retention eviction , 
-  and `missing_before` counts them. `NULL` when no earlier trade is inside the
+  2026-08-27 over the archive: jumps were under 0.1 % of consecutive ids on every
+  venue), so a jump is trades the archive never received, a capture restart, a
+  produce-error drop or a retention eviction, and `missing_before` counts them. `NULL` when no earlier trade is inside the
   lookback: unknown is not intact.
 - `precision_loss`, more than 8 decimals in `price` or `qty`, which the wire's and
   gold's 1e-8 fixed point cannot carry.
@@ -213,17 +212,17 @@ read), and the informational `silver_flags` line (replay, gap, missing-id and
 precision counts) so a change in any rate is visible.
 
 **Measured 2026-08-27, first rebuild** (`make lake-rebuild LAYER=silver`, whole
-archive, 2g heap): **99 s** for the three tables, peak driver
+archive, 2g heap): **99 s** for the three tables from 126,227,519 B of bronze trade tables, peak driver
 RSS 2,548 MiB; the incremental tick after it reported every table level with its
 bronze source in 6 s; the nightly audit set (now 29 checks + 4 informational) all
 green. The flags against an independent baseline, a `lag()` over distinct trade
 ids per symbol, computed straight from bronze before silver existed:
 
-| Venue | Rows | Replays (`venue_replay`) | Gaps / ids never received | Baseline gaps / ids | Beyond 8 dp |
-|---|---:|---:|---:|---:|---:|
-| Binance | 8,668,587 | 588, all in 16:56:31–16:56:54Z on 2026-08-26, 3 symbols, one connection, identical `recv_ts_ns`: the producer re-sent frames during the `redpanda-stop` chaos, not a venue replay | 144 / 200,280 | 144 / 200,280 | 0 |
-| Kraken | 155,455 | 0 | 141 / 8,013 | 141 / 8,013 | 0 |
-| Coinbase | 1,615,336 | 28,520 (= rows − distinct `(symbol, trade_id)`) | 72 / 41,424 | 72 / 41,424 | 0 |
+| Venue | Replays (`venue_replay`) | Gaps and ids never received, against the baseline | Beyond 8 dp |
+|---|---|---|---:|
+| Binance | all in 16:56:31–16:56:54Z on 2026-08-26, 3 symbols, one connection, identical `recv_ts_ns`: the producer re-sent frames during the `redpanda-stop` chaos, not a venue replay | equal | 0 |
+| Kraken | none | equal | 0 |
+| Coinbase | rows less distinct `(symbol, trade_id)`, the venue's resubscribe replays | equal | 0 |
 
 `seq_gap IS NULL` on 12 / 11 / 11 rows, the first trade of each symbol in the archive,
 where "intact" is unknowable.
@@ -332,8 +331,9 @@ frames are counted separately), duplicates on `gold.book_top20`'s and `gold.bbo_
 `(exchange, canonical_symbol, second)`.
 
 **Measured 2026-08-27, first rebuild** (`make lake-rebuild LAYER=books`, whole archive,
-2g heap): **2,367 s**, peak driver RSS 2,685 MiB. Kraken's frames replayed in 830 s;
-Coinbase, whose subscribe snapshots are the whole book, its events in 726 s.
+2g heap, 1,848,118,404 B of bronze book tables): **2,367 s**, peak driver RSS 2,685 MiB. Kraken
+replayed at ~35 k frames/s <!-- counts-ok: platform throughput, not market data --> in 830 s; Coinbase, whose subscribe snapshots are the whole
+book, its events in 726 s.
 
 | Table | Note |
 |---|---|
@@ -351,7 +351,7 @@ By hour they fall entirely in 16:00–18:00 UTC on 2026-08-26, the window of the
 on a full queue, and every other hour of the archive has zero. A dropped frame desyncs
 the replayed book, and the failures then run to the end of the connection because the
 capture's own book never missed the frame, so it never resubscribed. The
-unverifiable frames are two connections (`a90d3104…`, `25650038…`) whose subscribe snapshot
+unverifiable frames are two connections (`a90d3104…`, `25650038…` <!-- counts-ok: a connection id prefix, not a count -->) whose subscribe snapshot
 fell inside the `raw.kraken` retention eviction of the same day: no snapshot, no book, NULL
 rather than a guess. **Capture follow-up:** after a produce-error drop on a book stream,
 resubscribe for a fresh snapshot so the archive's book becomes verifiable again.
@@ -454,7 +454,7 @@ it read every partition to `latest`, 9.5 GB across 108
 partitions, through a `persist(DISK_ONLY)`, and the driver died with
 `java.lang.OutOfMemoryError` at `BasicColumnBuilder.appendFrom`. `DISK_ONLY` is
 not the cheap spill it reads as: Spark builds an in-memory columnar batch of
-`spark.sql.inMemoryColumnarStorage.batchSize` rows (10,000 by default) and
+`spark.sql.inMemoryColumnarStorage.batchSize` rows (10,000 <!-- counts-ok: Spark's default setting, not data --> by default) and
 writes it out whole, so a batch of Coinbase level2 frames at up to 5.2 MB each is
 tens of gigabytes of heap before a byte reaches disk.
 
@@ -592,8 +592,8 @@ prevent. Recovery is [`../../docs/runbooks/lake-ingest-lag.md`](../../docs/runbo
 200,000 was ~3.6× the 2026-08-27 arrival rate, and run 4 shows what it costs: more
 wall time, no more memory. A caught-up cycle never reaches it either way.
 
-**It stopped being enough on 2026-11-25.** `raw.kraken-0` was receiving close
-to the 200,000 cap every 5-minute cycle (two `rpk topic describe -p` samples 60 s
+**It stopped being enough on 2026-11-25.** `raw.kraken-0` was receiving just
+under the 200,000 cap per 5-minute cycle (two `rpk topic describe -p` samples 60 s
 apart, 17:27 UTC), and runs had lengthened to ~250 s, so a cycle received more than
 the cap. `k2_lake_ingest_backlog_offsets{topic="market.crypto.v3.raw.kraken"}` rose
 from 14:32 UTC and stayed until a hand-run at

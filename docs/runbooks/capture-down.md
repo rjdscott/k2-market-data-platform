@@ -188,8 +188,8 @@ stopping it:
 | time to `CaptureProduceErrors` firing | **256 s** from the fault (`capture-queue-full.sh`, broker paused), ~154 s after the first record was actually dropped |
 | producing again after `docker unpause` | **0 s** |
 | past the mid-outage enqueue level after `docker start` | **14 s** (`redpanda-stop.sh`), with **no capture restart** |
-| records lost, 388 s paused | **231,744** on kraken alone |
-| records lost, 45 s stopped | **7,821** on kraken alone |
+| records lost, 388 s paused | on kraken alone; the count is in [ADR-019](../adr/ADR-019-rust-capture-tier.md) |
+| records lost, 45 s stopped | on kraken alone; the count is in [ADR-019](../adr/ADR-019-rust-capture-tier.md) |
 
 **The second number is the one that matters, and it is worse than the design said.** A
 45 s broker outage should have lost nothing, the 32 MiB queue buys 204 s at kraken's

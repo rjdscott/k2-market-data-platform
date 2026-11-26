@@ -127,13 +127,13 @@ millisecond resolution.
 ### Counts are unique trade IDs, not records
 
 Venues re-send trades, and a record count reads that as one tier inventing them.
-Measured on the 2026-08-26T14:15Z→16:15Z window, Coinbase re-sent trade `69662829`
-— exchange `time` `15:31:09.261488Z` — in raw frame `sequence_num` 1017853 at
+Measured on the 2026-08-26T14:15Z→16:15Z window, Coinbase re-sent a trade
+(exchange `time` `15:31:09.261488Z`) in a later raw frame at
 `15:52:58.890Z`, 21 minutes stale, on the **same connection** (`conn_id`
 `8e980ee6-…`, zero `k2_capture_reconnects_total`). Both tiers wrote it to their topic
 again: `market.crypto.v3.trades.coinbase` p1@4345 and p1@4784/4785,
-`market.crypto.trades.coinbase` p3@51157 and p3@52885. Over that window 2,533 v3 and
-1,538 v2 Coinbase IDs arrived more than once, and every copy was byte-identical to
+`market.crypto.trades.coinbase` p3@51157 and p3@52885. Over that window
+Coinbase IDs arrived more than once on both tiers (counted in [ADR-019](../../docs/adr/ADR-019-rust-capture-tier.md)), and every copy was byte-identical to
 its first.
 
 So the `v2` / `v3` / `Δ` columns count **unique `trade_id`s**. Repeat records get

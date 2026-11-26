@@ -276,24 +276,67 @@ def tracked_files() -> dict[str, bytes]:
 # checked, code blocks included, because a pasted log line is where most of
 # these were found.
 #
-# What it looks for is the high-risk shape only, not every number: four or more
-# digits (separators allowed), or a figure with a magnitude (10.4 M, 236k),
-# then at most one word, then one of UNITS. A count that is the platform's own
-# (tests, alerts, a configured bound) or invented carries `counts-ok: <reason>`
-# on its line, in an HTML comment outside code (`<!-- counts-ok: ... -->`).
+# What it looks for is the high-risk shape only, not every number: a figure of
+# four or more digits (separators allowed, a non-breaking space among them) or
+# with a magnitude (10.4 M, 236k), on a line that names one of UNITS anywhere,
+# before or after it, singular or plural. A table row is read with its header,
+# so a `| Rows |` column counts for every row under it. Markdown emphasis is
+# stripped first (`**1,234**`); NOT_A_COUNT lists what is not a figure. Counts
+# spelled in words are not looked for.
+#
+# A figure that is the platform's own (a test count, a configured bound, a
+# throughput rate of a rebuild) or invented carries an opt-out right after it,
+# `<!-- counts-ok: <reason of 12 or more characters> -->` in prose, or the same
+# `counts-ok: <reason>` text in a code comment. One opt-out covers one figure:
+# the nearest one before it on the line (or, with none before, the next).
 
 IMMUTABLE = ("docs/adr/", "docs/audits/", "docs/benchmarks/", "docs/research/", "docs/plans/", "legacy/")
-UNITS = ("trades", "rows", "records", "frames", "buckets", "snapshots", "messages", "updates", "events",
-         "offsets", "book-seconds")
-COUNT = re.compile(
-    r"(?<![\w.,])(?:\d{1,3}(?:,\d{3})+|\d{4,}|\d+(?:\.\d+)?\s?(?:[kKMB]|million|billion))"
-    r"\s+(?:[\w`-]+\s+)?(?:" + "|".join(UNITS) + r")\b", re.I)
-OPT_OUT = re.compile(r"counts-ok:\s*\S.{7,}")
+UNITS = ("trade", "row", "record", "frame", "bucket", "snapshot", "message", "update", "event", "offset",
+         "book-second", "id", "tick", "fill")
+UNIT = re.compile(r"(?<![\w-])(?:" + "|".join(UNITS) + r")s?(?![\w-])", re.I)
+# Not a count: a year, a dotted version, a `key=value` setting, an id or a
+# timestamp of 13 or more digits, and a figure followed by a unit of size,
+# time or ratio (a size in bytes and a duration are what the rule asks for).
+NOT_A_COUNT = r"\s?(?:[KMGT]i?B|B|bytes?|ns|µs|us|ms|s|sec|min|h|hours?|days?|%|x|×)(?![\w])"
+FIGURE = re.compile(
+    r"(?<![\w.,:/@#=-])(?!(?:19|20)\d\d(?![\d,]))(?!\d{13})"
+    r"(?:\d{1,3}(?:,\d{3})+|\d{4,}|\d+(?:\.\d+)?\s?(?:[kKM]|million|billion)(?![\w]))(?![\w,:-]|\.\d)"
+    r"(?!" + NOT_A_COUNT + ")")
+OPT_OUT = re.compile(r"(?:<!--\s*)?counts-ok:\s*(.*?)\s*(?:-->|$)")
+# Length-preserving, so positions still point into the line as written.
+NBSP_GROUP = re.compile(r"(?<=\d)[\u00a0\u202f\u2009](?=\d{3}(?!\d))")
+EMPHASIS = re.compile(r"\*+|(?<![\w])_+(?=\S)|(?<=\S)_+(?![\w])")
+
+
+def unexcused(line: str, context: str = "") -> list[str]:
+    """The figures on `line` that a unit word on it (or in `context`, a table
+    header) makes counts, less the ones an opt-out covers."""
+    markers = [(m.start(), m.end()) for m in OPT_OUT.finditer(line) if len(m.group(1)) >= 12]
+    bare = OPT_OUT.sub(lambda m: " " * len(m.group(0)), line)
+    bare = EMPHASIS.sub(lambda m: " " * len(m.group(0)), NBSP_GROUP.sub(",", bare))
+    if not UNIT.search(bare) and not UNIT.search(context):
+        return []
+    found = [(m.start(), m.end(), m.group(0)) for m in FIGURE.finditer(bare)]
+    covered = set()
+    for start, _ in markers:
+        before = [i for i, f in enumerate(found) if f[1] <= start and i not in covered]
+        after = [i for i, f in enumerate(found) if f[0] >= start and i not in covered]
+        if before or after:
+            covered.add(before[-1] if before else after[0])
+    return [f[2] for i, f in enumerate(found) if i not in covered]
 
 
 def count_problems(path: str, text: str) -> list[str]:
-    return [f"{path}:{n}: {m.group(0)}" for n, line in enumerate(text.splitlines(), 1)
-            if not OPT_OUT.search(line) for m in COUNT.finditer(line)]
+    problems, header = [], ""
+    lines = text.splitlines()
+    for n, line in enumerate(lines, 1):
+        row = line.lstrip().startswith("|")
+        if not row:
+            header = ""
+        elif not header and n < len(lines) and re.match(r"\s*\|[\s:|-]*-[\s:|-]*$", lines[n]):
+            header = line  # the row above a |---| line
+        problems += [f"{path}:{n}: {f}" for f in unexcused(line, header if row and line != header else "")]
+    return problems
 
 
 def counts(tracked: dict[str, bytes]) -> list[str]:

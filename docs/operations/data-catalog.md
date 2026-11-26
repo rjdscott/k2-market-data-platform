@@ -40,13 +40,13 @@ con.sql("""
 
 ```
             tbl                           newest    rows
-gold.book_top20        2026-09-03 13:06:03+00:00  763486
-  gold.ohlcv_1m        2026-09-03 13:11:00+00:00   12416
-    gold.trades 2026-09-03 13:11:04.911000+00:00 4620846
+gold.book_top20        2026-09-03 13:06:03+00:00     <n>
+  gold.ohlcv_1m        2026-09-03 13:11:00+00:00     <n>
+    gold.trades 2026-09-03 13:11:04.911000+00:00     <n>
 ```
 
 The two reads are about a minute apart in wall clock; ClickHouse is nonetheless ahead of
-the lake on trades, and has no candles at all where the lake has 12,416. That is the
+the lake on trades, and has no candles at all where the lake has hours of them. That is the
 intended shape, not a fault.
 
 Trino is a third way in, not a third copy. `lake.<namespace>.<table>` through Trino reads
@@ -352,9 +352,9 @@ FROM lake.raw.messages WHERE topic LIKE '%kraken%' GROUP BY topic
 
 ```
                          topic     rows                           newest
-market.crypto.v3.trades.kraken    94975 2026-09-03 13:06:03.438000+00:00
-   market.crypto.v3.raw.kraken 13382683 2026-09-03 13:06:04.172000+00:00
-  market.crypto.v3.book.kraken   255453 2026-09-03 13:06:03.491000+00:00
+market.crypto.v3.trades.kraken      <n> 2026-09-03 13:06:03.438000+00:00
+   market.crypto.v3.raw.kraken      <n> 2026-09-03 13:06:04.172000+00:00
+  market.crypto.v3.book.kraken      <n> 2026-09-03 13:06:03.491000+00:00
 ```
 
 ### `bronze.kraken_trade`

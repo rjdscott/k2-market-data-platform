@@ -341,7 +341,7 @@ BTC: roughly **20 venues × ~500 instruments ≈ 10,000 instruments**, against t
 bytes rather than 294×. That matters because it changes what scales: partition counts and
 topic counts scale with venues and symbols; per-connection CPU does not.
 
-At 200×: **~140,000 frames/s in**, **~177,000 records/s out** <!-- counts-ok: a 200x projection of the 1x rates, arithmetic -->
+At 200×: **~140,000 frames/s in** <!-- counts-ok: a 200x projection of the 1x rates, arithmetic -->, **~177,000 records/s out** <!-- counts-ok: a 200x projection of the 1x rates, arithmetic -->
 (699.8 and 883.8 /s at 1×, capacity model §2c), and **1.29 TB/day** into `raw.messages`.
 
 ### 5.2 Files per day, and why the small-file problem inverts
@@ -352,7 +352,7 @@ section, as in the capacity model; the DDL's `write.target-file-size-bytes` valu
 binary equivalents (128 MiB, 256 MiB), a 5 % difference that moves no conclusion below.
 
 ```
-raw.messages, 200×:  1,294 GB/day ÷ 256 MB per file   = 5,055 files/day
+raw.messages, 200×:  1,294 GB/day ÷ 256 MB per file   = 5,055 files/day   counts-ok: a projection, arithmetic
 per commit:          1,294 GB ÷ 288 commits           = 4.49 GB  → ~18 files
 ```
 
@@ -379,10 +379,10 @@ a table should not accumulate partitions faster than its metadata can be planned
 | Spec | 1× (today) | 200× | Verdict |
 |---|---|---|---|
 | `raw.messages` `days(kafka_ts), topic` | 9 partitions/day, ~26 files/day, ~0.72 GB per partition | 60 partitions/day (20 venues × 3 streams), ~22 GB per partition | holds at both ends |
-| `raw.messages` `hours(kafka_ts), topic` | 216 partitions/day, **30 MB per partition**, a tenth of a target file | 1,440 partitions/day, **~0.9 GB per partition**, 3–4 target files | wrong today, **right at scale** |
+| `raw.messages` `hours(kafka_ts), topic` | 216 partitions/day, **30 MB per partition**, a tenth of a target file | 1,440 <!-- counts-ok: hourly partitions at 200x, arithmetic --> partitions/day, **~0.9 GB per partition**, 3–4 target files | wrong today, **right at scale** |
 | `bronze.<venue>_<msg>` `days(recv_ts)` | 6 tables, 1 partition/day each, ~583 MB each | ~40 tables (20 venues × 2 message types), ~17.5 GB each | holds at both ends |
 | `silver.trades_<venue>` `days(exchange_ts)` | 3 tables, 1 partition/day each, ~83 MB each | 20 tables, ~2.5 GB each | thin today, holds at scale |
-| `bronze.*` + `symbol` | 34 partitions/day (34 exchange–symbol pairs), ~7 MB of trades each and most holding hundreds of rows | 10,000 instruments → **10,000 partitions/day** | wrong at both ends, catastrophically so at scale |
+| `bronze.*` + `symbol` | 34 partitions/day (34 exchange–symbol pairs), ~7 MB of trades each and most holding hundreds of rows | 10,000 <!-- counts-ok: a scale-out instrument count, hypothetical --> instruments → **10,000 <!-- counts-ok: a scale-out instrument count, hypothetical --> partitions/day** | wrong at both ends, catastrophically so at scale |
 
 **The `hours()` crossover is a computable trigger, not a judgement.** A per-topic hour
 partition holds `6.47 GB/day ÷ 9 topics ÷ 24 h = 30 MB` today. It reaches one 256 MB

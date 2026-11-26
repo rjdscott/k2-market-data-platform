@@ -45,7 +45,7 @@ timeline
 | 2 | Redpanda migration | Single-broker Redpanda v25.3.4, built-in schema registry, explicit topic init | ✅ Kafka + Confluent Schema Registry both deleted; startup 15–30 s → 2–5 s | [001](adr/ADR-001-replace-kafka-with-redpanda.md) |
 | 3 | ClickHouse foundation | Kafka-engine queues, bronze/silver/gold DDL, Kraken added as second exchange | ✅ live trades through all layers, 0 errors over 90 min | [003](adr/ADR-003-clickhouse-warm-storage.md), [009](adr/ADR-009-medallion-in-clickhouse.md), [011](adr/ADR-011-multi-exchange-bronze-architecture.md) |
 | 4 | Streaming pipeline | Bronze → Silver → Gold entirely as materialized views | ✅ **The planned Kotlin Silver Processor was never built**, MVs made it unnecessary, saving a service | [004](adr/ADR-004-eliminate-spark-streaming.md), [009](adr/ADR-009-medallion-in-clickhouse.md) |
-| 5 | Cold tier / Iceberg | 10 Iceberg tables, Spark offload with PostgreSQL watermarks, Prefect 3 deployments, daily compaction + audit | ✅ an offload run in 16 s (throughput in the [v2 baseline](benchmarks/2026-02-19-v2-baseline.md)), 12:1 zstd compression, 99.9%+ warm/cold consistency | [006](adr/ADR-006-spark-batch-only.md), [007](adr/ADR-007-iceberg-cold-storage.md), [013](adr/ADR-013-pragmatic-iceberg-version-strategy.md), [014](adr/ADR-014-spark-based-iceberg-offload.md), [017](adr/ADR-017-iceberg-maintenance-pipeline.md) |
+| 5 | Cold tier / Iceberg | 10 Iceberg tables, Spark offload with PostgreSQL watermarks, Prefect 3 deployments, daily compaction + audit | ✅ an offload run in 16 s at 236k rows/s <!-- counts-ok: platform throughput, not market data --> ([v2 baseline](benchmarks/2026-02-19-v2-baseline.md)), 12:1 zstd compression, 99.9%+ warm/cold consistency | [006](adr/ADR-006-spark-batch-only.md), [007](adr/ADR-007-iceberg-cold-storage.md), [013](adr/ADR-013-pragmatic-iceberg-version-strategy.md), [014](adr/ADR-014-spark-based-iceberg-offload.md), [017](adr/ADR-017-iceberg-maintenance-pipeline.md) |
 | 6 | Kotlin feed handlers | Ktor WebSocket clients, dual raw+Avro producers, shared instrument registry | ✅ Built early, during Phase 3, to unblock end-to-end validation. 0.034 CPU / 134 MiB measured for Binance | [002](adr/ADR-002-kotlin-feed-handlers.md) |
 | 7 | Integration hardening | Latency benchmark ✅, resource burn-in 🟡, failure-mode testing ✅, monitoring ✅, runbooks ✅ (8: failure-recovery, iceberg-offload-{failure,lag,performance,monitoring,watermark-recovery}, iceberg-scheduler-recovery, redpanda) | 🟡 4 of 5 steps complete; remaining: 24 h burn-in, 5×/10× load test, Alertmanager routing | [015](adr/ADR-015-clickhouse-lts-downgrade.md), [016](adr/ADR-016-add-coinbase-exchange.md) |
 | 8 | Query API |, | ⬜ Not started | [005](adr/ADR-005-kotlin-spring-boot-api.md) |
@@ -108,7 +108,7 @@ The v2 investment analysis and ADRs were written on 2026-02-09, before any code.
 |---|---|---|
 | E2E latency <200 ms | p99 191 / 197 / 170 ms | ✅ Hit, with a small-sample caveat |
 | Query latency 2–5 ms (from 200–500 ms) | Never measured | ❓ Unverifiable, no API was built, no query benchmark exists |
-| 5,000+ msg/s per feed handler (36x) | Handlers run at 100–200 trades/s because that is what the exchanges send; headroom untested | ❓ Unverified |
+| 5,000+ <!-- counts-ok: the v1 design's own target, not measured --> msg/s per feed handler (36x) | Handlers run at 100–200 trades/s because that is what the exchanges send; headroom untested | ❓ Unverified |
 | Feed handler p99 2 ms, broker p99 5 ms | Only end-to-end was instrumented | ❓ Unverified per-segment |
 | Cold tier freshness 24 h → ~1 h | 15-minute offload cadence | ✅ Beaten by 4x |
 | Prefect eliminated ([ADR-008](adr/ADR-008-eliminate-prefect-orchestration.md)) | **Retained**, 3 containers, 2.5 CPU / 2.5 GB. It stopped scheduling OHLCV (MVs took that) and started scheduling the Iceberg offload, a job that genuinely needs retries, run history and a work pool | ❌ Reversed, correctly |
@@ -181,7 +181,7 @@ system rather than making the window smaller, and costs less code than the water
 module it replaces. The cheaper thing turned out to be the stronger one.
 
 The larger reversal is not about mechanism at all. Phase 5 asked how to copy ClickHouse
-into Iceberg and answered it well, 12:1 compression, 99.9% consistency, the v2 baseline's throughput, all
+into Iceberg and answered it well, 236k rows/s <!-- counts-ok: platform throughput, not market data -->, 12:1 compression, 99.9% consistency, all
 still true. It did not ask whether the archive should be a copy of a serving database. It
 should not: the lake inherited ClickHouse's normalisation, its 7-day TTL and the two
 `Array`/`Map` columns the JDBC driver could not read, so nothing in it was reproducible

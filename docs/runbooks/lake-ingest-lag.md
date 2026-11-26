@@ -132,7 +132,7 @@ docker exec k2-spark-iceberg python3 /home/iceberg/lake/ingest.py \
 # Unset params keep the script's defaults. Run on the live stack 2026-11-25 with
 # '{"driver_memory": "2g", "max_offsets_per_partition": 1000000}': the run's `running:`
 # line carried --env=K2_LAKE_DRIVER_MEMORY=2g and --max-offsets-per-partition=1000000, and
-# it logged `stage 1: committing <n> offsets` and ended success. The 500000 form below
+# it logged `stage 1: committing <n> offsets` and ended success. The 500000 (counts-ok: a configured per-run bound) form below
 # was not run.
 docker exec k2-airflow-scheduler airflow dags trigger lake_ingest \
   --conf '{"max_offsets_per_partition": 500000}'
@@ -161,8 +161,9 @@ the three.
 
 A topic has had unread offsets, as of the last commit, for six cycles. Every run commits
 and the lake looks healthy; the cap is simply below what a partition receives per cycle.
-On 2026-11-25 `market.crypto.v3.raw.kraken` held ~1.3 M from 14:32 to 17:12 UTC at a cap of
-200,000 against ~198,985 arriving per cycle (runs had slowed to ~250 s), with no alert.
+On 2026-11-25 `market.crypto.v3.raw.kraken` held a backlog from 14:32 to 17:12 UTC at a cap of
+200,000 <!-- counts-ok: the configured per-run cap, not data --> with arrivals just under it per
+cycle (runs had slowed to ~250 s), with no alert.
 
 ```bash
 # 1. Is the start offset behind the read position? Then nothing was evicted, drain it.
@@ -459,7 +460,7 @@ retention or destroying a topic, and both prove something other than the fault.
 faster than `k2_lake_rows_total`, `k2_lake_avg_file_bytes` falling.
 
 **Detection**, `LakeCompactionStale` from `docker/prometheus/rules/lake-alerts.yml`:
-`time() - k2_lake_last_compaction_ts_seconds{table="raw.messages"} > 129600`, `for: 30m`.
+`time() - k2_lake_last_compaction_ts_seconds{table="raw.messages"} > 129600` <!-- counts-ok: an alert threshold in seconds -->, `for: 30m`.
 Its annotation points at [lake-recovery.md](./lake-recovery.md); the diagnosis is here.
 
 **Read what that rule measures, because it is not what the name suggests.** It fires on the

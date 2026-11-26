@@ -200,7 +200,7 @@ curl -s --get localhost:9090/api/v1/query \
 capture process holds a **complete** book, `level2` sends absolute quantities per
 level with no top-N option, so top-20 is a truncation of a full `BTreeMap<i64,i64>`.
 That map is sized from a measurement, not a guess: spike S5 saw the BTC-USD opening
-snapshot at **5,195,904 bytes across 43,974 levels**, which is why the Coinbase
+snapshot at **5,195,904 bytes** at full depth, which is why the Coinbase
 container gets 512 MB where Binance and Kraken get 256 MB
 ([ADR-018 Appendix A](../adr/ADR-018-v3-lake-first-rust-capture.md#s5--coinbase-level2-without-jwt)).
 It is sized with headroom, not with proof, a market event that doubles resting depth

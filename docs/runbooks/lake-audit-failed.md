@@ -120,7 +120,7 @@ FROM lake.raw.messages.snapshots ORDER BY committed_at DESC LIMIT 10;
 --    sequence actually dense across the reported boundary?
 SELECT offset FROM lake.raw.messages
 WHERE topic = 'market.crypto.v3.raw.kraken' AND partition = 7
-  AND offset BETWEEN 918430 AND 918460 ORDER BY offset;
+  AND offset BETWEEN <first> AND <last> ORDER BY offset;
 ```
 
 **An already-recorded gap has already been reconciled, by the check itself.** A
@@ -262,7 +262,7 @@ columns exist:
 | `distinct_sources` | Meaning | Where the bug is |
 |---|---|---|
 | **1** | one archived frame decoded into two bronze rows | stage 2 ran twice over the same source snapshot range, check `k2.src-snapshot-id` on consecutive `bronze.*` commits |
-| **2** | two archived frames, on the *same connection*, carry the same venue trade id | **the venue re-sent it**, measured 2026-08-26, 5,034 Coinbase pairs ~15 s apart. Not an ingest bug and, since the key became the lineage, no longer this check; §4 counts it |
+| **2** | two archived frames, on the *same connection*, carry the same venue trade id | **the venue re-sent it**, measured 2026-08-26, Coinbase pairs ~15 s apart (counted in [ADR-024](../adr/ADR-024-unified-bronze-tables-in-the-lake.md)). Not an ingest bug and, since the key became the lineage, no longer this check; §4 counts it |
 
 ```bash
 # 2. Was ingest running more than once at a time? Concurrency 1 is a
@@ -362,8 +362,8 @@ printed with an `info` marker rather than `ok`. It cannot raise `LakeAuditFailed
 
 **What it measures**, how many logical trades arrived on more than one connection:
 `(exchange, symbol, trade_id)` groups on `bronze.trades` with `count(DISTINCT conn_id) > 1`.
-That is the Coinbase resubscribe replay described in §2, measured at **956 such trades in
-287,184 over 30 min on 2026-08-26**. Those rows are real frames that really arrived, and
+That is the Coinbase resubscribe replay described in §2, measured at **about 0.3 % of trades
+over 30 min on 2026-08-26**. Those rows are real frames that really arrived, and
 the archive keeps both.
 
 **What to do with it**, read the *rate*, not the level. The number exists so that a

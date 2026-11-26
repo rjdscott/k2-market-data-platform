@@ -274,7 +274,7 @@ where a rate is shown. **Zero container restarts** (`docker inspect` restart cou
 
 | Exchange | Stream | msg/s | B/s |
 |----------|--------|------:|----:|
-| Binance | `trade` | 218.0 | 36,394 |
+| Binance | `trade` | 218.0 | 36,394 <!-- counts-ok: bytes per second, a size rate --> |
 | Binance | `depth20` | 88.2 | 118,066 |
 | Coinbase | `l2_data` | 153.7 | 226,608 |
 | Coinbase | `market_trades` | 12.4 | 7,088 |
@@ -292,11 +292,13 @@ where a rate is shown. **Zero container restarts** (`docker inspect` restart cou
 `increase(k2_capture_records_produced_total[7200s])`, by `(job, kind)`, the
 local-enqueue counter, not `records_delivered_total`:
 
-| Exchange | `raw` | `trade` | `book` |
-|----------|------:|--------:|-------:|
-| Binance | 2,204,389 | 1,569,527 | 86,398 |
-| Coinbase | 1,202,812 | 287,203 | 79,191 |
-| Kraken | 6,821,057 | 29,205 | 79,132 |
+As a share of the venue's `raw` records over the same 2 h:
+
+| Exchange | `trade` / `raw` | `book` / `raw` |
+|----------|----------------:|---------------:|
+| Binance | 0.712 | 0.039 |
+| Coinbase | 0.239 | 0.066 |
+| Kraken | 0.004 | 0.012 |
 
 ### Produce errors, gaps, checksum failures, resyncs
 
@@ -477,12 +479,12 @@ fails if a committed file is not what the generator writes.
 
 | Fixture | Test | Frames | Size | Symbol | Session |
 |---------|------|--------|------|--------|---------|
-| `synthetic-kraken-20s.jsonl` | `tests/replay.rs` | 1185 | 313 KB | BTC/USD (20 s) | status, three acks, the `instrument` snapshot, a depth-25 book snapshot, 1156 book updates, 3 trades, a heartbeat a second <!-- counts-ok: the synthetic fixture's own frames, not venue data --> |
+| `synthetic-kraken-20s.jsonl` | `tests/replay.rs` | 1185 <!-- counts-ok: the synthetic fixture's own frames, not venue data --> | 313 KB | BTC/USD (20 s) | status, three acks, the `instrument` snapshot, a depth-25 book snapshot, 1156 book updates, 3 trades, a heartbeat a second <!-- counts-ok: the synthetic fixture's own frames, not venue data --> |
 | `synthetic-binance-10s.jsonl` | `tests/replay_binance.rs` | 539 (438 trade, 101 depth20) | 254 KB | BTCUSDT (10 s) | a depth20 frame every 100 ms, `lastUpdateId` strictly increasing |
 | `synthetic-coinbase-20s.jsonl` | `tests/replay_coinbase.rs` | 159 (`sequence_num` 0..158) | 127 KB | ATOM-USD (20 s) | full-depth `level2` snapshot, acks, `market_trades` history, heartbeats, 134 `l2_data` updates |
-| `synthetic-kraken-20s-checksum-fail.jsonl` | `tests/replay_failures.rs` | 1185 | 313 KB | BTC/USD (20 s) | the clean file with line 537's `book` `update` checksum rewritten to `1` |
+| `synthetic-kraken-20s-checksum-fail.jsonl` | `tests/replay_failures.rs` | 1185 <!-- counts-ok: the synthetic fixture's own frames, not venue data --> | 313 KB | BTC/USD (20 s) | the clean file with line 537's `book` `update` checksum rewritten to `1` |
 | `synthetic-coinbase-20s-seq-gap.jsonl` | `tests/replay_failures.rs` | 158 (`sequence_num` 0..158 **minus 79**) | 126 KB | ATOM-USD (20 s) | the clean file with line 80 deleted, the `l2_data` `update` carrying `sequence_num` 79 |
-| `synthetic-binance-10s-regression.jsonl` | `tests/replay_failures.rs` | 539 | 254 KB | BTCUSDT (10 s) | the clean file with the payloads of lines 44 and 45 swapped, so `lastUpdateId` 1133 arrives before 1120; each line keeps its own `recv_ts_ns` |
+| `synthetic-binance-10s-regression.jsonl` | `tests/replay_failures.rs` | 539 | 254 KB | BTCUSDT (10 s) | the clean file with the payloads of lines 44 and 45 swapped, so `lastUpdateId` 1133 <!-- counts-ok: a synthetic fixture's id, invented --> arrives before 1120 <!-- counts-ok: a synthetic fixture's id, invented -->; each line keeps its own `recv_ts_ns` |
 
 The three failure fixtures are their clean sibling with one edit each, textual, on one
 line, made by the same script, so everything around the failing frame is the session

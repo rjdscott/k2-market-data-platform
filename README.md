@@ -122,7 +122,6 @@ in that dated snapshot and are not repeated here (NOTICE).
 
 | | Binance | Kraken | Coinbase |
 |---|---:|---:|---:|
-| Frames/s, window average | 187 | 606 | 130 |
 | Exchange to receive, p50 / p99 (ms) | 42 / 207 | 177 / 459 | 184 / see note |
 | Sequence gaps | 0 | 0 | 0 |
 | Checksum failures | n/a | 0, every book frame verified | n/a |
@@ -133,7 +132,7 @@ excludes it from the histogram.
 
 | Operation | Result |
 |---|---|
-| Lake bronze rebuild from raw | the whole archive, six tables, in 520 s |
+| Lake bronze rebuild from raw | the whole archive, 3,326,927,766 B of raw frames into six tables, in 520 s |
 | Per-venue bronze vs raw archive | 0.59× |
 | Lake growth | about 9.8 GB/day |
 | ClickHouse pull of gold trades from the lake | the whole lake table in 4.4 s |

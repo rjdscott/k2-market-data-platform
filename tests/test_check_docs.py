@@ -245,33 +245,68 @@ def test_the_tree_as_committed_passes():
 # Every figure below is invented.
 
 
+def figures(text):
+    return [p.split(": ", 1)[1] for p in check_docs.count_problems("doc.md", text)]
+
+
 @pytest.mark.parametrize("line", [
     "the whole archive (12,345,678 rows, six tables)", "stage 2b: venue: 1234567 frames = ...",
     "the 12.3 M trades in gold", "456k rows a day", "the producer dropped 12,345 Venue records",
     "1,111,111 lake book-seconds pulled", "| x | 1,234 rows |", "2222222 OFFSETS", "2.5 million events",
+    # the review's shapes: the unit before the figure, emphasis, singular, the new units
+    "| records lost, 388 s paused | **12,345** on venue alone |", "records lost: 12,345",
+    "1,234 trade", "12,345 ids arrived twice", "1,234 ticks", "5,000 fills", "a total = 12,345 rows",
 ])
 def test_the_high_risk_shapes_fail(line):
-    assert len(check_docs.count_problems("doc.md", "intro\n" + line)) == 1
+    assert len(figures("intro\n" + line)) == 1
+
+
+def test_a_non_breaking_space_is_a_thousands_separator():
+    assert figures("12\u00a0345 rows and 1\u202f234\u202f567 frames") == ["12,345", "1,234,567"]
+
+
+def test_a_table_row_is_read_with_its_header():
+    table = "| Venue | Rows | Replays |\n|---|---:|---:|\n| A | 12,345 | 0 |\n| B | 23,456 | 1 |\n"
+    assert check_docs.count_problems("d.md", table) == ["d.md:3: 12,345", "d.md:4: 23,456"]
+    assert check_docs.count_problems("d.md", "text\n\n| Venue | p50 |\n|---|---|\n| A | 12,345 |\n") == []
 
 
 @pytest.mark.parametrize("line", [
     "rebuilt in 520 s", "999 rows", "a 2,048 MiB heap", "on 2026-01-01 rows were", "v1.2.3 rows",
     "port 18181", "0 records lost", "x1234 rows", "5.7 s",
+    # sizes, durations, settings and ids are not counts
+    "5,195,904 B in one frame", "5,195,904 bytes of frames", "25,227,274 ms between the records",
+    "`message.timeout.ms=300000` fails any record", "snapshot 6911535457573800498 of trades",
+    "in 2026 the rows", "a 10 x 1,000 % rows",
 ])
 def test_other_numbers_pass(line):
-    assert check_docs.count_problems("doc.md", line) == []
+    assert figures(line) == []
 
 
-def test_an_opt_out_needs_a_reason():
-    assert check_docs.count_problems("d.md", "1,000 rows <!-- counts-ok: synthetic test table -->") == []
-    assert check_docs.count_problems("d.md", "1,000 rows <!-- counts-ok: x -->") == ["d.md:1: 1,000 rows"]
+def test_an_opt_out_needs_a_reason_of_twelve_characters():
+    assert figures("1,000 rows <!-- counts-ok: synthetic table -->") == []
+    assert figures("1,000 rows <!-- counts-ok: eleven char -->") == ["1,000"]
+    assert figures("1,000 rows <!-- counts-ok: x -->") == ["1,000"]
+
+
+def test_one_opt_out_covers_one_figure():
+    two = "12,345 rows and 23,456 rows"
+    assert figures(two + " <!-- counts-ok: a synthetic example -->") == ["12,345"]
+    assert figures("12,345 <!-- counts-ok: a synthetic example --> rows and 23,456 rows") == ["23,456"]
+    assert figures("12,345 <!-- counts-ok: a synthetic example --> rows and 23,456 "
+                   "<!-- counts-ok: a synthetic example --> rows") == []
+
+
+def test_a_platform_throughput_rate_passes_with_its_opt_out():
+    assert figures("an offload at 236k rows/s") == ["236k"]
+    assert figures("an offload at 236k rows/s <!-- counts-ok: platform throughput -->") == []
 
 
 def test_only_editable_markdown_is_checked_code_blocks_included():
     text = b"```\n1000000 records evicted\n```\n"
     tracked = {"docs/runbooks/x.md": text, "docs/benchmarks/2001-01-01.md": text, "docs/adr/ADR-001-x.md": text,
                "legacy/v1/README.md": text, "docs/runbooks/x.sql": text}
-    assert check_docs.counts(tracked) == ["docs/runbooks/x.md:2: 1000000 records"]
+    assert check_docs.counts(tracked) == ["docs/runbooks/x.md:2: 1000000"]
 
 
 # ── gate (h): em-dash on added lines, on a push to main too ─────────────────

@@ -234,7 +234,7 @@ ch -q "SELECT exchange, canonical_symbol, window_start, open, high, low, close,
         FORMAT CSVWithNames" > ohlcv_1h.csv
 ch -q "SELECT exchange, symbol, canonical_symbol, trade_id, price, qty, side,
                exchange_ts, recv_ts_ns, src_topic, src_partition, src_offset
-        FROM gold.trades FINAL ORDER BY exchange_ts DESC LIMIT 1000
+        FROM gold.trades FINAL ORDER BY exchange_ts DESC LIMIT 1000  -- counts-ok: a LIMIT, a query parameter
         FORMAT JSONEachRow" > trades.jsonl
 
 # Sample a topic to disk. Values are Confluent-framed Avro, so a sample needs an Avro-aware
