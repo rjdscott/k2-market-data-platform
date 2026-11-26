@@ -55,15 +55,18 @@ fi
 rm -f "$out"
 
 # (b) forbidden words in published docs (audits may quote them)
+# The terms are salted SHA-256 hashes in scripts/check_docs.py, so the list is
+# not readable here; its docstring says how to add one. Commits before
+# 2026-11-26 carry the list in plain text on this line, and history is not
+# rewritten. A hit prints file:line, never the line. Any non-zero exit fails,
+# so a helper that crashes cannot pass the gate.
 out=$(mktemp)
 # shellcheck disable=SC2046  # word-splitting the file list is the point
-grep -niE "interview|optiver|hiring|feedback from" $(published_docs) 2>/dev/null \
-  | grep -v '^docs/audits/' > "$out" || true
-if [ -s "$out" ]; then
-  bad "(b) forbidden words found:"
-  sed 's/^/  /' "$out"
-else
+if python3 scripts/check_docs.py words $(published_docs | grep -v '^docs/audits/') > "$out"; then
   pass "(b) no forbidden words in published docs"
+else
+  bad "(b) forbidden words found (scripts/check_docs.py):"
+  sed 's/^/  /' "$out"
 fi
 rm -f "$out"
 
