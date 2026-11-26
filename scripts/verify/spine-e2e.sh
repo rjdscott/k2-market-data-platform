@@ -11,6 +11,7 @@
 #   rehearsal      make deploy-rehearsal: the deploy chain on compose project k2-rehearsal
 #
 # Exit 0 when every stage passed. Logs in a directory under $HOME, removed at the end unless KEEP=1.
+# ONLY="<stage> ..." runs the named stages alone, after the release they read.
 # Never touches the running stack: every stage is a throwaway lake or the k2-rehearsal project.
 set -uo pipefail
 cd "$(dirname "$0")/../.."
@@ -23,6 +24,7 @@ trap cleanup EXIT
 T0=$(date +%s) failed=0
 stage() {  # stage <name> <command...>: run it, its output to $W/<name>.log, one line
   local name=$1 t; shift; t=$(date +%s)
+  case " ${ONLY:-$name} release " in *" $name "*) ;; *) return 0 ;; esac  # ONLY="rules rehearsal": those stages (and the release they need)
   if "$@" > "$W/$name.log" 2>&1; then r=PASS; else r=FAIL; failed=1; fi
   printf '%s %-14s %5ss  %s\n' "$r" "$name" $(( $(date +%s) - t )) "$(grep -v '^$' "$W/$name.log" | tail -1 | cut -c1-110)"
 }
