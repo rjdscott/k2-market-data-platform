@@ -1,10 +1,23 @@
 # Hand-written access expectations (A9), reviewed by the owner and never generated from the rules
-# they test. make access-verify (step S20) runs every row. These are the access canary's
-# (contracts/governance/access-canary/): at build its seed rows 1 (north) and 4 (south) are a day
-# old, 2 (north) 21 minutes, 3 (north) and 5 (south) 1 minute. Any other id is not from the seed,
-# so it was never tested. The delayed rows need a canary build that passed in the last 19
-# minutes (its 10-minute schedule); a stale canary fails them, it never passes them. Each read
-# row's mustAppear names the rows its reader must see, so a canary that built no rows fails.
+# they test (tests/access/README.md says how to write one). make access-verify (step S20) runs
+# every row, in this order, as the principal it names, and a row passes only on the exact outcome
+# it states: "denied" is an access denial, never a syntax error or a missing table.
+#
+# These are the access canary's (contracts/governance/access-canary/): at build its seed rows 1
+# (north) and 4 (south) are a day old, 2 (north) 21 minutes, 3 (north) and 5 (south) 1 minute.
+# Any other id is not from the seed, so it was never tested. The delayed rows need a canary build
+# that passed in the last 19 minutes (its 10-minute schedule); a stale canary fails them, it never
+# passes them. Each read row's mustAppear names the rows its reader must see, so a canary that
+# built no rows fails.
+#
+# The repository's only other product, market-analytics.hot-gold, is a paused serving copy with
+# no Trino name and no grant (its grants.yaml), so it has nothing to grant and no row. There is no
+# second dbt product yet, so no other product's publisher exists to try serving these rows; that
+# row comes with the second product. Two of the gate's row kinds cannot be written in this file's
+# frozen shape: an impersonation that must SUCCEED (a statement row has no "succeeds" outcome),
+# and a user no document declares (k2gen check refuses a row by an undeclared principal). Both
+# are proven by the rules test instead (scripts/trino_rules_test.py, rows "impersonation" and
+# "strangers").
 expectations:
   # Readers see the tagged rows only, each with its role's policy.
   - principal: p.canary-full
@@ -27,6 +40,7 @@ expectations:
     visible: [id, region, note, event_ts]
     mustNotAppear: "id NOT IN (1, 2, 3)"
     mustAppear: {where: "id IN (1, 2, 3)", minRows: 3}
+
   # Every base path is refused to every reader: the table and its metadata tables (gate h1.08).
   - {principal: p.canary-full, table: governance.access_canary__base.events, denied: true}
   - {principal: p.canary-delayed, table: governance.access_canary__base.events, denied: true}
@@ -46,18 +60,71 @@ expectations:
   - {principal: p.canary-delayed, table: "governance.access_canary__base.events$metadata_log_entries", denied: true}
   - {principal: p.canary-delayed, table: "governance.access_canary__base.events$entries", denied: true}
   - {principal: p.canary-delayed, table: "governance.access_canary__base.events$all_entries", denied: true}
+  # The two metadata tables that name snapshot ids and tags, for the other two readers too.
+  - {principal: p.canary-full, table: "governance.access_canary__base.events$refs", denied: true}
+  - {principal: p.canary-full, table: "governance.access_canary__base.events$snapshots", denied: true}
+  - {principal: p.canary-scoped, table: "governance.access_canary__base.events$refs", denied: true}
+  - {principal: p.canary-scoped, table: "governance.access_canary__base.events$snapshots", denied: true}
+  # The base by its tag, by an old time, described, its statistics, its DDL: all refused.
+  - {principal: p.canary-full, sql: "SELECT * FROM governance.access_canary__base.events FOR VERSION AS OF 'audited'", expect: denied}
+  - {principal: p.canary-full, sql: "SELECT * FROM governance.access_canary__base.events FOR TIMESTAMP AS OF current_timestamp - INTERVAL '1' SECOND", expect: denied}
+  - {principal: p.canary-full, sql: "DESCRIBE governance.access_canary__base.events", expect: denied}
+  - {principal: p.canary-full, sql: "SHOW STATS FOR governance.access_canary__base.events", expect: denied}
+  - {principal: p.canary-full, sql: "SHOW CREATE TABLE governance.access_canary__base.events", expect: denied}
   - {principal: p.canary-full, sql: "SELECT * FROM TABLE(governance.system.table_changes('access_canary__base', 'events', 0, 1))", expect: denied}
+  # Readers never reach the writer catalog, the base or the view through it.
+  - {principal: p.canary-full, table: governance_build.access_canary__base.events, denied: true}
+  - {principal: p.canary-delayed, table: governance_build.access_canary.events, denied: true}
+  # A reader sees the view's columns, never how it is built.
+  - {principal: p.canary-full, sql: "SHOW CREATE VIEW governance.access_canary.events", expect: denied}
+
   # No time travel on the view (h1.09) and no statistics for readers (h1.20, h1.23, h1.24).
   - {principal: p.canary-full, sql: "SELECT * FROM governance.access_canary.events FOR VERSION AS OF 1", expect: error}
+  - {principal: p.canary-full, sql: "SELECT * FROM governance.access_canary.events FOR TIMESTAMP AS OF current_timestamp - INTERVAL '1' SECOND", expect: error}
   - {principal: p.canary-full, sql: "SHOW STATS FOR governance.access_canary.events", expect: noBounds}
   - {principal: p.canary-delayed, sql: "SET SESSION governance.statistics_enabled = true", expect: denied}
   - {principal: p.canary-delayed, sql: "SELECT count(*) FROM governance.access_canary.events", session: {governance.statistics_enabled: "true"}, expect: denied}
+  - {principal: p.canary-scoped, sql: "SET SESSION governance.statistics_enabled = true", expect: denied}
+  - {principal: p.canary-full, sql: "SELECT count(*) FROM governance.access_canary.events", session: {governance.statistics_enabled: "true"}, expect: denied}
+
   # Only the publisher changes the view; it still writes nothing through the reader catalog
   # (h1.02, h1.12, h1.19, h1.33).
   - {principal: dbt_access_canary, sql: "CREATE OR REPLACE VIEW governance_build.access_canary.events AS SELECT 1 x", expect: denied}
+  - {principal: dbt_access_canary, sql: "DROP VIEW governance_build.access_canary.events", expect: denied}
+  - {principal: dbt_access_canary, sql: "CREATE TABLE governance_build.access_canary.planted AS SELECT * FROM governance_build.access_canary__base.events", expect: denied}
   - {principal: svc.platform, sql: "CREATE OR REPLACE VIEW governance_build.access_canary.events AS SELECT 1 x", expect: denied}
+  - {principal: pub_access_canary, sql: "CREATE VIEW governance_build.access_canary.planted SECURITY DEFINER AS SELECT id FROM governance.access_canary__base.events", expect: denied}
   - {principal: pub_access_canary, sql: "ALTER VIEW governance_build.access_canary.events SET AUTHORIZATION USER \"svc.platform\"", expect: denied}
   - {principal: pub_access_canary, sql: "INSERT INTO governance.access_canary__base.events SELECT * FROM governance.access_canary__base.events", expect: denied}
   - {principal: pub_access_canary, sql: "CALL governance.system.rollback_to_snapshot('access_canary__base', 'events', 1)", expect: denied}
+  # Nobody on the pipeline side reads the reader view: not its builder, not the operator.
+  - {principal: dbt_access_canary, table: governance.access_canary.events, denied: true}
+  - {principal: svc.platform, table: governance.access_canary.events, denied: true}
   # A builder's definer view, planted by the test under a name no rule grants, is denied (h1.31).
+  # access-verify plants it through the catalog API just before this row and removes it after.
   - {principal: p.canary-full, table: governance.access_canary.foreign_view, denied: true}
+
+  # Impersonation: nobody becomes a principal the rules do not let them become (SET SESSION
+  # AUTHORIZATION is checked against the impersonation rules). k2-api's svc.api may become a
+  # declared person only, never a builder or a platform service; nobody else becomes anyone.
+  - {principal: svc.api, sql: "SET SESSION AUTHORIZATION \"dbt_access_canary\"", expect: denied}
+  - {principal: svc.api, sql: "SET SESSION AUTHORIZATION \"pub_access_canary\"", expect: denied}
+  - {principal: svc.api, sql: "SET SESSION AUTHORIZATION \"svc.platform\"", expect: denied}
+  - {principal: svc.platform, sql: "SET SESSION AUTHORIZATION \"p.canary-full\"", expect: denied}
+  - {principal: pub_access_canary, sql: "SET SESSION AUTHORIZATION \"p.canary-full\"", expect: denied}
+  - {principal: p.canary-full, sql: "SET SESSION AUTHORIZATION \"p.canary-delayed\"", expect: denied}
+
+  # Query history, which holds every query's text, is the operator's alone (h1.03). The operator's
+  # row comes after the readers' rows above, so it must find one of their queries.
+  - {principal: p.canary-full, table: system.runtime.queries, denied: true}
+  - {principal: svc.api, table: system.runtime.queries, denied: true}
+  - {principal: dbt_access_canary, table: system.runtime.queries, denied: true}
+  - {principal: pub_access_canary, table: system.runtime.queries, denied: true}
+  - principal: svc.platform
+    table: system.runtime.queries
+    visible: [query_id, state, user, source, query, resource_group_id, queued_time_ms, analysis_time_ms,
+              planning_time_ms, created, started, last_heartbeat, end, error_type, error_code]
+    mustAppear: {where: "\"user\" = 'p.canary-full'", minRows: 1}
+
+  # The catalog equals the release: no planted view, table or tag (ADR-061 part 6).
+  - {drift: catalog, expect: clean}
