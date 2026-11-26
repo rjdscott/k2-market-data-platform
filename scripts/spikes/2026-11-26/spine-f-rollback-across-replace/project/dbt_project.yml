@@ -1,0 +1,12 @@
+name: spine_f
+version: "0.1.0"
+profile: spine
+config-version: 2
+model-paths: ["models"]
+flags:
+  populate_cache: false
+  require_certificate_validation: true
+models:
+  spine_f:
+    +materialized: table
+    +on_table_exists: replace   # as dbt/dbt_project.yml: one Iceberg table whose history keeps every build

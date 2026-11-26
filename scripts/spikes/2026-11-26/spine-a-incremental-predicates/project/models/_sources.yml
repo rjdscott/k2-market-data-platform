@@ -1,0 +1,6 @@
+sources:
+  - name: src
+    database: spike
+    schema: spike_n04dbt_a
+    tables:
+      - name: events

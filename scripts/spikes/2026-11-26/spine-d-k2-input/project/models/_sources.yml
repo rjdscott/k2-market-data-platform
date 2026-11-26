@@ -1,0 +1,6 @@
+sources:
+  - name: up                      # the upstream product's fence
+    database: spike
+    schema: spike_n04dbt_d_up
+    tables:
+      - name: events

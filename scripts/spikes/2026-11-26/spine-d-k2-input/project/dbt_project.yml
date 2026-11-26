@@ -1,0 +1,13 @@
+name: spine_d
+version: "0.1.0"
+profile: spine
+config-version: 2
+model-paths: ["models"]
+macro-paths: ["macros"]
+flags:
+  populate_cache: false
+  require_certificate_validation: true
+models:
+  spine_d:
+    +materialized: table
+    +on_table_exists: replace

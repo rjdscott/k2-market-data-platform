@@ -1,0 +1,16 @@
+name: spine_a
+version: "0.1.0"
+profile: spine
+config-version: 2
+model-paths: ["models"]
+flags:
+  populate_cache: false
+  require_certificate_validation: true
+models:
+  spine_a:
+    # Every model: an incremental merge into an Iceberg table partitioned by event_date, fed by
+    # the rows loaded since its last run.
+    +materialized: incremental
+    +incremental_strategy: merge
+    +properties:
+      partitioning: "ARRAY['event_date']"
