@@ -1,7 +1,7 @@
 # ADR-057: Pause the ClickHouse hot tier while the platform is built
 
 **Status:** Accepted
-**Date:** 2026-11-27
+**Date:** 2026-11-26
 **Author:** Platform
 **Category:** Storage / Serving
 **Decided by:** the owner on 2026-11-26 (UTC), with [ADR-056](ADR-056-unified-data-product-platform.md),
@@ -25,8 +25,7 @@ cannot restart it, keep its disk, and stand down every alert, dashboard and chec
 where a reader can see that it was stood down. The cost: the copy goes stale, and a restart more
 than 7 days after the stop leaves a hole, because the lake gold it was reloaded from is dropped
 in the same phase. It comes back as a serving copy of a product of the new platform, rebuilt from
-that platform's lake, when a measured need or the release gate calls for it. Nothing is left to
-decide.
+that platform's lake, when a measured need or the release gate calls for it.
 
 ---
 
@@ -55,7 +54,7 @@ they test (`docker/prometheus/prometheus.yml:45-52`). No Airflow DAG, dbt model,
 **The forces.**
 
 - **Budget.** Its limits are 4.0 CPU / 8 GiB (`docker-compose.yml:252-256`). Before the pause,
-  `python3 scripts/check-budget.py` printed, on 2026-11-27, a steady state of 19 services at
+  `python3 scripts/check-budget.py` printed, on 2026-11-26, a steady state of 19 services at
   19.30 CPU / 35.312 GiB and a [bootstrap peak](glossary.md#bootstrap-peak) of 24 services at
   21.30 / 37.812, under the [ceiling](glossary.md#the-ceiling) of 25 / 48
   ([ADR-045](ADR-045-ceiling-25-cpu-48-gib.md)). The build adds about 2.10 CPU / 2.5625 GiB
@@ -70,7 +69,7 @@ they test (`docker/prometheus/prometheus.yml:45-52`). No Airflow DAG, dbt model,
   `group_offset_retention_sec` after the group last had a member. No compose file, config or script
   sets it (`git grep group_offset_retention` finds only this ADR), so it is the broker default:
   `docker exec k2-redpanda rpk cluster config get group_offset_retention_sec` printed `604800`,
-  7 days, on 2026-11-27. The trade and book topics also keep 7 days by time, with no byte cap
+  7 days, on 2026-11-26. The trade and book topics also keep 7 days by time, with no byte cap
   (`docker/redpanda/init.sh:149-152`, applied at `:211-213`). The 48 hours or 2 GiB per partition
   of `init.sh:137-146` is the raw topics, which the new platform's connectors read and ClickHouse
   does not. The book topics have carried nothing since book capture paused
@@ -91,7 +90,7 @@ and the lake gold it reloads from is retired in the same phase.** Scope: this on
 trigger under Consequences fires.
 
 1. **Pause.** The `clickhouse` service gains `profiles: ["hot-gold"]`; its container is stopped and
-   removed. The volumes `clickhouse-data` (3.038 GB, `docker system df -v`, 2026-11-27) and
+   removed. The volumes `clickhouse-data` (3.038 GB, `docker system df -v`, 2026-11-26) and
    `clickhouse-logs` are kept. The `image:` line and the DDL (the `CREATE TABLE` statements in
    `docker/clickhouse/ddl/`) stay, because `make test-clickhouse` and CI apply the gold DDL to a
    throwaway server whose tag is read from that line (`scripts/clickhouse-schema-test.sh:13`).
