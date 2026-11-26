@@ -4,9 +4,9 @@
 # Target: 25 CPU / 48 GiB at the bootstrap peak (ADR-045; was 20 CPU / 36 GiB, ADR-034, and 16 CPU / 40 GB, ADR-010)
 #
 # Published ports: every `ports:` entry is bound to 127.0.0.1, in every profile.
-# Containers reach each other over k2-net by service name (minio:9000,
-# lakekeeper:8181) and never through a published port; host tools use
-# localhost. A bare "9000:9000" listens on every interface, which put the MinIO
+# Containers reach each other by service name (minio:9000 on k2-net,
+# lakekeeper:8181 on k2-catalog only) and never through a published port; host
+# tools use localhost. A bare "9000:9000" listens on every interface, which put the MinIO
 # API and console, and every unauthenticated UI here, on the local network
 # until 2026-11-26. scripts/check-budget.py fails CI on a port without the
 # prefix. Loopback stops other machines, not other users of this host
@@ -18,10 +18,12 @@
 networks:
   k2-net:
     driver: bridge
-  # The catalog's own network (phase 001, docs/development/phase-001-interfaces.md A8).
-  # Today only the profiled stubs below join it; Lakekeeper, Trino, MinIO and the rest
-  # move onto it in step S22, and Lakekeeper then leaves k2-net and the host. `fetch`
-  # and third-party images never join it.
+  # The catalog's own network (phase 001, docs/development/phase-001-interfaces.md A8;
+  # ADR-059 part 7). Lakekeeper has no authentication, so the network is its fence:
+  # it is on k2-catalog alone, with no host port, and only the platform's own services
+  # join it (lakekeeper, lakekeeper-migrate, prefect-db, minio, trino, spark-iceberg,
+  # lake-init, tools, dbt-runner). `fetch`, caller-facing services and third-party
+  # images never join it.
   k2-catalog:
     driver: bridge
 
@@ -76,7 +78,11 @@ x-logging: &k2-logging
 # CLAUDE.md gotcha), and mounted whole, read-only, at /k2/releases: a service reads
 # a release through its pointer, never a release directory of its own. Not created
 # here if missing (docker would make it root-owned). `tools` is the one read-write
-# mount. Today only the profiled stubs use it; step S22 adds it to every service.
+# mount. Mounted by every service that reads a pointer (scripts/deploy.py POINTERS):
+# trino, airflow-scheduler, airflow-dag-processor, spark-iceberg, prometheus, and the
+# profiled stubs. Only Trino reads its configuration through it today; the DAGs, the
+# Spark jobs and the alert rules move onto their pointers in phase 002, when a
+# release first carries them.
 x-k2-releases-ro: &k2-releases-ro
   type: bind
   source: ${K2_RELEASES:-${HOME}/k2-releases}
@@ -318,6 +324,7 @@ services:
     hostname: minio
     networks:
       - k2-net
+      - k2-catalog  # Lakekeeper reaches it (storage checks, purges); so do lake-init and drop.sh, from there
     ports:
       - "127.0.0.1:9000:9000"     # API
       - "127.0.0.1:9001:9001"     # Console
@@ -366,7 +373,10 @@ services:
     volumes:
       - prometheus-data:/prometheus
       - ./docker/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      # The rules stay on the checkout until a release carries them (phase 002); the
+      # releases root is mounted now so deploy can check the pointer it will read.
       - ./docker/prometheus/rules:/etc/prometheus/rules:ro
+      - *k2-releases-ro
     command:
       - '--config.file=/etc/prometheus/prometheus.yml'
       - '--storage.tsdb.path=/prometheus'
@@ -575,7 +585,8 @@ services:
     container_name: k2-prefect-db
     hostname: prefect-db
     networks:
-      - k2-net
+      - k2-net      # Airflow's database
+      - k2-catalog  # the catalog's database
     ports:
       - "127.0.0.1:15432:5432"   # host access only; 5432 is often taken locally
     volumes:
@@ -722,8 +733,11 @@ services:
     networks:
       - k2-net
     volumes:
+      # The DAGs and dbt stay on the checkout until a release carries them (phase 002);
+      # the releases root is mounted now for the `resolve` task's pointer.
       - ./docker/airflow/dags:/opt/airflow/dags:ro
       - ./dbt:/opt/k2/dbt:ro
+      - *k2-releases-ro
       - /var/run/docker.sock:/var/run/docker.sock
     group_add:
       - "${K2_DOCKER_GID:-0}"
@@ -765,8 +779,10 @@ services:
     networks:
       - k2-net
     volumes:
+      # As the scheduler's: the DAGs on the checkout until phase 002, the root mounted now.
       - ./docker/airflow/dags:/opt/airflow/dags:ro
       - ./dbt:/opt/k2/dbt:ro
+      - *k2-releases-ro
     environment: *airflow-env
     command: ["dag-processor"]
     depends_on:
@@ -850,6 +866,7 @@ services:
     hostname: spark-iceberg
     networks:
       - k2-net
+      - k2-catalog  # the lake's writer: Lakekeeper and MinIO
     # The image runs as `spark` (uid 185) and, between jobs, only the Spark History
     # Server under tini (docker/spark/Dockerfile): it runs the event-log cleaner,
     # so the container's running state is the cleaner's. The lake jobs are
@@ -864,6 +881,9 @@ services:
       # place needs --force-recreate (CLAUDE.md, bind-mount gotcha).
       - ./config/instruments.yaml:/home/iceberg/config/instruments.yaml:ro
       - ./config/bars.yaml:/home/iceberg/config/bars.yaml:ro
+      # The jobs stay on the checkout until a release carries them (phase 002); the
+      # releases root is mounted now for the spark pointer.
+      - *k2-releases-ro
     environment:
       # MinIO / S3 credentials (Iceberg cold storage)
       - AWS_ACCESS_KEY_ID=${MINIO_ROOT_USER}
@@ -919,7 +939,7 @@ services:
     image: quay.io/lakekeeper/catalog:v0.13.9
     container_name: k2-lakekeeper-migrate
     networks:
-      - k2-net
+      - k2-catalog  # prefect-db is there; nothing else is needed
     environment:
       LAKEKEEPER__PG_DATABASE_URL_READ: postgres://${PREFECT_DB_USER}:${PREFECT_DB_PASSWORD}@prefect-db:5432/lakekeeper
       LAKEKEEPER__PG_DATABASE_URL_WRITE: postgres://${PREFECT_DB_USER}:${PREFECT_DB_PASSWORD}@prefect-db:5432/lakekeeper
@@ -942,11 +962,15 @@ services:
   # ───────────────────────────────────────────────────────────────────────
   # Lakekeeper - Iceberg REST catalog
   # ───────────────────────────────────────────────────────────────────────
-  # Port published on loopback only: the catalog runs unauthenticated on a
-  # single host, and the only host-side consumers were the DuckDB / PyIceberg
-  # notebooks, archived with the old lake ingest. Same reasoning as
-  # prefect-db's 127.0.0.1:15432.
-  # 18181 rather than 8181 because Redpanda already owns host 8081/8082.
+  # On k2-catalog only, with no host port (ADR-059 part 7). The catalog has no
+  # authentication: anything that reaches lakekeeper:8181 can create, replace or
+  # drop a table or a view, around every rule Trino enforces. So the network is
+  # the fence: only the platform's own services share k2-catalog with it, and
+  # neither the host nor a service on k2-net alone can reach it. Its UI went with
+  # the port. To ask it something from the host, go through a container on
+  # k2-catalog, as scripts/drop.sh does. Leaving k2-net and the port takes a
+  # recreate (`make deploy ... ALLOW_STATEFUL=lakekeeper`,
+  # docs/runbooks/first-cutover-to-releases.md).
   #
   # The image is distroless (no shell), so the healthcheck is the binary's own
   # `healthcheck` subcommand — it GETs http://localhost:8181/health and exits
@@ -957,9 +981,7 @@ services:
     container_name: k2-lakekeeper
     hostname: lakekeeper
     networks:
-      - k2-net
-    ports:
-      - "127.0.0.1:18181:8181"
+      - k2-catalog
     environment:
       LAKEKEEPER__PG_DATABASE_URL_READ: postgres://${PREFECT_DB_USER}:${PREFECT_DB_PASSWORD}@prefect-db:5432/lakekeeper
       LAKEKEEPER__PG_DATABASE_URL_WRITE: postgres://${PREFECT_DB_USER}:${PREFECT_DB_PASSWORD}@prefect-db:5432/lakekeeper
@@ -968,12 +990,9 @@ services:
       # trace wrote one log line per request: 99% of about 15 GiB a day of log
       # (2026-11-26). Off; the request traffic itself is unchanged.
       LAKEKEEPER__AUDIT__TRACING__ENABLED: "false"
-      # BASE_URI stays on the compose network: it is what the catalog puts in
-      # the links it hands back to Spark and PyIceberg *inside* docker.
-      # The SPA runs in the browser on the host, which cannot resolve
-      # `lakekeeper`, so the UI gets its own published-port URL.
+      # BASE_URI is its name on k2-catalog: what the catalog puts in the links it
+      # hands back to Trino and Spark.
       LAKEKEEPER__BASE_URI: http://lakekeeper:8181
-      LAKEKEEPER__UI__LAKEKEEPER_URL: http://localhost:18181
     command: ["serve"]
     depends_on:
       lakekeeper-migrate:
@@ -1010,7 +1029,7 @@ services:
     image: minio/minio:RELEASE.2025-09-07T16-13-09Z
     container_name: k2-lake-init
     networks:
-      - k2-net
+      - k2-catalog  # it calls Lakekeeper and MinIO, both there
     volumes:
       - ./docker/lake:/init:ro
     environment:
@@ -1037,11 +1056,19 @@ services:
 # SERVICES - SQL OVER THE LAKE (ADR-035)
 #############################################################################
   # One Trino node, coordinator and worker in one JVM, over the Lakekeeper REST
-  # catalog with the static MinIO keys (docker/trino/README.md). Catalog `lake`
-  # (warehouse k2) is read-only at the connector; each data domain has its own
-  # writable catalog and warehouse, generated from contracts/domains.yaml, and
-  # writer `dbt_<domain>` (ADR-044). Checked by `make test-trino`. Identity is
-  # the X-Trino-User header, not authenticated, so the port is loopback only.
+  # catalog. Its whole etc is the release's, read through the trino pointer
+  # (ADR-058): catalogs, rules, groups and the password authenticator compiled by
+  # k2gen (platform/k2gen/k2gen/emit/trino_etc.py). HTTPS only on 8443 with a
+  # password login (ADR-060): the server key and certificate are the FILE
+  # tls/trino.pem (never the tls/ directory, which holds ca.key), password.db is
+  # read through its directory, reread every 5 s. The shared secret and the S3
+  # key pair come from .env and reach the etc only as ${ENV:...}. On k2-catalog
+  # for Lakekeeper and MinIO, and on k2-net for its clients. Checked by
+  # `make test-trino`.
+  #
+  # The image's own health-check reads /etc/trino/config.properties, which is not
+  # the etc here, and so probes plain HTTP 8080, which is off: the check below
+  # asks HTTPS 8443 itself.
   #
   # Heap 2816M (etc/jvm.config) under the 5G limit leaves 2.25 GiB for
   # metaspace, code cache, thread stacks and direct buffers, which jvm.config
@@ -1055,15 +1082,20 @@ services:
     hostname: trino
     # Off the capture cores, like the other two engines.
     cpuset: ${K2_HEAVY_CPUSET-0-11}
+    command: ["/usr/lib/trino/bin/launcher", "run", "--etc-dir=/k2/releases/pointers/trino/compiled/trino/etc"]
     networks:
       - k2-net
+      - k2-catalog
     ports:
-      - "127.0.0.1:${K2_TRINO_PORT:-8088}:8080"
+      - "127.0.0.1:${K2_TRINO_PORT:-8443}:8443"
     volumes:
-      - ./docker/trino/etc:/etc/trino:ro
+      - *k2-releases-ro
+      - ${K2_SECRETS:-${HOME}/k2-secrets}/tls/trino.pem:/run/k2-secrets/tls/trino.pem:ro
+      - ${K2_SECRETS:-${HOME}/k2-secrets}/trino:/run/k2-secrets/trino:ro
     environment:
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      K2_TRINO_SHARED_SECRET: ${K2_TRINO_SHARED_SECRET:?set K2_TRINO_SHARED_SECRET in .env (openssl rand -hex 32)}
+      K2_TRINO_S3_ACCESS_KEY: ${K2_TRINO_S3_ACCESS_KEY:?set K2_TRINO_S3_ACCESS_KEY in .env}
+      K2_TRINO_S3_SECRET_KEY: ${K2_TRINO_S3_SECRET_KEY:?set K2_TRINO_S3_SECRET_KEY in .env}
     depends_on:
       lakekeeper:
         condition: service_healthy
@@ -1080,7 +1112,7 @@ services:
           cpus: '0.5'
           memory: 1G
     healthcheck:
-      test: ["CMD", "/usr/lib/trino/bin/health-check"]
+      test: ["CMD", "bash", "-c", "i=$$(curl -fsk https://localhost:8443/v1/info) && [[ $$i == *'\"starting\":false'* ]]"]
       interval: 15s
       timeout: 5s
       retries: 5
@@ -1403,8 +1435,8 @@ services:
 # airflow-dag-processor | 0.5       | 1G           | Airflow 3 DAG parsing
 # airflow-statsd        | 0.1       | 64M          | Airflow statsd to Prometheus (:9102)
 # spark-iceberg         | 3.0       | 8G           | Lake batch engine (its old ingest jobs retired, ADR-056)
-# lakekeeper            | 0.25      | 256M         | Iceberg REST catalog (v3, ADR-018)
-# trino                 | 2.0       | 5G           | SQL over the lake, dbt's engine (ADR-035; 127.0.0.1:8088)
+# lakekeeper            | 0.25      | 256M         | Iceberg REST catalog (v3, ADR-018); k2-catalog only, no host port
+# trino                 | 2.0       | 5G           | SQL over the lake, dbt's engine (ADR-035; HTTPS, 127.0.0.1:8443)
 # capture-binance       | 0.25      | 256M         | Rust capture, Binance (12 pairs, trades + L2)
 # capture-kraken        | 0.25      | 256M         | Rust capture, Kraken (11 pairs, trades + L2)
 # capture-coinbase      | 0.25      | 512M         | Rust capture, Coinbase (11 pairs, trades + L2)

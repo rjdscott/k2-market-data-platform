@@ -8,8 +8,8 @@
 #   scripts/backup-lake.sh             # `make backup`; the k2-backup.timer user unit runs it daily
 #   scripts/backup-lake.sh --dry-run   # list what it would copy; writes only empty directories
 #
-# Read-only against the stack: GETs to the catalog on its loopback port, reads
-# from MinIO through a throwaway `mc` container on the compose network, and
+# Read-only against the stack: GETs to the catalog and reads from MinIO, each
+# through a throwaway container on the catalog's network, and
 # pg_dump through `docker exec`. Additive only: an Iceberg object is written
 # once under a unique key and never changed, so a file already in the copy is
 # never replaced or removed, and an object whose content differs from its copy
@@ -32,7 +32,7 @@ umask 077
 TABLES=""
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd -P)
-CATALOG=http://127.0.0.1:18181/catalog/v1
+CATALOG=http://lakekeeper:8181/catalog/v1  # on k2-catalog only: no host port (ADR-059 part 7)
 KEEP=${K2_BACKUP_KEEP:-14}                    # catalog dumps kept, per database
 FLOOR_GIB=${K2_BACKUP_MIN_FREE_GIB:-20}       # refuse to start below this much free space
 
@@ -153,6 +153,11 @@ mc_run() {
     -e MC_CONFIG_DIR=/tmp/.mc -e MC_HOST_k2 -v "$DIR/lake:/backup" \
     --entrypoint mc minio/minio:RELEASE.2025-09-07T16-13-09Z "$@"
 }
+# A GET to the catalog, from a throwaway container on $net, with no credential.
+catalog() {
+  docker run --rm --network "$net" --cpus 0.5 --memory 128m \
+    --entrypoint curl minio/minio:RELEASE.2025-09-07T16-13-09Z -fsS "$CATALOG/$1"
+}
 
 # (1) Each table's location and current metadata file, from the catalog: read
 # first, so every file that metadata names already exists when the copy starts.
@@ -164,14 +169,17 @@ if [ -z "$TABLES" ]; then
 else
   net=$(docker inspect -f '{{range $k, $v := .NetworkSettings.Networks}}{{$k}} {{end}}' k2-minio 2>/dev/null) ||
     die "k2-minio is not running"
-  net=${net%% *}
-  prefix=$(curl -fsS "$CATALOG/config?warehouse=k2" 2>/dev/null |
+  # The catalog's network, where both Lakekeeper and MinIO are; before the cutover
+  # to releases Lakekeeper is on MinIO's only network.
+  cat_net=$(grep -o '[^ ]*_k2-catalog' <<<"$net" || true)
+  net=${cat_net:-${net%% *}}
+  prefix=$(catalog "config?warehouse=k2" 2>/dev/null |
     python3 -c 'import json, sys; print(json.load(sys.stdin)["defaults"]["prefix"])' 2>/dev/null) ||
-    die "the catalog did not answer on 127.0.0.1:18181 (is k2-lakekeeper up?)"
+    die "the catalog did not answer on $net (is k2-lakekeeper up?)"
 fi
 for t in $TABLES; do
   # The response is never printed: its config block can carry storage settings.
-  read -r loc meta < <(curl -fsS "$CATALOG/$prefix/namespaces/${t%%.*}/tables/${t#*.}" 2>/dev/null |
+  read -r loc meta < <(catalog "$prefix/namespaces/${t%%.*}/tables/${t#*.}" 2>/dev/null |
     python3 -c 'import json, sys; d = json.load(sys.stdin); print(d["metadata"]["location"], d["metadata-location"])' 2>/dev/null) ||
     die "the catalog has no table $t"
   # An unauthenticated catalog's answer decides what is read: keep it in the lake's bucket.
