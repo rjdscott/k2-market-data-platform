@@ -73,11 +73,15 @@ Where: `zero` in [`services/capture-rust/src/metrics.rs`](../../services/capture
 ### Book switch
 
 Proposed in [ADR-050](ADR-050-order-book-capture-paused-during-platform-build.md), not built:
-`book_capture.<venue>` in `config/instruments.yaml`, `true` or `false`, absent meaning `true`. A
-capture with `false` does not subscribe to its venue's book channel, does not watch or seed the
-book stream, and skips the once-a-second book sample; it still decodes any frame exactly as
-before, so replay and the fixture tests do not depend on it. It is read at start, so a change is a
-container recreate.
+`book_capture.<venue>` in `config/instruments.yaml`, `true` or `false`, required for every venue
+(a capture without it refuses to start). Each capture reports what it read as the gauge
+`k2_capture_book_capture{exchange}`, so a capture never recreated after a change, or a stale file
+mount, shows as a difference between file and gauge. A capture with `false` does not subscribe to
+its venue's book channel, does not watch or seed the book stream, and skips the once-a-second book
+sample; it still decodes any frame exactly as before, so replay and the fixture tests do not depend
+on it. The lake reads the same switch to skip the book audits and to record it in
+`gold.dim_venue`. Binance, which has no heartbeat channel, also sends a WebSocket Ping every 15 s
+and watches the Pong as a 60 s stream, so a dead connection is still noticed within a minute.
 Where: `config/instruments.yaml`, `services/capture-rust/src/config.rs` once built.
 
 ---
