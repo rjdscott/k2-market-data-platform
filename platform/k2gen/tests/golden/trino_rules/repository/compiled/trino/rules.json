@@ -1,0 +1,311 @@
+{
+  "catalogs": [
+    {
+      "user": "svc\\.platform",
+      "catalog": "fx_reference_build",
+      "allow": "all"
+    },
+    {
+      "user": "pub_access_canary",
+      "catalog": "governance",
+      "allow": "all"
+    },
+    {
+      "user": "dbt_access_canary|pub_access_canary|svc\\.platform|svc\\.runs",
+      "catalog": "governance_build",
+      "allow": "all"
+    },
+    {
+      "user": "svc\\.platform",
+      "catalog": "market_analytics_build",
+      "allow": "all"
+    },
+    {
+      "user": "svc\\.platform",
+      "catalog": "market_capture_build",
+      "allow": "all"
+    },
+    {
+      "user": "svc\\.platform",
+      "catalog": "reference_data_build",
+      "allow": "all"
+    },
+    {
+      "user": "svc\\.platform",
+      "catalog": "fx_reference",
+      "allow": "read-only"
+    },
+    {
+      "user": "svc\\.api|svc\\.catalog|svc\\.platform|svc\\.runs",
+      "catalog": "governance",
+      "allow": "read-only"
+    },
+    {
+      "user": "svc\\.platform",
+      "catalog": "lake",
+      "allow": "read-only"
+    },
+    {
+      "user": "svc\\.platform",
+      "catalog": "market_analytics",
+      "allow": "read-only"
+    },
+    {
+      "user": "svc\\.platform",
+      "catalog": "market_capture",
+      "allow": "read-only"
+    },
+    {
+      "user": "svc\\.platform",
+      "catalog": "reference_data",
+      "allow": "read-only"
+    },
+    {
+      "user": "dbt_access_canary|svc\\.platform",
+      "catalog": "system",
+      "allow": "read-only"
+    },
+    {
+      "group": "access_canary__delayed_reader|access_canary__full_reader|access_canary__public_reader",
+      "catalog": "governance",
+      "allow": "read-only"
+    },
+    {
+      "group": "access_canary__delayed_reader|access_canary__full_reader|access_canary__public_reader",
+      "catalog": "system",
+      "allow": "read-only"
+    },
+    {
+      "catalog": "system",
+      "allow": "none"
+    }
+  ],
+  "schemas": [
+    {
+      "user": "dbt_access_canary",
+      "catalog": "governance_build",
+      "schema": "access_canary__base",
+      "owner": true
+    },
+    {
+      "user": "pub_access_canary",
+      "catalog": "governance_build",
+      "schema": "access_canary",
+      "owner": true
+    },
+    {
+      "user": "svc\\.platform",
+      "catalog": "governance_build",
+      "schema": "run_records",
+      "owner": true
+    }
+  ],
+  "tables": [
+    {
+      "user": "svc\\.platform",
+      "catalog": "system",
+      "privileges": [
+        "SELECT"
+      ]
+    },
+    {
+      "user": "svc\\.platform",
+      "catalog": "governance_build",
+      "schema": "access_canary__base",
+      "privileges": [
+        "SELECT"
+      ]
+    },
+    {
+      "user": "dbt_access_canary",
+      "catalog": "system",
+      "schema": "metadata",
+      "table": "analyze_properties|catalogs|column_properties|materialized_view_properties|materialized_views|schema_properties|table_comments|table_properties",
+      "privileges": [
+        "SELECT"
+      ]
+    },
+    {
+      "group": "access_canary__delayed_reader|access_canary__full_reader|access_canary__public_reader",
+      "catalog": "system",
+      "schema": "jdbc",
+      "table": "attributes|catalogs|columns|procedure_columns|procedures|pseudo_columns|schemas|super_tables|super_types|table_types|tables|types|udts",
+      "privileges": [
+        "SELECT"
+      ]
+    },
+    {
+      "group": "access_canary__delayed_reader|access_canary__full_reader|access_canary__public_reader",
+      "catalog": "system",
+      "schema": "metadata",
+      "table": "analyze_properties|catalogs|column_properties|materialized_view_properties|materialized_views|schema_properties|table_comments|table_properties",
+      "privileges": [
+        "SELECT"
+      ]
+    },
+    {
+      "user": "dbt_access_canary",
+      "catalog": "governance_build",
+      "schema": "access_canary__base",
+      "privileges": [
+        "SELECT",
+        "INSERT",
+        "DELETE",
+        "UPDATE",
+        "OWNERSHIP"
+      ]
+    },
+    {
+      "user": "pub_access_canary",
+      "catalog": "governance_build",
+      "schema": "access_canary",
+      "table": "events",
+      "privileges": [
+        "SELECT",
+        "OWNERSHIP"
+      ]
+    },
+    {
+      "user": "pub_access_canary",
+      "catalog": "governance",
+      "schema": "access_canary__base",
+      "table": "events",
+      "privileges": [
+        "SELECT",
+        "GRANT_SELECT"
+      ]
+    },
+    {
+      "user": "svc\\.platform",
+      "catalog": "governance_build",
+      "schema": "run_records",
+      "table": "run_record",
+      "privileges": [
+        "SELECT",
+        "OWNERSHIP"
+      ]
+    },
+    {
+      "user": "svc\\.runs",
+      "catalog": "governance_build",
+      "schema": "run_records",
+      "table": "run_record",
+      "privileges": [
+        "SELECT",
+        "INSERT"
+      ]
+    },
+    {
+      "user": "svc\\.catalog",
+      "catalog": "governance",
+      "schema": "run_records",
+      "table": "run_record",
+      "privileges": [
+        "SELECT"
+      ]
+    },
+    {
+      "user": "svc\\.api|svc\\.catalog|svc\\.platform|svc\\.runs",
+      "catalog": "governance",
+      "schema": "access_canary__base",
+      "table": "events\\$refs",
+      "privileges": [
+        "SELECT"
+      ]
+    },
+    {
+      "group": "access_canary__delayed_reader",
+      "catalog": "governance",
+      "schema": "access_canary",
+      "table": "events",
+      "privileges": [
+        "SELECT"
+      ],
+      "filter": "(\"event_ts\" < current_timestamp - INTERVAL '20' MINUTE)",
+      "columns": [
+        {
+          "name": "note",
+          "mask": "CAST(NULL AS varchar)"
+        }
+      ]
+    },
+    {
+      "group": "access_canary__full_reader",
+      "catalog": "governance",
+      "schema": "access_canary",
+      "table": "events",
+      "privileges": [
+        "SELECT"
+      ]
+    },
+    {
+      "group": "access_canary__public_reader",
+      "catalog": "governance",
+      "schema": "access_canary",
+      "table": "events",
+      "privileges": [
+        "SELECT"
+      ],
+      "filter": "(\"region\" IN ('north'))"
+    }
+  ],
+  "system_session_properties": [
+    {
+      "user": "dbt_access_canary|pub_access_canary|svc\\.catalog|svc\\.platform|svc\\.runs",
+      "allow": true
+    }
+  ],
+  "catalog_session_properties": [
+    {
+      "user": "svc\\.platform",
+      "allow": true
+    },
+    {
+      "user": "dbt_access_canary|pub_access_canary|svc\\.catalog|svc\\.runs",
+      "property": "statistics_enabled",
+      "allow": true
+    }
+  ],
+  "queries": [
+    {
+      "user": "svc\\.platform",
+      "allow": [
+        "execute",
+        "kill",
+        "view"
+      ]
+    },
+    {
+      "user": "dbt_access_canary|k2_release_524c1aa22b24|p\\.canary\\-delayed|p\\.canary\\-full|p\\.canary\\-scoped|pub_access_canary|svc\\.api|svc\\.catalog|svc\\.runs",
+      "allow": [
+        "execute"
+      ]
+    }
+  ],
+  "impersonation": [
+    {
+      "original_user": "svc\\.api",
+      "new_user": "p\\.canary\\-delayed|p\\.canary\\-full|p\\.canary\\-scoped",
+      "allow": true
+    }
+  ],
+  "system_information": [
+    {
+      "user": "svc\\.platform",
+      "allow": [
+        "read"
+      ]
+    }
+  ],
+  "procedures": [
+    {
+      "user": "svc\\.platform",
+      "catalog": "system",
+      "schema": "runtime",
+      "procedure": "kill_query",
+      "privileges": [
+        "EXECUTE"
+      ]
+    }
+  ]
+}
