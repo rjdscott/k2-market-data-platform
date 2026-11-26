@@ -100,7 +100,7 @@ two reasons that demand opposite responses:
 
 | Cause | Distinguishing evidence | Response |
 |---|---|---|
-| **Real loss**, records were evicted from Redpanda before ingest read them | a `failOnDataLoss` failure in the same window ([lake-ingest-lag.md §3](./lake-ingest-lag.md#3-failondataloss--the-offsets-point-below-what-the-broker-holds)); the broker's `LOG-START-OFFSET` above the last committed offset | **record the gap**, it is unrecoverable, public feeds do not replay |
+| **Real loss**, records were evicted from Redpanda before ingest read them | a `failOnDataLoss` failure in the same window ([lake-ingest-lag.md §3](./lake-ingest-lag.md#3-failondataloss-the-offsets-point-below-what-the-broker-holds)); the broker's `LOG-START-OFFSET` above the last committed offset | **record the gap**, it is unrecoverable, public feeds do not replay |
 | **An audit bug**, a legitimate seam counted as a gap | no ingest failure, no eviction, and the "gap" sits at a day boundary, a topic recreation, or a compaction snapshot | **fix the audit**, a false positive here trains people to ignore the one alert that must never be ignored |
 
 **Recovery**
@@ -177,7 +177,7 @@ so it nets the same rows and prints the same detail, one definition, not two. It
 run on 2026-08-27 failed on exactly the acknowledged 1,168,954 before that was true.
 
 **If the gap is real and not yet recorded**, its deliverable is a record, not a repair:
-[lake-ingest-lag.md §3](./lake-ingest-lag.md#3-failondataloss--the-offsets-point-below-what-the-broker-holds)
+[lake-ingest-lag.md §3](./lake-ingest-lag.md#3-failondataloss-the-offsets-point-below-what-the-broker-holds)
 is the procedure, and `ingest.py --accept-data-loss` writes the row itself. Then fix the
 cause upstream, ingest downtime, or a per-run bound below the real arrival rate.
 

@@ -27,7 +27,7 @@ the served layer's name, and the `quant` user is granted `gold` and nothing else
 | Views | `gold.ohlcv_live(bucket = <seconds>)`, `gold.bbo_live` | computed on read over `FINAL` |
 
 `SHOW TABLES FROM gold` is the authority. Column-level detail is in
-[data-inspection.md](./data-inspection.md#schema-cheat-sheet).
+[data-catalog.md](./data-catalog.md), one section per table.
 
 ## Rules
 

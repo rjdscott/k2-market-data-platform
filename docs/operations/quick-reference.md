@@ -53,7 +53,8 @@ docker exec k2-redpanda curl -s localhost:8081/subjects | jq
 ClickHouse serves the `gold` database, canonical, deduplicated, every venue in one schema
 ([`docker/clickhouse/README.md`](../../docker/clickhouse/README.md)). `gold.trades` and
 `gold.book_top20` are `ReplacingMergeTree`: read them with `FINAL` when the number has to be
-exact. The v2 `k2` database was dropped at the Phase E cutover on 2026-08-27
+exact. The v2 `k2` database was dropped at the Phase E cutover on 2026-08-27 (phase names:
+[glossary](../adr/glossary.md#phases-a-to-g))
 ([`legacy/v2-clickhouse/`](../../legacy/v2-clickhouse/README.md)).
 
 ```bash
@@ -127,7 +128,7 @@ docker exec k2-spark-iceberg python3 /home/iceberg/lake/maintenance.py --audit-o
 curl -s localhost:18181/health | jq .
 PREFIX=$(curl -fsS 'localhost:18181/catalog/v1/config?warehouse=k2' | jq -r '.defaults.prefix')
 curl -fsS "localhost:18181/catalog/v1/$PREFIX/namespaces" | jq -c .
-#   {"namespaces":[["raw"],["bronze"],["silver"],["gold"],["audit"],["scratch_p4"]]}   (2026-11-26; scratch_p4 is the P4 spike's scratch namespace)
+#   {"namespaces":[["raw"],["bronze"],["silver"],["gold"],["audit"],["scratch_p4"]]}   (2026-11-26; scratch_p4 is the scratch namespace of plan phase P4's spike, [glossary](../adr/glossary.md#scratch-namespace-and-the-p4-spike))
 
 # Ingest lag and per-table commit age (timestamps, aged in PromQL)
 curl -s --get localhost:9090/api/v1/query \
@@ -165,7 +166,7 @@ docker exec k2-trino trino --execute 'SHOW SCHEMAS FROM lake'
 docker exec -it k2-trino trino --catalog lake --schema gold          # interactive
 docker exec k2-trino trino --execute 'SELECT count(*) FROM lake.gold.ohlcv_1m'
 
-# Time travel by snapshot id, the way the parity gates pin
+# Time travel by snapshot id, the way the parity gates (make parity-ohlcv, make parity-bars) pin
 docker exec k2-trino trino --execute "SELECT snapshot_id FROM lake.gold.\"ohlcv_1m\$refs\" WHERE name = 'main'"
 docker exec k2-trino trino --execute 'SELECT count(*) FROM lake.gold.ohlcv_1m FOR VERSION AS OF <snapshot id>'
 

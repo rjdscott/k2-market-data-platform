@@ -25,7 +25,8 @@ Two values in `.env` are host-specific, not secrets:
 - `K2_CAPTURE_CPUSET` / `K2_HEAVY_CPUSET` ship **empty**, which means no CPU pinning and
   starts anywhere. Uncomment the 15-core layout in `.env.example` only on a host that has
   those cores — a cpuset naming a core the host does not have fails the container at start
-  with `invalid argument`, six of them at once.
+  with `invalid argument`, seven of them at once (the three captures, ClickHouse, Spark,
+  Trino and the `lake-ddl` one-shot).
 - `K2_AIRFLOW_PORT` (default `8090`) and `K2_TRINO_PORT` (default `8088`) are the Airflow
   and Trino host ports. `K2_AIRFLOW_PORT` also feeds Airflow's own base URL, so moving it
   moves the links its UI builds; set either if something else on the host owns the port.

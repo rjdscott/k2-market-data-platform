@@ -58,6 +58,27 @@ while :; do
   sleep 15
 done
 
+# A long-running service whose container has exited is not in `ps` above, so it
+# passed there: Prometheus stayed Exited (255) after the 2026-11-25 VM restart and
+# only step (3) noticed, as a missing metric. Long-running is every service compose
+# defines without restart "no" (the one-shots exit by design). Fails closed: a
+# compose file it cannot read is a FAIL, not a pass.
+if [ -n "$ps_out" ]; then
+  running=$(docker compose ps --services --status running 2>/dev/null || true)
+  missing=$(docker compose config --format json 2>/dev/null | RUNNING="$running" python3 -c '
+import json, os, sys
+svc = json.load(sys.stdin)["services"]
+up = set(os.environ["RUNNING"].split())
+print(" ".join(sorted(n for n, d in svc.items() if d.get("restart", "no") != "no" and n not in up)))' 2>/dev/null) || missing="?"
+  if [ "$missing" = "?" ]; then
+    bad "(1) long-running services" "FAIL (could not read the services from docker compose config)"
+  elif [ -n "$missing" ]; then
+    bad "(1) long-running services" "FAIL (not running: $missing; start each with docker compose up -d --no-deps <service>)"
+  else
+    result "(1) long-running services" "PASS (every one is running)"
+  fi
+fi
+
 # ── (2) a message on every venue in the last 2 minutes ───────────────────────
 # 2>/dev/null, not 2>&1: rpk and clickhouse-client both write notices to stderr
 # ("<jemalloc>: Number of CPUs detected is not deterministic..."), and a merged

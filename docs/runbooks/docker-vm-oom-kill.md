@@ -15,7 +15,7 @@ nor a plain Docker engine on Linux, which has no VM.
 
 | # | Failure | MTTR target | Measured |
 |---|---------|-------------|----------|
-| 1 | Host out-of-memory killer kills the Docker VM | < 15 min from noticing | 10 min 17 s from the kill to `make health` PASS, 5 min 26 s of it after Docker Desktop was started (2026-11-25, one occurrence, not induced) |
+| 1 | Host out-of-memory killer kills the Docker VM | < 15 min from noticing | 10 min 13 s from the kill (22:33:43 UTC) to `make health` PASS (22:43:56), 4 min 38 s of it after Docker Desktop started (22:39:18); 2026-11-25, one occurrence, not induced |
 
 ---
 
@@ -87,6 +87,8 @@ docker info --format '{{.ServerVersion}}'
 
 ```bash
 # 4. Which long-running services did not come back? Prints nothing when every one is running.
+#    make health step (1) checks the same thing since 2026-11-26 ("(1) long-running services");
+#    on 2026-11-25 it did not, and passed with Prometheus exited.
 #    Run 2026-11-26 on the healthy stack: no output. On 2026-11-25 it would have listed
 #    prometheus (Exited (255)).
 comm -23 <(docker compose config --services | grep -v -x -E 'airflow-migrate|lakekeeper-migrate|lake-init|lake-ddl|redpanda-init' | sort) \
@@ -99,7 +101,7 @@ docker compose up -d --no-deps prometheus
 ```
 
 ```bash
-# 5. The whole stack. As run on 2026-11-25: health: PASS at 22:44 UTC. Run 2026-11-26
+# 5. The whole stack. As run on 2026-11-25: health: PASS at 22:43:56 UTC. Run 2026-11-26
 #    (counts replaced; they are market-derived):
 make health
 #   (1) health: PASS (all services healthy or have no healthcheck)
@@ -134,8 +136,10 @@ minute of the day. The owner's decision: leave both as captured, do not repair.
 
 **8. Record the outage** as one row in `lake.audit.checks`, the lake's append-only table of
 check results, with `docker/lake/record_check.py`. The row is the permanent record that the
-window is missing on purpose, not a bug for the next reader to chase, and the parity gate's
-known gap for that minute must name it (`tests/parity/README.md`). The flags:
+window is missing on purpose, not a bug for the next reader to chase, and the parity gate
+(`make parity-ohlcv`, which compares candles across ClickHouse, the lake and DuckDB;
+[glossary](../adr/glossary.md#parity-three-way-and-pinned)) may skip that minute only as a
+[known gap](../adr/glossary.md#known-gap) that names this row (`tests/parity/README.md`). The flags:
 
 - `--job operator` marks a row a person filed by hand (the other jobs are the nightly audit,
   the ingest and the replay tool);
@@ -161,10 +165,11 @@ docker exec k2-trino trino --user reviewer --output-format TSV_HEADER --execute 
 #   2026-11-26 01:00:44.228723 UTC  operator  capture_outage  stack/2026-11-25T22:33:43Z..2026-11-25T22:39:26Z  false   343
 ```
 
-**Measured**, one occurrence, 2026-11-25, not induced: the kill at 22:33:43 UTC, Docker
-Desktop started at 22:39:18, capture producing again at 22:39:26 (capture off **343 s**), the
-interrupted ingest's second attempt from 22:39:31 to 22:43:35, `make health` PASS at 22:44.
-That is 10 min 17 s from the kill to PASS, most of it before anyone noticed: no alert can fire
+**Measured**, one occurrence, 2026-11-25, not induced: the kill at 22:33:43 UTC (kernel log),
+Docker Desktop started at 22:39:18 (its unit's journal), capture producing again at 22:39:26
+(capture off **343 s**), the interrupted ingest's second attempt from 22:39:31 to 22:43:35
+(Airflow), `make health` PASS at 22:43:56 (the operator's log). That is 10 min 13 s from the
+kill to PASS, 5 min 35 s of it before anyone started Docker Desktop: no alert can fire
 (Detection above).
 
 ---
@@ -191,15 +196,32 @@ The numbers on this host, each with the command that reads it:
 | Host RAM, usable | 62.6 GiB (67,168,444,416 bytes; the kernel's report at the kill counted 63.8 GiB) | `free -b` (`total`) |
 | VM memory setting | 51,712 MiB = 50.5 GiB | Docker Desktop, Settings, Resources, Memory; `MemoryMiB` in `~/.docker/desktop/settings-store.json` |
 | What the containers can use | 49.5 GiB (53,149,335,552 bytes; the VM's own kernel keeps the rest) | `docker info --format '{{.MemTotal}} {{.NCPU}}'` |
-| The VM's footprint on the host right now | 44.7 GiB, peak 48.1 GiB, 2026-11-26 01:30 UTC | `systemctl --user show docker-desktop -p MemoryCurrent -p MemoryPeak` |
+| The VM's guest RAM on the host right now | 41.7 GiB, 2026-11-26 02:09 UTC | `awk '$1 == "shmem" {printf "%.1f GiB\n", $2 / 2^30}' "/sys/fs/cgroup/user.slice/user-$(id -u).slice/user@$(id -u).service/app.slice/docker-desktop.service/memory.stat"` |
+| Docker Desktop's whole footprint | 49.0 GiB at the same minute | `systemctl --user show docker-desktop -p MemoryCurrent` |
 | Left for everything else | 62.6 minus 50.5 = **12.1 GiB** | arithmetic |
 | Swap on the host | 8 GiB | `free -h` |
 
-At the kill the kernel's report showed the VM's shared memory at 48.7 GiB of its 51,712 MiB
-and all other processes holding 13.1 GiB of anonymous memory (memory a program allocated for
-itself, which cannot be dropped like file cache), with the 8 GiB of swap fully used: 61.8 GiB
-of the 63.8 GiB the kernel counted. The other processes alone held more than the 12.1 GiB
-the VM leaves once it reaches its setting, and swap was what ran out.
+The two footprint rows differ on purpose. Docker Desktop backs the VM's guest RAM with shared
+memory, which the unit's cgroup reports as `shmem` in its `memory.stat`: that is the VM.
+`MemoryCurrent` is the whole cgroup: the guest RAM, plus host file cache charged to the unit
+(Docker Desktop's own reads of its disk image and the like), plus its processes' memory, so it
+can read above the VM setting without the VM having grown.
+
+At the kill, the kernel's out-of-memory report (`journalctl -k`, the lines after `invoked
+oom-killer`) gives:
+
+| Figure | Kernel line | Value | What it is |
+|---|---|---|---|
+| Host RAM | `16716394 pages RAM`, `317848 pages reserved` | 63.77 GiB, of which 62.56 GiB usable | 4 KiB pages; usable is what `free` calls `total` |
+| System shared memory | `shmem:48707136kB` | 46.45 GiB | nearly all of it the VM's guest RAM; the VM had not yet reached its 50.5 GiB setting |
+| The VM process's own mapped share | `shmem-rss:27042252kB` on the `Killed process ... (qemu-system-x86)` line | 25.79 GiB | the part of the guest RAM QEMU had mapped and resident at that instant, not the VM's size |
+| Everything else's anonymous memory | `active_anon` plus `inactive_anon` minus `shmem`; or each other task's `rss_anon` in the task list | about 13 GiB: 12.9 by the first, 13.3 by the second | memory programs allocated for themselves, which cannot be dropped like file cache; another 3.7 GiB of theirs was in swap |
+| Swap | `Total swap = 8388604kB`, `Free swap = 0kB` | 8 GiB, none free | |
+
+So 46.45 GiB of guest RAM and about 13 GiB of everything else filled the 62.56 GiB of usable
+RAM, with swap already full: nothing was left to reclaim. With the VM at its full 50.5 GiB
+setting, which it reaches within hours, everything else has 12.1 GiB, and it was already
+holding about 13 GiB resident and 3.7 GiB more in swap.
 
 The two ways to satisfy the rule:
 
@@ -229,7 +251,7 @@ The reasoning behind the original sizing, and why it was wrong, is
   docker-desktop` at 22:39:18. Every container restarted by itself except Prometheus, which
   stayed `Exited (255)` and was started with `docker compose up -d --no-deps prometheus`. The
   interrupted `lake_ingest` run was retried by Airflow and succeeded; `make health` PASS at
-  22:44 UTC. Capture was off 343 s (22:33:43 to 22:39:26); that market data is not
+  22:43:56 UTC. Capture was off 343 s (22:33:43 to 22:39:26); that market data is not
   recoverable. Minute 22:33: the hot tier and the lake hold different partial sets of trades,
   left as captured and recorded as `lake.audit.checks` job `operator`, check
   `capture_outage`. Cause: desktop use plus the VM's full 51,712 MiB exceeded host RAM and

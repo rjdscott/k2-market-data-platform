@@ -37,7 +37,7 @@ predate the connection; the capture now excludes those frames from the histogram
 (`Handled.history`), and the lake keeps them as trades. The per-trade distribution over the lake
 (`recv_ts_ns − exchange_ts`) is in the same benchmark section. Segments 2–5 are bounds by
 construction or configuration and have not been measured end to end; the query that would do
-it is in [data-inspection.md](./data-inspection.md#trades--goldtrades).
+it is in [data-inspection.md](./data-inspection.md#trades-goldtrades).
 
 The v2 pipeline's 7-segment budget and its 2026-02-19 measurements are a dated record in
 [benchmarks/2026-02-19-v2-baseline.md](../benchmarks/2026-02-19-v2-baseline.md).

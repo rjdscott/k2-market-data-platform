@@ -130,9 +130,12 @@ beyond today's declared 36.812 GiB". That reasoning was wrong, in two ways.
    free as file cache (copies of files kept in memory so the next read is fast), and QEMU does not
    return those pages to the host. So from the host's side **the VM grows to its full setting and
    stays there**, whatever the containers use: after a restart on 2026-11-25 it went from about
-   20 GiB to about 41 GiB in under three hours, and it read 44.7 GiB, peak 48.1 GiB, at 01:30 UTC
-   on 2026-11-26 (`systemctl --user show docker-desktop -p MemoryCurrent -p MemoryPeak`). Memory
-   the containers do not use is not a margin for the host; the host pays for it anyway.
+   20 GiB to about 41 GiB in under three hours, and read 41.7 GiB at 02:09 UTC on 2026-11-26.
+   That figure is the guest RAM: Docker Desktop backs it with shared memory, which its systemd
+   unit's cgroup reports as `shmem` in `memory.stat`. The unit's `MemoryCurrent` read 49.0 GiB at
+   the same minute, because it also counts host file cache charged to the unit and the unit's
+   own processes, so it can read above the VM setting without the VM having grown. Memory the
+   containers do not use is not a margin for the host; the host pays for it anyway.
 2. **It ignored everything else the host runs.** The host is also a desktop. With 62.6 GiB of
    usable RAM (`free -b`) and the VM at 50.5 GiB, 12.1 GiB is left for the desktop, its browser,
    editor and every other program, and for the host kernel.
@@ -140,11 +143,16 @@ beyond today's declared 36.812 GiB". That reasoning was wrong, in two ways.
 **What happened.** At 22:33:43 UTC on 2026-11-25 the host kernel's out-of-memory killer (the part
 of Linux that ends a process when no memory is left) killed the VM, and every container with it;
 `systemctl --user status docker-desktop` showed `Result: oom-kill`. The kernel's report at the
-kill: the VM's shared memory at 48.7 GiB of its 51,712 MiB, all other processes holding 13.1 GiB
-of anonymous memory (memory a program allocated for itself, which cannot be dropped like file
-cache), the 8 GiB of swap fully used, host RAM 63.8 GiB as the kernel counts it. Together that is
-61.8 GiB of 63.8 with swap already full, and the other processes alone held more than the
-12.1 GiB the VM leaves once it reaches its setting. Capture was off for 343 s (22:33:43 to 22:39:26 UTC), and that
+kill, each figure from its own line: host RAM 63.77 GiB (`16716394 pages RAM`, 4 KiB pages), of
+which 62.56 GiB usable after `317848 pages reserved`; system-wide shared memory 46.45 GiB
+(`shmem:48707136kB`), nearly all of it the VM's guest RAM, which had not yet reached its 50.5 GiB
+setting; the QEMU process's own resident mapped share 25.79 GiB (`shmem-rss:27042252kB`), which
+is not the VM's size; everything else's anonymous memory (memory a program allocated for
+itself, which cannot be dropped like file cache) about 13 GiB, 12.9 by the kernel's anonymous
+totals minus shared memory and 13.3 summing each other task's `rss_anon`, with 3.7 GiB more of
+it in swap; and swap 8 GiB with `Free swap = 0kB`. So 46.45 GiB of guest RAM and about 13 GiB of
+everything else filled the 62.56 GiB, with swap already full. With the VM at its full setting,
+everything else has 12.1 GiB, and it already held about 13 resident. Capture was off for 343 s (22:33:43 to 22:39:26 UTC), and that
 market data is not recoverable: the venues' public feeds do not replay. Recovery and the checks
 after it are the runbook
 [`docker-vm-oom-kill.md`](../runbooks/docker-vm-oom-kill.md); the outage is recorded in
@@ -160,11 +168,13 @@ host RAM  >  VM memory setting  +  everything else the host runs  +  a margin
 ```
 
 so the desktop and its margin must fit in 12.1 GiB. The VM setting has a floor too: the declared
-bootstrap peak, 37.812 GiB (`python3 scripts/check-budget.py`), plus about 1 GiB for the VM's own
+bootstrap peak, 37.812 GiB (`python3 scripts/check-budget.py`; the Decision's 36.812 GiB was
+before Trino's memory limit went from 4 to 5 GiB on 2026-11-26,
+[ADR-035](ADR-035-trino-and-dbt-for-marts.md)'s Outcome), plus about 1 GiB for the VM's own
 kernel (50.5 GiB set, 49.5 GiB offered), so about 39 GiB. Below it Docker Desktop silently clips
 every limit above the VM's size. No alert can watch the host condition: every container,
 Prometheus and cAdvisor included, sees the VM's memory, not the host's. The checks are on the
-host: `free -h` (swap filling comes before a kill) and the `systemctl` line above.
+host: `free -h` (swap filling comes before a kill) and the unit's `shmem` above.
 
 **The owner's decision, 2026-11-26:** keep the VM at 51,712 MiB, keep the desktop light, add no
 swap. No limit and no ceiling change, so `scripts/check-budget.py`, the ADR-010 Outcome and the

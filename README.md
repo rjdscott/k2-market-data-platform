@@ -152,7 +152,7 @@ RAM than that setting plus everything else it runs
 
 Two lines of `.env` are host-specific and are the whole first-run gotcha:
 `K2_CAPTURE_CPUSET` and `K2_HEAVY_CPUSET` ship empty (no CPU pinning, starts anywhere) —
-uncomment the 15-core layout in `.env.example` only on a host that has those cores, or six
+uncomment the 15-core layout in `.env.example` only on a host that has those cores, or seven
 containers fail at start with `invalid argument`. `K2_AIRFLOW_PORT` (default 8090, loopback
 only) is Airflow's host port, and it moves the UI's own base URL with it; `K2_DOCKER_GID` is
 the group that owns the Docker socket, 0 on Docker Desktop.
