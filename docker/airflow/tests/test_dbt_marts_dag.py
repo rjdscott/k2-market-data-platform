@@ -17,10 +17,12 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import yaml
-from airflow.dag_processing.dagbag import DagBag
+from airflow.dag_processing.dagbag import BundleDagBag
 
 REPO = Path(__file__).resolve().parents[3]
-BAG = DagBag(dag_folder=str(REPO / "docker/airflow/dags"))
+# As the dag-processor and the task runner parse it: the folder is the bundle, and on
+# sys.path, which is how lake.py and factory.py import lake_script.py.
+BAG = BundleDagBag(dag_folder=str(REPO / "docker/airflow/dags"), bundle_path=REPO / "docker/airflow/dags")
 DAG = BAG.dags["dbt_marts"]
 SELECTORS = [s["name"] for s in yaml.safe_load((REPO / "dbt/selectors.yml").read_text())["selectors"]]
 
