@@ -36,7 +36,7 @@ for ((i = 0; i < ${#extra[@]}; i += 2)); do
 done
 
 frames=/tmp/k2-replay-${exchange}-${conn}.frames.jsonl
-uv run --no-project --with duckdb==1.4.4 --with pytz --with fastavro==1.12.2 \
+uv run --no-project --with duckdb==1.4.4 --with pytz==2026.6 --with fastavro==1.12.2 \
   python scripts/replay_export.py --exchange "$exchange" --snapshot-id "$snapshot" --conn-id "$conn" \
   --out "$frames" "${export_args[@]}"
 

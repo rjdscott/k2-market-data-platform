@@ -481,7 +481,10 @@ services:
   # effect on recreate: `docker compose up -d --force-recreate --no-deps prefect-db`.
   prefect-db:
     logging: *k2-logging
-    image: postgres:15-alpine
+    # 15.19-alpine as k2-prefect-db runs it (pulled 2026-08-13). By digest
+    # alone: the 15.19-alpine tag has since moved to a rebuild, and a tag that
+    # disagrees with its digest only confuses.
+    image: postgres@sha256:fe0737ba566a2c5b2a28f34433c0a423261900ec17b9bf7ad115e1aae7e57f1b
     container_name: k2-prefect-db
     hostname: prefect-db
     networks:
@@ -538,7 +541,7 @@ services:
   prefect-server:
     logging: *k2-logging
     profiles: ["legacy"]
-    image: prefecthq/prefect:3-python3.12
+    image: prefecthq/prefect:3.9.5-python3.12
     container_name: k2-prefect-server
     hostname: prefect-server
     networks:

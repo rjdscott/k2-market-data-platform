@@ -341,7 +341,7 @@ an Avro record with the venue's text frame inside. `strpos(..., '{')` cuts to th
 SELECT substr(from_utf8(payload), strpos(from_utf8(payload), '{')) AS frame,
        from_utf8(headers['recv_ts_ns']) AS recv_ts_ns, ingest_ts
 FROM lake.raw.messages
-WHERE topic = 'market.crypto.v3.raw.kraken' AND partition = 3 AND offset = 24654327
+WHERE topic = 'market.crypto.v3.raw.kraken' AND partition = 3 AND offset = 24654327  -- counts-ok: a Kafka offset, a position
   AND kafka_ts BETWEEN TIMESTAMP '2026-11-25 19:29:03 UTC' AND TIMESTAMP '2026-11-25 19:31:04 UTC';
 ```
 

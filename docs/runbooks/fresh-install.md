@@ -91,9 +91,9 @@ attempt described in BUG 1). The offsets after the build are +3 m 01 s, +3 m 16 
 +4 m 21 s measured from the container-start command itself, which is what a second run on
 warm images will see.
 
-`lake-verify.sh` at +15 min reported 264,855 raw rows, 79 gapless partitions, silver equal
+`lake-verify.sh` at +15 min reported raw rows on 79 gapless partitions, silver equal
 to bronze, and gold equal to silver first deliveries for all three venues. ClickHouse then
-held 85,134 rows in `gold.trades` and 13,896 in `gold.book_top20`.
+held rows in both `gold.trades` and `gold.book_top20`.
 
 ## What healthy looks like
 

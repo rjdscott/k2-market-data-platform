@@ -1,4 +1,4 @@
-FROM prefecthq/prefect:3-python3.12
+FROM prefecthq/prefect:3.9.5-python3.12
 
 # ─────────────────────────────────────────────────────────────────────────────
 # System dependencies

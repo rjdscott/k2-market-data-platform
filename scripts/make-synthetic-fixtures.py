@@ -10,8 +10,11 @@ number spellings, sequence behaviour and session shape the adapters were written
 against. Kraken's CRC32 is computed here over the synthetic book exactly as
 `kraken.rs::book_checksum` computes it, so every book frame verifies.
 
-Outputs, all named `synthetic-*` (check-docs.sh gate (h) fails CI on a fixture or
-sample data file that is neither that nor listed in NOTICE):
+Outputs, all named `synthetic-*`, and `tests/fixtures/SHA256SUMS`, the manifest of
+their sha256 digests (`sha256sum -c tests/fixtures/SHA256SUMS` from the root).
+Check-docs.sh gate (i) fails CI on a data file that is neither in that manifest at
+its hash nor listed in NOTICE, and on a `synthetic-*` file the manifest does not
+list, so a file is synthetic because this script wrote it, not because of its name:
 
 - `services/capture-rust/tests/fixtures/`: three clean sessions and three failure
   fixtures, each derived from its clean sibling by one edit (a wrong Kraken
@@ -28,6 +31,7 @@ digest when it moves). Real frames, for stronger evidence, come from
 """
 
 import datetime
+import hashlib
 import json
 import random
 import zlib
@@ -37,6 +41,7 @@ ROOT = Path(__file__).resolve().parent.parent
 CAPTURE = ROOT / "services/capture-rust/tests/fixtures"
 BRONZE = ROOT / "tests/fixtures/bronze"
 SPIKES = ROOT / "docs/research/2026-08-26-v3-spikes"
+MANIFEST = BRONZE.parent / "SHA256SUMS"
 
 SEED = 20261124
 E8 = 100_000_000  # the wire contract's 1e-8 fixed point
@@ -443,6 +448,8 @@ def build() -> tuple[dict[Path, str], list[str]]:
     out[SPIKES / "s5-coinbase-level2/synthetic-coinbase.sample.jsonl"] = "".join(
         spike_line(coinbase_updates(rng, btc, T0 + n * 300 * MS, n, "BTC-USD"), T0 + n * 300 * MS + 20 * MS) + "\n"
         for n in (1, 2, 3))
+    out[MANIFEST] = "".join(
+        f"{hashlib.sha256(text.encode()).hexdigest()}  {path.relative_to(ROOT)}\n" for path, text in sorted(out.items()))
     return out, [f"{name}: {what}" for name, (_, what) in derived.items()]
 
 
