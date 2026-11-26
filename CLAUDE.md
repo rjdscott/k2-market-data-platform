@@ -14,7 +14,7 @@ in ADR-019 and the `k2.*` database was dropped at the Phase E cutover on
 unexecuted, in `legacy/v2-clickhouse/`. ClickHouse now serves the `gold` hot tier
 only, fed straight from Redpanda. The v2 ClickHouse→Iceberg offload that wrote
 `cold.*` is deleted (Phase D).
-v2 is at the repo root; v1 is archived unmodified in `legacy/v1/`, the v2 Kotlin
+v2 is at the repo root; v1 is archived in `legacy/v1/` with its source unchanged since archiving (only dependency pins and READMEs have moved), the v2 Kotlin
 tier in `legacy/v2-kotlin/`, and the deleted v2 offload in `legacy/v2-offload/`.
 Read this before writing code or docs. Architecture: `docs/architecture/README.md`.
 
