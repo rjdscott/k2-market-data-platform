@@ -1,4 +1,4 @@
-.PHONY: chaos help up down logs ps health gates test test-python test-rust test-airflow record-fixtures test-notebooks test-legacy-kotlin dev-up check-docs check-alerts build-capture lint lake-verify lake-rebuild test-clickhouse test-trino test-dbt parity-ohlcv parity-bars notebooks notebooks-run test-k2gen generate new-product screenshots
+.PHONY: chaos help up down logs ps health backup backup-install gates test test-python test-rust test-airflow record-fixtures test-notebooks test-legacy-kotlin dev-up check-docs check-alerts build-capture lint lake-verify lake-rebuild test-clickhouse test-trino test-dbt parity-ohlcv parity-bars notebooks notebooks-run test-k2gen generate new-product screenshots
 
 # Stamped into the capture binary's k2_capture_build_info gauge. `git describe`
 # and not `rev-parse`: an image built from a dirty tree must not claim to be the
@@ -19,6 +19,19 @@ dev-up: ## Bring the stack up the safe way (override, rebuild, recreate mount ho
 
 health: ## Is it up: every service healthy, a message on every venue in the last 2 min, last lake commit + ingest run
 	bash scripts/health.sh
+
+backup:  ## Copy the irreplaceable lake tables and the catalog database to K2_BACKUP_DIR (default ~/k2-backup); read-only against the stack
+	bash scripts/backup-lake.sh
+
+# The owner runs this, once, from the main checkout: the unit runs the script from
+# the directory it was installed from. docs/runbooks/lake-backup-and-restore.md.
+backup-install:  ## Schedule `make backup` daily at 04:30 UTC: a systemd user timer in ~/.config/systemd/user, enabled
+	mkdir -p $(HOME)/.config/systemd/user
+	sed 's|@K2_ROOT@|$(CURDIR)|g' scripts/systemd/k2-backup.service > $(HOME)/.config/systemd/user/k2-backup.service
+	cp scripts/systemd/k2-backup.timer $(HOME)/.config/systemd/user/k2-backup.timer
+	systemctl --user daemon-reload
+	systemctl --user enable --now k2-backup.timer
+	@echo "Scheduled daily at 04:30 UTC. Run 'make backup' now for the first copy: make health FAILs (4) until one succeeds."
 
 check-docs: ## Doc gates (links, forbidden words, promtool, runbook paths, capacity-model gate, no em-dash on added lines, synthetic fixtures)
 	bash scripts/check-docs.sh
