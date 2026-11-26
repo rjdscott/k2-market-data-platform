@@ -88,7 +88,10 @@ export MC_HOST_k2
 
 net=$(docker inspect -f '{{range $k, $v := .NetworkSettings.Networks}}{{$k}} {{end}}' k2-minio 2>/dev/null) ||
   die "k2-minio is not running"
-net=${net%% *}
+# The catalog's network, where both Lakekeeper and MinIO are (ADR-059 part 7); before
+# the cutover to releases Lakekeeper is on MinIO's only network.
+cat_net=$(grep -o '[^ ]*_k2-catalog' <<<"$net" || true)
+net=${cat_net:-${net%% *}}
 # The copy must not live in MinIO's own storage, where dropping a bucket could delete it.
 while IFS= read -r src; do
   [ -n "$src" ] || continue

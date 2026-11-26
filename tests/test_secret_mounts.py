@@ -74,7 +74,7 @@ def test_each_forbidden_mount_is_named(volume, named):
     "${K2_SECRETS:-${HOME}/k2-secrets}/tls/trino.pem:/run/k2-secrets/tls/trino.pem:ro",
     "${K2_SECRETS:-${HOME}/k2-secrets}/trino:/run/k2-secrets/trino:ro",
     "${K2_SECRETS:-${HOME}/k2-secrets}/alertmanager:/run/k2-secrets:ro",
-    "./docker/trino/etc:/etc/trino:ro",
+    {"type": "bind", "source": "${K2_RELEASES:-${HOME}/k2-releases}", "target": "/k2/releases", "read_only": True},
 ])
 def test_a_named_file_or_another_directory_passes(volume):
     assert secret_mount_problems({"services": {"x": {"volumes": [volume]}}}) == []

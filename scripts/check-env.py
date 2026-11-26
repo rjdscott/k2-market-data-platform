@@ -18,7 +18,8 @@ exactly as compose resolves them. They are compared in-process and never
 printed. Exits 1, naming each variable, when a secret in CREDENTIALS (every
 password, secret and key compose passes to a service; tests/test_check_env.py
 fails when compose or .env.example names one the table does not), or any
-*_PASSWORD, *_SECRET or *_KEY .env.example lists, is:
+*_PASSWORD, *_SECRET or *_KEY .env.example lists (an *_ACCESS_KEY is the user
+name an S3 secret key pairs with, not a secret), is:
 
 - unset, empty, or still the value .env.example ships for it;
 - equal to the user name it is paired with, ignoring case: a user name is not
@@ -36,7 +37,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 # .env.example is ours and plain NAME=value, so a regex reads it.
-SECRET = re.compile(r"^([A-Z0-9_]*(?:PASSWORD|SECRET|KEY))=(.*)$", re.M)
+SECRET = re.compile(r"^([A-Z0-9_]*(?:PASSWORD|SECRET|(?<!ACCESS_)KEY))=(.*)$", re.M)
 SETTING = re.compile(r"^[A-Z0-9_]+=(.+)$", re.M)
 
 # Every secret compose passes to a service, and the user it is paired with
@@ -52,6 +53,8 @@ CREDENTIALS = {
     "AIRFLOW_JWT_SECRET": None,
     "AIRFLOW_API_SECRET_KEY": None,
     "GRAFANA_PASSWORD": "admin",                # GF_SECURITY_ADMIN_USER in docker-compose.yml
+    "K2_TRINO_SHARED_SECRET": None,             # Trino's internal shared secret (ADR-060)
+    "K2_TRINO_S3_SECRET_KEY": "$K2_TRINO_S3_ACCESS_KEY",  # Trino's S3 pair
 }
 # What .env.example tells you to generate clears this three times over
 # (`openssl rand -hex 24` is 48 characters, `-base64 32` is 44), and 16 random

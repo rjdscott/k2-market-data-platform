@@ -26,7 +26,7 @@ def filled(**overrides):
     """Every secret distinct, long and real-looking, users as .env.example ships them
     (the database role keeps its historical name, ADR-034)."""
     env = {n: f"filled-{i}-value-7f3a9c2e" for i, n in enumerate(NAMES)}
-    return {**env, "MINIO_ROOT_USER": USER, "PREFECT_DB_USER": "prefect", **overrides}
+    return {**env, "MINIO_ROOT_USER": USER, "K2_TRINO_S3_ACCESS_KEY": USER, "PREFECT_DB_USER": "prefect", **overrides}
 
 
 def test_the_shipped_example_does_not_pair_minio_user_and_password():
@@ -48,7 +48,7 @@ def test_every_secret_filled_passes():
 
 def test_the_table_names_every_secret_compose_and_the_example_pass():
     compose = (ROOT / "docker-compose.yml").read_text()
-    in_compose = set(re.findall(r"\$\{([A-Z0-9_]*(?:PASSWORD|SECRET|KEY|TOKEN))\b", compose))
+    in_compose = set(re.findall(r"\$\{([A-Z0-9_]*(?:PASSWORD|SECRET|(?<!ACCESS_)KEY|TOKEN))\b", compose))
     assert in_compose and in_compose | set(NAMES) <= guard.CREDENTIALS.keys()
     # every $NAME user the table points at is a variable compose really reads
     users = {u[1:] for u in guard.CREDENTIALS.values() if u and u.startswith("$")}
