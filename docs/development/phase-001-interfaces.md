@@ -192,17 +192,17 @@ has one owner and one frozen place.
 | Platform tables' columns | S15 emits their DDL; phase 002 writes them | `model.PLATFORM_TABLES` |
 | Who creates the run-record table | S15 emits it, S19 applies it | `platform/runs/run_record.sql`, `model.RUN_RECORD_SQL` |
 | Retention | S15 emits it once; maintenance reads it | `model.RETENTION`; no `retainDays` in `pipeline.schema.json` |
-| A compile over unfilled emitters | skipped with a line until S23 | `k2gen.emit.run` |
+| A compile over unfilled emitters | an error since S23 (every file or none) | `k2gen.emit.run` |
 | Canary expectation rows | S20, after S10's product | `tests/access/expectations.yaml`, under `expectations.schema.json` |
 | `trino-rules-test.sh`, `throwaway-lake.sh`, the drift CLI | S12 then S13; S20 | the shared-file table above |
 
-## Left to the step that goes live
+## The compose project name
 
-The proposal gives the compose file `name: k2`. It is not set here: the running stack's
-containers belong to the project named after the checkout's directory, so the line would leave
-`docker compose` from the live checkout blind to them, and the next `up` would collide with
-their container names. Step S22 sets it with the cutover that recreates the services
-(`docker compose -p k2`, A1).
+The proposal gives the compose file `name: k2`. It is not set, and step S22 did not set it: the
+owner decided on 2026-11-27 to keep the live project name, because a rename recreates every
+container and renames every volume. The compose file has no `name:`; `make deploy` is given the
+live name by `K2_COMPOSE_PROJECT` in `.env`
+([`docs/runbooks/first-cutover-to-releases.md`](../runbooks/first-cutover-to-releases.md)).
 
 ## Changed by the reviews, after S00d
 

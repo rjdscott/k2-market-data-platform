@@ -635,7 +635,7 @@ def _registry() -> Registry[Any]:
     resources = []
     for path in sorted(SCHEMA_DIR.glob("*.schema.json")):
         contents = json.loads(path.read_text())
-        if "$id" in contents:  # k2.schema.json, the old profile, has none and is not referenced
+        if "$id" in contents:  # a schema with no $id is never the target of a $ref
             resources.append((contents["$id"], Resource.from_contents(contents)))
     return Registry().with_resources(resources)
 

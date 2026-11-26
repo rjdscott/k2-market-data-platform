@@ -1,16 +1,14 @@
 # Contract schemas
 
-Two sets. The old format's two files are read by `k2gen validate` until step S23 of phase 001
-deletes `k2.schema.json` and that validator, which skips any product directory holding a v2
-`product.odps.yaml`. The v2 files are frozen by the interfaces steps (S00a, S00c) and
+One set. The old format's `k2.schema.json` and its validator, `k2gen validate`, were deleted in
+step S23 of phase 001 (2026-11-27). The v2 files are frozen by the interfaces steps (S00a, S00c) and
 read by `k2gen.model.schema_errors` (`platform/k2gen/k2gen/model.py`, whose `SCHEMAS` names the
 schemas of each kind); they change only through the orchestrator
 ([`platform/k2gen/INTERFACES.md`](../../platform/k2gen/INTERFACES.md)).
 
 | File | What it validates |
 |---|---|
-| `odcs-json-schema-v3.2.0-20261117.json` | every `*.odcs.yaml`, as the Open Data Contract Standard defines it (both formats) |
-| `k2.schema.json` | old format: `domains.yaml`, every `product.yaml`, K2's profile of an ODCS contract, and the K2 custom properties |
+| `odcs-json-schema-v3.2.0-20261117.json` | every `*.odcs.yaml`, as the Open Data Contract Standard defines it |
 | `odps-json-schema-v1.1.0.json` | v2: every `product.odps.yaml`, as the Open Data Product Standard defines it |
 | `k2-v2.schema.json` | v2: K2's profile of each product file and table contract with every K2 custom property; `domains.yaml`, `grants.yaml`, `contracts/access/roles.yaml` and `principals.yaml` |
 | `expectations.schema.json` | v2: `tests/access/expectations.yaml` (A9) |
@@ -58,25 +56,7 @@ Moving to a newer version is a pull request that adds the new file, points `ODPS
 - Licence: Apache License 2.0, copyright The Bitol Contributors. Vendored unmodified (`NOTICE`).
 
 Moving to a newer snapshot is a pull request that replaces the file, updates this section and
-`ODCS_SCHEMA` in both `platform/k2gen/k2gen/model.py` (the v2 path) and
-`platform/k2gen/k2gen/cli.py` (the old validator, until S23), and passes `make test-k2gen`.
-
-## Where each K2 field lives
-
-| K2 field | Place in the contract |
-|---|---|
-| `name`, `domain`, `version` | ODCS `name`, `domain`, `version` (semver, enforced by `k2.schema.json`) |
-| `owner` | ODCS `team.name`; equal to the domain's owner in `domains.yaml` |
-| `description` | ODCS `description.purpose` |
-| `table` | ODCS `schema[0].physicalName`, the Iceberg identifier without the `lake.` catalog |
-| `schema` | inline columns in `schema[0].properties` (`name`, `physicalType` as Spark SQL spells it, `description`, `required`), from which `k2gen generate` writes `docker/lake/ddl/generated/<table>.sql`. The other form, ODCS `schema[0].authoritativeDefinitions` of type `implementation` pointing at `docker/lake/ddl/lake.sql`, named a table that DDL created; k2gen refuses it since the DDL retired to `legacy/v3-lake-ingest/` ([ADR-056](../../docs/adr/ADR-056-unified-data-product-platform.md)) |
-| `quality` | ODCS `schema[0].quality`, type `custom`, engine `k2-maintenance`, the audit's check name |
-| `slo` | ODCS `slaProperties`, only where a check enforces a stated target: an alert, or `dbt source freshness` for a `latency` on a table a mart reads (its `element`, `<table>.<column>`, is the freshness column) |
-| `layer`, `format`, `partitioning`, `sort`, `classification`, `entitlement`, `retention`, `upstreams`, `schedule` | ODCS `customProperties`, validated by `k2.schema.json#/$defs/customProperties` |
-
-`retention` is a custom property and not the standard's `retention` SLA property on purpose:
-the standard's means how long data is kept, and K2's means how long snapshots are kept before
-expiry. No row is deleted ([ADR-032](../../docs/adr/ADR-032-odcs-contracts-and-k2gen.md)).
+`ODCS_SCHEMA` in `platform/k2gen/k2gen/model.py`, and passes `make test-k2gen`.
 
 ## Where each K2 v2 property lives
 
@@ -99,3 +79,7 @@ gone from the v2 table contract: every table is Iceberg (or, for `build: serving
 engine's); access is `policies` with grants; lineage is the product's ports; the schedule is the
 product's. A string pattern a bronze audit checks is the standard's own
 `logicalTypeOptions.pattern`, not a K2 property.
+
+`retention` is a custom property and not the standard's `retention` SLA property on purpose:
+the standard's means how long data is kept, and K2's means how long snapshots are kept before
+expiry. No row is deleted ([ADR-032](../../docs/adr/ADR-032-odcs-contracts-and-k2gen.md)).

@@ -12,7 +12,7 @@ and who may, is
 | Catalog | Lakekeeper warehouse | Files under | Who writes |
 |---|---|---|---|
 | `lake` | `k2`, empty since its old namespaces were dropped | `s3://k2-lake/warehouse/k2/` | nobody through Trino: `iceberg.security=read_only` |
-| one per data domain, named from its id (`market-analytics` is `market_analytics`) | the same name, created by `docker/lake/init-lake.sh` | `s3://k2-lake/warehouse/<name>/` | SQL statements: its writer `dbt_<name>` only; everyone reads. Table procedures: not fenced per user |
+| two per data domain, named from its id (`market-analytics` is `market_analytics`, read-only, and `market_analytics_build`, writable) | the same name, created by `docker/lake/init-lake.sh` from the release's storage plan | `s3://k2-lake/warehouse/<name>/` | only the principals the release's compiled rules name ([ADR-059](../../docs/adr/ADR-059-access-rules-compiled-default-deny-over-two-catalogs-per-domain.md)); readers see a dbt output only through a guarded view ([ADR-061](../../docs/adr/ADR-061-readers-see-dbt-outputs-through-a-view-over-the-tested-tag.md)) |
 
 Today's domains, from `contracts/domains.yaml`: `fx_reference`, `governance`,
 `market_analytics`, `market_capture`, `reference_data`. Inside a domain catalog, one schema per
@@ -20,26 +20,17 @@ data product, named from the product, a `staging` schema of views, and `dq`, whe
 own writer records its dbt test results; dbt creates them ([`dbt/README.md`](../../dbt/README.md),
 [ADR-046](../../docs/adr/ADR-046-governance-domain-and-quality-results.md)).
 
-`etc/` is mounted read-only over the image's `/etc/trino`. A changed file needs
-`docker compose up -d --force-recreate --no-deps trino` (`scripts/dev-up.sh` does it when
-`docker/trino/` changed); Trino reads its configuration only at start.
-
-| File | Kind | What it sets |
-|---|---|---|
-| `etc/config.properties` | hand-written | one node: coordinator and its only worker; HTTP on 8080 inside the network |
-| `etc/jvm.config` | hand-written | heap `-Xms2816M -Xmx2816M` under the 5G limit, JVM time zone `UTC`, exit on `OutOfMemoryError` (no heap dump: nowhere bounded to put one) |
-| `etc/node.properties` | hand-written | environment `k2`, data directory |
-| `etc/catalog/lake.properties` | hand-written | warehouse `k2`, `iceberg.security=read_only`; static MinIO keys from `${ENV:MINIO_ROOT_USER}` / `${ENV:MINIO_ROOT_PASSWORD}`, path-style, region `local-01` |
-| `etc/catalog/<domain>.properties` | **generated** | the domain's warehouse, writable, Lakekeeper-assigned locations, `register_table` and `add_files` off |
-| `etc/rules.json` | **generated** | file-based access control, below |
-| `etc/access-control.properties` | hand-written | points Trino at `rules.json` |
-| `test/local/<domain>.properties` | **generated** | each domain catalog's twin on a local metastore, for `make test-trino` |
-| `test/local/lake.properties` | hand-written | the read-only `lake` twin over the same metastore |
-
-Generated files come from `contracts/domains.yaml` through `make generate`
-(`platform/k2gen/k2gen/generate.py`), with `docker/lake/generated/warehouses.txt`, the list
-`init-lake.sh` creates. Never edit them: add or change a domain, then `make generate`; the CI
-drift gate fails a stale one.
+**Where the etc comes from.** Not from this directory: `docker/trino/etc` was deleted on
+2026-11-27. k2gen compiles the whole etc (`platform/k2gen/k2gen/emit/trino_etc.py`) into each
+release's `compiled/trino/etc/`, and the `trino` service starts with
+`--etc-dir=/k2/releases/pointers/trino/compiled/trino/etc`, through the release pointer
+([ADR-058](../../docs/adr/ADR-058-deploy-sealed-releases-by-pointer-swap.md)). It holds
+`config.properties` (HTTPS only on 8443, password logins, Web UI off), `jvm.config`,
+`node.properties`, `log.properties`, `catalog/` (`lake` and the two per domain),
+`access-control.properties` (the release's `rules.json`, through the pointer, reread every
+5 s), the group provider and the resource groups. A release that changes only the rules is
+picked up without a restart; a change under `etc` restarts Trino (`make deploy` plans it).
+Never edit a compiled file: change the documents, tag, `make release`, `make deploy`.
 
 **Heap.** 2816M of the 5 GiB limit leaves 2.25 GiB for metaspace, the 256M code cache,
 thread stacks and direct buffers; nothing here caps direct memory. A single query ran at 1 CPU /
@@ -60,36 +51,24 @@ it in the dbt profile.
    `checkCanExecuteTableProcedure` is an empty method in both file-based access controls of
    `lib/trino-plugin-toolkit` at tag 484 (lines 1043 and 727), and a `rollback_to_snapshot` of
    a table whose snapshots carry its Kafka offsets (the retired raw archive did) would lose them.
-2. **`rules.json`, per writer.** First match wins in each list. Catalogs `lake` and the domains
-   are `all` at the catalog level and `system` read-only; the fence is in the schema and table
-   rules: `dbt_<domain>` owns its own catalog's schemas and tables, and every user, that writer
-   included, has `SELECT` and `GRANT_SELECT` on everything else. A user no rule names (`trino`,
-   `someone`) reads everything and writes nothing with SQL statements. The catalog level stays
-   `all` because a definer view is readable by others only if its owner has `all` on each base
-   table's catalog: a read-only catalog rule gave `Access Denied: View owner does not have
-   sufficient privileges` on 2026-11-25. Three more lists:
-   - no `procedures` list, so `CALL` runs only Trino's built-ins: that default is what denies
-     `CALL <catalog>.system.rollback_to_snapshot`, `register_table` and the rest in a domain
-     catalog. In `lake` the read-only connector would deny them too (by the source; not
-     tested on its own);
-   - `catalog_session_properties` denies `expire_snapshots_min_retention` and
-     `remove_orphan_files_min_retention` to every user, a domain's writer included, and allows
-     the rest. Without it anyone could lower the 7-day floor to `0s` and expire a table's
-     snapshots (probed on `k2-trino`, 2026-11-25: 2 snapshots became 1);
-   - `queries`: every user executes; a user sees and kills only its own queries.
+2. **The rules, compiled default-deny for each release** from `contracts/access/` and each
+   product's grants ([ADR-059](../../docs/adr/ADR-059-access-rules-compiled-default-deny-over-two-catalogs-per-domain.md)).
+   The hand-written `rules.json` this section described until 2026-11-27 went with
+   `docker/trino/etc`.
 
-**Identity is asserted, not authenticated.** The user is the `X-Trino-User` header (`trino
---user`); anyone on the host can claim `dbt_market_analytics`. The port is published on
-`127.0.0.1` only. The fences stop mistakes, not a liar, and Lakekeeper is unauthenticated too
-([ADR-028](../../docs/adr/ADR-028-non-goals-and-honest-limits.md) section 8). The second
-layer, a MinIO key per identity scoped to its prefix, comes with the entitlements phase.
+**Identity is a password login over HTTPS** under a local CA
+([ADR-060](../../docs/adr/ADR-060-trino-logins-by-password-over-tls-under-a-local-ca.md); `make tls`,
+`make password PRINCIPAL=<id>`, secrets under `${K2_SECRETS}`, never the repository). Until
+2026-11-27 the user was the unchecked `X-Trino-User` header. Lakekeeper is still unauthenticated
+and is fenced by network instead (ADR-059 part 7). Trino's S3 keys are `K2_TRINO_S3_*`, MinIO's
+root pair until phase 002 gives it a scoped key.
 
 **The startup log and the S3 keys.** Trino logs every catalog property at start, one INFO
 line each under `io.trino.bootstrap.catalog.<catalog>`, and masks only what the connector
 marks security-sensitive: `s3.aws-secret-key` is masked, `s3.aws-access-key` is not. Until
 2026-11-26 that put the MinIO access key in `docker logs k2-trino` once per catalog per
-start. `etc/log.properties` sets that logger to `WARN`, and `make test-trino` starts `etc/`
-with a canary access key and fails if the log prints it. `SHOW CREATE CATALOG` does not exist
+start. The compiled `log.properties` sets that logger to `WARN` (its golden file pins the line);
+the check that started the old `etc/` with a canary key and read the log went with it. `SHOW CREATE CATALOG` does not exist
 in Trino 484 and `system.metadata.catalogs` lists no properties (probed 2026-11-26), so SQL
 does not reveal the keys either.
 
@@ -98,44 +77,31 @@ built-in access control in Trino 484 restricts `ALTER TABLE ... EXECUTE` per use
 writable catalog. `EXPLAIN ALTER TABLE reference_data.scratch_check.candles EXECUTE optimize`
 as `dbt_market_analytics` planned on 2026-11-25. So any user can still run `optimize`,
 `rollback_to_snapshot`, and `expire_snapshots` or `remove_orphan_files` at or above the 7-day
-floor on any domain's marts. The lake is not exposed by it, and a mart is rebuilt by dbt;
-`make test-trino` asserts the gap, so a release that closes it fails there.
+floor on any domain's marts. The lake is not exposed by it, and a mart is rebuilt by dbt.
+This was measured on the old hand-written rules, 2026-11-25.
+<!-- VERIFY: whether the compiled rules of ADR-059 still leave this gap, and which make test-trino row shows it -->
 
 ## Operating the domain warehouses
 
-**`lake-init` failed on a domain warehouse.** `init-lake.sh` creates them last, after the
-bucket and the `k2` warehouse, so the lake itself is bootstrapped; but the one-shot exits 1,
-and what waits for it does not start: `trino`. Read the reason, fix it (usually a name
-Lakekeeper refuses, or Lakekeeper or MinIO not up), then run the one-shot again and start
-what waited:
+**`lake-init` failed on a domain warehouse.** `make deploy` runs the one-shots before it moves
+anything, and `init-lake.sh` creates the domain warehouses last, after the bucket and the `k2`
+warehouse. Read the reason (`docker logs k2-lake-init | tail -20`), fix it (usually a name
+Lakekeeper refuses, or Lakekeeper or MinIO not up), then deploy again:
+[`docs/runbooks/deploy-a-release.md`](../../docs/runbooks/deploy-a-release.md).
 
-```bash
-docker logs k2-lake-init | tail -20
-docker compose up -d --force-recreate --no-deps lake-init
-docker compose up -d trino
-```
+**Removing a domain.** Delete it from `contracts/domains.yaml`, tag, `make release`,
+`make deploy`: its catalogs and rules go with the next release. `init-lake.sh` only creates, so
+the Lakekeeper warehouse and every object in it stay, invisible to Trino, and re-adding the same
+id would bring the old tables back. On 2026-11-25 the earlier single warehouse `marts` was
+confirmed empty and deleted through Lakekeeper's management API on its host port (`204`); that
+port is gone, so the API is reached only from a container on `k2-catalog`.
+<!-- VERIFY: the warehouse delete from a container on k2-catalog, then write the commands as run -->
 
-**Removing a domain.** Delete it from `contracts/domains.yaml` and `make generate`: its
-catalog file, its rules and its `warehouses.txt` line go. `init-lake.sh` only creates, so the
-Lakekeeper warehouse and every object in it stay, invisible to Trino, and re-adding the same
-id would bring the old tables back. To remove the warehouse for good, confirm it is empty,
-then delete it (how the earlier single warehouse `marts` went, 2026-11-25: `204`):
-
-```bash
-ID=$(curl -s 'localhost:18181/management/v1/warehouse?project-id=00000000-0000-0000-0000-000000000000' \
-  | python3 -c 'import json,sys; print([w["id"] for w in json.load(sys.stdin)["warehouses"] if w["name"] == "<name>"][0])')
-curl -s "localhost:18181/catalog/v1/$ID/namespaces"          # must print {"namespaces":[]}
-curl -s -o /dev/null -w '%{http_code}\n' -X DELETE "localhost:18181/management/v1/warehouse/$ID"   # 204
-```
-
-`make test-trino` (CI job `trino`) checks all of this with no stack: the real `etc/` starts
-with exactly `lake`, `system` and one catalog per domain, only `lake` is on `k2` and it is
-`read_only`; then, on local catalogs from the same generator, each writer creates, inserts
-and drops in its own catalog; the next domain's writer and an unnamed user are denied every SQL
-write on it (insert, delete, update, add column, view, drop); table procedures and `CALL`
-through `lake` are denied, and `CALL` through a domain catalog, its own writer included;
-nobody may set the two retention floors, so an expire at `0s` fails;
-a view across two catalogs is read by a third user; a user sees only its own queries.
+`make test-trino` (CI job `trino`) checks the rules with no stack: it compiles a release from a
+test document set, starts that release's etc and rules on a throwaway Lakekeeper, Postgres,
+MinIO and Trino 484, logs every user in by password over HTTPS, and holds each role to exactly
+its policy's rows and masks; one reader rule widened in place must then fail its rows
+(`scripts/trino-rules-test.sh`).
 
 ## Verified 2026-11-25
 
@@ -169,8 +135,8 @@ The notebook helper `gold.candles()` (archived) ported verbatim fails with `Deci
 `DECIMAL(38,10) * DECIMAL(38,10)` as `decimal(38,6)` but overflows once the exact product
 passes about 1e18. A `DECIMAL(38,0)` product of the two `_e8` integers runs.
 
-Proof commands for the live service, with nothing written. The `lake` half needed a table, and
-the lake has none until phase `004`; until then `make test-trino` proves it with no stack.
+Proof commands for the live service as it was on 2026-11-25, before password logins, with
+nothing written. They no longer log in: every login now needs a password over HTTPS.
 
 ```bash
 docker exec k2-trino trino --user dbt_market_analytics --execute 'CREATE TABLE reference_data.s.t (x integer)'

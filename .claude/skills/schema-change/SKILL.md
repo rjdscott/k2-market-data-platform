@@ -16,7 +16,7 @@ carries a crypto record until phase 004, and the ClickHouse tier is paused (ADR-
 | # | Artifact | Path |
 |---|----------|------|
 | 1 | Avro schema | `schemas/avro/*.avsc` |
-| 2 | Lake table contract, once a product has one | `contracts/` (columns, partitioning and sort inline; `make generate` writes the rest) |
+| 2 | Lake table contract, once a product has one | `contracts/` (columns, partitioning and sort inline; k2gen compiles the DDL into a release, `make release`) |
 | 3 | ClickHouse DDL (derived hot tier, paused) | `docker/clickhouse/ddl/10-gold-tables.sql` + `20-gold-kafka.sql` |
 | 4 | Docs | `docs/architecture/13-schema-design.md`, `docs/architecture/14-partitioning-strategy.md` |
 
@@ -40,9 +40,11 @@ Work top to bottom; do not skip a row because "nothing reads it yet".
    ```
 3. **Lake contract**: when a lake table carries the record, its columns,
    partitioning and sort live in its contract under `contracts/` alone. Edit it,
-   then `make test-k2gen` and `make generate`, and commit what `make generate`
-   wrote. Iceberg takes **nullable additions only**, because it keeps the files
-   written under the old schema.
+   then `make test-k2gen`; nothing generated is committed. The DDL reaches the
+   lake in a release: a tag, `make release TAG=<tag>`, then
+   `make deploy RELEASE=<id>` (`docs/runbooks/deploy-a-release.md`). Iceberg takes
+   **nullable additions only**, because it keeps the files written under the old
+   schema.
 4. **ClickHouse DDL**: the served `gold` tier, two files, both idempotent
    (`CREATE TABLE IF NOT EXISTS`, `ALTER TABLE … ADD COLUMN IF NOT EXISTS`);
    they are mounted at `/docker-entrypoint-initdb.d` and run on a fresh
@@ -72,7 +74,7 @@ Work top to bottom; do not skip a row because "nothing reads it yet".
    ```bash
    make test-python       # tests/test_wire_format.py: Avro against the ClickHouse queue tables
    make test-clickhouse   # the gold DDL on a throwaway server, assertions and all
-   make test-k2gen        # if a contract moved; then make generate leaves git status clean
+   make test-k2gen        # if a contract moved: k2gen's checks and emitters, no stack
    ```
 
 ## One PR
