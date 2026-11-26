@@ -24,6 +24,7 @@ Numbered chapters, in reading order. Start at [00](00-start-here.md).
 | 17 | [Scale-out path](17-scale-out-path.md) | HA, DR and cost on AWS at TB/PB, designed, not exercised |
 | 18 | [Data mesh](18-data-mesh.md) | five domains, products and their contracts, what `k2gen` checks and writes |
 | 19 | [Lakehouse and domain warehouses](19-lakehouse-and-domain-warehouses.md) | tables, catalog, warehouses; the producer lake, a mart warehouse per domain, who may write what |
+| 20 | [The target: a data product platform](20-target-data-product-platform.md) | the TARGET decided on 2026-11-26, not what runs: ethos, twelve diagrams, worked examples, distance from today |
 | A1 | [Technology stack](A1-technology-stack.md) | versions and the ADR behind each |
 
 Decisions live in [`../adr/`](../adr/README.md), and the labels and terms they use

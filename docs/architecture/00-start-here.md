@@ -4,6 +4,8 @@
 > **Read this if** you are new to the repo.
 > **Before this** nothing.
 
+The target the platform is being rebuilt toward is in [chapter 20](20-target-data-product-platform.md); chapters 01 to 19 describe what runs today.
+
 `docs/architecture/` is written as a book: numbered chapters in the order a new joiner
 should meet them, each one openable on its own. Every chapter starts with three lines: what you
 will learn, who should read it, what to read first, so you can skip.

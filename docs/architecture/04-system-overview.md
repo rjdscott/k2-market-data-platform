@@ -4,6 +4,8 @@
 > **Read this if** you need the shape before the detail.
 > **Before this** chapter 01.
 
+The target the platform is being rebuilt toward is in [chapter 20](20-target-data-product-platform.md); this chapter describes what runs today.
+
 ## Problem
 
 A research platform for crypto market data has to do four things end to end, on one host, inside a
