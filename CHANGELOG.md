@@ -13,6 +13,74 @@ layouts and commands, without notice. `3.0.0` is reserved for the release gate t
 
 ## [Unreleased]
 
+Phase 001 of the unified product platform plan, "the release and rules spine", to be tagged
+`3.0.0-alpha.3`: the platform runs only sealed releases compiled from documents, and Trino
+decides who sees what by rules compiled from them, behind passwords over TLS. No product
+pipeline runs yet; the run spine (phase 002) brings the first.
+
+### Decided
+
+- Readers see a dbt output only through a generated view over its tested tag, owned by a
+  publishing identity, its policies as Trino rules on the view's name (ADR-061); the view
+  guards on its base's refs, so a forged base serves nothing. ADR-056's rule against
+  definer views is narrowed to that one shape.
+- Access rules are compiled per release and deny by default, over a read-only reader catalog
+  and a build catalog per domain; the catalog service moves onto a network of its own
+  (ADR-059, superseding ADR-044's one writer per domain).
+- Every Trino login is a password over HTTPS under a local certificate authority (ADR-060).
+- Releases are deployed by moving a pointer per service and rolled back by the same steps
+  (ADR-058).
+- Products are defined once in ODPS and ODCS documents (ADR-055, superseding ADR-032's
+  descriptor format in part) and connectors land verbatim before bronze is published
+  (ADR-036, revised).
+- The decisions taken under the owner's delegation, and the owner's two rulings on FX content
+  and landing retention, are listed in `docs/research/2026-11-26-decisions-addendum.md`.
+
+### Added
+
+- `k2gen release`: compiles a tag's documents into a sealed, read-only release named by the
+  hash of its files and images, after the document, version, access and SQL checks pass;
+  `k2gen diff` prints what deploying it would need.
+- Emitters for Trino's configuration, rules and identity, the lake's DDL and reader views,
+  the per-product pipelines, the dbt project and the catalog JSON.
+- The first two products: an access canary that exercises every policy on the live stack,
+  and the paused ClickHouse hot tier as a serving-only product.
+- Principals and roles declared in `contracts/access/`; `make password`, `make api-key`,
+  `make principal-remove` and `make principals-status`, with every secret generated under
+  `${K2_SECRETS}` and never committed.
+- `make tls-init`, `make tls-rotate` and `make tls-status` for the local CA and Trino's
+  certificate.
+- `make release`, `make deploy`, `make release-verify`, `make rollback`, `make release-status`,
+  `make release-diff` and `make deploy-rehearsal`.
+- The hand-written access suite (`tests/access/`, `make access-verify`, `make test-access`),
+  the tested-data marker check and the catalog drift check.
+- Alertmanager, delivering every alert to one Slack channel through a webhook kept as a local
+  secret.
+- Architecture chapters 21 (releases and deploy) and 22 (access and identity); runbooks to
+  deploy, roll back, verify access, manage TLS and passwords, and create or rotate a principal.
+
+### Changed
+
+- The stack runs from releases: services read their configuration through pointers under
+  `${K2_RELEASES}`, not from the git checkout.
+- Trino listens only on HTTPS and its Web UI is off; every client connects by name, verifies
+  the local CA and logs in with its own password.
+
+### Fixed
+
+- A capture whose connect never returns is abandoned after a bound and retried, and a capture
+  that delivers nothing for ten minutes exits to be restarted: on 2026-11-26 the Coinbase
+  capture sat in its connect for 80 minutes with nothing logged.
+
+### Security
+
+- No credential, and no hash of one, is in git, a document or a release; a release records
+  only in its deploy record, as the checksum of each secret file the deploy used.
+- Readers cannot reach a dbt output's untested rows, its base table, its metadata tables or
+  time travel; the catalog service has no host port and is reachable only from the
+  platform's own services. Delay and row-scope policies suit trusted readers only: a delayed
+  or scoped reader can infer value ranges of hidden rows (ADR-061, Outcome).
+
 ## [3.0.0-alpha.2] - 2026-11-26
 
 Phase 000 of the unified product platform plan, "clear the ground": the old pipeline is

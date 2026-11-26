@@ -215,3 +215,15 @@ module keeps working. `git diff` of `contracts/schema/` adds properties and chan
 | A finding's location | `Finding.pointer` | every check, `k2gen check` |
 | The catalog page and REST | per product `keywords`, `issued`, `periodicity`, `productFile`, `support`, `links`, `inputs[].version`; per output `build`, `testedRef`, `contractFile`, `partitioning`, `retentionDays`, `sla`, `quality`; per role `approvers`; per column `logicalType`, `primaryKeyPosition`, `unique`, `classification` | S18, phase 003 |
 | `config()` with `~`, or a hook holding Jinja | `model_config`'s quote-aware scan, `ValueError` only | S05, S07, S17 |
+
+## Changed by the reviews of S12, S15 and S13, after S00d
+
+Each change is in code and tested; none renamed a frozen name.
+
+| Change | Where | Why |
+|---|---|---|
+| **The guarded view shape.** A reader view's SQL is `SELECT <contract columns> FROM <base> FOR VERSION AS OF 'audited' WHERE EXISTS (SELECT 1 FROM <base>$refs WHERE "name" = 'audited' AND "type" = 'TAG')`, on one line, every name quoted | `emit/lake.view_sql` | the builder owns every name in `<fence>__base` and could swap its base for a view, which Trino 484 reads with the string version ignored; `$refs` exists only for an Iceberg table, so the read fails ([ADR-061](../../docs/adr/ADR-061-readers-see-dbt-outputs-through-a-view-over-the-tested-tag.md) Outcome) |
+| **`view_update(view, old, new)`** takes name-to-type maps (each type as Trino's `DESCRIBE` spells it; `old` is None before the first tag) and returns the statements before and after the tag commit; a column is common only when name and type agree, and a published view with nothing in common raises `lake.NoCommonColumns` | `emit/lake.py` | a view stores its columns' types, so a retype is a drop and an add |
+| **The publisher's `$refs` grant.** `pub_<fence>` holds `SELECT, GRANT_SELECT` on exactly `<table>` and `<table>$refs` of its own bases, through the reader catalog | `emit/trino_rules.py` | Trino's definer-view owner check asks `GRANT_SELECT` of every relation the view reads, the guard's included ([ADR-059](../../docs/adr/ADR-059-access-rules-compiled-default-deny-over-two-catalogs-per-domain.md) Outcome) |
+| **`password.db` in fixed slots.** One `<user>:<bcrypt>` line per principal in a 128-byte slot padded with spaces, 32 slots to a 4 KiB page; every change is one aligned write of one slot in place under the file's `flock`; a file not yet in slots is rewritten into them once | `scripts/principal-secret.py` (`SLOT`); S19's canary line the same way | a reader racing a write sees each line old or new, never torn |
+| **The Web UI is off.** `web-ui.enabled=false` in the compiled `config.properties` | `emit/trino_etc.py` | its form login gave a session that outlived a removed password ([ADR-060](../../docs/adr/ADR-060-trino-logins-by-password-over-tls-under-a-local-ca.md) Outcome) |

@@ -250,3 +250,10 @@ and a guard against accidents, not a barrier against a determined reader. **Revi
 licensed to a principal outside the owner's team: that product's delayed or scoped data must then be
 physically separate (a table or tag per policy, written by the pipeline), since no rule closes the leak.
 This tightens revisit trigger 4 above from counts to values.
+
+## Outcome (2026-11-26, the review is now in the repository)
+
+Context says the independent review of design (a) "is not in the repository". It now is: the review, the
+interfaces proposal it reviewed and the interfaces review are kept, dated and unchanged, in
+[`docs/research/2026-11-26-phase-001-interfaces/`](../research/2026-11-26-phase-001-interfaces.md)
+(`phase001-o8-review.md` is the review Context cites).

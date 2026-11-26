@@ -203,3 +203,14 @@ containers belong to the project named after the checkout's directory, so the li
 `docker compose` from the live checkout blind to them, and the next `up` would collide with
 their container names. Step S22 sets it with the cutover that recreates the services
 (`docker compose -p k2`, A1).
+
+## Changed by the reviews, after S00d
+
+The guarded reader view shape, `view_update`'s name-to-type maps and `lake.NoCommonColumns`, the
+publisher's `$refs` grant, `password.db` in fixed slots and the Web UI switched off: each is stated,
+with where it lives and why, in the last section of
+[`platform/k2gen/INTERFACES.md`](../../platform/k2gen/INTERFACES.md#changed-by-the-reviews-of-s12-s15-and-s13-after-s00d).
+For the wrapper above, step (6)'s two view statements are `emit/lake.view_update(view, old, new)`,
+with `old` and `new` the tagged and tested snapshots' columns mapped to their types. The table
+above holds for `trino/password.db` with one addition: each line sits in a fixed 128-byte slot,
+rewritten by one aligned write in place, so a reader never sees a torn line.

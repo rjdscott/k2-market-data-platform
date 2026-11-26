@@ -14,6 +14,12 @@ dropped or archived after a backup. No live crypto data lands in any warehouse u
 namespace per product ([chapter 20](20-target-data-product-platform.md)). Examples below that name a
 lake table or a mart ran on the dates given, against tables since dropped.
 
+**From release `v3.0.0-alpha.3`** the catalogs, writers and rules this chapter describes are
+replaced: each domain has a read-only reader catalog and a build catalog, the rules are compiled per
+release and deny by default, and Trino logins are passwords over TLS
+([chapter 22](22-access-and-identity.md), [ADR-059](../adr/ADR-059-access-rules-compiled-default-deny-over-two-catalogs-per-domain.md)).
+The producer lake, a warehouse per domain and their names stand.
+
 ## The picture
 
 K2 keeps its data as files in one bucket, `k2-lake`. Six parts work on it:
