@@ -207,6 +207,18 @@ def test_concurrent_runs_serialise_on_the_file(secrets: Path) -> None:
     assert bcrypt_checks([((secrets / f"principals/{s}.password").read_text(), stored[s]) for s in SERVICES]) == [True] * len(SERVICES)
 
 
+def test_a_directory_another_run_made_meanwhile_is_not_an_error(tmp_path: Path) -> None:
+    """The race the concurrent test hit: two runs both see a directory missing, both mkdir."""
+    made = module(f"""
+import pathlib
+real = pathlib.Path.exists
+pathlib.Path.exists = lambda self: False if self.name == 'k2-secrets' else real(self)  # the check lost the race
+d = pathlib.Path({str(tmp_path / 'k2-secrets')!r}); d.mkdir()
+ps.directory(d / 'trino' / 'password.db')
+""")
+    assert made.returncode == 0, made.stderr
+
+
 @pytest.mark.parametrize("args, why", [
     (("password", "PRINCIPAL=p.nobody"), "not a principal"),
     (("password", "PRINCIPAL=k2_release_0123456789ab", "TO_FILE=1"), "not a principal"),  # deploy's (S19)

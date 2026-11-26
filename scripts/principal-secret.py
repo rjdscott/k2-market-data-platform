@@ -164,8 +164,8 @@ def known() -> tuple[set[str], set[str], set[str]]:
 def directory(path: Path) -> Path:
     """`path`'s parent, created and kept at mode 700, as every directory up to the root is."""
     for d in reversed((path.parent, *path.parent.parents)):
-        if not d.exists():
-            d.mkdir(mode=0o700)
+        if not d.exists():  # exist_ok: a concurrent run may make it between the check and the mkdir
+            d.mkdir(mode=0o700, exist_ok=True)
             os.chmod(d, 0o700)
     os.chmod(path.parent, 0o700)
     return path
