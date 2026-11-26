@@ -19,7 +19,9 @@ warehouses and access.
 [layers and what they hold](#layers-and-what-they-hold) ·
 [Iceberg versions and housekeeping](#iceberg-versions-commits-and-housekeeping) ·
 [catalogs and access](#catalogs-warehouses-and-who-may-write) ·
-[dbt and the marts](#dbt-and-the-marts) · [quality and parity](#quality-and-parity) ·
+[dbt and the marts](#dbt-and-the-marts) ·
+[products: definition, sources and state](#products-definition-sources-and-state) ·
+[quality and parity](#quality-and-parity) ·
 [Spark query mechanics](#spark-query-mechanics) ·
 [resources](#resources-memory-cpu-and-the-ceiling) · [tools](#tools) ·
 [plan labels](#plan-and-phase-labels)
@@ -72,17 +74,18 @@ Where: `zero` in [`services/capture-rust/src/metrics.rs`](../../services/capture
 
 ### Book switch
 
-Proposed in [ADR-050](ADR-050-order-book-capture-paused-during-platform-build.md), not built:
-`book_capture.<venue>` in `config/instruments.yaml`, `true` or `false`, required for every venue
+Built with [ADR-050](ADR-050-order-book-capture-paused-during-platform-build.md) (pull requests
+#230 and #232): `book_capture.<venue>` in `config/instruments.yaml`, `true` or `false`, required for every venue
 (a capture without it refuses to start). Each capture reports what it read as the gauge
 `k2_capture_book_capture{exchange}`, so a capture never recreated after a change, or a stale file
 mount, shows as a difference between file and gauge. A capture with `false` does not subscribe to
 its venue's book channel, does not watch or seed the book stream, and skips the once-a-second book
 sample; it still decodes any frame exactly as before, so replay and the fixture tests do not depend
-on it. The lake reads the same switch to skip the book audits and to record it in
-`gold.dim_venue`. Binance, which has no heartbeat channel, also sends a WebSocket Ping every 15 s
+on it. The lake reads the same switch to skip the book audits; ADR-050's record of it in
+`gold.dim_venue` is not built, and [ADR-055](ADR-055-source-state-and-inputs-live-in-the-contracts.md)
+proposes generating the switch from the contracts' [state](#maturity-and-state) instead. Binance, which has no heartbeat channel, also sends a WebSocket Ping every 15 s
 and watches the Pong as a 60 s stream, so a dead connection is still noticed within a minute.
-Where: `config/instruments.yaml`, `services/capture-rust/src/config.rs` once built.
+Where: `config/instruments.yaml`, `services/capture-rust/src/config.rs`.
 
 ---
 
@@ -686,12 +689,99 @@ Where: [`platform/k2gen/`](../../platform/k2gen/); [ADR-032](ADR-032-odcs-contra
 
 ### Paused table
 
-Proposed in [ADR-050](ADR-050-order-book-capture-paused-during-platform-build.md), not built: a
-table whose contract carries the custom property `paused: {since, adr}`. It receives no new data
+Built with [ADR-050](ADR-050-order-book-capture-paused-during-platform-build.md) (pull request
+#232), on the nine book tables: a table whose contract carries the custom property
+`paused: {since, adr}`. It receives no new data
 by decision and its rows stay readable. k2gen refuses a freshness target on it and prints the
 pause on its product page; a product's `lifecycle` (its maturity) is left as it was. The property
-is removed when the table is fed again.
+is removed when the table is fed again. [ADR-055](ADR-055-source-state-and-inputs-live-in-the-contracts.md)
+proposes replacing it with the contract's [state](#maturity-and-state), declared on the three bronze
+book tables and derived for the other six.
+Where: `contracts/schema/k2.schema.json`; `tests/test_contracts.py` holds the marks to the switch.
+
+---
+
+## Products: definition, sources and state
+
+### Descriptor and contract
+
+A data product's definition is its directory, `contracts/<domain>/<product>/`. The descriptor,
+`product.yaml`, describes the product as a whole in K2's own format: owner, purpose, kind,
+[maturity](#maturity-and-state), inputs, outputs, known consumers, and the marts it builds. A
+contract, `<table>.odcs.yaml`, describes one lake table in [ODCS](#odcs): its schema, quality
+rules, service levels and K2's custom properties. A product has one descriptor and one contract
+per lake table it writes; a mart is described by its entry in the descriptor's `marts`.
+Where: [ADR-032](ADR-032-odcs-contracts-and-k2gen.md);
+[`contracts/schema/README.md`](../../contracts/schema/README.md).
+
+### ODCS
+
+The Open Data Contract Standard: a published, vendor-neutral YAML format for describing one
+dataset, with a JSON Schema to validate against. K2 vendors version v3.2.0 as a frozen, dated
+file. The standard has fields for schema, quality, service levels, owner and a free-text `status`;
+what it has no field for goes in `customProperties`, its list of free key and value pairs, which
+K2 validates with its own schema. Since v3.1.0 it no longer describes the product, only each
+dataset, which is why the descriptor is K2's own.
+Where: [`contracts/schema/README.md`](../../contracts/schema/README.md).
+
+### Maturity and state
+
+Two questions about a product. **Maturity**, the descriptor's `lifecycle`, asks whether it can be
+relied on: `draft`, or `published` once phase P6's readiness scorecard passes. **State** asks
+whether data flows, and is an operator's decision. Proposed in
+[ADR-055](ADR-055-source-state-and-inputs-live-in-the-contracts.md), not built: each contract's
+ODCS `status`, one of `active`, `paused`, `deprecated` or `retired`, with `statusChange` giving
+since when, why and the decision. Today the only state is the [paused table](#paused-table) mark.
 Where: `contracts/schema/k2.schema.json` once built.
+
+### Declared and effective state
+
+Proposed in [ADR-055](ADR-055-source-state-and-inputs-live-in-the-contracts.md), not built. The
+declared state is what a contract's `status` says. The effective state is what every component
+obeys, computed by k2gen over the declared graph: a computed table whose every feed (its table
+upstreams less its [lookups](#lookup)) is paused is itself paused, "starved"; one with only some
+feeds paused stays active, flagged "partly fed". Only a table with a stream, file or pull
+[source binding](#source-binding-and-pipeline-pattern) may be declared paused.
+Where: k2gen, once built.
+
+### Source binding and pipeline pattern
+
+Proposed in [ADR-055](ADR-055-source-state-and-inputs-live-in-the-contracts.md), not built. A
+source binding is a contract's `source` custom property: where the table's rows come from. Its
+`pattern` is one of five, each with one engine: `stream` (a venue channel, through the Rust
+capture), `file` (a published file, through a generated Airflow DAG, ADR-036 in phase P4),
+`pull` (an API or database, designed only), `lake` (computed by the platform's Spark jobs) and
+`sql` (a mart built by dbt). The pattern fixes what the author declares and what still needs
+code: a new venue still needs Rust, a new file format a parser function.
+Where: `contracts/schema/k2.schema.json` once built.
+
+### Lookup
+
+Proposed in [ADR-055](ADR-055-source-state-and-inputs-live-in-the-contracts.md), not built: an
+upstream that supplies reference values to a table rather than its rows, listed in the contract's
+`lookups`. A lookup does not decide whether a table is starved. The one today is
+`bronze.kraken_instrument` for `silver.book_kraken`, whose checksum needs each pair's precision
+while its rows come from `bronze.kraken_book`.
+Where: the contract's `customProperties`, once built.
+
+### Impact report
+
+Proposed in [ADR-055](ADR-055-source-state-and-inputs-live-in-the-contracts.md) for phase P5, not
+built: `k2gen impact --base origin/main`, which computes every table's effective state on a pull
+request's base and head and lists, in the CI job summary, every table, mart, product and known
+consumer whose state or flag changes, with the audits, freshness checks and SLOs that stand down.
+The same pass fails a forbidden state transition and a reader left on a retired table.
+Where: `platform/k2gen/`, once built.
+
+### Lineage, declared and observed
+
+Lineage is the chain of sources and tables a table is computed from. Declared lineage is what the
+contracts say (`upstreams`, `inputs`, a mart's `reads`); k2gen draws it as the diagram on every
+product page. Observed lineage is what the jobs report doing, as OpenLineage events (an open
+standard for the event a job emits naming the datasets it read and wrote), which phase P5
+captures. Per-record lineage is a different thing: see [lineage columns](#lineage-columns).
+Where: [`docs/products/`](../products/README.md);
+[plan P5](../plans/2026-11-24-governed-self-serve-platform/005-access-lineage-catalog.md).
 
 ---
 
