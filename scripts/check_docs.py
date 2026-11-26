@@ -109,6 +109,10 @@ def words(paths: list[str], terms=TERMS) -> list[str]:
 #   writes beside its output, with the hash it has there; or
 # - listed by its exact path in NOTICE, with its source and terms.
 #
+# The content sniff skips SOURCE_EXT (but YAML and TOML under a fixtures or
+# samples path, where data lands), and a .json file that parses as one JSON
+# document; any other text file, with an unknown extension or none, is sniffed.
+#
 # Every tracked synthetic-* file is in that manifest too, except the replay
 # tests' golden digests (synthetic-*.sha256), which must be one digest and
 # nothing else: a name is not evidence, the generator's hash is. A committed
@@ -153,6 +157,10 @@ FIXTURE_PATH = re.compile(r"(^|/)(fixtures|samples)/|sample[^/]*$", re.I)
 OLD_EXT = {".json", ".jsonl", ".ndjson", ".csv", ".tsv", ".txt", ".parquet", ".avro", ".pcap", ".pcapng",
            ".bin", ".gz", ".zst", ".sha256"}
 KNOWN_BINARY = {"legacy/v2-kotlin/gradle/wrapper/gradle-wrapper.jar"}  # the archived Gradle wrapper
+# Not sniffed: ruff lints Python, gates b and j read Markdown, and YAML, TOML, SQL and shell are parsed
+# by their own tools and tests; a data file is caught by its extension or, renamed to another, by the sniff.
+SOURCE_EXT = {".py", ".md", ".sql", ".sh", ".yml", ".yaml", ".toml"}
+FIXTURE_SNIFFED = {".yml", ".yaml", ".toml"}  # still sniffed under a fixtures or samples path
 YAML_RECORD = re.compile(r"""-[ \t]+(\{|\[|("[^"]*"|'[^']*'|[^\s#:][^:#]*?)[ \t]*:([ \t]|$))""")
 GOLDEN = "platform/k2gen/tests/golden/"
 GOLDEN_MARKER = GOLDEN + "README.md"
@@ -226,6 +234,15 @@ def records(path: str, content: bytes) -> bool:
     return False
 
 
+def json_document(content: bytes) -> bool:
+    """Whether the whole file is one JSON document (JSON lines are several, and fail)."""
+    try:
+        json.loads(content)
+    except ValueError:
+        return False
+    return True
+
+
 def notebook_problem(content: bytes) -> str | None:
     try:
         cells = json.loads(content)["cells"]
@@ -277,7 +294,12 @@ def data_problems(tracked: dict[str, bytes], notice: str) -> list[str]:
             problems.append(f"{path}: a list of records under a fixtures or samples path, not in {MANIFEST}")
             continue
         suffix = Path(path).suffix.lower()
-        fmt = "extension" if suffix in DATA_EXT or (under and suffix in OLD_EXT) else sniff(head)
+        if suffix in DATA_EXT or (under and suffix in OLD_EXT):
+            fmt = "extension"
+        elif (suffix in SOURCE_EXT and not (under and suffix in FIXTURE_SNIFFED)) or (suffix == ".json" and json_document(content)):
+            fmt = None
+        else:
+            fmt = sniff(head)
         if fmt and path not in listed:
             problems.append(f"{path}: a data file ({fmt}) neither in {MANIFEST} nor listed by path in NOTICE")
     problems += [f"{MANIFEST}: lists {path}, which is not tracked" for path in sorted(manifest.keys() - tracked.keys())]

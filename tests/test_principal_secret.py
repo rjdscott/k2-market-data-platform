@@ -1,7 +1,8 @@
 """scripts/principal-secret.py through its make targets (mk/principals.mk), with K2_SECRETS in a
 temporary directory: a secret is printed once on a terminal or written to a service's 0600 file,
 only its hash reaches password.db or keys.json, a rotation changes one line in place, concurrent
-runs serialise, an unknown principal is refused, and nothing reaches the checkout.
+runs serialise, an unknown principal is refused, a removal drops one principal's lines in place
+and refuses a known one or the canary, status names the stale ones, and nothing reaches the checkout.
 
 The bcrypt hashes are checked by the pinned bcrypt the targets use, in a uv subprocess, since the
 root test environment carries none. The login a real Trino 484 accepts, and the one it refuses,
@@ -25,11 +26,12 @@ KEY = re.compile(r"^k2_[A-Za-z0-9_-]{43}$", re.M)
 LINE = re.compile(r"^(?P<user>[^:\n]+):(?P<hash>\$2y\$10\$[./A-Za-z0-9]{53})$")
 SERVICES = ("svc.runs", "svc.catalog", "svc.platform", "svc.api", "dbt_access_canary", "pub_access_canary")
 CANARY = "k2_release_0123456789ab:$2y$10$" + "C" * 53 + "\n"  # a line deploy (S19) owns: kept as it is
+GONE = "dbt_gone:$2y$10$" + "D" * 53 + "\n"  # a builder whose product is gone, still matching dbt_.*
 
 
 def run(secrets: Path, *args: str, tty: bool = False) -> tuple[int, str, str]:
     """`make <args>` with K2_SECRETS=secrets: (exit, stdout, stderr). With tty, stdout is a terminal."""
-    env = {k: v for k, v in os.environ.items() if k not in ("VIRTUAL_ENV", "PRINCIPAL", "ROTATE", "TO_FILE")}
+    env = {k: v for k, v in os.environ.items() if k not in ("VIRTUAL_ENV", "PRINCIPAL", "ROTATE", "TO_FILE", "FORCE")}
     env["K2_SECRETS"] = str(secrets)
     argv = ["make", "-s", "--no-print-directory", "-C", str(ROOT), *args]
     if not tty:
@@ -185,6 +187,8 @@ def test_concurrent_runs_serialise_on_the_file(secrets: Path) -> None:
     (("password", "PRINCIPAL=p.canary-full", "TO_FILE=1"), "printed, never stored"),
     (("password", "PRINCIPAL=p.canary-full"), "not a terminal"),
     (("api-key", "PRINCIPAL=p.canary-full"), "not a terminal"),
+    (("principal-remove",), "PRINCIPAL=<id>"),
+    (("principal-remove", "PRINCIPAL=../../x", "FORCE=1"), "not a principal id"),
 ])
 def test_a_refused_run_writes_nothing(secrets: Path, args: tuple[str, ...], why: str) -> None:
     code, out, err = run(secrets, *args)
@@ -198,16 +202,66 @@ def test_secrets_inside_a_checkout_are_refused() -> None:
     assert code != 0 and "inside a git checkout" in err and not inside.exists()
 
 
+def test_a_removal_drops_one_principal_in_place_and_nothing_else(secrets: Path) -> None:
+    for service in ("svc.runs", "svc.api"):
+        assert run(secrets, "password", f"PRINCIPAL={service}", "TO_FILE=1")[0] == 0
+    db, keys, gone_file = secrets / "trino/password.db", secrets / "api/keys.json", secrets / "principals/dbt_gone.password"
+    first, second = db.read_text().splitlines(keepends=True)
+    db.write_text(CANARY + first + GONE + second + GONE)  # truncated in place: the same inode
+    keys.parent.mkdir(mode=0o700)
+    keys.write_text(json.dumps({"a" * 64: "p.canary-full", "b" * 64: "dbt_gone", "c" * 64: "dbt_gone"}))
+    gone_file.write_text("x" * 43)
+    inode, keys_inode = db.stat().st_ino, keys.stat().st_ino
+
+    code, out, err = run(secrets, "principal-remove", "PRINCIPAL=dbt_gone")
+    assert code == 0, err
+    assert db.read_text() == CANARY + first + second  # every other line byte for byte, in order
+    assert (db.stat().st_ino, keys.stat().st_ino) == (inode, keys_inode)  # rewritten in place, never renamed over
+    assert json.loads(keys.read_text()) == {"a" * 64: "p.canary-full"} and not gone_file.exists()
+    assert "2 line(s) of trino/password.db" in err and "2 key(s) of api/keys.json" in err
+    assert "principals/dbt_gone.password" in err and "$2y$" not in out + err and "b" * 64 not in out + err
+
+    code, _, err = run(secrets, "principal-remove", "PRINCIPAL=dbt_gone")
+    assert code == 0 and "nothing to remove" in err and db.read_text() == CANARY + first + second
+
+
+def test_a_removal_of_a_known_principal_needs_force(secrets: Path) -> None:
+    assert run(secrets, "password", "PRINCIPAL=svc.runs", "TO_FILE=1")[0] == 0
+    db, stored = secrets / "trino/password.db", secrets / "principals/svc.runs.password"
+    old_text, old_secret = db.read_text(), stored.read_text()
+
+    code, _, err = run(secrets, "principal-remove", "PRINCIPAL=svc.runs")
+    assert code != 0 and "still known" in err and "FORCE=1" in err
+    assert db.read_text() == old_text and stored.read_text() == old_secret
+
+    code, _, err = run(secrets, "principal-remove", "PRINCIPAL=svc.runs", "FORCE=1")
+    assert code == 0, err
+    assert db.read_text() == "" and not stored.exists()
+
+
+def test_a_removal_of_the_release_canary_is_refused(secrets: Path) -> None:
+    (secrets / "trino").mkdir(parents=True)
+    db = secrets / "trino/password.db"
+    db.write_text(CANARY)
+    code, out, err = run(secrets, "principal-remove", "PRINCIPAL=k2_release_0123456789ab", "FORCE=1")
+    assert code != 0 and "release canary" in err and out == "" and db.read_text() == CANARY
+
+
 def test_status_lists_names_and_never_a_hash(secrets: Path) -> None:
     assert run(secrets, "password", "PRINCIPAL=svc.runs", "TO_FILE=1")[0] == 0
     db = secrets / "trino/password.db"
-    db.write_text(db.read_text() + CANARY + "p.gone:$2y$10$" + "D" * 53 + "\n")
+    db.write_text(db.read_text() + CANARY + "p.gone:$2y$10$" + "D" * 53 + "\n" + GONE)
+    (secrets / "principals/svc.old.password").write_text("x" * 43)
     code, out, err = run(secrets, "principals-status")
     assert code == 0, err
     rows = {f[0]: f[1:] for f in (line.split() for line in out.splitlines()) if f and f[0] in ("svc.runs", "svc.api", "p.canary-full")}
     assert rows["svc.runs"] == ["yes", "yes", "-"] and rows["svc.api"] == ["no", "no", "-"]
     assert rows["p.canary-full"] == ["no", "-", "no"]
     assert "release canaries" in out and "k2_release_0123456789ab" in out
-    assert "NOT DECLARED" in out and "p.gone" in out
+    stale = {line.split()[1]: line for line in out.splitlines() if line.startswith("STALE ")}
+    assert sorted(stale) == ["dbt_gone", "p.gone", "svc.old"]
+    assert stale["dbt_gone"].startswith("STALE dbt_gone in trino/password.db: ") and "pattern rules" in stale["dbt_gone"]
+    assert "Trino still logs it in" in stale["p.gone"] and "pattern rules" not in stale["p.gone"]
+    assert stale["svc.old"].startswith("STALE svc.old in principals/svc.old.password: ") and "Trino" not in stale["svc.old"]
     assert "$2y$" not in out and (secrets / "principals/svc.runs.password").read_text() not in out
 

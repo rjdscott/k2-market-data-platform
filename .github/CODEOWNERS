@@ -15,3 +15,4 @@
 /contracts/domains.yaml       @rjdscott  # platform-team: adding a domain or changing its owner
 /contracts/schema/            @rjdscott  # platform-team
 /platform/k2gen/              @rjdscott  # platform-team
+/contracts/access/            @rjdscott  # platform-team: principals and roles
