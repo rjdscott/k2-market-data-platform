@@ -276,7 +276,7 @@
       ]
     },
     {
-      "user": "dbt_access_canary|k2_release_3a77f2856995|p\\.canary\\-delayed|p\\.canary\\-full|p\\.canary\\-scoped|pub_access_canary|svc\\.api|svc\\.catalog|svc\\.runs",
+      "user": "dbt_access_canary|k2_release_9aaec24abeea|p\\.canary\\-delayed|p\\.canary\\-full|p\\.canary\\-scoped|pub_access_canary|svc\\.api|svc\\.catalog|svc\\.runs",
       "allow": [
         "execute"
       ]

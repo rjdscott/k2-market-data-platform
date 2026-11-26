@@ -80,9 +80,10 @@ x-logging: &k2-logging
 # here if missing (docker would make it root-owned). `tools` is the one read-write
 # mount. Mounted by every service that reads a pointer (scripts/deploy.py POINTERS):
 # trino, airflow-scheduler, airflow-dag-processor, spark-iceberg, prometheus, and the
-# profiled stubs. Only Trino reads its configuration through it today; the DAGs, the
-# Spark jobs and the alert rules move onto their pointers in phase 002, when a
-# release first carries them.
+# profiled stubs; and by lake-init, for the storage plan (the trino pointer's, or the
+# release deploy names in K2_STORAGE_PLAN). Only Trino and lake-init read through it
+# today; the DAGs, the Spark jobs and the alert rules move onto their pointers in
+# phase 002, when a release first carries them.
 x-k2-releases-ro: &k2-releases-ro
   type: bind
   source: ${K2_RELEASES:-${HOME}/k2-releases}
@@ -1032,9 +1033,13 @@ services:
       - k2-catalog  # it calls Lakekeeper and MinIO, both there
     volumes:
       - ./docker/lake:/init:ro
+      - *k2-releases-ro  # the warehouse list: the release's compiled/lake/storage-plan.json
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      # Empty: the script reads the plan through the trino pointer. Deploy sets it to the
+      # release being deployed, so a first deploy and a new warehouse read that release.
+      K2_STORAGE_PLAN: ${K2_STORAGE_PLAN:-}
     entrypoint: ["/bin/bash", "/init/init-lake.sh"]
     depends_on:
       minio:
