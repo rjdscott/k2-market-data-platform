@@ -338,7 +338,9 @@ ClickHouse examples use the read-only `quant` user:
 
 ```bash
 set -a && . ./.env && set +a
-CH="docker exec k2-clickhouse clickhouse-client --user quant --password $K2_QUANT_PASSWORD"
+# A function, not a variable: zsh does not split "$CH" into words, so `CH="docker exec ..."; $CH`
+# fails there with "command not found".
+ch() { docker exec -i k2-clickhouse clickhouse-client --user quant --password "$K2_QUANT_PASSWORD" "$@"; }
 ```
 
 ### `raw.messages`
@@ -416,7 +418,7 @@ ClickHouse, same instrument — note `FINAL`, and the `price` / `qty` aliases na
 explicitly:
 
 ```bash
-$CH -q "SELECT exchange, canonical_symbol, trade_id, price, qty, side, exchange_ts
+ch -q "SELECT exchange, canonical_symbol, trade_id, price, qty, side, exchange_ts
         FROM gold.trades FINAL
         WHERE exchange = 'kraken' AND canonical_symbol = 'BTC/USD'
         ORDER BY exchange_ts DESC LIMIT 3 FORMAT PrettyCompactMonoBlock"
@@ -444,7 +446,7 @@ ORDER BY window_start DESC LIMIT 3
 The ClickHouse `gold.ohlcv_1m` table is empty until the pull runs. The head is the view:
 
 ```bash
-$CH -q "SELECT exchange, canonical_symbol, window_start, open, high, low, close, volume, trade_count
+ch -q "SELECT exchange, canonical_symbol, window_start, open, high, low, close, volume, trade_count
         FROM gold.ohlcv_live(bucket = 60)
         WHERE exchange = 'kraken' AND canonical_symbol = 'BTC/USD'
         ORDER BY window_start DESC LIMIT 3 FORMAT PrettyCompactMonoBlock"
@@ -490,7 +492,7 @@ ORDER BY second DESC LIMIT 3
 ClickHouse, different column names and no `_e8` division built in:
 
 ```bash
-$CH -q "SELECT exchange, canonical_symbol, second, depth, bid_px[1] AS bid_e8, ask_px[1] AS ask_e8, checksum_ok
+ch -q "SELECT exchange, canonical_symbol, second, depth, bid_px[1] AS bid_e8, ask_px[1] AS ask_e8, checksum_ok
         FROM gold.book_top20 FINAL
         WHERE exchange = 'kraken' AND canonical_symbol = 'BTC/USD'
         ORDER BY second DESC LIMIT 3 FORMAT PrettyCompactMonoBlock"
@@ -521,7 +523,7 @@ ClickHouse `gold.bbo_1s` is empty until the pull runs; `gold.bbo_live` is the he
 same arithmetic over the topic-fed book:
 
 ```bash
-$CH -q "SELECT exchange, canonical_symbol, second, bid, ask, round(spread_bps,3) AS spread_bps,
+ch -q "SELECT exchange, canonical_symbol, second, bid, ask, round(spread_bps,3) AS spread_bps,
                round(imbalance,4) AS imbalance
         FROM gold.bbo_live WHERE exchange = 'kraken' AND canonical_symbol = 'BTC/USD'
         ORDER BY second DESC LIMIT 5 FORMAT PrettyCompactMonoBlock"

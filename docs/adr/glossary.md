@@ -765,7 +765,9 @@ Where: [ADR-035](ADR-035-trino-and-dbt-for-marts.md) Outcome, which reads both f
 The ceiling is the cap on the sum of every default-profile service's declared CPU and memory
 limits, one-shots included: 25 CPU / 48 GiB since [ADR-045](ADR-045-ceiling-25-cpu-48-gib.md)
 (20 / 36 under ADR-034, 16 / 40 under ADR-010). It is a sum of limits, not of use; measured use
-is a fraction of it, and the gap is the safety margin if every limit were reached at once. CI
+is a fraction of it, and the gap is the safety margin if every limit were reached at once. It is
+measured inside the Docker VM and says nothing about the host's own memory (see
+[Docker VM and its memory setting](#docker-vm-and-its-memory-setting)). CI
 enforces it with `python3 scripts/check-budget.py`, which printed 21.30 CPU / 37.812 GiB for the
 bootstrap default on 2026-11-26, and every limit change also updates the ADR-010 Outcome and the
 summary comment in `docker-compose.yml`.
@@ -779,6 +781,40 @@ in the steady state). The ceiling is gated there, at its highest point. A one-sh
 with `restart: "no"` that sets something up and exits, such as `redpanda-init` (topics) or
 `lake-init` (bucket, catalog, warehouses).
 Where: `scripts/check-budget.py`; [`docs/operations/docker-resources.md`](../operations/docker-resources.md).
+
+### Docker VM and its memory setting
+
+On Docker Desktop for Linux the containers do not run on the host's kernel: they run inside one
+virtual machine, a `qemu-system-x86` process on the host, given a fixed memory setting (51,712
+MiB on the reference host; Docker Desktop, Settings, Resources, Memory). `docker info` reports
+what the VM's kernel offers the containers (49.5 GiB there), and every container, cAdvisor and
+Prometheus included, sees only that, never the host. The VM's kernel fills the memory the
+containers leave free with file cache and QEMU does not return it, so from the host's side the
+VM grows to its full setting within hours and stays there. Hence the rule: host RAM must exceed
+the VM setting plus everything else the host runs, with a margin, and the ceiling, which is
+measured inside the VM, does not answer that question.
+Where: [ADR-045](ADR-045-ceiling-25-cpu-48-gib.md)'s 2026-11-26 Outcome;
+[`docs/runbooks/docker-vm-oom-kill.md`](../runbooks/docker-vm-oom-kill.md), section 2.
+
+### Host out-of-memory kill
+
+When the host runs out of memory and swap, the host kernel's out-of-memory killer ends a process
+to free memory, usually the largest, which on a Docker Desktop host is the VM. Every container
+stops at once, Docker Desktop's systemd unit ends `Result: oom-kill` and is not restarted, and
+capture stops until someone starts it again; the market data of that window is lost for good.
+It is not the per-container kill at a memory limit (see container memory above), which happens
+inside the VM. No alert can see it coming, because nothing inside the VM sees host memory.
+Where: [`docs/runbooks/docker-vm-oom-kill.md`](../runbooks/docker-vm-oom-kill.md); the
+2026-11-25 incident in [ADR-045](ADR-045-ceiling-25-cpu-48-gib.md)'s Outcome.
+
+### Run duration p90
+
+The 90th percentile of `lake_ingest` run durations over a window: the duration that nine runs in
+ten finish within. The ingest runs every 5 minutes, so a run has a 300 s slot; ADR-034's standing
+trigger is a p90 above 240 s over a day, and it fired on 2026-11-25 at 253 s, as the day's gold
+candle and bar step (stage 2d) grew. ADR-048 is the response.
+Where: [ADR-034](ADR-034-airflow-3-replaces-prefect.md)'s 2026-11-26 Outcome, which carries the
+command.
 
 ---
 

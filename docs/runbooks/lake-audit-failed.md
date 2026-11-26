@@ -1,14 +1,14 @@
 # Runbook: A lake audit failed
 
 The nightly maintenance run ends in the checks `docker/lake/maintenance.py`'s `AUDITS` tuple
-lists, **eleven kinds** over the lake, and any failure exits non-zero, fails the run and raises
-an alert: `contract_schema` on every lake table (§15); `offset_continuity` on `raw.messages`
-(§1); `duplicate_identifiers` on each table with identifier fields (§2); per bronze table,
-`bronze_unparseable` and `bronze_schema_drift` (§6, §7); per silver table, `silver_parity` (§9)
-and, on the trades tables, `silver_flags` (§10); on gold, `gold_parity`, `ohlcv_parity` and
-`bars_parity` (§11, §12, §14); and `kraken_checksum` (§13). They ask different questions, have
-different causes, and some are **findings to record** rather than faults to repair; telling
-them apart is what this runbook is for.
+lists, **eleven kinds** over the lake, and any failure exits non-zero, fails the Airflow
+`lake_maintenance` run and raises an alert: `contract_schema` on every lake table (§15);
+`offset_continuity` on `raw.messages` (§1); `duplicate_identifiers` on each table with
+identifier fields (§2); per bronze table, `bronze_unparseable` and `bronze_schema_drift` (§6,
+§7); per silver table, `silver_parity` (§9) and, on the trades tables, `silver_flags` (§10); on
+gold, `gold_parity`, `ohlcv_parity` and `bars_parity` (§11, §12, §14); and `kraken_checksum`
+(§13). They ask different questions, have different causes, and some are **findings to record**
+rather than faults to repair; telling them apart is what this runbook is for.
 
 `silver_flags` is the odd one out: it is **informational**, has no pass/fail semantics, and is
 excluded from the `N audits passed` summary line (`INFORMATIONAL` in `maintenance.py`). §3 and
@@ -101,7 +101,7 @@ two reasons that demand opposite responses:
 
 | Cause | Distinguishing evidence | Response |
 |---|---|---|
-| **Real loss**, records were evicted from Redpanda before ingest read them | a `failOnDataLoss` failure in the same window ([lake-ingest-lag.md §3](./lake-ingest-lag.md#3-failondataloss--the-offsets-point-below-what-the-broker-holds)); the broker's `LOG-START-OFFSET` above the last committed offset | **record the gap**, it is unrecoverable, public feeds do not replay |
+| **Real loss**, records were evicted from Redpanda before ingest read them | a `failOnDataLoss` failure in the same window ([lake-ingest-lag.md §3](./lake-ingest-lag.md#3-failondataloss-the-offsets-point-below-what-the-broker-holds)); the broker's `LOG-START-OFFSET` above the last committed offset | **record the gap**, it is unrecoverable, public feeds do not replay |
 | **An audit bug**, a legitimate seam counted as a gap | no ingest failure, no eviction, and the "gap" sits at a day boundary, a topic recreation, or a compaction snapshot | **fix the audit**, a false positive here trains people to ignore the one alert that must never be ignored |
 
 **Recovery**
@@ -178,7 +178,7 @@ so it nets the same rows and prints the same detail, one definition, not two. It
 run on 2026-08-27 failed on exactly the acknowledged 1,168,954 before that was true.
 
 **If the gap is real and not yet recorded**, its deliverable is a record, not a repair:
-[lake-ingest-lag.md §3](./lake-ingest-lag.md#3-failondataloss--the-offsets-point-below-what-the-broker-holds)
+[lake-ingest-lag.md §3](./lake-ingest-lag.md#3-failondataloss-the-offsets-point-below-what-the-broker-holds)
 is the procedure, and `ingest.py --accept-data-loss` writes the row itself. Then fix the
 cause upstream, ingest downtime, or a per-run bound below the real arrival rate.
 
@@ -268,7 +268,12 @@ columns exist:
 ```bash
 # 2. Was ingest running more than once at a time? Concurrency 1 is a
 #    correctness setting, not a politeness one.   not yet run: Phase D burn-in
-docker exec k2-prefect-server prefect deployment inspect 'lake-ingest/lake-ingest-5min'
+#    Under Airflow (since 2026-11-25) the DAG allows one run at a time; run 2026-11-26:
+docker exec -e PYTHONWARNINGS=ignore k2-airflow-scheduler airflow dags details lake_ingest -o plain 2>/dev/null \
+  | grep -E '^max_active_runs '
+#   max_active_runs                  1
+#    Every lake writer also takes the flock in docker/lake/lock.py; a hand-run beside a
+#    scheduled one is the only other way two could overlap, and it exits 75.
 ```
 
 ```sql
