@@ -11,15 +11,39 @@ None. This repository contains no market data files from any venue.
 
 Every venue-format frame in the tree is synthetic: invented prices, sizes, ids
 and timestamps, written in each venue's wire format by
-scripts/make-synthetic-fixtures.py from a fixed seed, and named synthetic-*:
+scripts/make-synthetic-fixtures.py from a fixed seed, named synthetic-*, and
+listed with its sha256 in tests/fixtures/SHA256SUMS, which the same script
+writes:
 
-  services/capture-rust/tests/fixtures/synthetic-*    replay test sessions and their golden hashes
+  services/capture-rust/tests/fixtures/synthetic-*    replay test sessions (their golden
+                                                      hashes, synthetic-*.sha256, are pinned
+                                                      from the replay output, not generated)
   tests/fixtures/bronze/synthetic-*                   one frame per bronze table
   docs/research/2026-08-26-v3-spikes/*/synthetic-*    the S2 and S5 spike samples
 
-tests/clickhouse/*.jsonl are hand-written synthetic rows. Gate (h) of
-scripts/check-docs.sh fails CI on a fixture or sample data file that is neither
-named synthetic-* nor listed by path in this section with its source and terms.
+The manifest proves a file is what the committed generator writes, not that
+the generator invents its values, so a review must read the generator's diff.
+
+Hand-written synthetic rows, invented values on round numbers, for the
+ClickHouse schema test (scripts/clickhouse-schema-test.sh):
+
+  tests/clickhouse/bars.jsonl
+  tests/clickhouse/book.jsonl
+  tests/clickhouse/trades_block1.jsonl
+  tests/clickhouse/trades_block2.jsonl
+
+The platform's own measurements, no venue data: recovery times written by
+`make chaos` (scripts/chaos/):
+
+  scripts/chaos/results/2026-08-26.tsv
+  scripts/chaos/results/2026-08-27.tsv
+
+Gate (i) of scripts/check-docs.sh (scripts/check_docs.py) fails CI on a data
+file, found by extension or by content (JSON lines, CSV, TSV, Parquet, Avro,
+pcap, a compressed stream) whatever its name or path, that is neither in
+tests/fixtures/SHA256SUMS at its hash nor listed by exact path in this file
+with its source and terms; on a synthetic-* file the manifest does not list;
+and on a committed notebook with outputs (under legacy/, unless listed below).
 
 Market data is fetched by a user's own running stack from each venue's public
 endpoints, stays on that user's machine, and is subject to that provider's
@@ -29,6 +53,42 @@ real frames into services/capture-rust/tests/recorded/, which is git-ignored.
 Earlier commits in this repository's history contain recorded venue frames that
 have since been replaced by the synthetic files above. History is not rewritten
 (docs/adr/ADR-029-research-production-parity-contract.md, Outcome 2026-11).
+
+Venue values in immutable documents
+===================================
+
+Dated snapshots and Accepted ADRs are never rewritten (CLAUDE.md, Immutability),
+so a venue price, volume or market-data count that was true when one was
+written stays in it. These files carry such values, as found by a sweep on
+2026-11-26. They are measurements of a run on the maintainer's machine or
+single illustrative samples, kept for the record, not a data set and not
+offered as one. The values themselves are deliberately not repeated here.
+
+Every other document is editable and carries none: it states a ratio, a size
+in bytes, a duration, or a pointer to the platform table or dated snapshot that
+holds the figure. Gate (j) of scripts/check-docs.sh fails CI on a count of
+captured data in any tracked Markdown file outside the immutable directories;
+the rule, the directories it exempts and the opt-out for the platform's own
+figures are stated once, in scripts/check_docs.py, gate (j).
+
+Price or size values in a quoted record:
+
+  docs/adr/ADR-020-avro-fixed-point-contracts.md          one trade record, price and quote volume
+  legacy/v2-clickhouse/schema/11-bronze-coinbase.sql       one raw Coinbase price in a comment
+  legacy/v1/demos/notebooks/spark-iceberg-queries.ipynb    saved query output: rows of Binance trades
+
+Trade, row, record or frame counts of captured market data:
+
+  docs/adr/ADR-019-rust-capture-tier.md                    v2/v3 overlap and outage record counts
+  docs/adr/ADR-021-raw-first-archive-and-lineage.md        records evicted by retention, ingest rates
+  docs/adr/ADR-022-exactly-once-via-snapshot-offsets.md    offsets committed per run, records evicted
+  docs/adr/ADR-024-unified-bronze-tables-in-the-lake.md    trades captured over a 30-minute window
+  docs/adr/ADR-028-non-goals-and-honest-limits.md          rows backfilled, frames checked
+  docs/adr/ADR-030-scd2-security-master.md                 raw rows checked, trades per instrument window
+  docs/audits/2026-09-03-ux-end-to-end.md                  trades in one hour of the archive
+  docs/benchmarks/2026-08-27.md                            records, rows and frames per table and venue
+  docs/plans/2026-08-26-v3-quant-research-platform/003-phase-d-lake-tier.md   records evicted, raw-to-bronze counts
+  legacy/v2-offload/runbooks/iceberg-offload-performance.md   rows in one offload run
 
 Screenshots
 ===========

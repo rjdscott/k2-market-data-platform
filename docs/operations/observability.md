@@ -156,7 +156,7 @@ freezes at its last small value during exactly the outage it is the backstop for
 | `LakeDiskUsageCritical` | critical | `k2_lake_disk_used_ratio > 0.90` for 5m |
 | `LakeUnresolvableSchemaId` | warning | `k2_lake_unresolvable_schema_ids_total > 0` for 15m, a record names a writer schema the registry will not serve, so stage 2 skips that id and files an `audit.checks` row with `job='ingest'`. Its own gauge, keyed on `k2.job`, so it can neither clear nor be cleared by `LakeAuditFailed` |
 | `LakeOffsetGap` | warning | `k2_lake_offset_gaps_total > 0` for 5m, an ingest ran with `--accept-data-loss` and resumed past records Redpanda had already evicted. A **pulse, not a condition**: the row is filed once by the repairing run, the gauge ages out after 15 min like the schema-id one, and the alert resolves with nothing fixed. The durable record is the `offset_gap` row in `lake.audit.checks`; the alert only exists so a permanent hole accepted at a keyboard is not visible solely in a closed terminal. **Unproven against a live fault:** the repair of 2026-08-26 wrote the gauge's source property, but `lake-metrics` had been running since before the gauge existed and so served neither it nor `k2_lake_ingest_backlog_offsets`. Both appear on the exporter's next restart; the rule itself is covered by `promtool` |
-| `LakeIngestBacklogSustained` | warning | `k2_lake_ingest_backlog_offsets > 0` for 30m on any topic, six cycles with unread offsets because the per-run cap is below the arrival rate. Added after 2026-11-25, when `raw.kraken` held ~1.3 M for 2 h 40 m with no alert. Covered by `promtool`; unproven against a live fault |
+| `LakeIngestBacklogSustained` | warning | `k2_lake_ingest_backlog_offsets > 0` for 30m on any topic, six cycles with unread offsets because the per-run cap is below the arrival rate. Added after 2026-11-25, when `raw.kraken` held a backlog for 2 h 40 m with no alert. Covered by `promtool`; unproven against a live fault |
 | `LakeIngestLagHigh` | warning | The newest Kafka record in `raw.messages` is over 15m old, sustained 10m |
 | `LakeCommitAgeHigh` | warning | A `bronze.*` table has taken no commit for 30m while the archive keeps moving, stage 2 is the failing half |
 | `LakeCompactionStale` | warning | No file-rewrite snapshot on `raw.messages` for 36 h: the nightly compaction has missed a run. Measures the job, not its side effect on file size, an alert on mean file size fires by construction for the table's first ~15 days. Can be secondary: a stalled ingest produces no small files, so the rewrite finds nothing to merge and commits no snapshot. Check `LakeIngestFailed` first |
@@ -264,15 +264,17 @@ Lakekeeper REST catalog and reads their current snapshot summary, the same prope
 the ingest and maintenance jobs write their position into
 ([ADR-022](../adr/ADR-022-exactly-once-via-snapshot-offsets.md)). The gauges that name a
 job (`max_kafka_ts`, `ingest_backlog`, the two audit counts) take the **newest snapshot by
-`timestamp-ms` carrying that `k2.job`**, never the last entry of the metadata array:
+`timestamp-ms` carrying that `k2.job`** among those on `main`'s lineage (a branch's commits
+are not read), never the last entry of the metadata array:
 Lakekeeper 0.13.3 returned the same five snapshots in two different orders on two
 successive `loadTable` calls (2026-08-26), and reading by position reported a lag that had
-already been closed. Prefect runs each flow in
-a short-lived subprocess that exits long before Prometheus scrapes it, so a counter inside
-the job was never observable; the committed snapshot is the durable record of what ran.
+already been closed. Each lake job runs as a
+short-lived process (an Airflow task now, a Prefect flow before the 2026-11-25 cutover) that
+exits long before Prometheus scrapes it, so a counter inside the job was never observable; the
+committed snapshot is the durable record of what ran.
 
-It is a separate 128 MB service rather than a sidecar in `prefect-worker` on purpose: if the
-worker crashes, the exporter keeps reporting the rising ingest lag these alerts exist to
+It is a separate 128 MB service rather than a sidecar of the scheduler on purpose: if the
+scheduler crashes, the exporter keeps reporting the rising ingest lag these alerts exist to
 catch.
 
 | Metric | Type | Source |

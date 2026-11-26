@@ -20,16 +20,70 @@ host's — on a UTC+10 machine every bucket lands ten hours late
 
 from __future__ import annotations
 
+import functools
+import json
 import os
 import subprocess
 import sys
+import urllib.request
 from pathlib import Path
 
 import duckdb
 
 LAKEKEEPER = os.environ.get("K2_LAKEKEEPER_HOST_URL", "http://localhost:18181/catalog")
 S3_ENDPOINT = os.environ.get("K2_S3_HOST_ENDPOINT", "localhost:9000")
+WAREHOUSE = "k2"
 SCALE = 100_000_000  # 1e-8 fixed point, the wire's and gold's representation
+
+
+def lineage(metadata: dict) -> list:
+    """Snapshot ids on `main`'s lineage, current first, from one loadTable `metadata`.
+
+    `current-snapshot-id` is the id `main` points at (the Iceberg spec makes them
+    equal); the walk follows `parent-snapshot-id` from there. Not "the newest
+    snapshot": once a table has a branch, `iceberg_snapshots` and the metadata's
+    snapshot list hold its unpublished commits and those of a dropped branch, and
+    DuckDB 1.4.4 has no column saying which is which. [] for an empty table.
+    """
+    parents = {s["snapshot-id"]: s.get("parent-snapshot-id") for s in metadata.get("snapshots", [])}
+    out, sid = [], metadata.get("current-snapshot-id")
+    while sid in parents:
+        out.append(sid)
+        sid = parents[sid]
+    return out
+
+
+def tags(metadata: dict) -> dict:
+    """{tag name: snapshot id} for every tag in one loadTable `metadata`'s `refs`; branches are left out.
+
+    A tag is a named pointer to one snapshot that expiry keeps. The walk in `lineage()`
+    stops at the first parent expiry removed, so once the snapshots between a tagged pin
+    and main's head are gone the pin is off the walk but still in the table, and this is
+    how a reader still finds it (tests/parity/README.md).
+    """
+    return {name: r["snapshot-id"] for name, r in metadata.get("refs", {}).items() if r.get("type") == "tag"}
+
+
+def _get(url: str) -> dict:
+    with urllib.request.urlopen(url, timeout=15) as r:  # noqa: S310 - the catalog's published port
+        return json.load(r)
+
+
+@functools.cache
+def _prefix() -> str:
+    """The warehouse's REST prefix: fixed for the catalog's life, so read once per process."""
+    return _get(f"{LAKEKEEPER.rstrip('/')}/v1/config?warehouse={WAREHOUSE}")["defaults"]["prefix"]
+
+
+def table_metadata(table: str) -> dict:
+    """The metadata of `ns.table` (or `lake.ns.table`) from Lakekeeper's REST loadTable."""
+    ns, name = table.split(".")[-2:]
+    return _get(f"{LAKEKEEPER.rstrip('/')}/v1/{_prefix()}/namespaces/{ns}/tables/{name}")["metadata"]
+
+
+def main_lineage(table: str) -> list:
+    """`lineage()` of `ns.table` (or `lake.ns.table`), from Lakekeeper's REST loadTable."""
+    return lineage(table_metadata(table))
 
 
 def _env() -> dict:
@@ -67,12 +121,22 @@ def pin(con: duckdb.DuckDBPyConnection, namespaces=PINNED_NAMESPACES) -> dict:
 
     `pinned.gold_trades`, `pinned.silver_book_kraken`, `pinned.audit_checks` …
     each `SELECT * FROM lake.<ns>.<table> AT (VERSION => <id>)`, the id read
-    once, here. Every notebook query goes through these, never through
-    `lake.<ns>.<table>` (tests/test_notebooks_pinned.py greps for it), so a
+    once, here: the snapshot `main` points at (`main_lineage`), never the newest
+    by commit time, which can be a branch's. Every notebook query goes through
+    these, never through `lake.<ns>.<table>` (tests/test_notebooks_pinned.py greps for it), so a
     chart or a number a notebook printed names the snapshot it came from and
     re-running at that id gives the same answer while an ingest lands new rows
     beside it (ADR-029). Returns {table: snapshot_id} and prints it with the
     repo's commit, which is the provenance a shared result carries.
+
+    It asks for main's head and serves that or nothing. Expiry never removes the
+    head, so the parity gate's stale-pin case cannot arise here; the one way to
+    serve something else is a head the metadata does not list, which the walk
+    reads as an empty table. That raises: an error in a notebook's first cell
+    costs a re-run, while a view labelled empty over a table that is not empty
+    would put an unpinned number into a shared result. A table with no
+    snapshot at all has nothing to pin, so its view is held empty (`WHERE false`):
+    it serves what the table held at pin time, nothing, after the table's first commit too.
     """
     con.execute("CREATE SCHEMA IF NOT EXISTS pinned")
     tables = con.execute(
@@ -81,20 +145,26 @@ def pin(con: duckdb.DuckDBPyConnection, namespaces=PINNED_NAMESPACES) -> dict:
     ).fetchall()
     ids = {}
     for ns, table in tables:
-        row = con.execute(f"SELECT snapshot_id FROM iceberg_snapshots(lake.{ns}.{table}) ORDER BY timestamp_ms DESC LIMIT 1").fetchone()
-        if row is None:  # an empty table has no snapshot; the view reads it unpinned, and says so
-            con.execute(f"CREATE OR REPLACE VIEW pinned.{ns}_{table} AS SELECT * FROM lake.{ns}.{table}")
+        meta = table_metadata(f"{ns}.{table}")
+        on_main = lineage(meta)
+        if not on_main and meta.get("current-snapshot-id") not in (None, -1):
+            raise RuntimeError(
+                f"{ns}.{table}: main points at snapshot {meta['current-snapshot-id']}, which the table's metadata "
+                f"does not list, so there is no snapshot to pin; nothing was served. Re-run pin(con) once the catalog answers consistently"
+            )
+        if not on_main:  # no snapshot to pin: held at what it held, nothing, even once rows land
+            con.execute(f"CREATE OR REPLACE VIEW pinned.{ns}_{table} AS SELECT * FROM lake.{ns}.{table} WHERE false")
             ids[f"{ns}.{table}"] = None
             continue
-        con.execute(f"CREATE OR REPLACE VIEW pinned.{ns}_{table} AS SELECT * FROM lake.{ns}.{table} AT (VERSION => {row[0]})")
-        ids[f"{ns}.{table}"] = row[0]
+        con.execute(f"CREATE OR REPLACE VIEW pinned.{ns}_{table} AS SELECT * FROM lake.{ns}.{table} AT (VERSION => {on_main[0]})")
+        ids[f"{ns}.{table}"] = on_main[0]
     try:
         sha = subprocess.run(["git", "rev-parse", "--short", "HEAD"], capture_output=True, text=True, cwd=Path(__file__).parent).stdout.strip()
     except OSError:
         sha = "unknown"
     print(f"pinned {len(ids)} tables at commit {sha}")
     for name, snap in ids.items():
-        print(f"  {name:<28} {snap if snap is not None else '(empty, unpinned)'}")
+        print(f"  {name:<28} {snap if snap is not None else '(empty when pinned, held empty)'}")
     return ids
 
 

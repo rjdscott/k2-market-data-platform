@@ -40,13 +40,13 @@ con.sql("""
 
 ```
             tbl                           newest    rows
-gold.book_top20        2026-09-03 13:06:03+00:00  763486
-  gold.ohlcv_1m        2026-09-03 13:11:00+00:00   12416
-    gold.trades 2026-09-03 13:11:04.911000+00:00 4620846
+gold.book_top20        2026-09-03 13:06:03+00:00     <n>
+  gold.ohlcv_1m        2026-09-03 13:11:00+00:00     <n>
+    gold.trades 2026-09-03 13:11:04.911000+00:00     <n>
 ```
 
 The two reads are about a minute apart in wall clock; ClickHouse is nonetheless ahead of
-the lake on trades, and has no candles at all where the lake has 12,416. That is the
+the lake on trades, and has no candles at all where the lake has hours of them. That is the
 intended shape, not a fault.
 
 Trino is a third way in, not a third copy. `lake.<namespace>.<table>` through Trino reads
@@ -303,7 +303,7 @@ What the archive knows about its own holes. None of these exist in ClickHouse.
 | `precision_loss` | `silver.trades_*` | price or qty needs more than 8 decimals; the 1e-8 fixed point of gold cannot hold it |
 | `checksum_ok` | `silver.book_kraken`, `gold.book_top20`, `gold.bbo_1s` | Kraken's CRC32 verified by replaying the connection's book at the pair's precision. `NULL` = precision unknown or the venue publishes no checksum |
 | `seq_gap` | `silver.book_binance` | `lastUpdateId` did not advance past the previous frame on this connection |
-| `audit.checks` | `lake.audit.checks` | one row per check per run. Maintenance writes the names in `AUDITS` (`docker/lake/maintenance.py`): `offset_continuity`, `duplicate_identifiers`, `bronze_unparseable`, `bronze_schema_drift`, `silver_parity`, `silver_flags` (informational), `gold_parity`, `ohlcv_parity`, `bars_parity`, `kraken_checksum`. The ingest writes `unresolvable_schema_id`, `bronze_parity`, `offset_gap` and `batch_offsets` (ADR-047, only on a mismatch); an operator `manual_purge` and `checksum_failure_acknowledged`; `scripts/replay-lake.sh` writes `replay`. `passed = false` is what makes a maintenance run exit non-zero |
+| `audit.checks` | `lake.audit.checks` | one row per check per run. Maintenance writes the names in `AUDITS` (`docker/lake/maintenance.py`): `contract_schema` (one row per lake table: the live table against its contract), `offset_continuity`, `duplicate_identifiers`, `bronze_unparseable`, `bronze_schema_drift`, `silver_parity`, `silver_flags` (informational), `gold_parity`, `ohlcv_parity`, `bars_parity`, `kraken_checksum`. The ingest writes `unresolvable_schema_id`, `bronze_parity`, `offset_gap` and `batch_offsets` (ADR-047, only on a mismatch); an operator `manual_purge` and `checksum_failure_acknowledged`; `scripts/replay-lake.sh` writes `replay`. `passed = false` is what makes a maintenance run exit non-zero |
 | `gold.feed_errors` | ClickHouse | the served tier's counterpart: Kafka records the decoder rejected, with their bytes |
 | `dq.dbt_test_results` | `<catalog>.dq.dbt_test_results`, each domain catalog | one row per dbt test and unit test per run, as dbt reported it (`pass`, `fail`, `warn`, `error`, `skipped`), with the relation it tests and dbt's message |
 | `dq_results` | `governance.quality_results.dq_results` | the two rows above in one shape, `status` as `pass`, `fail`, `warn` or `error`: where to look first |
@@ -338,7 +338,9 @@ ClickHouse examples use the read-only `quant` user:
 
 ```bash
 set -a && . ./.env && set +a
-CH="docker exec k2-clickhouse clickhouse-client --user quant --password $K2_QUANT_PASSWORD"
+# A function, not a variable: zsh does not split "$CH" into words, so `CH="docker exec ..."; $CH`
+# fails there with "command not found".
+ch() { docker exec -i k2-clickhouse clickhouse-client --user quant --password "$K2_QUANT_PASSWORD" "$@"; }
 ```
 
 ### `raw.messages`
@@ -350,9 +352,9 @@ FROM lake.raw.messages WHERE topic LIKE '%kraken%' GROUP BY topic
 
 ```
                          topic     rows                           newest
-market.crypto.v3.trades.kraken    94975 2026-09-03 13:06:03.438000+00:00
-   market.crypto.v3.raw.kraken 13382683 2026-09-03 13:06:04.172000+00:00
-  market.crypto.v3.book.kraken   255453 2026-09-03 13:06:03.491000+00:00
+market.crypto.v3.trades.kraken      <n> 2026-09-03 13:06:03.438000+00:00
+   market.crypto.v3.raw.kraken      <n> 2026-09-03 13:06:04.172000+00:00
+  market.crypto.v3.book.kraken      <n> 2026-09-03 13:06:03.491000+00:00
 ```
 
 ### `bronze.kraken_trade`
@@ -416,7 +418,7 @@ ClickHouse, same instrument — note `FINAL`, and the `price` / `qty` aliases na
 explicitly:
 
 ```bash
-$CH -q "SELECT exchange, canonical_symbol, trade_id, price, qty, side, exchange_ts
+ch -q "SELECT exchange, canonical_symbol, trade_id, price, qty, side, exchange_ts
         FROM gold.trades FINAL
         WHERE exchange = 'kraken' AND canonical_symbol = 'BTC/USD'
         ORDER BY exchange_ts DESC LIMIT 3 FORMAT PrettyCompactMonoBlock"
@@ -444,7 +446,7 @@ ORDER BY window_start DESC LIMIT 3
 The ClickHouse `gold.ohlcv_1m` table is empty until the pull runs. The head is the view:
 
 ```bash
-$CH -q "SELECT exchange, canonical_symbol, window_start, open, high, low, close, volume, trade_count
+ch -q "SELECT exchange, canonical_symbol, window_start, open, high, low, close, volume, trade_count
         FROM gold.ohlcv_live(bucket = 60)
         WHERE exchange = 'kraken' AND canonical_symbol = 'BTC/USD'
         ORDER BY window_start DESC LIMIT 3 FORMAT PrettyCompactMonoBlock"
@@ -490,7 +492,7 @@ ORDER BY second DESC LIMIT 3
 ClickHouse, different column names and no `_e8` division built in:
 
 ```bash
-$CH -q "SELECT exchange, canonical_symbol, second, depth, bid_px[1] AS bid_e8, ask_px[1] AS ask_e8, checksum_ok
+ch -q "SELECT exchange, canonical_symbol, second, depth, bid_px[1] AS bid_e8, ask_px[1] AS ask_e8, checksum_ok
         FROM gold.book_top20 FINAL
         WHERE exchange = 'kraken' AND canonical_symbol = 'BTC/USD'
         ORDER BY second DESC LIMIT 3 FORMAT PrettyCompactMonoBlock"
@@ -521,7 +523,7 @@ ClickHouse `gold.bbo_1s` is empty until the pull runs; `gold.bbo_live` is the he
 same arithmetic over the topic-fed book:
 
 ```bash
-$CH -q "SELECT exchange, canonical_symbol, second, bid, ask, round(spread_bps,3) AS spread_bps,
+ch -q "SELECT exchange, canonical_symbol, second, bid, ask, round(spread_bps,3) AS spread_bps,
                round(imbalance,4) AS imbalance
         FROM gold.bbo_live WHERE exchange = 'kraken' AND canonical_symbol = 'BTC/USD'
         ORDER BY second DESC LIMIT 5 FORMAT PrettyCompactMonoBlock"
@@ -596,15 +598,16 @@ FROM pinned.audit_checks ORDER BY run_ts DESC LIMIT 4
 
 ```
                           run_ts    job check_name                          scope  passed  observed
-2026-09-03 12:58:25.158640+00:00 ingest offset_gap market.crypto.v3.raw.binance/0   False     25784
-2026-09-03 12:58:25.158640+00:00 ingest offset_gap market.crypto.v3.raw.binance/2   False     14923
-2026-09-03 12:58:25.158640+00:00 ingest offset_gap market.crypto.v3.raw.binance/3   False     24479
-2026-09-03 12:58:25.158640+00:00 ingest offset_gap market.crypto.v3.raw.binance/4   False     10243
+2026-09-03 12:58:25.158640+00:00 ingest offset_gap market.crypto.v3.raw.binance/0   False      1000
+2026-09-03 12:58:25.158640+00:00 ingest offset_gap market.crypto.v3.raw.binance/2   False      2000
+2026-09-03 12:58:25.158640+00:00 ingest offset_gap market.crypto.v3.raw.binance/3   False      3000
+2026-09-03 12:58:25.158640+00:00 ingest offset_gap market.crypto.v3.raw.binance/4   False      4000
 ```
 
-`offset_gap` rows are written by `ingest.py` **before** the skip they license: these record
-25,784 Binance records that Redpanda evicted before the lake read them, on partition 0 of
-`market.crypto.v3.raw.binance`. The archive knows exactly what it is missing.
+`offset_gap` rows are written by `ingest.py` **before** the skip they license: each records,
+in `observed`, the Binance records Redpanda evicted from that partition of
+`market.crypto.v3.raw.binance` before the lake read them (the values above are invented).
+The archive knows exactly what it is missing.
 
 ## Related
 

@@ -266,3 +266,144 @@ built, which holds the lake as it was at build time. A bucket computed before th
 snapshot it names equals the lake only if no trade landed in it since, and a stale lake bucket
 would show as a difference, not pass. `make parity-ohlcv` stays three-way; the fourth side is
 `--dbt`, opt in.
+
+## Outcome (2026-11-26, readers follow main)
+
+**Clause 4's "current" means `main`.** `pin()` and the parity scripts' stale-pin
+fallback took the newest snapshot by commit time, which a branch spike on 2026-11-25 showed can
+be an unpublished commit; they now resolve the snapshot `main` points at, and a pin is used only
+if it is on `main`'s lineage.
+
+## Outcome (2026-11-26, a known gap in the pinned day)
+
+**The candle parity gate can now leave out one listed minute of a recorded outage, and only
+that.** The gate is `make parity-ohlcv` ([`scripts/parity_ohlcv.py`](../../scripts/parity_ohlcv.py)):
+for one UTC day it computes every 1-minute candle three ways, in ClickHouse on read over the
+topic-fed `gold.trades`, in the lake's stored `gold.ohlcv_1m`, and in DuckDB over silver,
+optionally a fourth way through dbt's SQL on Trino, and requires each of them to equal the
+lake's on every bucket (one exchange, symbol and minute) at tolerance zero, at the snapshot
+ids pinned in `tests/parity/pinned.json`. It is the release gate clause 3 names.
+
+What happened: at 22:33:43 UTC on 2026-11-25 the host's out-of-memory killer killed the
+Docker VM, and the stack came back at 22:39:26 UTC. For UTC day 2026-11-25 the lake equals
+DuckDB over silver and dbt on every bucket, and ClickHouse equals the lake on every bucket
+except those of minute 22:33 UTC on every venue. For that minute ClickHouse holds fewer
+trades than the lake, and a few the lake never received. Reloading the window into
+ClickHouse from the lake would make them equal by deleting those trades, so the owner left
+both stores as they are and closed the phase on that day. The outage is recorded in
+`lake.audit.checks`, the lake's append-only table of check results, one row per check per
+run with its job, check name, scope, pass or fail, an observed number and a free-text
+detail: job `operator`, check `capture_outage`, scope
+`stack/2026-11-25T22:33:43Z..2026-11-25T22:39:26Z`, failed, observed 343 (the seconds capture
+was off), written at 2026-11-26 01:00:44 UTC.
+
+What the gate does now: the pin may list `known_gaps`, at most one entry, with exactly the
+fields `start`, `end`, `sides`, `cause`, `recorded` and `audit_ref`. The run stops on any
+entry that breaks a rule: times not written exactly `YYYY-MM-DDTHH:MMZ` (UTC, end
+exclusive); an end not after the start; a window longer than 60 minutes or outside the day
+compared; `sides` other than `["clickhouse"]`, because the lake against silver and against
+dbt check the lake's own computation, which an outage cannot make differ; an empty cause; a
+`recorded` that is not a `YYYY-MM-DD` date; an `audit_ref` not written exactly
+`lake.audit.checks job=<job> check_name=<name> scope=stack/<start>..<end>` with times to the
+second; or a window not inside that scope rounded out to whole minutes. A second entry stops
+the run with a pointer to the trigger below. The run takes the window out of ClickHouse
+against the lake only, prints it with its cause, its `audit_ref` and the buckets it removed,
+fails if the window has no difference left in it (stale, mistyped or dead), and ends
+`PARITY: ok (1 known gap applied, see above)` instead of `PARITY: PASS`. CI checks the
+committed entry against every rule except the last, which needs the stack. Bars parity needs
+nothing: all three of its sides read the lake.
+
+What it still guarantees: the three-way guarantee holds for every minute of the pinned day
+except the listed one, and inside that minute the lake still equals DuckDB over silver and
+dbt; an exclusion cannot be longer than an hour, be a second one, sit outside the day or
+outside the outage its audit row records, or stay in the pin once it hides nothing, without
+the run refusing it; and no run with a gap reads as a clean pass. It does not guarantee
+ClickHouse inside the window, which is the point of listing it. The first revisit trigger
+above still holds: a gap is a recorded loss, never a tolerance for a difference nobody has
+explained ([`tests/parity/README.md`](../../tests/parity/README.md) says when one may be
+listed).
+
+**Revisit when:** a second incident needs an exclusion. The gate should then read the loss
+windows from `lake.audit.checks` itself, rather than a copy kept by hand in the pin.
+
+## Outcome (2026-11-26, a pin fails rather than falls back)
+
+**A pinned snapshot is used if it is on `main`'s lineage or the pin's own tag names it, and any
+other pin stops the run.** Terms: a *snapshot* is one version of an Iceberg table, named by a
+random 64-bit id and numbered by a *sequence number* that grows with each commit; each snapshot
+records its *parent*, the version it was committed on top of. *`main`* is the table's published
+line of versions, and its *lineage* is the chain of parents walked back from the snapshot
+`main` points at. A *branch* is another named line whose commits `main` readers never see. A
+*tag* is a named pointer to one snapshot that commits do not move. The nightly maintenance
+*expires* snapshots older than seven days, keeping the newest ten and every snapshot a tag
+points at; an expired snapshot and the files only it used are deleted. The parity gate
+(`make parity-ohlcv`, `make parity-bars`) reads each table at the snapshot id written in
+`tests/parity/pinned.json`, so a rerun reads the same rows.
+
+What went wrong: the "readers follow main" Outcome above made the scripts accept a pin only
+if the walk from `main`'s head reached it, and otherwise run at `main`'s current snapshot
+with one printed line, leaving the exit code to the comparison. The 2026-11-25 pins were
+tagged on 2026-11-26 so expiry would keep them. Expiry keeps the tagged snapshot but deletes
+the untagged ones after it, and the walk stops at the first deleted parent, so about a week
+after pinning (the first nightly run on or after 2026-12-03) the walk would no longer reach
+any pin: the gate would compare the engines on whatever was current, exit 0, and still be
+read as the pinned check. A phase audit found it on 2026-11-26 and reproduced it on a crafted
+table. The same audit found that a known gap's `audit_ref`, the reference to the row in
+`lake.audit.checks` that records the outage, was checked as text only, so an invented
+reference of the right shape was accepted.
+
+What the gate does now:
+
+- **Resolution.** `resolve_snapshot` in `scripts/parity_ohlcv.py`, used by both scripts for
+  every lake side (`gold.ohlcv_1m`, the three `silver.trades_<venue>` tables, `gold.bars`,
+  `gold.trades`), accepts a pin on `main`'s lineage, or one the pin's own tag points at:
+  `parity_<day>` (the pinned day with underscores), or `parity_<day>_dbt` for the dbt side.
+  Both are read from the catalog's `loadTable` answer the scripts already fetched (`refs` of
+  `type: tag`). Any other tag validates nothing, so a scratch tag on a branch's commit does not
+  make it a pin. Anything else stops the run before any side is read, naming the table, the id,
+  the tag, and the two ways out: restore the tag if the snapshot is still in the table, or
+  re-pin. There is no fallback. The one way to run at the current snapshot is `--pin-current`,
+  which pins `main`'s head and writes it to the pin.
+- **What resolution cannot check.** Once expiry has cut the chain, nothing in the table records
+  whether a tagged snapshot was ever on `main` or only on a branch. A branch's commit that
+  someone tags with the pin's own name would therefore be accepted after a week. The tagging
+  step in `tests/parity/README.md` closes this by checking, before tagging and while the chain
+  still reaches the pin, that the id is an ancestor of `main` (Trino's `"<table>$history"`,
+  `is_current_ancestor`).
+- **The dbt side.** It reads `gold.trades` at `dbt_trades_snapshot`, a field of the pin that
+  `--pin-current <day> --dbt` records while every snapshot the day's lake candles were computed
+  from is still held: the newest of them by sequence number, which holds every trade those
+  candles counted. It is never re-derived: a week later all of them but the tagged one are
+  expired, and "the newest still held" could be an older snapshot, at which a candle that
+  missed a late trade would match the lake and pass. Every `--dbt` run requires the recorded id
+  to be one of the day's source snapshots, to pass the rule above under `parity_<day>_dbt`, and
+  to have no newer source snapshot still held; a NULL source id stops the run. A `--dbt` run
+  with a pin that lacks the field stops and says to re-pin with `--dbt`. For the 2026-11-25 pin
+  the field was added by hand on 2026-11-26, after checking read-only that the id is the newest
+  of that day's source snapshots by sequence number, all still held, and is the one tagged
+  `parity_2026_11_25_dbt`.
+- **The audit row.** Before anything is compared, `confirm_audit_row` reads
+  `lake.audit.checks` through the gate's own DuckDB connection for exactly the job, check name
+  and scope the reference names, and stops unless the row exists, is an `operator` row, and
+  has `passed` false (a NULL verdict is not a failure). A query that raises (catalog or storage
+  unreachable) stops the run as "could not read", distinct from "has no row"; neither passes.
+  CI, which has no stack, keeps the offline check of the reference's form.
+- **Notebooks.** `k2lake.pin()` always asks for `main`'s head, which expiry never removes, so
+  it cannot meet the stale-pin case. It now raises if the head is missing from the metadata,
+  instead of serving the table unpinned under an empty-table label, and an empty table's view is
+  held empty (`WHERE false`) rather than reading the moving head once rows land.
+
+Verified on 2026-11-26, read-only: Trino read every pinned snapshot by id and by tag name;
+Trino and DuckDB 1.4.4 each read a snapshot whose parent was already expired, by id, so
+reading a snapshot does not need its ancestors; DuckDB 1.4.4 does not read by tag name, and
+the scripts pass ids. At commit `007f011`, before the tag-name and dbt-pin changes,
+`scripts/parity-ohlcv.sh` (without `--dbt`) resolved every pin on `main`'s lineage, found the
+2026-11-25 outage row, applied the one gap and ended `PARITY: ok (1 known gap applied, see
+above)`. Not verified: a run of the final code against the stack, a `--dbt` run, the tag path
+on the live lake (no pin is off the walk before about 2026-12-03), and Spark reading a snapshot
+with expired ancestors; Spark resolves an id or a tag from the same metadata and reads that
+snapshot's own file list, so it is expected to.
+
+**Revisit when:** a pin's tags reach their 180-day age, counted from each snapshot's own commit
+time, not from tagging (the 2026-11-25 tags lapse about 2027-05-25), or at the next re-pin,
+the next tagging that must run the lineage check above.

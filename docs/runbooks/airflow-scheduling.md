@@ -27,7 +27,7 @@ request of plan phase P2, after 24 consecutive green `lake_ingest` runs.
 | 1 | Scheduler heartbeat lost | < 10 min | alert 301 s after the stop; cleared 59 s after `up` (2026-11-25) |
 | 2 | A lake task failed after its retries | depends on what the script found | alert 27 s after the failure (2026-11-25) |
 | 3 | `lake_ingest` skipped three runs in a row: the lock is held | < 15 min | orphan driver gone 284 ms after TERM (2026-11-25); the alert fired once, falsely, after the first maintenance run (fixed); not induced by a real stall |
-| 4 | Catch up after a long stall, with a bigger driver | a manual run | task 2.9 min for 273039 offsets, 2 g driver (2026-11-25); the run first waited for the scheduled run before it |
+| 4 | Catch up after a long stall, with a bigger driver | a manual run | task 2.9 min to drain the stalled backlog, 2 g driver (2026-11-25); the run first waited for the scheduled run before it |
 | 5 | `lake_ingest` not running: a stale DAG folder, a forgotten pause | < 25 min | observed 2026-11-25 before the alert existed: 35 min with no run, then healthy within a minute of the recreate |
 
 ---
@@ -107,7 +107,7 @@ curl -s localhost:9090/api/v1/rules | jq -r '.data.groups[].rules[].name' | grep
 Run on the live stack 2026-11-25: after the 06:05:42 unpause the first run listed was the
 06:01 probe run (success in 21 s). The first real run was the 06:06 slot, 06:06:00 to
 06:09:30 `success`; its `running:` line had no `--probe` and its log said `stage 1:
-committing 404815 offsets`. The commit age read 204 s just after it, and `make health`
+committing <n> offsets`. The commit age read 204 s just after it, and `make health`
 step (3) printed `last commit 36s ago`.
 
 ```bash
@@ -152,7 +152,7 @@ make health
 Run on the live stack 2026-11-25: both Prefect containers were removed at 06:45:07 and
 `ps -a` listed neither. `make health` ended `health: PASS`. `make lake-verify` ended
 `✓ lake-verify passed` with `summary matches table @ 7100892857985855191: snapshot says
-166156820 rows, COUNT(*) says 166156820`, and it printed `paused lake_ingest`, `paused
+<n> rows, COUNT(*) says <n>` (the same figure both times), and it printed `paused lake_ingest`, `paused
 lake_maintenance`, `resumed lake_ingest` and `resumed lake_maintenance` around its checks.
 The gates passed: `make test` (Rust, the ClickHouse schema test PASS, 8 notebook, 23
 generator and 17 DAG tests), `make parity-bars` (`parity: ok`, 0 rows differing in both

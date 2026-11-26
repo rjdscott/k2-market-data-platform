@@ -25,6 +25,7 @@ def tree(tmp_path):
     shutil.copytree(ROOT / "contracts", tmp_path / "contracts")
     (tmp_path / cli.LAKE_SQL).parent.mkdir(parents=True)
     shutil.copy(ROOT / cli.LAKE_SQL, tmp_path / cli.LAKE_SQL)
+    shutil.copytree(ROOT / cli.ADR_DIR, tmp_path / cli.ADR_DIR)  # a paused contract names its ADR
     return tmp_path
 
 
@@ -46,19 +47,19 @@ def test_the_repository_validates():
     assert cli.validate() == []
 
 
-def test_every_table_outside_audit_has_exactly_one_contract():
-    tables = [t for t in ddl.parse(ROOT / cli.LAKE_SQL) if not t.startswith("audit.")]
+def test_every_table_has_exactly_one_contract():
+    tables = list(ddl.parse(ROOT / cli.LAKE_SQL))
     described = [yaml.safe_load(p.read_text())["schema"][0]["physicalName"] for p in (ROOT / "contracts").glob("*/*/*.odcs.yaml")]
-    # audit.checks has one too, because marts read it (venue-quality, quality-results).
-    assert sorted(described) == sorted([*tables, "audit.checks"])
+    assert sorted(described) == sorted(tables)
 
 
-def test_an_audit_table_may_go_without_a_contract(tree):
-    # Only while no mart reads it: today venue-quality and quality-results do.
+def test_an_audit_table_without_a_contract_fails(tree):
+    # The nightly contract_schema audit fails it in the audit namespace, so CI must too.
+    # The marts that read audit.checks go with its contract, so the one error left is the table's.
     shutil.rmtree(tree / AUDIT)
     shutil.rmtree(tree / "contracts/governance/quality-results")
     edit(tree / "contracts/market-analytics/venue-quality/product.yaml", lambda d: d.update(inputs=[{"table": "gold.trades"}], marts=[{**d["marts"][0], "reads": ["gold.trades"]}]))
-    assert cli.validate(tree) == []
+    assert cli.validate(tree) == [f"{cli.LAKE_SQL}: audit.checks has no contract under contracts/"]
 
 
 def test_the_parser_finds_every_table_in_lake_sql():
@@ -191,3 +192,52 @@ def test_audit_is_a_layer_but_not_a_made_up_one(tree):
     contract = tree / AUDIT / "audit.checks.odcs.yaml"
     edit(contract, set_property("layer", "quality"))
     assert [e for e in cli.validate(tree) if "customProperties" in e and "'quality' is not one of" in e]
+
+
+# ── paused tables (ADR-050) ────────────────────────────────────────────────
+
+KRAKEN_BOOK = "contracts/market-capture/venue-frames/bronze.kraken_book.odcs.yaml"
+
+
+def pause(since="2026-11-26", adr="ADR-050"):
+    def change(doc):
+        doc["customProperties"].append({"property": "paused", "value": {"since": since, "adr": adr}})
+
+    return change
+
+
+def unpause(doc):
+    doc["customProperties"] = [p for p in doc["customProperties"] if p["property"] != "paused"]
+
+
+def test_a_paused_table_validates(tree):
+    edit(tree / KRAKEN_BOOK, unpause)
+    edit(tree / KRAKEN_BOOK, pause())
+    assert cli.validate(tree) == []
+
+
+def test_a_paused_table_names_an_adr_that_exists(tree):
+    edit(tree / KRAKEN_BOOK, unpause)
+    edit(tree / KRAKEN_BOOK, pause(adr="ADR-999"))
+    assert cli.validate(tree) == [f"{KRAKEN_BOOK}: paused by ADR-999, which has no file in docs/adr/"]
+
+
+def test_a_paused_table_names_a_real_day(tree):
+    edit(tree / KRAKEN_BOOK, unpause)
+    edit(tree / KRAKEN_BOOK, pause(since="2026-02-30"))
+    assert cli.validate(tree) == [f"{KRAKEN_BOOK}: paused since 2026-02-30, which is not a day"]
+
+
+def test_an_unquoted_day_is_a_date_to_yaml_and_fails_the_profile(tree):
+    from datetime import date
+
+    edit(tree / KRAKEN_BOOK, unpause)
+    edit(tree / KRAKEN_BOOK, pause(since=date(2026, 11, 26)))
+    errors = cli.validate(tree)
+    assert any(e.startswith(f"{KRAKEN_BOOK}: customProperties: $.paused.since") for e in errors), errors
+
+
+def test_a_paused_table_promises_no_freshness(tree):
+    # gold.trades declares a latency service level, which a mart's dbt source freshness reads.
+    edit(tree / TRADES, pause())
+    assert cli.validate(tree) == [f"{TRADES}: a paused table promises no freshness, so it declares no latency service level"]

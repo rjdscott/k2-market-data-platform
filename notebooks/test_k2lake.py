@@ -8,8 +8,9 @@ parameter binding. Run with `make test-notebooks` (or `cd notebooks && uv run py
 from __future__ import annotations
 
 import duckdb
+import k2lake
 import pytest
-from k2lake import SCALE, completeness, trades
+from k2lake import SCALE, completeness, lineage, trades
 
 # One symbol, one venue, one minute. Trades at :05.500 and :06.500 on 12:00.
 TRADES = [
@@ -133,3 +134,106 @@ def test_a_symbol_with_a_quote_is_bound_not_interpolated(con):
 def test_bad_source_is_rejected(con):
     with pytest.raises(ValueError):
         trades(con, *WINDOW, source="pinned; DROP TABLE pinned.gold_trades")
+
+
+# REST loadTable metadata, the shape Lakekeeper serves. `main` is at 3; 4 is an
+# unpublished commit on branch audit_1 and 5 the commit of a branch since dropped,
+# both newer than main. On 2026-11-25 pin() took 5's shape on a scratch table and
+# served a row that was never on main.
+METADATA = {
+    "current-snapshot-id": 3,
+    "refs": {"main": {"snapshot-id": 3, "type": "branch"}, "audit_1": {"snapshot-id": 4, "type": "branch"}},
+    "snapshots": [
+        {"snapshot-id": 1, "timestamp-ms": 1},
+        {"snapshot-id": 2, "parent-snapshot-id": 1, "timestamp-ms": 2},
+        {"snapshot-id": 3, "parent-snapshot-id": 2, "timestamp-ms": 3},
+        {"snapshot-id": 4, "parent-snapshot-id": 3, "timestamp-ms": 4},
+        {"snapshot-id": 5, "parent-snapshot-id": 2, "timestamp-ms": 5},
+    ],
+}
+
+
+def test_lineage_is_mains_not_the_newest_snapshot():
+    assert lineage(METADATA) == [3, 2, 1]
+
+
+def test_an_empty_table_has_no_lineage():
+    assert lineage({"current-snapshot-id": -1, "snapshots": []}) == []
+
+
+@pytest.fixture
+def rest(monkeypatch):
+    """Lakekeeper's two REST answers, METADATA for every table; returns the URLs asked for."""
+    urls = []
+
+    def get(url):
+        urls.append(url)
+        return {"defaults": {"prefix": "PFX"}} if "/config" in url else {"metadata": METADATA}
+
+    k2lake._prefix.cache_clear()
+    monkeypatch.setattr(k2lake, "_get", get)
+    yield urls
+    k2lake._prefix.cache_clear()
+
+
+def test_main_lineage_reads_the_table_it_names(rest):
+    """`lake.gold.trades` (the parity scripts) and `gold.trades` (pin) are one table."""
+    assert k2lake.main_lineage("lake.gold.trades") == k2lake.main_lineage("gold.trades") == [3, 2, 1]
+    assert rest[1].endswith("/v1/PFX/namespaces/gold/tables/trades")
+    assert sum("/config" in u for u in rest) == 1, "the prefix is read once, not per table"
+
+
+class FakeLake:
+    """The DuckDB connection pin() talks to: one table, gold.trades, holding METADATA's
+    snapshots. `iceberg_snapshots` answers as DuckDB does, newest first by timestamp,
+    so a pin() that reads it again pins 5, the dropped branch's commit."""
+
+    def __init__(self):
+        self.sql = []
+
+    def execute(self, sql):
+        self.sql.append(sql)
+        if "information_schema" in sql:
+            rows = [("gold", "trades")]
+        elif "iceberg_snapshots" in sql:
+            rows = [(s["snapshot-id"],) for s in sorted(METADATA["snapshots"], key=lambda s: -s["timestamp-ms"])]
+        else:
+            rows = []
+        return type("Result", (), {"fetchall": lambda self: rows, "fetchone": lambda self: rows[0] if rows else None})()
+
+
+def test_pin_pins_the_snapshot_main_points_at(rest, capsys):
+    con = FakeLake()
+    assert k2lake.pin(con, ("gold",)) == {"gold.trades": 3}
+    assert any("lake.gold.trades AT (VERSION => 3)" in q for q in con.sql)
+
+
+def test_tags_are_the_tag_refs_only_never_a_branch():
+    meta = {**METADATA, "refs": {**METADATA["refs"], "parity_x": {"snapshot-id": 1, "type": "tag", "max-ref-age-ms": 1}}}
+    assert k2lake.tags(meta) == {"parity_x": 1}
+    assert k2lake.tags(METADATA) == {}
+
+
+def test_pin_refuses_a_head_the_metadata_does_not_list(monkeypatch, capsys):
+    """The one way pin() could serve something other than main's head: the walk finds
+    nothing and the table would be read unpinned under an empty-table label."""
+    k2lake._prefix.cache_clear()
+    broken = {**METADATA, "current-snapshot-id": 9}
+    monkeypatch.setattr(k2lake, "_get", lambda url: {"defaults": {"prefix": "PFX"}} if "/config" in url else {"metadata": broken})
+    con = FakeLake()
+    with pytest.raises(RuntimeError, match="main points at snapshot 9, which the table's metadata does not list"):
+        k2lake.pin(con, ("gold",))
+    assert not any("CREATE OR REPLACE VIEW" in q for q in con.sql)
+    k2lake._prefix.cache_clear()
+
+
+def test_an_empty_table_is_held_empty_not_left_live(monkeypatch, capsys):
+    """No snapshot to pin: the view must not start serving the moving head after the table's first commit."""
+    k2lake._prefix.cache_clear()
+    empty = {"current-snapshot-id": -1, "refs": {}, "snapshots": []}
+    monkeypatch.setattr(k2lake, "_get", lambda url: {"defaults": {"prefix": "PFX"}} if "/config" in url else {"metadata": empty})
+    con = FakeLake()
+    assert k2lake.pin(con, ("gold",)) == {"gold.trades": None}
+    assert "CREATE OR REPLACE VIEW pinned.gold_trades AS SELECT * FROM lake.gold.trades WHERE false" in con.sql
+    assert "(empty when pinned, held empty)" in capsys.readouterr().out
+    k2lake._prefix.cache_clear()

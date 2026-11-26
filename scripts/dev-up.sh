@@ -22,6 +22,11 @@ if [ ! -f docker-compose.yml ] || [ ! -f .env ]; then
   exit 1
 fi
 result "(a) preflight" "PASS (docker-compose.yml + .env present)"
+# Read-only, so it runs under --dry-run too. Names variables, never values.
+if ! python3 scripts/check-env.py; then
+  result "(a) preflight" "FAIL (.env holds a guessable credential, see check-env above)"
+  exit 1
+fi
 
 # (b) prefect-server host port, idempotent
 # One variable, not an override file: compose interpolates K2_PREFECT_PORT into

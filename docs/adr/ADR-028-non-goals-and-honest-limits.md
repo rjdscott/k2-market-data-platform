@@ -361,3 +361,20 @@ authenticating it, so the writer identities its rules name (`dbt_<domain>`,
 read-only connector are guard rails against mistakes, not a boundary: Lakekeeper is still
 unauthenticated and Trino holds the MinIO root keys. ADR-044 names the storage key per
 identity that would be the next layer.
+
+## Outcome (2026-11-26, the ports were not on localhost)
+
+**§ 8's "the ports bind to localhost" was not true.** Until this Outcome only PostgreSQL,
+Lakekeeper, Airflow and Trino carried a `127.0.0.1:` prefix; the other fifteen published
+ports, MinIO's S3 API and console among them, listened on every interface, so § 8's own
+revisit trigger, "any port is exposed off localhost", had fired without anyone seeing it.
+The P3 audit found it on 2026-11-26 by `ss -ltn` and a `curl` from the host's LAN address,
+which MinIO answered `200`.
+
+The decision stands, and the fix is the one § 8 assumed: every published port now binds
+`127.0.0.1`, `scripts/check-budget.py` fails CI on one that does not, and `make up` refuses a
+placeholder or guessable `.env` (`scripts/check-env.py`). What § 8 still does not claim, and
+[SECURITY.md](../../SECURITY.md) now states, is that loopback keeps other machines out and not
+other users of the host. The single MinIO root credential every engine holds, exposed on the
+network until then, still has to be rotated and replaced by scoped keys; that is a decision of
+its own, and it will change ADR-044's single-key statement.

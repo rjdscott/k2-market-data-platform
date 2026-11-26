@@ -17,7 +17,9 @@ Load credentials into your shell first, then set a shorthand:
 
 ```bash
 set -a && . ./.env && set +a
-CH="docker exec k2-clickhouse clickhouse-client --password $CLICKHOUSE_PASSWORD"
+# A function, not a variable: zsh does not split "$CH" into words, so `CH="docker exec ..."; $CH`
+# fails there with "command not found".
+ch() { docker exec -i k2-clickhouse clickhouse-client --password "$CLICKHOUSE_PASSWORD" "$@"; }
 ```
 
 `clickhouse-client` also accepts `--password` with no argument to prompt interactively.
@@ -60,28 +62,28 @@ docker exec k2-redpanda rpk group describe k2-gold-trades
 
 ```bash
 # Volume and freshness, per exchange (FINAL: one row per logical trade)
-$CH -q "SELECT exchange, count() AS trades, min(exchange_ts) AS earliest, max(exchange_ts) AS latest
+ch -q "SELECT exchange, count() AS trades, min(exchange_ts) AS earliest, max(exchange_ts) AS latest
         FROM gold.trades FINAL GROUP BY exchange ORDER BY exchange"
 
 # Are all three exchanges flowing right now?
-$CH -q "SELECT exchange, count() AS trades, max(exchange_ts) AS latest
+ch -q "SELECT exchange, count() AS trades, max(exchange_ts) AS latest
         FROM gold.trades FINAL
         WHERE exchange_ts > now() - INTERVAL 15 MINUTE
         GROUP BY exchange ORDER BY exchange"
 
 # Most recent rows
-$CH -q "SELECT exchange, canonical_symbol, price, qty, side, exchange_ts, src_partition, src_offset
+ch -q "SELECT exchange, canonical_symbol, price, qty, side, exchange_ts, src_partition, src_offset
         FROM gold.trades FINAL ORDER BY exchange_ts DESC LIMIT 10 FORMAT Pretty"
 
 # Busiest instruments
-$CH -q "SELECT exchange, canonical_symbol, count() AS trades
+ch -q "SELECT exchange, canonical_symbol, count() AS trades
         FROM gold.trades FINAL WHERE exchange_ts > now() - INTERVAL 1 HOUR
         GROUP BY exchange, canonical_symbol ORDER BY trades DESC LIMIT 15 FORMAT Pretty"
 
 # Venue-to-K2 lag: the receive clock against the venue clock. This is the v3 successor of
 # the v2 ingestion-lag number in latency-budgets.md; it measures the exchange RTT plus the
 # capture parse, not the ClickHouse hop.
-$CH -q "SELECT exchange,
+ch -q "SELECT exchange,
                quantile(0.50)(recv_ts_ns / 1e6 - toUnixTimestamp64Milli(exchange_ts)) AS p50_ms,
                quantile(0.99)(recv_ts_ns / 1e6 - toUnixTimestamp64Milli(exchange_ts)) AS p99_ms,
                count() AS n
@@ -90,37 +92,37 @@ $CH -q "SELECT exchange,
         GROUP BY exchange FORMAT Pretty"
 
 # Deliveries vs trades: the gap is venue replays and topic overlap, collapsed by FINAL
-$CH -q "SELECT count(), (SELECT count() FROM gold.trades FINAL) FROM gold.trades"
+ch -q "SELECT count(), (SELECT count() FROM gold.trades FINAL) FROM gold.trades"
 
 # Kafka Engine health: a non-empty exceptions.text is the thing to look for; a record the
 # decoder rejected is in gold.feed_errors with its bytes
-$CH -q "SELECT table, consumer_id, num_messages_read, num_commits, last_poll_time, exceptions.text
+ch -q "SELECT table, consumer_id, num_messages_read, num_commits, last_poll_time, exceptions.text
         FROM system.kafka_consumers WHERE database = 'gold' FORMAT Vertical"
-$CH -q "SELECT seen_at, topic, partition, offset, error FROM gold.feed_errors ORDER BY seen_at DESC LIMIT 10"
+ch -q "SELECT seen_at, topic, partition, offset, error FROM gold.feed_errors ORDER BY seen_at DESC LIMIT 10"
 ```
 
 ## Candles and BBO: `gold.ohlcv_*`, `gold.ohlcv_live`, `gold.bbo_*`
 
 ```bash
 # Latest 1m candles, computed on read over the deduplicated trades: any bucket in seconds
-$CH -q "SELECT exchange, canonical_symbol, window_start, open, high, low, close, volume, trade_count
+ch -q "SELECT exchange, canonical_symbol, window_start, open, high, low, close, volume, trade_count
         FROM gold.ohlcv_live(bucket = 60)
         WHERE canonical_symbol = 'BTC/USDT' AND window_start > now() - INTERVAL 1 HOUR
         ORDER BY window_start DESC LIMIT 20 FORMAT Pretty"
 
 # The lake-computed candles (the record; loaded by pull, see clickhouse-rebuild-from-lake.md)
-$CH -q "SELECT exchange, canonical_symbol, window_start, open, close, volume, trade_count
+ch -q "SELECT exchange, canonical_symbol, window_start, open, close, volume, trade_count
         FROM gold.ohlcv_1m FINAL ORDER BY window_start DESC LIMIT 20 FORMAT Pretty"
 
 # Candle coverage across the four loaded timeframes
 for tf in 1m 5m 1h 1d; do
   echo -n "ohlcv_$tf: "
-  $CH -q "SELECT concat(toString(count()), ' candles, latest ', toString(max(window_start)))
+  ch -q "SELECT concat(toString(count()), ' candles, latest ', toString(max(window_start)))
           FROM gold.ohlcv_$tf FINAL"
 done
 
 # Best bid/offer off the 1 Hz book, with mid / spread / imbalance / microprice
-$CH -q "SELECT exchange, canonical_symbol, second, bid, ask, spread_bps, imbalance
+ch -q "SELECT exchange, canonical_symbol, second, bid, ask, spread_bps, imbalance
         FROM gold.bbo_live WHERE canonical_symbol = 'BTC/USDT' ORDER BY second DESC LIMIT 10 FORMAT Pretty"
 ```
 
@@ -195,7 +197,7 @@ They did on 2026-08-27: 1,978,901 / 273,060 / 33,246 (binance / coinbase / krake
 
 ```bash
 # ClickHouse side
-$CH -q "SELECT exchange, count() FROM gold.trades FINAL
+ch -q "SELECT exchange, count() FROM gold.trades FINAL
         WHERE exchange_ts >= '2026-08-27 00:00:00' AND exchange_ts < '2026-08-27 05:00:00' GROUP BY exchange"
 ```
 
@@ -213,26 +215,26 @@ A difference means the ClickHouse feed skipped or double-counted something, chec
 What *is* a hard invariant internal to the lake, checked by the nightly audit:
 `raw.messages` holds an unbroken offset run per `(topic, partition)`, and no two
 `bronze.*` rows share their identifier fields. See
-[prefect-schedules.md](./prefect-schedules.md) and
+[airflow-schedules.md](./airflow-schedules.md) (the nightly `lake_maintenance` DAG) and
 [lake-audit-failed.md](../runbooks/lake-audit-failed.md).
 
 ## Storage and export
 
 ```bash
 # Table sizes
-$CH -q "SELECT table, formatReadableSize(sum(bytes)) AS size, sum(rows) AS rows
+ch -q "SELECT table, formatReadableSize(sum(bytes)) AS size, sum(rows) AS rows
         FROM system.parts WHERE database = 'gold' AND active
         GROUP BY table ORDER BY sum(bytes) DESC FORMAT Pretty"
 
 # CSV / JSON export. NEVER `SELECT *` here: ClickHouse omits ALIAS columns from it, so
 # `SELECT *` on a candle table yields a file with no OHLC at all. Spell them out.
-$CH -q "SELECT exchange, canonical_symbol, window_start, open, high, low, close,
+ch -q "SELECT exchange, canonical_symbol, window_start, open, high, low, close,
                volume, quote_volume, trade_count
         FROM gold.ohlcv_1h FINAL WHERE window_start > now() - INTERVAL 7 DAY
         FORMAT CSVWithNames" > ohlcv_1h.csv
-$CH -q "SELECT exchange, symbol, canonical_symbol, trade_id, price, qty, side,
+ch -q "SELECT exchange, symbol, canonical_symbol, trade_id, price, qty, side,
                exchange_ts, recv_ts_ns, src_topic, src_partition, src_offset
-        FROM gold.trades FINAL ORDER BY exchange_ts DESC LIMIT 1000
+        FROM gold.trades FINAL ORDER BY exchange_ts DESC LIMIT 1000  -- counts-ok: a LIMIT, a query parameter
         FORMAT JSONEachRow" > trades.jsonl
 
 # Sample a topic to disk. Values are Confluent-framed Avro, so a sample needs an Avro-aware

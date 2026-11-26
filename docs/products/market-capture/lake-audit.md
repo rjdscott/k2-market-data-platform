@@ -9,6 +9,7 @@ What the lake jobs found when they checked the lake: one row per check per run, 
 | Owner | `capture-team` |
 | Kind | source-aligned |
 | Lifecycle | draft |
+| Status | running |
 | Descriptor | [`contracts/market-capture/lake-audit/product.yaml`](../../../contracts/market-capture/lake-audit/product.yaml) |
 
 ## Inputs and outputs
@@ -33,6 +34,7 @@ One row per check per run of a lake job, append-only: a failed check is never ed
 
 | | |
 |---|---|
+| Status | running |
 | Classification | internal |
 | Entitlement | none |
 | Retention | snapshots expire after 7 days; no row is deleted ([ADR-032](../../../docs/adr/ADR-032-odcs-contracts-and-k2gen.md)) |
@@ -47,7 +49,7 @@ One row per check per run of a lake job, append-only: a failed check is never ed
 |---|---|---|
 | `run_ts` | `TIMESTAMP NOT NULL` | When the maintenance run that produced this row started |
 | `job` | `STRING NOT NULL` | Who wrote it: maintenance \| ingest \| verify \| operator \| replay. replay is one row per `scripts/replay-lake.sh` run (docker/lake/record_check.py): the raw.messages snapshot, the conn_id and the crate sha in detail, the output hash in scope-free form, so a result is reproducible by re-running the same ids and comparing one digest. operator means a human filed it by hand at the moment of a decision: the two runbook rows that record a deliberate purge and a known offset gap. The column exists to answer "who asserted this", so a hand-filed row claiming maintenance would be the one lie that matters |
-| `check_name` | `STRING NOT NULL` | job=maintenance writes the names in docker/lake/maintenance.py AUDITS: offset_continuity, duplicate_identifiers, bronze_unparseable, bronze_schema_drift, silver_parity, silver_flags (informational, no pass/fail), gold_parity, ohlcv_parity, bars_parity, kraken_checksum. job=ingest writes unresolvable_schema_id, bronze_parity, and offset_gap (a --accept-data-loss run recording records Redpanda evicted before the lake read them, one row per partition, written BEFORE the skip it licenses), and batch_offsets (a stage-1 batch whose rows, first or last offset differ from the range it read, one row per partition, filed only on a mismatch, ADR-047). job=operator writes manual_purge (a deletion, not a finding, kept distinct so a query over this table never reads a purge as a check result) and checksum_failure_acknowledged. job=replay writes replay (scripts/replay-lake.sh) |
+| `check_name` | `STRING NOT NULL` | job=maintenance writes the names in docker/lake/maintenance.py AUDITS: contract_schema (one row per lake table: its live schema, partitioning, sort order and identifier fields against its contract), offset_continuity, duplicate_identifiers, bronze_unparseable, bronze_schema_drift, silver_parity, silver_flags (informational, no pass/fail), gold_parity, ohlcv_parity, bars_parity, kraken_checksum. job=ingest writes unresolvable_schema_id, bronze_parity, and offset_gap (a --accept-data-loss run recording records Redpanda evicted before the lake read them, one row per partition, written BEFORE the skip it licenses), and batch_offsets (a stage-1 batch whose rows, first or last offset differ from the range it read, one row per partition, filed only on a mismatch, ADR-047). job=operator writes manual_purge (a deletion, not a finding, kept distinct so a query over this table never reads a purge as a check result) and checksum_failure_acknowledged. job=replay writes replay (scripts/replay-lake.sh) |
 | `scope` | `STRING NOT NULL` | What was checked: a table name, or topic/partition |
 | `passed` | `BOOLEAN NOT NULL` | false here is what makes the maintenance run exit non-zero |
 | `observed` | `BIGINT` | The number the check produced: gap count, duplicate count. NULL where the check has no count |

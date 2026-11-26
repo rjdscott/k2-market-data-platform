@@ -11,21 +11,21 @@ How a product is added: [the golden path](../development/golden-path.md).
 
 Owner `capture-team`, source-aligned. What the venues sent, archived verbatim and typed per venue: raw.messages, bronze and silver per venue, and the book replay state.
 
-| Product | Lifecycle | Outputs and marts |
-|---|---|---|
-| [lake-audit](market-capture/lake-audit.md) | draft | `audit.checks` |
-| [raw-archive](market-capture/raw-archive.md) | draft | `raw.messages` |
-| [venue-books](market-capture/venue-books.md) | draft | `silver.book_binance`, `silver.book_kraken`, `silver.book_coinbase`, `gold.book_state` |
-| [venue-frames](market-capture/venue-frames.md) | draft | `bronze.binance_trade`, `bronze.binance_depth20`, `bronze.kraken_trade`, `bronze.kraken_book`, `bronze.kraken_instrument`, `bronze.coinbase_market_trades`, `bronze.coinbase_level2` |
-| [venue-trades](market-capture/venue-trades.md) | draft | `silver.trades_binance`, `silver.trades_kraken`, `silver.trades_coinbase` |
+| Product | Lifecycle | Status | Outputs and marts |
+|---|---|---|---|
+| [lake-audit](market-capture/lake-audit.md) | draft | running | `audit.checks` |
+| [raw-archive](market-capture/raw-archive.md) | draft | running | `raw.messages` |
+| [venue-books](market-capture/venue-books.md) | draft | running | `silver.book_binance`, `silver.book_kraken`, `silver.book_coinbase`, `gold.book_state` |
+| [venue-frames](market-capture/venue-frames.md) | draft | running | `bronze.binance_trade`, `bronze.binance_depth20`, `bronze.kraken_trade`, `bronze.kraken_book`, `bronze.kraken_instrument`, `bronze.coinbase_market_trades`, `bronze.coinbase_level2` |
+| [venue-trades](market-capture/venue-trades.md) | draft | running | `silver.trades_binance`, `silver.trades_kraken`, `silver.trades_coinbase` |
 
 ## reference-data
 
 Owner `reference-data-team`, source-aligned. The security master: instrument and venue dimensions, type-2, from the instrument registry and the attributes a venue publishes.
 
-| Product | Lifecycle | Outputs and marts |
-|---|---|---|
-| [security-master](reference-data/security-master.md) | draft | `gold.dim_instrument`, `gold.dim_venue` |
+| Product | Lifecycle | Status | Outputs and marts |
+|---|---|---|---|
+| [security-master](reference-data/security-master.md) | draft | running | `gold.dim_instrument`, `gold.dim_venue` |
 
 ## fx-reference
 
@@ -37,19 +37,19 @@ No product yet.
 
 Owner `analytics-team`, consumer-aligned. Cross-venue products a researcher reads first: canonical trades, candles, event bars and the 1 Hz book.
 
-| Product | Lifecycle | Outputs and marts |
-|---|---|---|
-| [book-snapshots](market-analytics/book-snapshots.md) | draft | `gold.book_top20`, `gold.bbo_1s` |
-| [candles](market-analytics/candles.md) | draft | `gold.ohlcv_1m`, `gold.ohlcv_5m`, `gold.ohlcv_1h`, `gold.ohlcv_1d`, `market_analytics.candles.ohlcv_1m` |
-| [canonical-trades](market-analytics/canonical-trades.md) | draft | `gold.trades` |
-| [delayed-candles](market-analytics/delayed-candles.md) | draft | `market_analytics.delayed_candles.ohlcv_delayed_20m` |
-| [event-bars](market-analytics/event-bars.md) | draft | `gold.bars` |
-| [venue-quality](market-analytics/venue-quality.md) | draft | `market_analytics.venue_quality.venue_quality_scorecard` |
+| Product | Lifecycle | Status | Outputs and marts |
+|---|---|---|---|
+| [book-snapshots](market-analytics/book-snapshots.md) | draft | running | `gold.book_top20`, `gold.bbo_1s` |
+| [candles](market-analytics/candles.md) | draft | running | `gold.ohlcv_1m`, `gold.ohlcv_5m`, `gold.ohlcv_1h`, `gold.ohlcv_1d`, `market_analytics.candles.ohlcv_1m` |
+| [canonical-trades](market-analytics/canonical-trades.md) | draft | running | `gold.trades` |
+| [delayed-candles](market-analytics/delayed-candles.md) | draft | running | `market_analytics.delayed_candles.ohlcv_delayed_20m` |
+| [event-bars](market-analytics/event-bars.md) | draft | running | `gold.bars` |
+| [venue-quality](market-analytics/venue-quality.md) | draft | running | `market_analytics.venue_quality.venue_quality_scorecard` |
 
 ## governance
 
 Owner `platform-team`, consumer-aligned. What the platform records about the other domains' data rather than the data itself: quality results first, control evidence and lineage in later phases. Its products read every other domain and no domain reads them (ADR-046).
 
-| Product | Lifecycle | Outputs and marts |
-|---|---|---|
-| [quality-results](governance/quality-results.md) | draft | `governance.quality_results.dq_results` |
+| Product | Lifecycle | Status | Outputs and marts |
+|---|---|---|---|
+| [quality-results](governance/quality-results.md) | draft | running | `governance.quality_results.dq_results` |

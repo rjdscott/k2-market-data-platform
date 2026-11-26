@@ -164,7 +164,7 @@ is acceptable for a dashboard and is not acceptable for a research number, which
 ```bash
 # 1. What does the broker still hold? Start and end offsets per partition. ✅ verified
 docker exec k2-redpanda rpk topic describe market.crypto.v3.raw.binance
-#   PARTITIONS 12  REPLICAS 1 ... max.message.bytes 8388608 (DYNAMIC_TOPIC_CONFIG)
+#   PARTITIONS 12  REPLICAS 1 ... max.message.bytes 8388608 (DYNAMIC_TOPIC_CONFIG)   counts-ok: a topic setting in bytes
 
 docker exec k2-redpanda rpk topic describe -p market.crypto.v3.trades.binance   # ✅ verified
 # Read LOG-START-OFFSET vs HIGH-WATERMARK: if LOG-START has moved above where the

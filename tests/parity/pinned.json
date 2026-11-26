@@ -1,18 +1,31 @@
 {
-  "day": "2026-08-27",
-  "ohlcv_1m_snapshot": 1622213366608023449,
+  "day": "2026-11-25",
+  "ohlcv_1m_snapshot": 1578447691193969083,
   "silver_snapshots": {
-    "kraken": 264358488000747777,
-    "coinbase": 7144589879523206615,
-    "binance": 3528392281922118482
+    "coinbase": 1973035339595012019,
+    "kraken": 5765993657413384545,
+    "binance": 2128928356663149335
   },
+  "dbt_trades_snapshot": 6911535457573800498,
   "bars": {
-    "day": "2026-08-28",
-    "bars_snapshot": 6439341232863081544,
-    "trades_snapshot": 768042784292372288,
+    "day": "2026-11-25",
+    "bars_snapshot": 7742311469663053082,
+    "trades_snapshot": 2055991547363439727,
     "reference_symbols": [
       "BTC/USD",
       "ETH/USDT"
     ]
-  }
+  },
+  "known_gaps": [
+    {
+      "start": "2026-11-25T22:33Z",
+      "end": "2026-11-25T22:34Z",
+      "sides": [
+        "clickhouse"
+      ],
+      "cause": "The host's out-of-memory killer killed the Docker VM at 22:33:43 UTC and the stack restarted at 22:39:26 UTC, leaving ClickHouse and the lake with different trades for minute 22:33.",
+      "recorded": "2026-11-26",
+      "audit_ref": "lake.audit.checks job=operator check_name=capture_outage scope=stack/2026-11-25T22:33:43Z..2026-11-25T22:39:26Z"
+    }
+  ]
 }

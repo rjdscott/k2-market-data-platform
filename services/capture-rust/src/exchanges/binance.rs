@@ -110,16 +110,26 @@ impl BinanceAdapter {
     }
 
     /// The `streams=` query the combined endpoint wants, in registry order:
-    /// `btcusdt@trade/btcusdt@depth20@100ms/...`. The caller appends it to
-    /// [`crate::config::Exchange::default_ws_url`]; there is no subscribe frame.
+    /// `btcusdt@trade/btcusdt@depth20@100ms/...`, or `btcusdt@trade/...` alone
+    /// while the registry's `book_capture` is false for Binance (ADR-050). The
+    /// caller appends it to [`crate::config::Exchange::default_ws_url`]; there
+    /// is no subscribe frame.
     pub fn stream_query(&self) -> String {
+        let book = self.instruments.book_capture();
         self.instruments
             .natives()
             .iter()
             .map(|n| n.to_ascii_lowercase())
-            .flat_map(|s| [format!("{s}@{TRADE_STREAM}"), format!("{s}@{DEPTH_STREAM}")])
+            .flat_map(|s| {
+                let depth = book.then(|| format!("{s}@{DEPTH_STREAM}"));
+                std::iter::once(format!("{s}@{TRADE_STREAM}")).chain(depth)
+            })
             .collect::<Vec<_>>()
             .join("/")
+    }
+
+    pub fn book_capture(&self) -> bool {
+        self.instruments.book_capture()
     }
 
     /// Empty: on the combined endpoint the URL *is* the subscription.
@@ -386,8 +396,7 @@ mod tests {
     use super::*;
     use crate::config::Exchange;
 
-    const REGISTRY: &str =
-        "version: 2\ninstruments:\n  binance:\n    - { native: BTCUSDT, canonical: BTC/USDT }\n";
+    const REGISTRY: &str = "version: 2\ninstruments:\n  binance:\n    - { native: BTCUSDT, canonical: BTC/USDT }\nbook_capture: { binance: true, kraken: true, coinbase: true }\n";
 
     fn adapter() -> BinanceAdapter {
         let mut a = BinanceAdapter::new(Instruments::parse(REGISTRY, Exchange::Binance).unwrap());

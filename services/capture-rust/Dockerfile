@@ -17,7 +17,7 @@
 # resolves the same way it does on a developer's machine.
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-FROM rust:1-bookworm AS chef
+FROM rust:1.100.0-bookworm AS chef
 # cmake + clang: rdkafka is built from source (`cmake-build`) and `zstd-sys`
 # needs libclang for bindgen. Spike S6 found this the hard way.
 RUN apt-get update \
@@ -55,7 +55,7 @@ RUN cargo build --release --bin k2-capture
 # distroless/cc because librdkafka is a C library: it needs libgcc and libstdc++
 # but nothing else. No shell, no package manager, no curl - which is why
 # `k2-capture healthcheck` exists as a subcommand.
-FROM gcr.io/distroless/cc-debian12:nonroot
+FROM gcr.io/distroless/cc-debian12:nonroot@sha256:9dac0a79194e45a7da0158a9c6da57b217585af0786db3845d1f0ec1a0dd182f
 COPY --from=builder /repo/services/capture-rust/target/release/k2-capture /k2-capture
 USER nonroot
 ENTRYPOINT ["/k2-capture"]

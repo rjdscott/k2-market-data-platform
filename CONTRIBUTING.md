@@ -5,7 +5,7 @@ This is a personal portfolio project. Issues and questions are welcome; pull req
 ## Prerequisites
 
 - Docker Engine with Compose v2
-- Nothing else is required: `make test-rust` runs the Rust suite in a `rust:1-bookworm` container, so no local `cargo` or JDK is needed
+- Nothing else is required: `make test-rust` runs the Rust suite in a `rust:1.100.0-bookworm` container, so no local `cargo` or JDK is needed
 - [`uv`](https://docs.astral.sh/uv/) (only for the Python unit tests and ruff)
 
 ## Setup
@@ -22,10 +22,10 @@ make ps
 
 ```bash
 make test                # everything CI runs: Python + Rust + ClickHouse
-make test-rust           # cargo test inside rust:1-bookworm
-make test-python         # uv run --no-project --with pytest --with pyyaml --with fastavro==1.12.2 --with duckdb==1.4.4 pytest tests -q
+make test-rust           # cargo test inside rust:1.100.0-bookworm
+make test-python         # uv run --no-project --with pytest==9.2.0 --with pyyaml==6.0.4 --with fastavro==1.12.2 --with duckdb==1.4.4 pytest tests -q
 make test-clickhouse     # the gold DDL and its assertions on a throwaway 24.3 server
-make lint                # uv run --no-project --with ruff ruff check docker/lake tests
+make lint                # uv run --no-project --with ruff==0.17.6 ruff check docker/lake tests
 ```
 
 CI (`.github/workflows/ci.yml`) runs the same three suites plus a Docker build of every image, a compose config check, the doc gates and a Trivy scan.
@@ -44,16 +44,19 @@ in it, and what does not.
 | `config/` | registries the services read: instruments, bar thresholds | secrets, host-specific values (those are `.env`) |
 | `docker/` | per-service images, DDL, lake jobs, Prefect flows, alert rules, dashboards | volumes, backups, warehouse files |
 | `docs/` | the architecture book, ADRs, runbooks, plans, audits, benchmarks, research | progress trackers, phase status files, pasted market data |
-| `legacy/` | v1, the v2 Kotlin tier, v2 ClickHouse DDL, the v2 offload: archived, unmodified; index in [`legacy/README.md`](legacy/README.md) | new work or fixes |
+| `legacy/` | v1, the v2 Kotlin tier, v2 ClickHouse DDL, the v2 offload: archived, source unchanged since archiving (v1 has had dependency pins bumped, see its README); index in [`legacy/README.md`](legacy/README.md) | new work or fixes |
 | `notebooks/` | DuckDB research notebooks and the `k2lake` helpers, outputs cleared | executed outputs, which are your venue data |
 | `schemas/` | the Avro wire contracts | anything that is not the contract |
 | `scripts/` | gates, health, chaos, parity, the synthetic fixture generator | one-off scripts nobody reruns |
 | `services/` | the Rust capture crate, its tests and synthetic fixtures | recorded venue frames (`tests/recorded/` is git-ignored) |
 | `tests/` | Python unit tests, ClickHouse assertions, synthetic fixtures, parity pins | real venue frames, tests that need a live stack |
 
-A data file under any `fixtures/` or `samples/` directory is named `synthetic-*` or is
-listed in [`NOTICE`](NOTICE) with its source and terms; `scripts/check-docs.sh` gate (h)
-fails CI otherwise.
+A data file anywhere in the tree (JSON lines, CSV, Parquet, Avro, pcap and the like, by
+extension or by content) is written by `scripts/make-synthetic-fixtures.py` and listed at
+its hash in `tests/fixtures/SHA256SUMS`, or is listed by path in [`NOTICE`](NOTICE) with
+its source and terms. Notebooks are committed without outputs (`make notebooks-run` writes
+executed copies to the git-ignored `notebooks/.executed/`). `scripts/check-docs.sh` gate
+(i) fails CI otherwise.
 
 ## Conventions
 

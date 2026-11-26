@@ -6,7 +6,7 @@ notebooks read the same Iceberg tables the audits do (ADR-018, ADR-026).
 
 ```bash
 make notebooks            # uv sync, then JupyterLab on http://localhost:8889
-make notebooks-run        # execute all five headless (nbconvert), the runnable check
+make notebooks-run        # execute all five headless (nbconvert) into .executed/, git-ignored
 ```
 
 | Notebook | Question it answers | Tables |
@@ -28,6 +28,13 @@ first cell calls `pin(con)`: one `pinned.<ns>_<table>` view per gold, silver and
 at its current snapshot id, printed with the commit, and nothing below reads `lake.*`
 directly (`tests/test_notebooks_pinned.py` fails CI if one does). A number a notebook
 prints therefore names the snapshot it came from ([ADR-029](../docs/adr/ADR-029-research-production-parity-contract.md)).
+"Current" is the snapshot `main` points at, read from Lakekeeper's `loadTable`
+(`k2lake.main_lineage`), never the newest snapshot by commit time: once a table has a
+branch, that can be an unpublished commit. `pin()` raises rather than serve a table unpinned
+when `main`'s snapshot is missing from the metadata, and holds an empty table's view empty. A
+pin the parity scripts are given is used only if it is on `main`'s lineage or its own
+`parity_<day>` tag names it; otherwise the run stops
+([`tests/parity/README.md`](../tests/parity/README.md#keeping-the-pinned-snapshots-alive)).
 What this data can and cannot honestly support is written down before any of it is
 quoted: [replay-fidelity-limits](../docs/research/2026-08-28-replay-fidelity-limits.md).
 
@@ -71,11 +78,11 @@ completeness(con, 'BTC/USD', 'kraken', '2026-09-03 12:00', '2026-09-03 13:00').s
 │ trades │ minutes_with_trades │ minutes_expected │ seq_gaps │ ids_never_received │ quote_coverage_pct │ checksum_failed │ audit_failures │
 │ int64  │        int64        │      int64       │  int64   │       int64        │       double       │      int64      │     int64      │
 ├────────┼─────────────────────┼──────────────────┼──────────┼────────────────────┼────────────────────┼─────────────────┼────────────────┤
-│   1923 │                  13 │               60 │        0 │                  0 │              100.0 │               0 │             31 │
+│   1000 │                  13 │               60 │        0 │                  0 │              100.0 │               0 │             31 │
 └────────┴─────────────────────┴──────────────────┴──────────┴────────────────────┴────────────────────┴─────────────────┴────────────────┘
 ```
 
-Read that as: 1923 trades over 13 of the hour's 60 minutes (Kraken BTC/USD is thin, and the
+Read that as (the trade count is invented here): trades in 13 of the hour's 60 minutes (Kraken BTC/USD is thin, and the
 capture only started at 12:46 in this window), no trade-id holes, every trade found a quote.
 `checksum_failed` is Kraken-only — Binance and Coinbase publish no book checksum, so it is
 `NULL` there, which means *not measurable*, never *clean*. `audit_failures` counts
@@ -117,7 +124,7 @@ A key's FIRST version opens at `1970-01-01`, not at the run that discovered it: 
 asserts what an instrument *is*, and that was true before K2 recorded it, so no trade is ever
 older than its dimension row. `recorded_at` dates when K2 learned it — on those seed rows
 `valid_from < recorded_at`, and the gap is the history nothing observed
-([ADR-030](../adr/ADR-030-scd2-security-master.md) Outcome). Later versions open at their run.
+([ADR-030](../docs/adr/ADR-030-scd2-security-master.md) Outcome). Later versions open at their run.
 
 Numbers printed by these notebooks are not published anywhere else; the published ones are
 in `docs/benchmarks/`. A notebook cell is a query, not a claim.

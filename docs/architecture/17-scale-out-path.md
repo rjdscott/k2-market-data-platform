@@ -62,7 +62,7 @@ is why chapter 16 remains the authority on anything with a stopwatch attached.
 | F4 | **Catalog database** | Lakekeeper's PostgreSQL down means no commits. The ingest writes its data files, fails to commit, and is a no-op with orphans — [ADR-022](../adr/ADR-022-exactly-once-via-snapshot-offsets.md)'s own table covers it | RDS PostgreSQL Multi-AZ: synchronous replication, failover in ~1–2 min | Lakekeeper must reconnect rather than wedge. **Unverified** — no failover has been exercised anywhere |
 | F5 | **Ingest job dies mid-commit** | **already safe, and for an exact reason** — §1.1 | unchanged. Exactly-once is a property of the Iceberg commit, so it does not care what launched the job | **the `flock` does not survive the move.** §1.2. This is the sharpest finding on this page |
 | F6 | **ClickHouse node** | the hot tier is gone; nothing is lost. [ADR-025](../adr/ADR-025-clickhouse-derived-hot-tier.md) makes it derived, rebuildable and originating nothing | `ReplicatedMergeTree` × 2+ replicas with a 3-node Keeper ensemble, or ClickHouse Cloud | the RTO is the **rebuild duration**, which is a function of lake size and is unmeasured at 200×. §3's hot-tier row argues that number should be measured before any replica is bought |
-| F7 | **Prefect** | no ingest is dispatched; the lake stalls and `LakeIngestFailed` fires. Nothing is lost only while the bus still holds the unread records, and the binding limit is **the per-partition byte cap, not 48 h** (2 GiB since 2026-11-25): measured 2026-08-26 at the old 512 MiB, that cap bound at **7.01 h** on `raw.kraken` partition 0, because keyed partitioning concentrates the busiest symbol, and 1,168,954 records were evicted unread (`docker/redpanda/init.sh`) | Prefect Cloud, or server + worker on ECS across AZs with RDS Multi-AZ | `concurrency_limit=1` becomes the **only** mutual exclusion once the `flock` is gone (F5), so a control-plane bug becomes a correctness bug |
+| F7 | **Prefect** | no ingest is dispatched; the lake stalls and `LakeIngestFailed` fires. Nothing is lost only while the bus still holds the unread records, and the binding limit is **the per-partition byte cap, not 48 h** (2 GiB since 2026-11-25): measured 2026-08-26 at the old 512 MiB, that cap bound at **7.01 h** on `raw.kraken` partition 0, because keyed partitioning concentrates the busiest symbol, and records were evicted unread (`docker/redpanda/init.sh`; the count is in [ADR-021](../adr/ADR-021-raw-first-archive-and-lineage.md)'s Outcome) | Prefect Cloud, or server + worker on ECS across AZs with RDS Multi-AZ | `concurrency_limit=1` becomes the **only** mutual exclusion once the `flock` is gone (F5), so a control-plane bug becomes a correctness bug |
 | F8 | **S3 regional event** | not representable — MinIO is one container on one disk | nothing single-region can mitigate it. This row is why §7 exists | — |
 | F9 | **Region** | not representable | §7: S3 CRR, a catalog in the second region, re-placed capture. **Not** a warm standby — a cold rebuild with a stated RTO | Iceberg's absolute paths make this a *catalog and metadata* problem before it is a storage problem (§7.1) |
 | F10 | **Trino** | SQL over the lake and the marts stops, and `dbt_marts` fails, so the marts go stale. Nothing is lost: Trino's `lake` catalog cannot commit ([ADR-044](../adr/ADR-044-producer-lake-and-domain-mart-warehouses.md)), and the next run rebuilds every mart from the lake | Trino on ECS, one task per node across AZs; ECS replaces a failed task (§3) | the coordinator is one process, so losing it stops serving until its task is replaced. One kind of table in the mart warehouses is not rebuildable: each domain's `dq.dbt_test_results`, the dbt test history (§7.2) |
@@ -341,7 +341,7 @@ BTC: roughly **20 venues × ~500 instruments ≈ 10,000 instruments**, against t
 bytes rather than 294×. That matters because it changes what scales: partition counts and
 topic counts scale with venues and symbols; per-connection CPU does not.
 
-At 200×: **~140,000 frames/s in**, **~177,000 records/s out**
+At 200×: **~140,000 frames/s in** <!-- counts-ok: a 200x projection of the 1x rates, arithmetic -->, **~177,000 records/s out** <!-- counts-ok: a 200x projection of the 1x rates, arithmetic -->
 (699.8 and 883.8 /s at 1×, capacity model §2c), and **1.29 TB/day** into `raw.messages`.
 
 ### 5.2 Files per day, and why the small-file problem inverts
@@ -352,7 +352,7 @@ section, as in the capacity model; the DDL's `write.target-file-size-bytes` valu
 binary equivalents (128 MiB, 256 MiB), a 5 % difference that moves no conclusion below.
 
 ```
-raw.messages, 200×:  1,294 GB/day ÷ 256 MB per file   = 5,055 files/day
+raw.messages, 200×:  1,294 GB/day ÷ 256 MB per file   = 5,055 files/day   counts-ok: a projection, arithmetic
 per commit:          1,294 GB ÷ 288 commits           = 4.49 GB  → ~18 files
 ```
 
@@ -379,10 +379,10 @@ a table should not accumulate partitions faster than its metadata can be planned
 | Spec | 1× (today) | 200× | Verdict |
 |---|---|---|---|
 | `raw.messages` `days(kafka_ts), topic` | 9 partitions/day, ~26 files/day, ~0.72 GB per partition | 60 partitions/day (20 venues × 3 streams), ~22 GB per partition | holds at both ends |
-| `raw.messages` `hours(kafka_ts), topic` | 216 partitions/day, **30 MB per partition**, a tenth of a target file | 1,440 partitions/day, **~0.9 GB per partition**, 3–4 target files | wrong today, **right at scale** |
+| `raw.messages` `hours(kafka_ts), topic` | 216 partitions/day, **30 MB per partition**, a tenth of a target file | 1,440 <!-- counts-ok: hourly partitions at 200x, arithmetic --> partitions/day, **~0.9 GB per partition**, 3–4 target files | wrong today, **right at scale** |
 | `bronze.<venue>_<msg>` `days(recv_ts)` | 6 tables, 1 partition/day each, ~583 MB each | ~40 tables (20 venues × 2 message types), ~17.5 GB each | holds at both ends |
 | `silver.trades_<venue>` `days(exchange_ts)` | 3 tables, 1 partition/day each, ~83 MB each | 20 tables, ~2.5 GB each | thin today, holds at scale |
-| `bronze.*` + `symbol` | 34 partitions/day (34 exchange–symbol pairs), ~7 MB of trades each and most holding hundreds of rows | 10,000 instruments → **10,000 partitions/day** | wrong at both ends, catastrophically so at scale |
+| `bronze.*` + `symbol` | 34 partitions/day (34 exchange–symbol pairs), ~7 MB of trades each and most holding hundreds of rows | 10,000 <!-- counts-ok: a scale-out instrument count, hypothetical --> instruments → **10,000 <!-- counts-ok: a scale-out instrument count, hypothetical --> partitions/day** | wrong at both ends, catastrophically so at scale |
 
 **The `hours()` crossover is a computable trigger, not a judgement.** A per-topic hour
 partition holds `6.47 GB/day ÷ 9 topics ÷ 24 h = 30 MB` today. It reaches one 256 MB

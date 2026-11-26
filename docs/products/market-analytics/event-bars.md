@@ -9,6 +9,7 @@ Tick, volume and dollar bars at the one canonical threshold per symbol, restarti
 | Owner | `analytics-team` |
 | Kind | consumer-aligned |
 | Lifecycle | draft |
+| Status | running |
 | Descriptor | [`contracts/market-analytics/event-bars/product.yaml`](../../../contracts/market-analytics/event-bars/product.yaml) |
 
 ## Inputs and outputs
@@ -40,6 +41,7 @@ Event bars from gold.trades, one row per (exchange, canonical_symbol, bar_kind, 
 
 | | |
 |---|---|
+| Status | running |
 | Classification | internal |
 | Entitlement | realtime |
 | Retention | snapshots expire after 7 days; no row is deleted ([ADR-032](../../../docs/adr/ADR-032-odcs-contracts-and-k2gen.md)) |

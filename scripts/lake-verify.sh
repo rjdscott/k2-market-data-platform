@@ -105,6 +105,7 @@ import offsets as O
 import books
 import gold
 import silver
+from catalog import main_snapshots
 from ingest import ALL_TOPICS, RAW_TABLE, snapshot_history
 from maintenance import audit_book_parity, audit_gold_trades, audit_offset_continuity, audit_silver_parity
 from spark_conf import lake_session
@@ -172,11 +173,10 @@ try:
     # Both numbers at ONE snapshot. COUNT(*) at "current" raced every commit
     # that landed while the checks above ran: on 2026-11-24 two queued runs
     # added 679,304 rows between the two reads and this failed on a sound lake.
-    row = spark.sql(
-        f"SELECT snapshot_id, summary['total-records'] FROM {RAW_TABLE}.snapshots "
-        f"WHERE summary['{O.JOB}'] = '{O.JOB_INGEST}' ORDER BY committed_at DESC LIMIT 1"
-    ).collect()
-    sid, claimed = (row[0][0], int(row[0][1])) if row else (None, -1)
+    # On main's lineage only: a branch commit is not a snapshot the table is at.
+    rows = [r for r in main_snapshots(spark, RAW_TABLE) if (r["summary"] or {}).get(O.JOB) == O.JOB_INGEST]
+    row = max(rows, key=lambda r: r["committed_at"], default=None)
+    sid, claimed = (row["snapshot_id"], int(row["summary"]["total-records"])) if row else (None, -1)
     actual = (spark.sql(f"SELECT count(*) FROM {RAW_TABLE} VERSION AS OF {sid}").collect()[0][0]
               if sid else -2)
     check("summary matches table", claimed == actual,

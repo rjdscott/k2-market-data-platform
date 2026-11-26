@@ -47,7 +47,9 @@ docker exec k2-clickhouse clickhouse-client --password "$CLICKHOUSE_PASSWORD" -q
 # → three rows, all non-zero
 docker exec k2-clickhouse clickhouse-client --password "$CLICKHOUSE_PASSWORD" -q \
   "SELECT exchange, count() FROM gold.book_top20 GROUP BY exchange ORDER BY exchange"
-# → three rows, all non-zero
+# → a non-zero row for each venue whose book_capture is true, and no row for a venue
+#   whose switch is false (ADR-050): `grep -A3 '^book_capture:' config/instruments.yaml`.
+#   The release decision states which; `make health` step (4) checks each capture agrees.
 docker exec k2-clickhouse clickhouse-client --password "$CLICKHOUSE_PASSWORD" -q \
   "SELECT count() FROM gold.ohlcv_live(bucket = 60) WHERE window_start > now() - INTERVAL 10 MINUTE"
 # → non-zero: candles on read over the deduplicated trades
@@ -94,6 +96,11 @@ make parity-ohlcv parity-bars   # live three-way parity at tests/parity/pinned.j
 
 Parity cannot run in GitHub's CI (no stack there), so this is the only place it gates a
 tag. A failure prints the first differing rows; the Python reference is the arbiter.
+
+A candle run that ends `PARITY: ok (1 known gap applied, see above)` passes only if the
+release report names the applied gap: its window, cause and `audit_ref`, as the run printed
+them. With a gap listed, the three-way guarantee holds for every minute of the pinned day
+except the listed one, and the report says so (`tests/parity/README.md`, "Known gaps").
 
 ## 5. Grep sweep — forbidden strings in published docs
 

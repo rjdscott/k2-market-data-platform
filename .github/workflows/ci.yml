@@ -22,17 +22,17 @@ jobs:
         working-directory: services/capture-rust
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # Pinned to the channel services/capture-rust/rust-toolchain.toml declares.
       # `@stable` was a no-op: rustup honours the toolchain file, so the action's
       # `components:` never applied and 1.98.0 was downloaded on every run anyway
       # (rust-cache caches build artefacts, not toolchains).
-      - uses: dtolnay/rust-toolchain@1.98.0
+      - uses: dtolnay/rust-toolchain@516c5a67e611cdaf2ef0bb5d78620e3c7d245fe6 # 1.98.0
         with:
           components: clippy, rustfmt
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: services/capture-rust
 
@@ -58,15 +58,15 @@ jobs:
     timeout-minutes: 10
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: astral-sh/setup-uv@v10.4.0
+      - uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
 
       - name: Ruff
-        run: uv run --no-project --with ruff ruff check docker/lake docker/airflow scripts/airflow_shadow_check.py scripts/screenshots tests
+        run: uv run --no-project --with ruff==0.17.6 ruff check docker/lake docker/airflow scripts/airflow_shadow_check.py scripts/screenshots scripts/check_docs.py scripts/check-budget.py scripts/check-env.py scripts/make-synthetic-fixtures.py tests
 
       - name: Pytest
-        run: uv run --no-project --with pytest --with pyyaml --with fastavro==1.12.2 --with duckdb==1.4.4 pytest tests -q
+        run: uv run --no-project --with pytest==9.2.0 --with pyyaml==6.0.4 --with fastavro==1.12.2 --with duckdb==1.4.4 pytest tests -q
 
       - name: Notebook helpers (k2lake)
         run: make test-notebooks
@@ -77,9 +77,9 @@ jobs:
     timeout-minutes: 10
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: astral-sh/setup-uv@v10.4.0
+      - uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
 
       # Generated files are never edited by hand. A contract changed without
       # `make generate`, a generated file edited by hand, or one never committed
@@ -102,7 +102,7 @@ jobs:
     timeout-minutes: 10
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # The served tier's contract, asserted on a throwaway server: the v2
       # OHLCV regression (open/close across two insert blocks), FINAL
@@ -117,7 +117,7 @@ jobs:
     timeout-minutes: 10
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # The pinned image from docker-compose.yml with docker/trino/etc, no
       # network: the real etc/ starts with one catalog per domain in
@@ -132,9 +132,9 @@ jobs:
     timeout-minutes: 15
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: astral-sh/setup-uv@v10.4.0
+      - uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
 
       # make test-dbt: sqlfluff, then the pinned Trino image over the local catalogs
       # job trino uses, with every lake table dbt/models/_sources.yml lists created
@@ -171,16 +171,16 @@ jobs:
             build_args: K2_GIT_SHA=${{ github.sha }}
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: docker/setup-buildx-action@v4
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
       # Every one of these COPYs from the repo root, so the context is `.` and
       # matches docker-compose.yml. capture-rust is NOT a standalone crate: it
       # compiles the wire contract in from the repo with
       # `include_str!("../../../schemas/avro/trade.avsc")` (src/record.rs), and
       # its Dockerfile.dockerignore is what keeps the context small.
-      - uses: docker/build-push-action@v7
+      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           file: ${{ matrix.dockerfile }}
@@ -213,7 +213,7 @@ jobs:
     timeout-minutes: 5
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # `config` resolves every variable, mount and dependency without pulling
       # an image or starting anything, so it catches a bad service definition on
@@ -222,14 +222,15 @@ jobs:
       - name: docker compose config
         run: docker compose --env-file .env.example config -q
 
-      # Prints the steady default, bootstrap default and bootstrap with
-      # --profile governance and with --profile legacy (the Prefect rollback)
-      # limit sums, and fails when the bootstrap default is over the
-      # 25 CPU / 48 GiB ADR-045 states. Also fails a service in any
-      # config with no CPU or memory limit (it would escape the budget and
-      # nothing else would notice), an untagged or `latest` image, and an
-      # unpinned FROM or pip install in a Dockerfile. Stdlib only.
-      - name: resource budget, limits and pins
+      # Prints the steady default, the bootstrap default and, for each profile a
+      # service names (today legacy, the Prefect rollback), the default plus that
+      # profile: limit sums, each service's limits times its replicas, and fails when the
+      # bootstrap default is over the 25 CPU / 48 GiB ADR-045 states. Also fails
+      # a service under any profile with no CPU or memory limit (it would escape the budget and
+      # nothing else would notice), an untagged or `latest` image, an
+      # unpinned FROM or pip install in a Dockerfile, and a published port not
+      # bound to 127.0.0.1 (SECURITY.md). Stdlib only.
+      - name: resource budget, limits, pins and loopback ports
         run: python3 scripts/check-budget.py
 
   docs:
@@ -239,12 +240,16 @@ jobs:
 
     steps:
       # Full history: gate (h) diffs against the merge base with origin/main,
-      # which a depth-1 checkout does not have.
-      - uses: actions/checkout@v7
+      # which a depth-1 checkout does not have. On a push to main that merge
+      # base is the pushed commit itself, so the push run diffs from the commit
+      # main was at before it instead.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
 
       - run: bash scripts/check-docs.sh
+        env:
+          K2_DIFF_BASE: ${{ github.event_name == 'push' && github.event.before || '' }}
 
   security:
     name: Security (Trivy)
@@ -256,9 +261,9 @@ jobs:
       security-events: write
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: aquasecurity/trivy-action@v0.36.0
+      - uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           scan-type: fs
           scan-ref: .
@@ -272,8 +277,29 @@ jobs:
 
       # Code scanning is free on public repos; on a private repo this step fails with
       # 'Code scanning is not enabled' — don't let that fail the build.
-      - uses: github/codeql-action/upload-sarif@v4
+      - uses: github/codeql-action/upload-sarif@915412ff23e8b7659517e607487dbeae018f2934 # v4.39.5
         if: always()
         continue-on-error: true
         with:
           sarif_file: trivy-results.sarif
+
+      # The gate. The report above cannot fail the build; this can: a CRITICAL
+      # with a fix available, in any lockfile outside legacy/, fails unless
+      # .trivyignore.yaml lists it with a reason and an expiry date
+      # (tests/test_ci_security.py holds every entry to both). It runs after
+      # the upload so a failing scan still reaches code scanning. The
+      # third-party images compose runs are not scanned here: Prometheus
+      # v3.2.0 alone carries two fixable CRITICALs today, so that scan waits on
+      # the owner's upgrade-or-accept decision.
+      - name: Fail on a fixable CRITICAL
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          skip-dirs: legacy
+          scanners: vuln
+          severity: CRITICAL
+          ignore-unfixed: true
+          exit-code: '1'
+          format: table
+          trivyignores: .trivyignore.yaml

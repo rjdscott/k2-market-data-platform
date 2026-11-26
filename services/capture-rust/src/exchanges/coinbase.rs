@@ -113,12 +113,21 @@ impl CoinbaseAdapter {
 
     /// Three subscribe frames, one per channel, all products in each. S5 sent
     /// exactly this shape and saw no error frames; the documented limit is 8
-    /// unauthenticated messages per second per IP, so three is safe.
+    /// unauthenticated messages per second per IP, so three is safe. With the
+    /// registry's `book_capture` false for Coinbase (ADR-050) `level2` is left
+    /// out; `heartbeats` stays, and keeps the connection-wide `sequence_num`
+    /// moving between trades.
     pub fn subscribe_messages(&self) -> Vec<String> {
+        let book = self.instruments.book_capture();
         ["level2", "market_trades", "heartbeats"]
             .into_iter()
+            .filter(|channel| book || *channel != "level2")
             .map(|channel| subscribe(channel, &self.instruments.natives(), "subscribe"))
             .collect()
+    }
+
+    pub fn book_capture(&self) -> bool {
+        self.instruments.book_capture()
     }
 
     /// Unsubscribe then subscribe `level2` for one product. This adapter never
@@ -226,6 +235,13 @@ impl CoinbaseAdapter {
     /// [`Action::Reconnect`] is returned. `expected_seq` is re-anchored on the
     /// frame we did get so a gap the caller chooses not to act on is counted
     /// once, not on every frame after it.
+    ///
+    /// Unchanged with `book_capture` false (ADR-050), deliberately. The rule was
+    /// written to repair the book, but the counter is connection-wide, so with
+    /// no `level2` a gap is a lost trade or heartbeat frame, and the reconnect
+    /// still helps: the `market_trades` subscribe resends recent trades
+    /// (`Handled.history`), which should refill the lost ones. That refill is
+    /// not verified; the rollout checks it.
     fn check_sequence(&mut self, got: i64) -> Vec<Action> {
         let expected = self.expected_seq.replace(got + 1);
         match expected {
@@ -471,7 +487,7 @@ mod tests {
     use crate::config::Exchange;
 
     fn adapter() -> CoinbaseAdapter {
-        let yaml = "version: 2\ninstruments:\n  coinbase:\n    - { native: ATOM-USD, canonical: ATOM/USD }\n    - { native: DOT-USD, canonical: DOT/USD }\n";
+        let yaml = "version: 2\ninstruments:\n  coinbase:\n    - { native: ATOM-USD, canonical: ATOM/USD }\n    - { native: DOT-USD, canonical: DOT/USD }\nbook_capture: { binance: true, kraken: true, coinbase: true }\n";
         let mut a = CoinbaseAdapter::new(Instruments::parse(yaml, Exchange::Coinbase).unwrap());
         a.begin_connection("test-conn");
         a

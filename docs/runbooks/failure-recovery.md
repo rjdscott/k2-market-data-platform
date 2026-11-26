@@ -31,7 +31,7 @@ exists to tell you what "normal recovery" looks like so you can spot when it isn
 | 1 | Redpanda restart | <2 min | ~10 s |
 | 2 | ClickHouse restart | <3 min | ~32 s |
 | 3 | Capture container crash | <1 min | ~30 s (Kotlin, 2026-02-19; not re-measured on Rust) |
-| 4 | Spark / Prefect batch-job failure | <15 min | next scheduled run |
+| 4 | Spark batch-job failure (the lake ingest) | <15 min | next scheduled run |
 | 5 | MinIO unavailable | <5 min | ~5 s |
 | 6 | Network partition | <5 min | ~20–30 s |
 
@@ -124,15 +124,15 @@ and until it runs this is an inherited number, not a measurement of what is depl
 
 ---
 
-## 4. Spark / Prefect batch-job failure
+## 4. Spark batch-job failure (the lake ingest)
 
-**Symptom**, a Prefect flow run for `lake-ingest-5min` is marked Failed; lake row counts
-stop advancing.
+**Symptom**, a `lake_ingest` run is marked failed in Airflow (Prefect's `lake-ingest-5min`
+until the 2026-11-25 cutover); lake row counts stop advancing.
 
 **Detection**, `LakeIngestFailed`, then `LakeIngestLagHigh` from
 [`docker/prometheus/rules/lake-alerts.yml`](../../docker/prometheus/rules/lake-alerts.yml)
-(see [observability.md](../operations/observability.md#alert-rules)); also visible in
-Prefect run history.
+(see [observability.md](../operations/observability.md#alert-rules)), and
+`AirflowTaskFailed` once the run's retry has failed too; also visible in the Airflow UI.
 
 **Expected behaviour**, the consumed Kafka offsets are written into the Iceberg snapshot
 summary by the same commit that writes the rows ([ADR-022](../adr/ADR-022-exactly-once-via-snapshot-offsets.md)),
@@ -142,8 +142,8 @@ re-reads the same range. Idempotent by construction: no duplicates, no gap.
 **Recovery**, usually none. Wait for the next 5-minute run.
 
 ```bash
-# Force a run rather than waiting
-docker exec k2-prefect-server prefect deployment run 'lake-ingest/lake-ingest-5min'
+# Force a run rather than waiting (airflow-scheduling.md section 2 reads the failed one)
+docker exec k2-airflow-scheduler airflow dags trigger lake_ingest
 ```
 
 **Measured**, not yet verified for the lake path; the Phase D burn-in
@@ -158,7 +158,7 @@ triage entry point, not a second copy of it.
 
 **Symptom**, lake ingest and maintenance runs fail; the hot tier is completely unaffected.
 
-**Detection**, `LakeIngestFailed` and Prefect flow-run failures. There is no MinIO
+**Detection**, `LakeIngestFailed` and failed `lake_ingest` runs in Airflow. There is no MinIO
 exporter, and `LakeExporterDown` does not fire: `docker/lake/metrics.py` reads the catalog,
 never MinIO.
 
@@ -216,7 +216,8 @@ their output is what the healthy state looks like.
 
 **Symptom**, queries get slower or start failing; `gold` reads time out.
 
-**Detection**, `ClickHouseHighMemoryUsage` (RSS > 85% of host RAM, 5m),
+**Detection**, `ClickHouseHighMemoryUsage` (RSS > 85% of `OSMemoryTotal`, 5m; on Docker
+Desktop that is the VM's memory, not the host's),
 `ClickHouseQueryFailureRateHigh` (> 0.1 failed queries/s, 3m),
 `ClickHouseMergeQueueLarge` (> 10 background merge tasks, 5m).
 
@@ -273,6 +274,82 @@ ch -q "SELECT table, partition, count() AS parts FROM system.parts
 **Measured**, not measured. Inducing memory pressure on the served tier is the obvious
 next chaos script; until it exists, treat the numbers above as the healthy baseline and
 nothing more.
+
+---
+
+## 8. Host or Docker VM killed: the hot tier against the lake
+
+**Not one of the six**, and not induced: written after the host's out-of-memory killer
+killed the Docker VM at 22:33:43 UTC on 2026-11-25 (stack back at 22:39:26 UTC).
+
+**Symptom**, every container restarted at once, or the whole stack was down and came back.
+
+**Detection**, manual: no alert compares the two stores. The check below does, and so does
+`make parity-ohlcv` for a pinned day, failing on ClickHouse against the lake only.
+
+**Expected behaviour**, both ClickHouse's Kafka consumers and the lake ingest resume from
+their committed offsets, but a hard kill can leave the two stores holding different trades
+for the minutes around it, and nothing reconciles them. On 2026-11-25 that was minute
+22:33 UTC on every venue: ClickHouse held fewer trades than the lake for that minute, and a
+few the lake never received.
+
+**Recovery**
+
+```bash
+# 1. When was the VM killed? The kernel log of the current boot (after a host reboot, add -b -1).
+journalctl -k --utc -o short-iso --since '2026-11-25 22:00 UTC' --until '2026-11-25 23:00 UTC' \
+  -g 'Out of memory' --no-pager
+# 2026-11-25: one line at 22:33:43, "Out of memory: Killed process <pid> (qemu-system-x86)".
+
+# 2. Trades per venue-minute, lake.gold.ohlcv_1m (Trino) against ClickHouse gold.trades FINAL,
+#    for the hour around the kill. diff prints only the venue-minutes that differ.
+from='2026-11-25 22:00:00'; to='2026-11-25 23:00:00'
+diff \
+  <(docker exec k2-trino trino --output-format TSV --execute "
+      SELECT exchange, format_datetime(window_start, 'yyyy-MM-dd HH:mm'), sum(trade_count)
+      FROM lake.gold.ohlcv_1m
+      WHERE window_start >= TIMESTAMP '$from UTC' AND window_start < TIMESTAMP '$to UTC'
+      GROUP BY 1, 2 ORDER BY 1, 2") \
+  <(docker exec k2-clickhouse clickhouse-client --password "$CLICKHOUSE_PASSWORD" --format TabSeparated -q "
+      SELECT exchange, formatDateTime(toStartOfMinute(exchange_ts), '%Y-%m-%d %H:%i'), count()
+      FROM gold.trades FINAL
+      WHERE exchange_ts >= '$from' AND exchange_ts < '$to'
+      GROUP BY 1, 2 ORDER BY 1, 2")
+# 2026-11-26, for 2026-11-25: three "<" lines (lake) and three ">" lines (ClickHouse),
+# one per venue, all at 22:33. No output means the stores agree on counts for the hour.
+```
+
+3. **No output: done.** Equal counts are not equal trades, so run `make parity-ohlcv` on
+   that day before the next tag; it compares every candle column.
+4. **Lines printed: do not repair by default.** Making the stores equal means reloading the
+   window into ClickHouse from the lake ([clickhouse-rebuild-from-lake.md](./clickhouse-rebuild-from-lake.md)
+   §2), which deletes every trade only ClickHouse holds. That is the owner's decision; on
+   2026-11-25 it was to leave both as they are.
+5. **Left as is: record the outage**, one row in `lake.audit.checks` (the lake's table of
+   check results) whose scope is the outage to the second and whose `observed` is the
+   seconds capture was off. Then, when that day is pinned, list the differing minute as the
+   known gap in `tests/parity/pinned.json`, for ClickHouse against the lake only, with an
+   `audit_ref` naming that row ([`tests/parity/README.md`](../../tests/parity/README.md)).
+   The 2026-11-25 row was recorded at 2026-11-26 01:00:44 UTC with this command; it exists,
+   so do not record it again.
+
+```bash
+docker exec -e K2_LAKE_DRIVER_MEMORY=512m k2-spark-iceberg python3 /home/iceberg/lake/record_check.py \
+  --job operator --check capture_outage --scope 'stack/2026-11-25T22:33:43Z..2026-11-25T22:39:26Z' \
+  --observed 343 --failed \
+  --detail 'Host kernel OOM-killed the Docker VM at 22:33:43Z; stack restarted 22:39:26Z. Capture off 343 s: no trades or book updates for the window. Minute 22:33 UTC: hot tier and lake hold different partial sets of trades (hot tier fewer); left as captured, not repaired. Every other minute of 2026-11-25 matches lake vs hot tier.'
+
+# Read it back.
+docker exec k2-trino trino --user reviewer --execute "SELECT run_ts, scope, passed, observed
+  FROM lake.audit.checks WHERE job = 'operator' AND check_name = 'capture_outage' ORDER BY run_ts"
+# "2026-11-26 01:00:44.228723 UTC","stack/2026-11-25T22:33:43Z..2026-11-25T22:39:26Z","false","343"
+```
+
+**Measured**, no MTTR: this is investigation, not repair. Steps 1 and 2 and the read-back in
+step 5 were run read-only on 2026-11-26 against the stack as it stood after the 2026-11-25
+kill; the row itself was recorded at 2026-11-26 01:00:44 UTC.
+
+**Last verified:** 2026-11-26, steps 1, 2 and 5 (the row read back as above).
 
 ---
 

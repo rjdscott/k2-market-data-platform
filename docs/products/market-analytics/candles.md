@@ -9,6 +9,7 @@ OHLCV candles at 1m, 5m, 1h and 1d from gold.trades, recomputed and replaced whe
 | Owner | `analytics-team` |
 | Kind | consumer-aligned |
 | Lifecycle | draft |
+| Status | running |
 | Descriptor | [`contracts/market-analytics/candles/product.yaml`](../../../contracts/market-analytics/candles/product.yaml) |
 
 ## Inputs and outputs
@@ -54,6 +55,7 @@ OHLCV 1m candles from gold.trades, one row per (exchange, canonical_symbol, buck
 
 | | |
 |---|---|
+| Status | running |
 | Classification | internal |
 | Entitlement | realtime |
 | Retention | snapshots expire after 7 days; no row is deleted ([ADR-032](../../../docs/adr/ADR-032-odcs-contracts-and-k2gen.md)) |
@@ -87,6 +89,7 @@ OHLCV 5m candles from gold.trades, one row per (exchange, canonical_symbol, buck
 
 | | |
 |---|---|
+| Status | running |
 | Classification | internal |
 | Entitlement | realtime |
 | Retention | snapshots expire after 7 days; no row is deleted ([ADR-032](../../../docs/adr/ADR-032-odcs-contracts-and-k2gen.md)) |
@@ -120,6 +123,7 @@ OHLCV 1h candles from gold.trades, one row per (exchange, canonical_symbol, buck
 
 | | |
 |---|---|
+| Status | running |
 | Classification | internal |
 | Entitlement | realtime |
 | Retention | snapshots expire after 7 days; no row is deleted ([ADR-032](../../../docs/adr/ADR-032-odcs-contracts-and-k2gen.md)) |
@@ -153,6 +157,7 @@ OHLCV 1d candles from gold.trades, one row per (exchange, canonical_symbol, buck
 
 | | |
 |---|---|
+| Status | running |
 | Classification | internal |
 | Entitlement | realtime |
 | Retention | snapshots expire after 7 days; no row is deleted ([ADR-032](../../../docs/adr/ADR-032-odcs-contracts-and-k2gen.md)) |

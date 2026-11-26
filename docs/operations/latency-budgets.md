@@ -12,9 +12,9 @@ the dominant segment is transit plus the venue's clock skew, and it is published
 | 1 | Venue timestamp → frame received (`recv_ts_ns`) | transit + venue skew; **measured below** | the internet |
 | 2 | Frame → parsed records | < 1 ms, single-threaded, no allocation on the hot path | [`handle_frame`](../../services/capture-rust/README.md) |
 | 3 | Record → Redpanda acked | < 2 ms; queue is the only buffer | [`sink.rs`](../../services/capture-rust/src/sink.rs), settings below |
-| 4a | Redpanda → ClickHouse `gold.trades` visible | ≤ 5 s | `kafka_flush_interval_ms = 5000` in [`20-gold-kafka.sql`](../../docker/clickhouse/ddl/20-gold-kafka.sql) |
-| 4b | Redpanda → lake `raw.messages` committed | 5 min cron + run wall time | `lake-ingest-5min` ([prefect-schedules.md](./prefect-schedules.md)); `k2_lake_ingest_lag_seconds` |
-| 5 | Lake gold → ClickHouse `ohlcv_*` / `bbo_1s` | operator pull; 10.4 M trades in 4.4 s | [clickhouse-rebuild-from-lake.md](../runbooks/clickhouse-rebuild-from-lake.md) |
+| 4a | Redpanda → ClickHouse `gold.trades` visible | ≤ 5 s | `kafka_flush_interval_ms = 5000` <!-- counts-ok: a setting in milliseconds --> in [`20-gold-kafka.sql`](../../docker/clickhouse/ddl/20-gold-kafka.sql) |
+| 4b | Redpanda → lake `raw.messages` committed | 5 min cron + run wall time | the Airflow DAG `lake_ingest` ([airflow-schedules.md](./airflow-schedules.md)); `time() - k2_lake_max_kafka_ts_seconds` in Prometheus |
+| 5 | Lake gold → ClickHouse `ohlcv_*` / `bbo_1s` | operator pull; the whole lake `gold.trades` in 4.4 s | [clickhouse-rebuild-from-lake.md](../runbooks/clickhouse-rebuild-from-lake.md) |
 
 Two read paths follow: **live** (`gold.ohlcv_live`, `gold.bbo_live`, computed on read over
 `FINAL`) sees a trade after segments 1–4a; **research** (lake `gold.*`, DuckDB) after 1–4b plus
@@ -22,22 +22,22 @@ the layer stages of the same run.
 
 ## Measured: segment 1, 2026-08-27
 
-Per frame, from the capture histogram, 6.5 h window, three venues
+Per frame, from the capture histogram, every trade frame of a 6.5 h window, three venues
 ([benchmarks/2026-08-27.md § Latency](../benchmarks/2026-08-27.md#latency--exchange-timestamp--k2-receive)
 carries the commands):
 
-| Exchange | n | p50 (ms) | p95 (ms) | p99 (ms) |
-|---|---:|---:|---:|---:|
-| Binance | 2,732,367 | 42.2 | 95.9 | 206.8 |
-| Kraken | 47,792 | 176.8 | 245.9 | 459.1 |
-| Coinbase | 416,325 | 184.1 | 472.5 | 30,000 (top bucket) |
+| Exchange | p50 (ms) | p95 (ms) | p99 (ms) |
+|---|---:|---:|---:|
+| Binance | 42.2 | 95.9 | 206.8 |
+| Kraken | 176.8 | 245.9 | 459.1 |
+| Coinbase | 184.1 | 472.5 | 30,000 ms (top bucket) |
 
 The Coinbase p99 is the venue's on-subscribe trade *snapshot*, whose `exchange_ts` values
 predate the connection; the capture now excludes those frames from the histogram
 (`Handled.history`), and the lake keeps them as trades. The per-trade distribution over the lake
 (`recv_ts_ns − exchange_ts`) is in the same benchmark section. Segments 2–5 are bounds by
 construction or configuration and have not been measured end to end; the query that would do
-it is in [data-inspection.md](./data-inspection.md#trades--goldtrades).
+it is in [data-inspection.md](./data-inspection.md#trades-goldtrades).
 
 The v2 pipeline's 7-segment budget and its 2026-02-19 measurements are a dated record in
 [benchmarks/2026-02-19-v2-baseline.md](../benchmarks/2026-02-19-v2-baseline.md).
@@ -50,14 +50,14 @@ tunable, one buffer, sized against the container's memory limit:
 
 ```rust
 queue.buffering.max.kbytes = 32768        // 32 MB, the only buffer
-message.max.bytes          = 8388608      // 8 MiB; matches the WebSocket cap in ws.rs
+message.max.bytes          = 8388608      // 8 MiB; matches the WebSocket cap in ws.rs (counts-ok: a setting in bytes)
 enable.idempotence         = true         // a retry cannot duplicate a record
 acks                       = "all"        // durability first
 compression.type           = "zstd"
-message.timeout.ms         = 300000       // 5 min: drop and count rather than pin forever
+message.timeout.ms         = 300000       // 5 min: drop and count rather than pin forever (counts-ok: a setting in ms)
 ```
 
-`message.timeout.ms = 300000` is the one worth understanding: a record still unsent after
+`message.timeout.ms = 300000` <!-- counts-ok: a setting in milliseconds --> is the one worth understanding: a record still unsent after
 5 minutes is failed and counted rather than held, because a record that stale is better lost
 visibly than pinned behind a dead broker. No `linger.ms` tuning, the venue's frame arrival
 rate, not batching, sets the cadence.

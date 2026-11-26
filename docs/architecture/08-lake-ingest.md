@@ -66,7 +66,7 @@ never shares the 8 GiB container with an ingest.
 ### Stage 1: offsets in the snapshot
 
 1. **Where to start.** `offsets.latest_summary()` finds the newest `raw.messages` snapshot
-   whose summary carries `k2.job = ingest`, maintenance snapshots (compaction, expiry) have
+   on `main`'s lineage whose summary carries `k2.job = ingest`, maintenance snapshots (compaction, expiry) have
    no `k2.job` and are skipped by that property, not by guessing at Iceberg's `operation`
    field. Its `k2.kafka-offsets` map holds Kafka *end* offsets (exclusive), so the next
    start is the same number copied, no ±1. A partition the map has never seen starts at
@@ -127,6 +127,7 @@ The ingest's own findings land in the same table: `offset_gap`, `unresolvable_sc
 
 | Audit | Asserts |
 |---|---|
+| `contract_schema` | every lake table's live columns, types, nullability, order, partition spec, sort order and identifier fields equal its contract; no table without one in the lake's namespaces ([chapter 18](18-data-mesh.md#where-a-contract-is-enforced-and-when)) |
 | `offset_continuity` | per `(topic, partition)`, `raw.messages` offsets are contiguous from min to max; the only permitted holes are ranges recorded as `offset_gap` in `audit.checks` |
 | `bronze_unparseable`, `bronze_schema_drift`, `duplicate_identifiers` | no frame the parser rejected (venue columns NULL); no undeclared keys; no repeated `(src_topic, src_partition, src_offset)` lineage |
 | `silver_parity`, `silver_flags` | bronze == silver row counts; flag rates reported |
