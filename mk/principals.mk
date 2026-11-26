@@ -1,13 +1,20 @@
 # Owned by phase 001 step S14: principals, grants and keys (contracts/access/, scripts/principal-secret.py).
 # Only that step edits this file (docs/development/phase-001-interfaces.md).
-# Targets it will hold: password, api-key. Until S14 lands each is a
-# stub that says so on stderr and exits 2, so nothing mistakes it for a pass; no file
-# under mk/ redefines a target of the root Makefile (tests/test_mk_split.py).
+# The procedure around these targets: docs/runbooks/create-or-rotate-a-principal.md. No secret
+# is ever on a command line: the script makes it. PRINCIPAL, ROTATE and TO_FILE, given on make's
+# command line, reach the recipe as environment variables ($$PRINCIPAL), never spliced into it.
+
+PRINCIPAL_SECRET = uv run --project platform/k2gen --locked -q --with bcrypt==5.0.0 python scripts/principal-secret.py
 
 .PHONY: password
-password:  ## NOT BUILT until step S14: PRINCIPAL=<id>: print a 32-byte password once; its bcrypt line goes to ${K2_SECRETS}/trino/password.db and the password to ${K2_SECRETS}/principals/<id>.password, never the repository
-	@echo "NOT BUILT password: phase 001 step S14 builds it" >&2; exit 2
+password:  ## PRINCIPAL=<id> [ROTATE=1] [TO_FILE=1]: a 32-byte password printed once, or with TO_FILE=1 a service's ${K2_SECRETS}/principals/<id>.password; its bcrypt line goes to ${K2_SECRETS}/trino/password.db, never the repository
+	@$(PRINCIPAL_SECRET) password --principal "$$PRINCIPAL" \
+	  $$(test "$$ROTATE" = 1 && echo --rotate) $$(test "$$TO_FILE" = 1 && echo --to-file)
 
 .PHONY: api-key
-api-key:  ## NOT BUILT until step S14: PRINCIPAL=<id>: print a k2_ key once; its sha256 goes to ${K2_SECRETS}/api/keys.json, never the repository
-	@echo "NOT BUILT api-key: phase 001 step S14 builds it" >&2; exit 2
+api-key:  ## PRINCIPAL=<id> [ROTATE=1]: a k2_ key printed once; its sha256 goes to ${K2_SECRETS}/api/keys.json, never the repository
+	@$(PRINCIPAL_SECRET) api-key --principal "$$PRINCIPAL" $$(test "$$ROTATE" = 1 && echo --rotate)
+
+.PHONY: principals-status
+principals-status:  ## Which known principals have a password line, a password file and an API key under ${K2_SECRETS}: names only
+	@$(PRINCIPAL_SECRET) status
