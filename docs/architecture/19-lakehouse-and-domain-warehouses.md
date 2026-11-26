@@ -62,7 +62,7 @@ flowchart TB
 
 The catalog never holds data. An engine asks it where a table's files are, then reads or writes
 those files in MinIO itself, with the MinIO keys from `.env`
-([`spark_conf.py`](../../docker/lake/spark_conf.py), [`lake.properties`](../../docker/trino/etc/catalog/lake.properties)).
+([`spark_conf.py`](../../docker/lake/spark_conf.py), [`lake.properties`](../../platform/k2gen/k2gen/emit/trino_etc.py)).
 
 ## First principles
 
@@ -94,7 +94,7 @@ engine here speaks ([ADR-023](../adr/ADR-023-lakekeeper-rest-catalog.md)).
 **A warehouse is a fenced area of storage with its own table list.** Each Lakekeeper warehouse
 has a storage location, a bucket plus a key prefix, and its own namespaces and tables.
 [`init-lake.sh`](../../docker/lake/init-lake.sh) creates `k2` at `warehouse/k2`, then one warehouse
-per line of [`warehouses.txt`](../../docker/lake/generated/warehouses.txt) at `warehouse/<name>`.
+per line of `warehouses.txt` at `warehouse/<name>`.
 A connection opens one warehouse; a name in one does not resolve in another. Lakekeeper also
 chooses where a new table's files go, under its warehouse's prefix. A Trino table placed inside
 `warehouse/k2/` from a writable catalog was refused with `Failed to create transaction`
@@ -158,7 +158,7 @@ venue and day, how complete the lake is ([the dbt README, archived](../../legacy
 `quality_results.dq_results`, below.
 
 One entry in `domains.yaml` gives a domain its whole fence. `make generate` runs
-[`generate.py`](../../platform/k2gen/k2gen/generate.py), which turns the id `market-analytics`
+`generate.py`, which turns the id `market-analytics`
 into the name `market_analytics` and writes:
 
 ```mermaid
@@ -209,7 +209,7 @@ it through its owner.
 | Any other Trino user, `trino` included | **read**. Write **denied**, as above | none: no rule names it | **read**. SQL writes **denied** by `rules.json` |
 | DuckDB, in the notebooks and parity scripts (archived) | **read** while they ran, through `ATTACH 'k2' AS lake`. No Trino rule applies; the code only reads | not attached today | not attached today |
 
-In [`rules.json`](../../docker/trino/etc/rules.json) the first matching rule wins. A writer's own
+In [`rules.json`](../../platform/k2gen/k2gen/emit/trino_rules.py) the first matching rule wins. A writer's own
 rule comes first; everyone else falls through to the last, `SELECT` and `GRANT_SELECT` only. The
 same file also denies, to every user: `CALL` of any Iceberg procedure, by leaving out a
 `procedures` list, so only Trino's built-in procedures run; and the two session properties that

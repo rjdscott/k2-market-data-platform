@@ -4,10 +4,10 @@ docs/runbooks/first-cutover-to-releases.md, then its rollback to today's shape. 
 deploy_rehearsal.py, whose helpers it uses (R).
 
 Today's shape, as main runs before step S22: fixed container names, one shared network, Trino on plain
-HTTP reading the checkout's docker/trino/etc, Lakekeeper on the shared network with a host port, a
-stand-in capture. The cutover keeps the project name (renaming it would recreate every container, the
-captures and Redpanda among them), joins MinIO and Postgres to the catalog's network without a
-restart, compiles a release whose held services keep the images they run, and deploys it allowing
+HTTP (its image's own etc, since S23 deleted the checkout's docker/trino/etc), Lakekeeper on the
+shared network with a host port, a stand-in capture. The cutover keeps the project name (renaming
+it would recreate every container, the captures and Redpanda among them), joins MinIO and Postgres
+to the catalog's network without a restart, compiles a release whose held services keep the images they run, and deploys it allowing
 Lakekeeper alone of the stateful services, which must move networks and lose its host port.
 """
 
@@ -22,7 +22,7 @@ from typing import Any
 
 TODAY = """\
 # Today's shape (main before step S22), for the cutover rehearsal: fixed names, one network, Trino on
-# HTTP from the checkout's etc, Lakekeeper with a host port.
+# HTTP from its image's own etc, Lakekeeper with a host port.
 networks:
   k2-net: {}
 volumes:
@@ -79,7 +79,6 @@ services:
     image: trinodb/trino:484
     networks: [k2-net]
     ports: ["127.0.0.1:${K2_TRINO_HTTP_PORT}:8080"]
-    volumes: ["./docker/trino/etc:/etc/trino:ro"]
     environment: {MINIO_ROOT_USER: "${MINIO_ROOT_USER}", MINIO_ROOT_PASSWORD: "${MINIO_ROOT_PASSWORD}"}
     healthcheck: {test: ["CMD", "/usr/lib/trino/bin/health-check"], interval: 3s, retries: 60}
     restart: unless-stopped
@@ -122,8 +121,6 @@ def rehearse(R: Any) -> int:
     lk_port, http_port = R.free_port(), R.free_port()
     R.DOTENV.update({"K2_LAKEKEEPER_PORT": lk_port, "K2_TRINO_HTTP_PORT": http_port})
     R.scratch_repo(TODAY)
-    for d in ("docker/trino", "docker/lake"):  # today's Trino etc, read from the checkout
-        R.sh("cp", "-r", str(R.REPO / d), str(R.CLONE / "docker"))
     R.dotenv()
     R.DOTENV.update({"K2_LAKEKEEPER_PORT": lk_port, "K2_TRINO_HTTP_PORT": http_port})
     (R.CLONE / ".env").write_text("".join(f"{k}={v}\n" for k, v in R.DOTENV.items()))
@@ -133,8 +130,8 @@ def rehearse(R: Any) -> int:
 
     # Today's stack, running, with its lake
     R.compose("up", "-d", "--wait", "prefect-db", "minio", "lakekeeper", "capture-binance")
-    warehouses = [w.strip() for w in (R.CLONE / "docker/lake/generated/warehouses.txt").read_text().splitlines()
-                  if w.strip() and not w.startswith("#")]
+    domains = R.model.parse(R.model.DOMAINS, (R.CLONE / R.model.DOMAINS).read_bytes())["domains"]
+    warehouses = [R.model.warehouse(d) for d in domains]  # what lake-init made: one per domain
     c = R.compose("ps", "-q", "minio").stdout.strip()
     R.sh("docker", "exec", c, "sh", "-c", 'MC_HOST_l="http://$MINIO_ROOT_USER:$MINIO_ROOT_PASSWORD@localhost:9000" mc mb --ignore-existing l/lake')
     tools_today = R.sh("docker", "build", "-q", "-f", str(R.CLONE / "docker/tools/Dockerfile"), str(R.CLONE)).stdout.strip()

@@ -41,7 +41,7 @@ The owner is asked to confirm a decision the build's orchestrator took.
 - **Trino's defaults are open.** With a section absent, every user may set every session property, view and
   kill every other user's query, and run only built-in functions and procedures; every user reaches the
   `system` catalog unless a rule says otherwise (Trino 484 documentation). The live, hand-generated
-  [`docker/trino/etc/rules.json`](../../docker/trino/etc/rules.json) gives `all` on every catalog and ends with
+  [`docker/trino/etc/rules.json`](../../platform/k2gen/k2gen/emit/trino_rules.py) gives `all` on every catalog and ends with
   a catch-all `SELECT`, which opens `system.runtime.queries`, the query history holding every statement's text,
   to every user (the gate's "Surprises").
 - **`SELECT` in a writable catalog is the right to change a table.** Trino 484 checks a

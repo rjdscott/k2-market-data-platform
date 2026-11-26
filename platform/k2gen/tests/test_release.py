@@ -91,12 +91,11 @@ def emitter(name: str, out: dict[str, str] | None) -> SimpleNamespace:
 
 @pytest.fixture
 def emitted(monkeypatch: pytest.MonkeyPatch) -> dict[str, str]:
-    """What the test-only emitter returns; a test sets it before each compile. A stub emitter
-    sits beside it, so every compile also proves a stub is skipped."""
+    """What the test-only emitter returns; a test sets it before each compile."""
     out: dict[str, str] = {}
     monkeypatch.setattr(docset, "read", fake_read)
     monkeypatch.setattr(model, "load", fake_load)
-    monkeypatch.setattr(emit, "modules", lambda: [emitter("a_stub", None), emitter("test_only", out)])
+    monkeypatch.setattr(emit, "modules", lambda: [emitter("test_only", out)])
     return out
 
 
@@ -114,10 +113,15 @@ def tree(root: Path) -> dict[str, bytes]:
     return {p.relative_to(root).as_posix(): p.read_bytes() for p in root.rglob("*") if p.is_file()}
 
 
-def test_the_good_set_compiles_with_a_stub_and_a_test_emitter(tmp_path: Path, emitted: dict[str, str], capsys: pytest.CaptureFixture[str]) -> None:
+def test_the_good_set_compiles_with_a_test_emitter_and_never_with_a_stub(tmp_path: Path, emitted: dict[str, str],
+                                                                          monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(emit, "modules", lambda: [emitter("a_stub", None), emitter("test_only", {RULES: "{}"})])
+    with pytest.raises(ValueError, match="emitter a_stub is a stub"):
+        build(tmp_path, "stubbed")
+    assert not (tmp_path / "releases").exists() or not any((tmp_path / "releases").iterdir())  # nothing sealed
+    monkeypatch.setattr(emit, "modules", lambda: [emitter("test_only", emitted)])
     emitted[RULES] = "{}"
     rid, root = build(tmp_path, "a")
-    assert "SKIP emitter a_stub: a stub until step S99" in capsys.readouterr().err
     manifest = json.loads((root / model.MANIFEST).read_bytes())
     assert model.schema_errors("manifest", manifest) == []
     on_disk = tree(root)

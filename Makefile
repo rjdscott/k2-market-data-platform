@@ -1,4 +1,4 @@
-.PHONY: chaos help up down logs ps health backup backup-install gates test test-python test-rust test-airflow record-fixtures test-notebooks test-legacy-kotlin dev-up check-docs check-alerts build-capture lint lake-verify test-clickhouse test-trino test-dbt parity-ohlcv parity-bars test-k2gen generate new-product screenshots
+.PHONY: chaos help up down logs ps health backup backup-install gates test test-python test-rust test-airflow record-fixtures test-notebooks test-legacy-kotlin dev-up check-docs check-alerts build-capture lint lake-verify test-clickhouse test-trino test-dbt parity-ohlcv parity-bars test-k2gen screenshots
 
 # Stamped into the capture binary's k2_capture_build_info gauge. `git describe`
 # and not `rev-parse`: an image built from a dirty tree must not claim to be the
@@ -163,15 +163,8 @@ test-notebooks:  ## SKIP until phase 004: notebooks/ is archived with the old la
 	@echo "SKIP test-notebooks: notebooks/ is archived with the old lake ingest (legacy/v3-lake-ingest/notebooks/); returns in phase 004"
 
 # --locked: a pyproject.toml edited without `uv lock` fails here, not in someone else's sync.
-test-k2gen:  ## k2gen: contracts/ against ODCS v3 and the K2 schema, plus each check made to fail (no stack needed)
+test-k2gen:  ## k2gen: the checks, the emitters against their goldens, the compiler and each check made to fail (no stack needed)
 	cd platform/k2gen && uv run --locked -q pytest -q
-
-# CI runs this and fails on any diff or untracked file: generated files are never edited by hand.
-generate:  ## Validate contracts/, then rewrite docker/lake/ddl/generated/, docker/lake/generated/{retention.json,contract_schemas.json,warehouses.txt}, docs/products/, and the per-domain Trino catalogs and rules.json under docker/trino/
-	cd platform/k2gen && uv run --locked -q k2gen generate
-
-new-product:  ## Scaffold contracts/DOMAIN/NAME/: a descriptor and one contract with inline columns that validates (DOMAIN=x NAME=y)
-	cd platform/k2gen && uv run --locked -q k2gen new "$(DOMAIN)" "$(NAME)"
 
 # Read-only against the LIVE stack: logs in and opens pages
 # (scripts/screenshots/capture.py). Secrets go from .env and the Airflow

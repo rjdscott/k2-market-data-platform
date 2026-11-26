@@ -13,7 +13,6 @@ is the compiler's to work out (k2gen.release, model.NEEDS_BY_PREFIX).
 
 import importlib
 import pkgutil
-import sys
 from types import ModuleType
 
 from k2gen.model import Model
@@ -26,9 +25,8 @@ def modules() -> list[ModuleType]:
 
 def run(model: Model) -> dict[str, str]:
     """Every emitter's files, which k2gen.release writes. Two emitters returning one path, or a
-    path outside compiled/, is an error. An emitter still a stub (NotImplementedError) is skipped
-    with a line on stderr, so a compile works while phase 001 fills them; step S23 makes a stub
-    an error."""
+    path outside compiled/, is an error, and so is an emitter still a stub (NotImplementedError):
+    since step S23 a compile emits every file or none."""
     files: dict[str, str] = {}
     owner: dict[str, str] = {}
     for module in modules():
@@ -36,8 +34,7 @@ def run(model: Model) -> dict[str, str]:
         try:
             out = module.emit(model)
         except NotImplementedError as stub:
-            print(f"k2gen release: SKIP emitter {name}: a stub until step {stub}", file=sys.stderr)
-            continue
+            raise ValueError(f"emitter {name} is a stub (step {stub})") from stub
         for path in out:
             if not path.startswith("compiled/") or "/../" in f"/{path}/" or "//" in path:
                 raise ValueError(f"emitter {name}: {path} is not a path under compiled/")
