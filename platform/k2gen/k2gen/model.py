@@ -276,7 +276,9 @@ TEMPLATE = r"^(?:[^{}]|\{\{ds\}\})*$"
 
 # A product's fence names lake namespaces; these are the old layer namespaces and the
 # platform's own (A5).
-RESERVED_PRODUCT_NAMES = frozenset({"raw", "bronze", "silver", "gold", "audit", "scratch", "dq", "runs"})
+# `run_records` holds the run-record table (platform/runs/run_record.sql): a product whose fence
+# took that namespace would own the platform's run history (review of S15, H1).
+RESERVED_PRODUCT_NAMES = frozenset({"raw", "bronze", "silver", "gold", "audit", "scratch", "dq", "runs", "run_records"})
 # A domain's fence is its reader catalog and warehouse, and <fence>_build its writer
 # catalog; its name is also a directory beside contracts/access/ and contracts/schema/. A Trino
 # reserved word is refused by TRINO_RESERVED, the parser's own list (S05, docs.name-reserved-word),
