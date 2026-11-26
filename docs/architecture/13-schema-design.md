@@ -69,9 +69,11 @@ test per run: `invocation_id`, `run_started_at`, `writer`, `unique_id`, `test_na
 `dq_results` read those and the lake's audit table in one shape:
 `checked_at`, `source_system`, `domain`, `subject`, `check_name`, `status`, `detail`
 ([ADR-046](../adr/ADR-046-governance-domain-and-quality-results.md)). The lake columns a mart
-reads are the contract between the two: `make generate` writes them, with Trino's types, into
-`dbt/models/_sources.yml`, so a lake column change reaches the marts' sources at the next
-`make generate`, and CI fails until that is committed.
+reads are the contract between the two: since 2026-11-27 the `dbt` emitter of `k2gen release`
+writes them into the release's `compiled/dbt/models/_sources.yml`, so a lake column change reaches
+a mart's sources in the next release compiled from a tag
+([chapter 21](21-releases-and-deploy.md)); the committed `dbt/models/_sources.yml` and the
+`make generate` drift gate that kept it current are gone.
 
 Rules: each layer is derived only from the one above; lineage points one layer up; vendor
 fields are never dropped (bronze columns, kept through silver); dedup is a gold concern;

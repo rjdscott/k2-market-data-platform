@@ -43,8 +43,9 @@ a namespace; `TARGET=bucket:<name>` names a bucket. Each step must hold before t
    object under the location; the script waits, up to `K2_DROP_PURGE_WAIT_S` (900 s), until
    none is left.
 
-Every call to the stack runs in one throwaway container, `k2-drop-<pid>`, on the stack's network,
-from the image `make backup` pins: curl for the catalog, mc for MinIO. The MinIO credential is in
+Every call to the stack runs in one throwaway container, `k2-drop-<pid>`, on the catalog's network
+`<project>_k2-catalog` (Lakekeeper has no host port since 2026-11-27; before the cutover to releases,
+MinIO's only network), from the image `make backup` pins: curl for the catalog, mc for MinIO. The MinIO credential is in
 that container's environment only.
 
 **It refuses**, before anything is copied: an empty or malformed `TARGET`; a whole warehouse
@@ -61,8 +62,9 @@ not in storage; a lake object in a versioned bucket; a namespace with nested nam
   section 6 step 1 does.
 - **Keep the target gone.** Nothing in the stack creates a lake table or namespace at start
   since the v3 lake retired: its `lake-ddl` one-shot is gone, and `lake-init` creates only the
-  bucket and the warehouses (`docker/lake/init-lake.sh`, the list in
-  `docker/lake/generated/warehouses.txt`). A dropped warehouse would come back on the next `up`;
+  bucket and the warehouses (`docker/lake/init-lake.sh`, the list in the storage plan of the
+  release it reads, `compiled/lake/storage-plan.json`). A dropped warehouse would come back on the
+  next run of `lake-init`;
   `make drop` refuses one anyway.
 - **Prune the copies.** Nothing deletes `$K2_BACKUP_DIR/drop/`. Delete a day's directory by hand
   once nothing needs it.
@@ -108,17 +110,21 @@ make drop TARGET=bucket:spike-drop-n05
 ```
 
 **Check it is gone**, from the catalog, from Trino and from storage. Each command reaches the
-stack from a throwaway container on its network, so it does not need the catalog's published port.
+stack from a throwaway container on the catalog's network, as `scripts/drop.sh` does: the catalog
+has no published port. Trino is reached with the `trino_cli` helper of
+[tls-and-passwords.md](./tls-and-passwords.md) (HTTPS and a password since 2026-11-27), defined in
+the same shell after the `NET` line below: Trino is on the catalog's network too.
+<!-- VERIFY: the NET line (MinIO is on both networks after the cutover) and both trino_cli lines of this runbook, on the live stack after the cutover; the commands below ran 2026-11-26 in the old shape -->
 
 ```bash
-NET=$(docker inspect -f '{{range $k, $v := .NetworkSettings.Networks}}{{$k}}{{end}}' k2-minio)
+NET=$(docker inspect -f '{{range $k, $v := .NetworkSettings.Networks}}{{$k}} {{end}}' k2-minio | grep -o '[^ ]*_k2-catalog')
 IMG=minio/minio:RELEASE.2025-09-07T16-13-09Z
 lk() { docker run --rm --network "$NET" --entrypoint curl "$IMG" -sS "$@"; }
 mcrun() { docker run --rm --network "$NET" -e MC_CONFIG_DIR=/tmp/.mc -e MINIO_ROOT_USER -e MINIO_ROOT_PASSWORD --entrypoint /bin/bash "$IMG" -c 'export MC_HOST_k2="http://$MINIO_ROOT_USER:$MINIO_ROOT_PASSWORD@minio:9000"; mc "$@"' mc "$@"; }
 P=$(lk "http://lakekeeper:8181/catalog/v1/config?warehouse=k2" | python3 -c "import json, sys; print(json.load(sys.stdin)['defaults']['prefix'])")
 
 lk -o /dev/null -w '%{http_code}\n' "http://lakekeeper:8181/catalog/v1/$P/namespaces/spike_drop_n05"   # 404
-docker exec k2-trino trino --user reviewer --execute 'SHOW SCHEMAS FROM lake'                         # not listed
+trino_cli svc.platform 'SHOW SCHEMAS FROM lake'                                                       # not listed
 mcrun ls --recursive k2/k2-lake/warehouse/k2/01a21830-6e2f-7a63-a7ff-66792a90b027/ | wc -l             # 0: a location from the drop log
 mcrun ls k2                                                                                             # the bucket is not listed
 ```
@@ -209,7 +215,7 @@ lk -X POST "http://lakekeeper:8181/catalog/v1/$P/namespaces/$NS/register" -H 'co
 #   prints the metadata file just registered, the same as $META
 
 # 4. Read it back.
-docker exec k2-trino trino --user reviewer --execute "SELECT count(*) FROM lake.$NS.$TB"
+trino_cli svc.platform "SELECT count(*) FROM lake.$NS.$TB"
 ```
 
 A **view** is not registered back: create it again from its SQL, which the copy keeps.

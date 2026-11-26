@@ -8,8 +8,10 @@ thirteen products it described were archived in
 [`legacy/v3-lake-ingest/contracts/`](../../legacy/v3-lake-ingest/contracts/), the one-shot that
 applied the generated DDL is gone, and nothing ingests or builds a product made this way
 ([ADR-056](../adr/ADR-056-unified-data-product-platform.md)). The page as it stood is in git
-history (`git show 6429a58:docs/development/golden-path.md`). Do not add a product in the old
-format: `make new-product` still writes one, and nothing on the stack would run it.
+history (`git show 6429a58:docs/development/golden-path.md`). The tools went too, on 2026-11-27:
+`make new-product`, `k2gen validate`, `k2gen generate` and `make generate` are gone, and a
+product's documents are now checked and compiled into a sealed release by `k2gen release`
+([chapter 21](../architecture/21-releases-and-deploy.md)).
 
 The new path defines a product once, in its contract, and carries it through one ingestion,
 storage, catalog and service layer

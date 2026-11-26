@@ -16,8 +16,10 @@ Desktop shares.
 > **Target state: where these commands ran.** On 2026-11-26, against throwaway lakes of
 > `scripts/lib/throwaway-lake.sh` (Trino 484 started from a compiled release, HTTPS only, on its own Docker
 > network) with `NET=<prefix>-net` and `K2_SECRETS` the lake's own `<state>/secrets/k2`, and once on a fresh
-> temporary `K2_SECRETS` (section 1). The live Trino serves plain HTTP until step S22 mounts these files and turns
-> HTTPS on; from then the live values are `NET=k2-net` and the container `k2-trino`.
+> temporary `K2_SECRETS` (section 1). The live Trino serves HTTPS only from the cutover to releases (step S22,
+> [first-cutover-to-releases.md](./first-cutover-to-releases.md)); from then the live values are
+> `NET=<project>_k2-net` (compose prefixes each network with the project name, `K2_COMPOSE_PROJECT`) and the
+> container `k2-trino`. <!-- VERIFY: trino_cli and served on the live stack after the cutover -->
 
 Every check below runs a client in a one-off container on Trino's network, which reaches it as `trino`, by name.
 Define the two helpers once per shell (the Trino CLI and curl come from Trino's own image):

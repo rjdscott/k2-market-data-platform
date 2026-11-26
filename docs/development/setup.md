@@ -27,8 +27,8 @@ Two values in `.env` are host-specific, not secrets:
   those cores — a cpuset naming a core the host does not have fails the container at start
   with `invalid argument`, five of them at once (the three captures, Spark and Trino; six with
   the paused ClickHouse under `hot-gold`).
-- `K2_AIRFLOW_PORT` (default `8090`) and `K2_TRINO_PORT` (default `8088`) are the Airflow
-  and Trino host ports. `K2_AIRFLOW_PORT` also feeds Airflow's own base URL, so moving it
+- `K2_AIRFLOW_PORT` (default `8090`) and `K2_TRINO_PORT` (default `8443`, HTTPS only since
+  2026-11-27) are the Airflow and Trino host ports. `K2_AIRFLOW_PORT` also feeds Airflow's own base URL, so moving it
   moves the links its UI builds; set either if something else on the host owns the port.
 
 `make up` builds three images on the first run: the Rust `k2-capture` binary, `k2-airflow`

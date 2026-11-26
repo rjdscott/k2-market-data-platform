@@ -253,13 +253,14 @@ not a gap in this page.**
 | `K2_SCHEMA_REGISTRY_URL` | `http://redpanda:8081` | the managed registry | where schema ids resolve |
 | `K2_LAKE_LOCK` | `/tmp/k2-lake-ingest.lock` | **nothing valid** — §1.2 | the ingest mutual exclusion, and the one row here that is not a rename |
 
-**One exception today: Trino's catalog files.** `docker/trino/etc/catalog/lake.properties`
-and every domain catalog `make generate` writes (`platform/k2gen/k2gen/generate.py`) hard-code
-`http://lakekeeper:8181/catalog`, `http://minio:9000`, region `local-01` and path-style
-access, where `docker/lake/` reads each from the environment. By the rule above that is a
-bug, and a small one: Trino already reads the storage keys as `${ENV:MINIO_ROOT_USER}`, so the
-fix is the same substitution for the four values, in `lake.properties` and in the generator's
-template.
+**One exception today: Trino's catalog files.** Every catalog file a release carries under
+`compiled/trino/etc/catalog/`, written by the `trino_etc` emitter
+([`platform/k2gen/k2gen/emit/trino_etc.py`](../../platform/k2gen/k2gen/emit/trino_etc.py),
+[chapter 21](21-releases-and-deploy.md)), hard-codes `http://lakekeeper:8181/catalog`,
+`http://minio:9000`, region `local-01` and path-style access, where `docker/lake/` reads each
+from the environment. By the rule above that is a bug, and a small one: Trino already reads the
+storage keys as `${ENV:K2_TRINO_S3_ACCESS_KEY}` and `${ENV:K2_TRINO_S3_SECRET_KEY}`, so the fix
+is the same substitution for the four values, in the emitter.
 
 Credentials are the other thing that is not a variable rename: `MINIO_ROOT_USER` /
 `MINIO_ROOT_PASSWORD`, read at `spark_conf.py`'s `lake_session()`, become an IAM task
