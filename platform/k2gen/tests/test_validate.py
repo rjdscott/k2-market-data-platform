@@ -1,123 +1,115 @@
-"""k2gen validate, against the real contracts/ and lake.sql and against copies broken one way each.
+"""k2gen validate, against the repository and against a scaffolded tree broken one way each.
 
-Each failure test breaks one thing in a copy of the tree and asserts the line
+Each failure test breaks one thing in a copy of the tree (conftest.py) and asserts the line
 that names it, so a check that stops firing fails here rather than in review.
 """
 
 import shutil
+from datetime import date
 
 import pytest
 import yaml
+from conftest import (
+    FRAMES,
+    FRAMES_CONTRACT,
+    MART,
+    TRADES_CONTRACT,
+    TRADES_PRODUCT,
+    edit,
+    set_property,
+)
 
-from k2gen import cli, ddl, generate
-
-ROOT = cli.ROOT
-TRADES = "contracts/market-analytics/canonical-trades/gold.trades.odcs.yaml"
-BBO = "contracts/market-analytics/book-snapshots/gold.bbo_1s.odcs.yaml"
-CANDLES = "contracts/market-analytics/candles/product.yaml"
-AUDIT = "contracts/market-capture/lake-audit"
-DELAYED = "contracts/market-analytics/delayed-candles/product.yaml"
-
-
-@pytest.fixture
-def tree(tmp_path):
-    """A copy of contracts/ and lake.sql that a test can break."""
-    shutil.copytree(ROOT / "contracts", tmp_path / "contracts")
-    (tmp_path / cli.LAKE_SQL).parent.mkdir(parents=True)
-    shutil.copy(ROOT / cli.LAKE_SQL, tmp_path / cli.LAKE_SQL)
-    shutil.copytree(ROOT / cli.ADR_DIR, tmp_path / cli.ADR_DIR)  # a paused contract names its ADR
-    return tmp_path
-
-
-def edit(path, change):
-    doc = yaml.safe_load(path.read_text())
-    change(doc)
-    path.write_text(yaml.safe_dump(doc, sort_keys=False))
-
-
-def set_property(name, value):
-    def change(doc):
-        (prop,) = [p for p in doc["customProperties"] if p["property"] == name]
-        prop["value"] = value
-
-    return change
+from k2gen import cli, generate
 
 
 def test_the_repository_validates():
     assert cli.validate() == []
 
 
-def test_every_table_has_exactly_one_contract():
-    tables = list(ddl.parse(ROOT / cli.LAKE_SQL))
-    described = [yaml.safe_load(p.read_text())["schema"][0]["physicalName"] for p in (ROOT / "contracts").glob("*/*/*.odcs.yaml")]
-    assert sorted(described) == sorted(tables)
+def test_a_contract_that_references_lake_sql_fails(tree):
+    # The schema still admits the reference form; the DDL it points at retired (ADR-056).
+    def reference(doc):
+        del doc["schema"][0]["properties"]
+        doc["schema"][0]["authoritativeDefinitions"] = [{"type": "implementation", "url": "docker/lake/ddl/lake.sql"}]
+        doc.pop("slaProperties")
 
-
-def test_an_audit_table_without_a_contract_fails(tree):
-    # The nightly contract_schema audit fails it in the audit namespace, so CI must too.
-    # The marts that read audit.checks go with its contract, so the one error left is the table's.
-    shutil.rmtree(tree / AUDIT)
-    shutil.rmtree(tree / "contracts/governance/quality-results")
-    edit(tree / "contracts/market-analytics/venue-quality/product.yaml", lambda d: d.update(inputs=[{"table": "gold.trades"}], marts=[{**d["marts"][0], "reads": ["gold.trades"]}]))
-    assert cli.validate(tree) == [f"{cli.LAKE_SQL}: audit.checks has no contract under contracts/"]
-
-
-def test_the_parser_finds_every_table_in_lake_sql():
-    # A table the parser misses would also be missing from the coverage test above.
-    text = (ROOT / cli.LAKE_SQL).read_text()
-    assert len(ddl.parse(ROOT / cli.LAKE_SQL)) == text.count("CREATE TABLE IF NOT EXISTS lake.")
-
-
-def test_the_floor_is_the_one_maintenance_enforces():
-    assert f"args.retain_days < {cli.FLOOR_DAYS}:" in (ROOT / "docker/lake/maintenance.py").read_text()
-
-
-def test_a_wrong_partition_spec_fails(tree):
-    edit(tree / TRADES, set_property("partitioning", ["days(exchange_ts)"]))
+    edit(tree / TRADES_CONTRACT, reference)
     assert cli.validate(tree) == [
-        f"{TRADES}: partitioning ['days(exchange_ts)'], but {cli.LAKE_SQL} declares ['exchange', 'days(exchange_ts)']"
+        f"{TRADES_CONTRACT}: gold.example_trades declares no inline columns; docker/lake/ddl/lake.sql, "
+        "which it references, retired to legacy/v3-lake-ingest/ (ADR-056)"
     ]
 
 
-def test_a_wrong_sort_order_fails(tree):
-    edit(tree / TRADES, set_property("sort", ["exchange_ts", "canonical_symbol"]))
-    assert len(errors := cli.validate(tree)) == 1 and "sort" in errors[0], errors
+def test_a_second_contract_for_a_table_fails(tree):
+    copy = tree / "contracts/market-analytics/example-copy"
+    copy.mkdir()
+    shutil.copy(tree / TRADES_PRODUCT, copy / "product.yaml")
+    shutil.copy(tree / TRADES_CONTRACT, copy / "gold.example_trades.odcs.yaml")
+    edit(copy / "product.yaml", lambda d: d.update(name="example-copy", marts=[]))
+    # example-copy sorts first, so the original is the second.
+    assert f"{TRADES_CONTRACT}: a second contract for gold.example_trades" in cli.validate(tree)
+
+
+def test_an_output_with_no_contract_beside_it_fails(tree):
+    edit(tree / TRADES_PRODUCT, lambda d: d["outputs"].append("gold.example_more"))
+    assert cli.validate(tree) == [
+        f"{TRADES_PRODUCT}: outputs ['gold.example_more', 'gold.example_trades'], but the contracts beside it are ['gold.example_trades']"
+    ]
+
+
+def test_a_layer_other_than_its_namespace_fails(tree):
+    edit(tree / TRADES_CONTRACT, set_property("layer", "silver"))
+    assert cli.validate(tree) == [f"{TRADES_CONTRACT}: layer silver, but gold.example_trades is in namespace gold"]
+
+
+def test_a_made_up_layer_fails_the_profile(tree):
+    edit(tree / TRADES_CONTRACT, set_property("layer", "quality"))
+    assert [e for e in cli.validate(tree) if "customProperties" in e and "'quality' is not one of" in e]
+
+
+@pytest.mark.parametrize("key", ["partitioning", "sort"])
+def test_a_partition_or_sort_on_an_undeclared_column_fails(tree, key):
+    edit(tree / TRADES_CONTRACT, set_property(key, ["days(recv_ts)"]))
+    assert cli.validate(tree) == [f"{TRADES_CONTRACT}: {key} days(recv_ts) reads no column the contract declares"]
 
 
 def test_a_parent_with_expiry_under_the_floor_fails(tree):
-    edit(tree / TRADES, set_property("retention", 3))
-    errors = cli.validate(tree)
-    # gold.trades is read by the four candle tables and by gold.bars.
-    assert len(errors) == 5 and all(e.startswith(f"{TRADES}: ") and "7-day floor, not 3" in e for e in errors), errors
+    edit(tree / FRAMES_CONTRACT, set_property("retention", 3))
+    assert cli.validate(tree) == [
+        f"{FRAMES_CONTRACT}: gold.example_trades reads it, so it must keep snapshots for the {cli.FLOOR_DAYS}-day floor, not 3"
+    ]
 
 
 def test_a_table_nothing_reads_may_expire_sooner(tree):
-    edit(tree / BBO, set_property("retention", 3))
+    edit(tree / TRADES_CONTRACT, set_property("retention", 3))
     assert cli.validate(tree) == []
 
 
-def test_a_table_with_no_contract_fails(tree):
-    (tree / BBO).unlink()
-    edit(tree / "contracts/market-analytics/book-snapshots/product.yaml", lambda d: d["outputs"].remove("gold.bbo_1s"))
-    assert cli.validate(tree) == [f"{cli.LAKE_SQL}: gold.bbo_1s has no contract under contracts/"]
-
-
 def test_a_table_less_restricted_than_its_input_fails(tree):
-    edit(tree / TRADES, set_property("classification", "public"))
-    errors = cli.validate(tree)
-    assert any("gold.trades is public but reads silver.trades_kraken, which is internal" in e for e in errors), errors
+    edit(tree / TRADES_CONTRACT, set_property("classification", "public"))
+    assert cli.validate(tree) == [f"{TRADES_PRODUCT}: gold.example_trades is public but reads bronze.example_frames, which is internal"]
+
+
+def test_a_table_less_restricted_than_its_external_source_fails(tree):
+    edit(tree / FRAMES / "product.yaml", lambda d: d["inputs"][0].update(classification="restricted"))
+    assert cli.validate(tree) == [f"{FRAMES}/product.yaml: bronze.example_frames is internal but reads synthetic venue feed, which is restricted"]
 
 
 def test_an_input_no_product_declares_fails(tree):
-    edit(tree / CANDLES, lambda d: d["inputs"].append({"table": "gold.trades_v2"}))
-    errors = cli.validate(tree)
-    assert f"{CANDLES}: input gold.trades_v2 is not an output of any product" in errors, errors
+    edit(tree / TRADES_PRODUCT, lambda d: d["inputs"].append({"table": "gold.example_missing"}))
+    assert f"{TRADES_PRODUCT}: input gold.example_missing is not an output of any product" in cli.validate(tree)
+
+
+def test_an_input_nothing_reads_fails(tree):
+    edit(tree / TRADES_CONTRACT, set_property("upstreams", []))
+    edit(tree / TRADES_PRODUCT, lambda d: d.update(marts=[]))
+    assert cli.validate(tree) == [f"{TRADES_PRODUCT}: input bronze.example_frames is read by none of its outputs"]
 
 
 def test_a_contract_outside_the_standard_fails(tree):
-    edit(tree / TRADES, lambda d: d.pop("apiVersion"))
+    edit(tree / TRADES_CONTRACT, lambda d: d.pop("apiVersion"))
     errors = cli.validate(tree)
-    assert any(e.startswith(f"{TRADES}: $: 'apiVersion' is a required property") for e in errors), errors
+    assert any(e.startswith(f"{TRADES_CONTRACT}: $: 'apiVersion' is a required property") for e in errors), errors
 
 
 def set_mart(**fields):
@@ -127,34 +119,57 @@ def set_mart(**fields):
     return change
 
 
-@pytest.mark.parametrize("table", ["market_capture.candles.ohlcv_1m", "market_analytics.ohlcv.ohlcv_1m"])
+@pytest.mark.parametrize("table", ["market_capture.example_trades.example_trades", "market_analytics.trades.example_trades"])
 def test_a_mart_outside_its_domain_catalog_or_product_schema_fails(tree, table):
     # ADR-044: a domain writes only its own catalog, and each product has its own schema.
-    edit(tree / CANDLES, set_mart(table=table))
-    assert cli.validate(tree) == [f"{CANDLES}: mart {table} must live in market_analytics.candles, its domain's catalog and its product's schema (ADR-044)"]
+    edit(tree / TRADES_PRODUCT, set_mart(table=table))
+    assert cli.validate(tree) == [
+        f"{TRADES_PRODUCT}: mart {table} must live in market_analytics.example_trades, its domain's catalog and its product's schema (ADR-044)"
+    ]
 
 
 def test_a_mart_reading_a_table_its_product_does_not_declare_fails(tree):
-    edit(tree / CANDLES, set_mart(reads=["gold.trades", "gold.bars"]))
-    assert cli.validate(tree) == [f"{CANDLES}: mart market_analytics.candles.ohlcv_1m reads gold.bars, which is neither one of its outputs nor a resolved input"]
+    edit(tree / TRADES_PRODUCT, set_mart(reads=["gold.example_trades", "gold.example_other"]))
+    assert cli.validate(tree) == [f"{TRADES_PRODUCT}: mart {MART} reads gold.example_other, which is neither one of its outputs nor a resolved input"]
 
 
 def test_a_mart_declared_twice_fails(tree):
-    edit(tree / CANDLES, lambda doc: doc["marts"].append(dict(doc["marts"][0])))
-    assert cli.validate(tree) == [f"{CANDLES}: mart market_analytics.candles.ohlcv_1m is declared twice"]
+    edit(tree / TRADES_PRODUCT, lambda doc: doc["marts"].append(dict(doc["marts"][0])))
+    assert cli.validate(tree) == [f"{TRADES_PRODUCT}: mart {MART} is declared twice"]
+
+
+def test_a_mart_is_a_table_or_a_view_by_its_contract(tree):
+    edit(tree / TRADES_PRODUCT, set_mart(materialized="view"))
+    assert cli.validate(tree) == []
+    edit(tree / TRADES_PRODUCT, set_mart(materialized="ephemeral"))
+    assert [e for e in cli.validate(tree) if e.startswith(f"{TRADES_PRODUCT}: $.marts[0].materialized") and "'ephemeral' is not one of ['table', 'view']" in e]
+
+
+def test_a_product_may_build_only_marts_but_not_nothing(tree):
+    # As ADR-035's delayed product did: a view, and no lake table of its own.
+    generate.scaffold(tree, "market-analytics", "example-delayed")
+    pdir = tree / "contracts/market-analytics/example-delayed"
+    (pdir / "gold.example_delayed.odcs.yaml").unlink()
+    view = {"table": "market_analytics.example_delayed.example_delayed", "grain": ["id"], "reads": ["gold.example_trades"], "materialized": "view"}
+    edit(pdir / "product.yaml", lambda d: d.update(inputs=[{"table": "gold.example_trades"}], outputs=[], marts=[view]))
+    assert cli.validate(tree) == []
+    edit(pdir / "product.yaml", lambda d: d.pop("marts"))
+    errors = cli.validate(tree)
+    where = "contracts/market-analytics/example-delayed/product.yaml"
+    assert [e for e in errors if e.startswith(f"{where}: $: ") and "is not valid under any of the given schemas" in e], errors
 
 
 def test_a_latency_on_a_column_the_table_lacks_fails(tree):
     def change(doc):
-        doc["slaProperties"][0]["element"] = "gold.trades.loaded_at"
+        doc["slaProperties"][0]["element"] = "gold.example_trades.loaded_at"
 
-    edit(tree / TRADES, change)
-    assert cli.validate(tree) == [f"{TRADES}: latency element gold.trades.loaded_at is not a column of gold.trades"]
+    edit(tree / TRADES_CONTRACT, change)
+    assert cli.validate(tree) == [f"{TRADES_CONTRACT}: latency element gold.example_trades.loaded_at is not a column of gold.example_trades"]
 
 
 def test_a_latency_without_a_unit_fails_the_k2_profile(tree):
-    edit(tree / TRADES, lambda doc: doc["slaProperties"][0].pop("unit"))
-    assert [e for e in cli.validate(tree) if e.startswith(f"{TRADES}: $.slaProperties[0]") and "'unit' is a required property" in e]
+    edit(tree / TRADES_CONTRACT, lambda doc: doc["slaProperties"][0].pop("unit"))
+    assert [e for e in cli.validate(tree) if e.startswith(f"{TRADES_CONTRACT}: $.slaProperties[0]") and "'unit' is a required property" in e]
 
 
 @pytest.mark.parametrize(
@@ -165,38 +180,14 @@ def test_a_latency_without_a_unit_fails_the_k2_profile(tree):
         ("dq", "the schema every domain's dbt run records its test results in (dbt/macros/record_test_results.sql)"),
     ],
 )
-def test_a_product_named_like_a_platform_schema_is_rejected(tree, name, why):
+def test_a_product_named_like_a_platform_schema_is_rejected(bare, name, why):
     # Its marts would share <catalog>.<name> with the domain's staging or intermediate views,
     # or with the test results its dbt runs record (ADR-046).
-    generate.scaffold(tree, "market-analytics", name)
-    assert cli.validate(tree) == [f"contracts/market-analytics/{name}/product.yaml: product name {name} is {why}"]
-
-
-def test_a_mart_is_a_table_or_a_view_by_its_contract(tree):
-    edit(tree / CANDLES, set_mart(materialized="view"))
-    assert cli.validate(tree) == []
-    edit(tree / CANDLES, set_mart(materialized="ephemeral"))
-    assert [e for e in cli.validate(tree) if e.startswith(f"{CANDLES}: $.marts[0].materialized") and "'ephemeral' is not one of ['table', 'view']" in e]
-
-
-def test_a_product_may_build_only_marts_but_not_nothing(tree):
-    # ADR-035's delayed product is a view and writes no lake table.
-    assert yaml.safe_load((tree / DELAYED).read_text())["outputs"] == []
-    assert cli.validate(tree) == []
-    edit(tree / DELAYED, lambda d: d.pop("marts"))
-    errors = cli.validate(tree)
-    assert [e for e in errors if e.startswith(f"{DELAYED}: $: ") and "is not valid under any of the given schemas" in e], errors
-
-
-def test_audit_is_a_layer_but_not_a_made_up_one(tree):
-    contract = tree / AUDIT / "audit.checks.odcs.yaml"
-    edit(contract, set_property("layer", "quality"))
-    assert [e for e in cli.validate(tree) if "customProperties" in e and "'quality' is not one of" in e]
+    generate.scaffold(bare, "market-analytics", name)
+    assert cli.validate(bare) == [f"contracts/market-analytics/{name}/product.yaml: product name {name} is {why}"]
 
 
 # ── paused tables (ADR-050) ────────────────────────────────────────────────
-
-KRAKEN_BOOK = "contracts/market-capture/venue-frames/bronze.kraken_book.odcs.yaml"
 
 
 def pause(since="2026-11-26", adr="ADR-050"):
@@ -206,38 +197,30 @@ def pause(since="2026-11-26", adr="ADR-050"):
     return change
 
 
-def unpause(doc):
-    doc["customProperties"] = [p for p in doc["customProperties"] if p["property"] != "paused"]
-
-
 def test_a_paused_table_validates(tree):
-    edit(tree / KRAKEN_BOOK, unpause)
-    edit(tree / KRAKEN_BOOK, pause())
+    edit(tree / FRAMES_CONTRACT, pause())
     assert cli.validate(tree) == []
 
 
 def test_a_paused_table_names_an_adr_that_exists(tree):
-    edit(tree / KRAKEN_BOOK, unpause)
-    edit(tree / KRAKEN_BOOK, pause(adr="ADR-999"))
-    assert cli.validate(tree) == [f"{KRAKEN_BOOK}: paused by ADR-999, which has no file in docs/adr/"]
+    edit(tree / FRAMES_CONTRACT, pause(adr="ADR-999"))
+    assert cli.validate(tree) == [f"{FRAMES_CONTRACT}: paused by ADR-999, which has no file in docs/adr/"]
 
 
 def test_a_paused_table_names_a_real_day(tree):
-    edit(tree / KRAKEN_BOOK, unpause)
-    edit(tree / KRAKEN_BOOK, pause(since="2026-02-30"))
-    assert cli.validate(tree) == [f"{KRAKEN_BOOK}: paused since 2026-02-30, which is not a day"]
+    edit(tree / FRAMES_CONTRACT, pause(since="2026-02-30"))
+    assert cli.validate(tree) == [f"{FRAMES_CONTRACT}: paused since 2026-02-30, which is not a day"]
 
 
 def test_an_unquoted_day_is_a_date_to_yaml_and_fails_the_profile(tree):
-    from datetime import date
-
-    edit(tree / KRAKEN_BOOK, unpause)
-    edit(tree / KRAKEN_BOOK, pause(since=date(2026, 11, 26)))
+    edit(tree / FRAMES_CONTRACT, pause(since=date(2026, 11, 26)))
+    assert yaml.safe_load((tree / FRAMES_CONTRACT).read_text())["customProperties"][-1]["value"]["since"] == date(2026, 11, 26)
     errors = cli.validate(tree)
-    assert any(e.startswith(f"{KRAKEN_BOOK}: customProperties: $.paused.since") for e in errors), errors
+    assert any(e.startswith(f"{FRAMES_CONTRACT}: customProperties: $.paused.since") for e in errors), errors
 
 
 def test_a_paused_table_promises_no_freshness(tree):
-    # gold.trades declares a latency service level, which a mart's dbt source freshness reads.
-    edit(tree / TRADES, pause())
-    assert cli.validate(tree) == [f"{TRADES}: a paused table promises no freshness, so it declares no latency service level"]
+    # gold.example_trades declares a latency service level, which its mart's dbt source freshness reads.
+    edit(tree / TRADES_CONTRACT, pause())
+    assert cli.validate(tree) == [f"{TRADES_CONTRACT}: a paused table promises no freshness, so it declares no latency service level"]
+

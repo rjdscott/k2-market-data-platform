@@ -9,47 +9,30 @@ How a product is added: [the golden path](../development/golden-path.md).
 
 ## market-capture
 
-Owner `capture-team`, source-aligned. What the venues sent, archived verbatim and typed per venue: raw.messages, bronze and silver per venue, and the book replay state.
+Owner `capture-team`, source-aligned. What the venues send, landed as they sent it and then typed per venue.
 
-| Product | Lifecycle | Status | Outputs and marts |
-|---|---|---|---|
-| [lake-audit](market-capture/lake-audit.md) | draft | running | `audit.checks` |
-| [raw-archive](market-capture/raw-archive.md) | draft | running | `raw.messages` |
-| [venue-books](market-capture/venue-books.md) | draft | paused | `silver.book_binance`, `silver.book_kraken`, `silver.book_coinbase`, `gold.book_state` |
-| [venue-frames](market-capture/venue-frames.md) | draft | 3 of 7 tables paused | `bronze.binance_trade`, `bronze.binance_depth20`, `bronze.kraken_trade`, `bronze.kraken_book`, `bronze.kraken_instrument`, `bronze.coinbase_market_trades`, `bronze.coinbase_level2` |
-| [venue-trades](market-capture/venue-trades.md) | draft | running | `silver.trades_binance`, `silver.trades_kraken`, `silver.trades_coinbase` |
+No product yet.
 
 ## reference-data
 
 Owner `reference-data-team`, source-aligned. The security master: instrument and venue dimensions, type-2, from the instrument registry and the attributes a venue publishes.
 
-| Product | Lifecycle | Status | Outputs and marts |
-|---|---|---|---|
-| [security-master](reference-data/security-master.md) | draft | running | `gold.dim_instrument`, `gold.dim_venue` |
+No product yet.
 
 ## fx-reference
 
-Owner `fx-reference-team`, source-aligned. Foreign exchange reference rates as their publisher released them. Declared in phase P1, no product until phase P4 of the governed self-serve platform plan.
+Owner `fx-reference-team`, source-aligned. Foreign exchange reference rates as their publisher released them.
 
 No product yet.
 
 ## market-analytics
 
-Owner `analytics-team`, consumer-aligned. Cross-venue products a researcher reads first: canonical trades, candles, event bars and the 1 Hz book.
+Owner `analytics-team`, consumer-aligned. Cross-venue products a researcher reads first, derived from the venues' data.
 
-| Product | Lifecycle | Status | Outputs and marts |
-|---|---|---|---|
-| [book-snapshots](market-analytics/book-snapshots.md) | draft | paused | `gold.book_top20`, `gold.bbo_1s` |
-| [candles](market-analytics/candles.md) | draft | running | `gold.ohlcv_1m`, `gold.ohlcv_5m`, `gold.ohlcv_1h`, `gold.ohlcv_1d`, `market_analytics.candles.ohlcv_1m` |
-| [canonical-trades](market-analytics/canonical-trades.md) | draft | running | `gold.trades` |
-| [delayed-candles](market-analytics/delayed-candles.md) | draft | running | `market_analytics.delayed_candles.ohlcv_delayed_20m` |
-| [event-bars](market-analytics/event-bars.md) | draft | running | `gold.bars` |
-| [venue-quality](market-analytics/venue-quality.md) | draft | running | `market_analytics.venue_quality.venue_quality_scorecard` |
+No product yet.
 
 ## governance
 
-Owner `platform-team`, consumer-aligned. What the platform records about the other domains' data rather than the data itself: quality results first, control evidence and lineage in later phases. Its products read every other domain and no domain reads them (ADR-046).
+Owner `platform-team`, consumer-aligned. What the platform records about the other domains' data rather than the data itself: quality results, control evidence and lineage. Its products read every other domain and no domain reads them (ADR-046).
 
-| Product | Lifecycle | Status | Outputs and marts |
-|---|---|---|---|
-| [quality-results](governance/quality-results.md) | draft | running | `governance.quality_results.dq_results` |
+No product yet.

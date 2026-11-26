@@ -1,9 +1,9 @@
-"""k2gen generate and k2gen new, on a copy of contracts/ and lake.sql.
+"""k2gen generate and k2gen new on the repository's tree and on scaffolded ones (conftest.py).
 
-The CI drift job (`make generate`, then no diff) proves the committed outputs are
-current. These prove the properties that job relies on: a run is repeatable, a
-deleted contract takes its outputs with it, and a scaffold is a valid product
-whose generated DDL reads back as its contract declares.
+The CI drift job (`make generate`, then no diff) proves the committed outputs are current.
+These prove the properties that job relies on. A run is repeatable; a deleted contract
+takes its outputs with it; a tree with no product still writes every domain's fence, and
+a scaffold is a valid product whose generated DDL reads back as its contract declares.
 """
 
 import json
@@ -12,27 +12,19 @@ from pathlib import Path
 
 import pytest
 import yaml
+from conftest import FRAMES, FRAMES_CONTRACT, MART, TRADES_CONTRACT, TRADES_PRODUCT, edit
 
 from k2gen import cli, ddl, generate
 
 ROOT = cli.ROOT
 EXAMPLE = "contracts/market-analytics/example"
 EXAMPLE_DDL = f"{generate.GENERATED_DDL}/gold.example.sql"
-
-
-@pytest.fixture
-def tree(tmp_path):
-    """contracts/ and lake.sql, without any generated file."""
-    shutil.copytree(ROOT / "contracts", tmp_path / "contracts")
-    (tmp_path / cli.LAKE_SQL).parent.mkdir(parents=True)
-    shutil.copy(ROOT / cli.LAKE_SQL, tmp_path / cli.LAKE_SQL)
-    shutil.copytree(ROOT / cli.ADR_DIR, tmp_path / cli.ADR_DIR)  # a paused contract names its ADR
-    return tmp_path
+TRADES_PAGE = f"{generate.PAGES}/market-analytics/example-trades.md"
 
 
 def snapshot(root: Path) -> dict:
     """Every file under the generator's outputs, path -> bytes."""
-    places = [root / d for d in generate.OWNED] + [(root / generate.RETENTION).parent, root / "docker/trino"]
+    places = [root / d for d in generate.OWNED] + [(root / generate.RETENTION).parent, root / "docker/trino", root / "dbt"]
     return {p.relative_to(root).as_posix(): p.read_bytes() for d in places for p in sorted(d.rglob("*")) if p.is_file()}
 
 
@@ -41,68 +33,68 @@ def test_a_second_generate_changes_nothing(tree):
     first = snapshot(tree)
     generate.generate(tree)
     assert snapshot(tree) == first
-    assert f"{generate.PAGES}/market-analytics/candles.md" in first and generate.RETENTION in first
+    assert TRADES_PAGE in first and generate.RETENTION in first
 
 
-def test_a_scaffolded_product_validates(tree):
-    written = generate.scaffold(tree, "market-analytics", "example")
-    assert [p.relative_to(tree).as_posix() for p in written] == [f"{EXAMPLE}/product.yaml", f"{EXAMPLE}/gold.example.odcs.yaml"]
-    assert cli.validate(tree) == []
+def test_a_tree_with_no_product_writes_every_fence_and_no_table(bare):
+    # The repository today: five domains, no product (ADR-056).
+    files = generate.generate(bare)
+    domains = yaml.safe_load((bare / "contracts/domains.yaml").read_text())["domains"]
+    assert json.loads(files[generate.RETENTION]) == {} and json.loads(files[generate.CONTRACT_SCHEMAS]) == {}
+    assert yaml.safe_load(files[generate.DBT_SOURCES])["sources"] == [] and yaml.safe_load(files[generate.DBT_SELECTORS])["selectors"] == []
+    assert sorted(p for p in files if p.startswith(generate.PAGES)) == [f"{generate.PAGES}/README.md", generate.PRODUCT_TABLE]
+    assert files[f"{generate.PAGES}/README.md"].count("No product yet.") == len(domains)
+    assert files[generate.PRODUCT_TABLE].endswith("\nNo product yet.\n")
+    assert sorted(p for p in files if p.startswith(generate.GENERATED_DDL)) == [f"{generate.GENERATED_DDL}/README.md"]
+    for catalogs in (generate.CATALOGS, generate.TEST_CATALOGS):
+        assert sorted(p for p in files if p.startswith(catalogs)) == sorted(f"{catalogs}/{cli.fence(d)}.properties" for d in domains)
 
 
-def test_the_scaffolds_marts_stub_validates_once_uncommented(tree):
-    generate.scaffold(tree, "market-analytics", "example-desk")
-    path = tree / "contracts/market-analytics/example-desk/product.yaml"
+def test_a_scaffolded_product_validates(bare):
+    written = generate.scaffold(bare, "market-analytics", "example")
+    assert [p.relative_to(bare).as_posix() for p in written] == [f"{EXAMPLE}/product.yaml", f"{EXAMPLE}/gold.example.odcs.yaml"]
+    assert cli.validate(bare) == []
+
+
+def test_the_scaffolds_marts_stub_validates_once_uncommented(bare):
+    generate.scaffold(bare, "market-analytics", "example-desk")
+    path = bare / "contracts/market-analytics/example-desk/product.yaml"
     text = path.read_text()
     stub = text[text.index("# marts:"):]
     path.write_text(text.replace(stub, "\n".join(line.removeprefix("# ") for line in stub.splitlines()) + "\n"))
     (mart,) = yaml.safe_load(path.read_text())["marts"]
     assert mart == {"table": "market_analytics.example_desk.example_desk", "grain": ["id"], "reads": ["gold.example_desk"]}
-    assert cli.validate(tree) == []
+    assert cli.validate(bare) == []
 
 
-def test_a_source_aligned_scaffold_is_bronze_and_validates(tree):
-    generate.scaffold(tree, "fx-reference", "example-rates")
-    assert (tree / "contracts/fx-reference/example-rates/bronze.example_rates.odcs.yaml").exists()
-    assert cli.validate(tree) == []
+def test_a_source_aligned_scaffold_is_bronze_and_validates(bare):
+    generate.scaffold(bare, "fx-reference", "example-rates")
+    assert (bare / "contracts/fx-reference/example-rates/bronze.example_rates.odcs.yaml").exists()
+    assert cli.validate(bare) == []
 
 
 def test_new_refuses_an_undeclared_domain_and_an_existing_product(tree):
     with pytest.raises(SystemExit, match="not a domain"):
         generate.scaffold(tree, "market-research", "example")
     with pytest.raises(SystemExit, match="already exists"):
-        generate.scaffold(tree, "market-analytics", "candles")
+        generate.scaffold(tree, "market-analytics", "example-trades")
 
 
-def test_generated_ddl_reads_back_as_the_contract_declares(tree):
-    generate.scaffold(tree, "market-analytics", "example")
-    generate.generate(tree)
-    (table,) = ddl.parse(tree / EXAMPLE_DDL).values()
+def test_generated_ddl_reads_back_as_the_contract_declares(bare):
+    generate.scaffold(bare, "market-analytics", "example")
+    generate.generate(bare)
+    (table,) = ddl.parse(bare / EXAMPLE_DDL).values()
     assert table.columns == ("id", "event_ts")
     assert table.partitioning == ("days(event_ts)",) and table.sort == ("event_ts",)
     assert table.schema[0] == ddl.Column("id", "STRING NOT NULL", "Placeholder key column.")
 
 
 def test_contract_schemas_state_every_table_as_its_contract_does(tree):
-    """What the nightly contract_schema audit compares each live table with (docker/lake/contract_schema.py)."""
-    generate.scaffold(tree, "market-analytics", "example")
     schemas = json.loads(generate.render(tree)[generate.CONTRACT_SCHEMAS])
     contracts = {yaml.safe_load(p.read_text())["schema"][0]["physicalName"] for p in (tree / "contracts").glob(f"*/*/*{cli.SUFFIX}")}
-    assert schemas.keys() == contracts
-
-    # A table lake.sql creates: its columns in lake.sql's order, NOT NULL split out, nested types as written.
-    lake = ddl.parse(tree / cli.LAKE_SQL)
-    trades = schemas["gold.trades"]
-    assert [c["name"] for c in trades["columns"]] == list(lake["gold.trades"].columns)
-    assert trades["columns"][0] == {"name": "exchange", "type": "STRING", "required": True}
-    assert {"name": "seq_gap", "type": "BOOLEAN", "required": False} in trades["columns"]
-    assert trades["partitioning"] == ["exchange", "days(exchange_ts)"] and trades["sort"] == ["canonical_symbol", "exchange_ts"]
-    assert trades["identifier"] == ["exchange", "canonical_symbol", "trade_id"]
-    bids = next(c for c in schemas["silver.book_binance"]["columns"] if c["name"] == "bids")
-    assert bids == {"name": "bids", "type": "ARRAY<STRUCT<px: DECIMAL(28,10), qty: DECIMAL(28,10)>>", "required": True}
-
-    # A table with inline columns: its own, and no identifier fields, since its generated DDL sets none.
-    assert schemas["gold.example"] == {
+    assert schemas.keys() == contracts == {"bronze.example_frames", "gold.example_trades"}
+    # Its own columns in order, NOT NULL split out, and no identifier fields, since its generated DDL sets none.
+    assert schemas["gold.example_trades"] == {
         "columns": [{"name": "id", "type": "STRING", "required": True}, {"name": "event_ts", "type": "TIMESTAMP", "required": True}],
         "partitioning": ["days(event_ts)"],
         "sort": ["event_ts"],
@@ -110,16 +102,16 @@ def test_contract_schemas_state_every_table_as_its_contract_does(tree):
     }
 
 
-def test_a_deleted_contract_removes_its_outputs(tree):
-    generate.scaffold(tree, "market-analytics", "example")
-    generate.generate(tree)
+def test_a_deleted_contract_removes_its_outputs(bare):
+    generate.scaffold(bare, "market-analytics", "example")
+    generate.generate(bare)
     page = f"{generate.PAGES}/market-analytics/example.md"
-    before = snapshot(tree)
+    before = snapshot(bare)
     assert {EXAMPLE_DDL, page} <= before.keys() and b'"gold.example"' in before[generate.RETENTION]
 
-    shutil.rmtree(tree / EXAMPLE)
-    generate.generate(tree)
-    after = snapshot(tree)
+    shutil.rmtree(bare / EXAMPLE)
+    generate.generate(bare)
+    after = snapshot(bare)
     assert EXAMPLE_DDL not in after and page not in after
     assert b"gold.example" not in after[generate.RETENTION] + after[f"{generate.PAGES}/README.md"] + after[generate.PRODUCT_TABLE]
 
@@ -128,41 +120,24 @@ def test_the_product_table_has_one_row_per_product(tree):
     generate.scaffold(tree, "fx-reference", "example-rates")
     generate.generate(tree)
     rows = [r for r in (tree / generate.PRODUCT_TABLE).read_text().splitlines() if r.startswith("| [")]
-    assert len(rows) == len(list(tree.glob("contracts/*/*/product.yaml")))
+    assert len(rows) == len(list(tree.glob("contracts/*/*/product.yaml"))) == 3
     new = "| [fx-reference](README.md#fx-reference) | [example-rates](fx-reference/example-rates.md) | `fx-reference-team` | draft | running | `bronze.example_rates` |"
     assert new in rows
-    (candles,) = [r for r in rows if "| [candles](" in r]
-    assert "`analytics-team`" in candles and "`gold.ohlcv_1m`" in candles and "`market_analytics.candles.ohlcv_1m`" in candles
+    (trades,) = [r for r in rows if "| [example-trades](" in r]
+    assert "`analytics-team`" in trades and "`gold.example_trades`" in trades and f"`{MART}`" in trades
 
 
-def test_generate_writes_nothing_while_validate_fails(tree, monkeypatch):
-    generate.scaffold(tree, "market-analytics", "example")
-    contract = tree / EXAMPLE / "gold.example.odcs.yaml"
+def test_generate_writes_nothing_while_validate_fails(bare, monkeypatch):
+    generate.scaffold(bare, "market-analytics", "example")
+    contract = bare / EXAMPLE / "gold.example.odcs.yaml"
     contract.write_text(contract.read_text().replace('["days(event_ts)"]', '["days(recv_ts)"]'))
-    monkeypatch.setattr(cli, "ROOT", tree)
+    monkeypatch.setattr(cli, "ROOT", bare)
     assert cli.main(["generate"]) == 1
-    assert snapshot(tree) == {}
-
-
-def test_inline_columns_for_a_table_in_lake_sql_fail(tree):
-    contract = tree / "contracts/market-analytics/canonical-trades/gold.trades.odcs.yaml"
-    doc = yaml.safe_load(contract.read_text())
-    del doc["schema"][0]["authoritativeDefinitions"]
-    doc["schema"][0]["properties"] = [{"name": "exchange", "physicalType": "STRING", "description": "The venue."}]
-    contract.write_text(yaml.safe_dump(doc, sort_keys=False))
-    errors = cli.validate(tree)
-    assert any(e.endswith("gold.trades is created by docker/lake/ddl/lake.sql, so the contract references it, not inline columns") for e in errors), errors
-
-
-def test_a_partition_on_an_undeclared_column_fails(tree):
-    generate.scaffold(tree, "market-analytics", "example")
-    contract = tree / EXAMPLE / "gold.example.odcs.yaml"
-    contract.write_text(contract.read_text().replace('["days(event_ts)"]', '["days(recv_ts)"]'))
-    assert cli.validate(tree) == [f"{EXAMPLE}/gold.example.odcs.yaml: partitioning days(recv_ts) reads no column the contract declares"]
+    assert snapshot(bare) == {}
 
 
 def test_the_parser_reads_types_and_comments(tmp_path):
-    sql = tmp_path / "lake.sql"
+    sql = tmp_path / "t.sql"
     sql.write_text(
         "CREATE TABLE IF NOT EXISTS lake.gold.t (\n"
         "    a     STRING  NOT NULL COMMENT 'It''s a key; with a semicolon',\n"
@@ -178,10 +153,13 @@ def test_the_parser_reads_types_and_comments(tmp_path):
     )
 
 
-def test_pages_carry_no_em_dash_although_lake_sql_comments_do():
+def test_pages_carry_no_em_dash_although_a_contract_does(tree):
     # check-docs gate (h) refuses an em-dash on an added line, and a page is regenerated whole.
-    assert "\u2014" in (ROOT / cli.LAKE_SQL).read_text()
-    assert not [p for p, text in generate.render(ROOT).items() if "\u2014" in text]
+    edit(tree / TRADES_PRODUCT, lambda d: d.update(purpose="Trades \u2014 made up."))
+    edit(tree / TRADES_CONTRACT, lambda d: d["schema"][0]["properties"][0].update(description="Key \u2014 made up."))
+    files = generate.render(tree)
+    assert not [p for p, text in files.items() if "\u2014" in text]
+    assert "Trades: made up." in files[TRADES_PAGE] and "| `id` | `STRING NOT NULL` | Key: made up. |" in files[TRADES_PAGE]
 
 
 def add_domain(root: Path, name: str, owner: str = "research-team") -> None:
@@ -191,11 +169,11 @@ def add_domain(root: Path, name: str, owner: str = "research-team") -> None:
     path.write_text(yaml.safe_dump(doc, sort_keys=False))
 
 
-def test_a_new_domain_gets_its_fence(tree):
+def test_a_new_domain_gets_its_fence(bare):
     # ADR-044: adding a domain and running generate is the whole act of giving it a fence.
-    add_domain(tree, "research-desk")
-    assert cli.validate(tree) == []
-    files = generate.generate(tree)
+    add_domain(bare, "research-desk")
+    assert cli.validate(bare) == []
+    files = generate.generate(bare)
     catalog = files[f"{generate.CATALOGS}/research_desk.properties"]
     assert "iceberg.rest-catalog.warehouse=research_desk\n" in catalog and "warehouse=k2" not in catalog
     assert "iceberg.add-files-procedure.enabled=false\n" in catalog and "iceberg.register-table-procedure.enabled=false\n" in catalog
@@ -213,35 +191,35 @@ def test_a_new_domain_gets_its_fence(tree):
     assert not [r for r in rules["schemas"] + rules["tables"] if r.get("catalog") == "lake"]
 
 
-def test_a_removed_domain_takes_its_catalog_and_leaves_lake_properties(tree):
-    lake = tree / generate.CATALOGS / "lake.properties"
+def test_a_removed_domain_takes_its_catalog_and_leaves_lake_properties(bare):
+    lake = bare / generate.CATALOGS / "lake.properties"
     lake.parent.mkdir(parents=True)
     lake.write_text("connector.name=iceberg\niceberg.security=read_only\n")
-    add_domain(tree, "research-desk")
-    generate.generate(tree)
-    assert (tree / generate.CATALOGS / "research_desk.properties").exists()
+    add_domain(bare, "research-desk")
+    generate.generate(bare)
+    assert (bare / generate.CATALOGS / "research_desk.properties").exists()
 
-    path = tree / "contracts/domains.yaml"
+    path = bare / "contracts/domains.yaml"
     doc = yaml.safe_load(path.read_text())
     del doc["domains"]["research-desk"]
     path.write_text(yaml.safe_dump(doc, sort_keys=False))
-    generate.generate(tree)
-    assert not (tree / generate.CATALOGS / "research_desk.properties").exists()
-    assert not (tree / generate.TEST_CATALOGS / "research_desk.properties").exists()
-    assert "research_desk" not in (tree / generate.TRINO_RULES).read_text() + (tree / generate.WAREHOUSES).read_text()
+    generate.generate(bare)
+    assert not (bare / generate.CATALOGS / "research_desk.properties").exists()
+    assert not (bare / generate.TEST_CATALOGS / "research_desk.properties").exists()
+    assert "research_desk" not in (bare / generate.TRINO_RULES).read_text() + (bare / generate.WAREHOUSES).read_text()
     assert lake.read_text() == "connector.name=iceberg\niceberg.security=read_only\n"
 
 
 @pytest.mark.parametrize("name", ["lake", "system", "k2", "information-schema", "table", "default", "user"])
-def test_a_domain_whose_fence_name_is_taken_is_rejected(tree, name):
-    add_domain(tree, name)
+def test_a_domain_whose_fence_name_is_taken_is_rejected(bare, name):
+    add_domain(bare, name)
     fence = cli.fence(name)
-    assert [e for e in cli.validate(tree) if f"domain {name} would be catalog and warehouse {fence}" in e]
+    assert [e for e in cli.validate(bare) if f"domain {name} would be catalog and warehouse {fence}" in e]
 
 
-def test_a_domain_id_that_is_not_a_slug_is_rejected(tree):
-    add_domain(tree, "Research_Desk")
-    assert [e for e in cli.validate(tree) if "contracts/domains.yaml" in e and "Research_Desk" in e]
+def test_a_domain_id_that_is_not_a_slug_is_rejected(bare):
+    add_domain(bare, "Research_Desk")
+    assert [e for e in cli.validate(bare) if "contracts/domains.yaml" in e and "Research_Desk" in e]
 
 
 def test_the_rules_keep_the_retention_floors_and_other_peoples_queries_out_of_reach():
@@ -259,61 +237,38 @@ def test_warehouses_txt_ends_with_a_newline():
     assert text.endswith("\n") and text.splitlines()[-1] == sorted(cli.fence(d) for d in yaml.safe_load((ROOT / "contracts/domains.yaml").read_text())["domains"])[-1]
 
 
-def test_dbt_sources_carry_trino_types_the_identifier_check_and_freshness():
+def test_dbt_sources_carry_trino_types_and_freshness(tree):
     # ADR-044 and dbt/README.md: the sources a mart reads come from the contracts, not by hand.
-    files = generate.render(ROOT)
-    audit, gold = yaml.safe_load(files[generate.DBT_SOURCES])["sources"]
+    # One source: bronze.example_frames is read by a lake table, not by a mart.
+    (gold,) = yaml.safe_load(generate.render(tree)[generate.DBT_SOURCES])["sources"]
     assert (gold["name"], gold["database"], gold["schema"]) == ("gold", "lake", "gold")
-    ohlcv, trades = gold["tables"]
-    types = {c["name"]: c["data_type"] for c in trades["columns"]}
-    assert types["exchange_ts"] == "timestamp(6) with time zone" and types["price_e8"] == "bigint" and types["src_index"] == "integer"
-    assert list(types) == list(ddl.parse(ROOT / cli.LAKE_SQL)["gold.trades"].columns)
-    assert trades["config"]["loaded_at_field"] == "ingest_ts"
+    (trades,) = gold["tables"]
+    assert trades["name"] == "example_trades"
+    assert {c["name"]: c["data_type"] for c in trades["columns"]} == {"id": "varchar", "event_ts": "timestamp(6) with time zone"}
+    assert trades["config"]["meta"] == {"contract": TRADES_CONTRACT, "owner": "analytics-team", "read_by": [MART]}
+    assert trades["config"]["loaded_at_field"] == "event_ts"
     assert trades["config"]["freshness"] == {"error_after": {"count": 30, "period": "minute"}}
-    assert trades["config"]["meta"]["read_by"] == ["market_analytics.candles.ohlcv_1m", "market_analytics.venue_quality.venue_quality_scorecard"]
-    # The delayed view reads the lake's candles (ADR-035), checked on their identifier fields, with no freshness declared.
-    assert ohlcv["config"]["meta"]["read_by"] == ["market_analytics.delayed_candles.ohlcv_delayed_20m"]
-    assert ohlcv["data_tests"][0]["dbt_expectations.expect_compound_columns_to_be_unique"]["arguments"]["column_list"] == ["exchange", "canonical_symbol", "window_start"]
-    assert "freshness" not in ohlcv["config"]
-    (test,) = trades["data_tests"]
-    args = test["dbt_expectations.expect_compound_columns_to_be_unique"]["arguments"]
-    assert args == {"column_list": ["exchange", "canonical_symbol", "trade_id"], "row_condition": "exchange_ts >= current_timestamp - interval '6' hour"}
-    # audit.checks: its own types, no identifier fields so no uniqueness check, no latency so no freshness.
-    (checks,) = audit["tables"]
-    assert {c["name"]: c["data_type"] for c in checks["columns"]} == {
-        "run_ts": "timestamp(6) with time zone", "job": "varchar", "check_name": "varchar", "scope": "varchar",
-        "passed": "boolean", "observed": "bigint", "detail": "varchar",
-    }
-    assert "data_tests" not in checks and "freshness" not in checks["config"]
 
 
-def test_one_dbt_selector_per_domain_with_marts():
-    # Domains with no mart (fx-reference, market-capture, reference-data) get none.
-    governance, selector = yaml.safe_load(generate.render(ROOT)[generate.DBT_SELECTORS])["selectors"]
-    assert governance["name"] == "governance"
-    assert governance["definition"]["union"] == [{"method": "fqn", "value": "governance"}, {"method": "source", "value": "audit.checks"}]
+def test_a_source_with_no_latency_has_no_freshness(tree):
+    edit(tree / TRADES_CONTRACT, lambda d: d.pop("slaProperties"))
+    (gold,) = yaml.safe_load(generate.render(tree)[generate.DBT_SOURCES])["sources"]
+    assert "freshness" not in gold["tables"][0]["config"] and "loaded_at_field" not in gold["tables"][0]["config"]
+
+
+def test_one_dbt_selector_per_domain_with_marts(tree):
+    # Domains with no mart (market-capture here) get none.
+    (selector,) = yaml.safe_load(generate.render(tree)[generate.DBT_SELECTORS])["selectors"]
     assert selector["name"] == "market_analytics"
-    assert selector["definition"]["union"] == [
-        {"method": "fqn", "value": "market_analytics"},
-        {"method": "source", "value": "audit.checks"},
-        {"method": "source", "value": "gold.ohlcv_1m"},
-        {"method": "source", "value": "gold.trades"},
-    ]
+    assert selector["definition"]["union"] == [{"method": "fqn", "value": "market_analytics"}, {"method": "source", "value": "gold.example_trades"}]
 
 
 def test_a_removed_mart_takes_its_sources_and_selector_with_it(tree):
-    # The last marts gone: what scripts/dbt-test.sh then shows dbt still parses.
-    shutil.rmtree(tree / "contracts/market-analytics/delayed-candles")
-    shutil.rmtree(tree / "contracts/market-analytics/venue-quality")
-    shutil.rmtree(tree / "contracts/governance/quality-results")
-    path = tree / "contracts/market-analytics/candles/product.yaml"
-    doc = yaml.safe_load(path.read_text())
-    del doc["marts"]
-    path.write_text(yaml.safe_dump(doc, sort_keys=False))
+    edit(tree / TRADES_PRODUCT, lambda d: d.pop("marts"))
     assert cli.validate(tree) == []
-    assert generate.render(tree)[generate.DBT_SOURCES] == generate._dbt_sources([], {}, {})
-    assert generate.render(tree)[generate.DBT_SELECTORS] == generate._dbt_selectors([])
     files = generate.render(tree)
+    assert files[generate.DBT_SOURCES] == generate._dbt_sources([], {})
+    assert files[generate.DBT_SELECTORS] == generate._dbt_selectors([])
     assert yaml.safe_load(files[generate.DBT_SOURCES])["sources"] == []
     assert yaml.safe_load(files[generate.DBT_SELECTORS])["selectors"] == []
 
@@ -324,53 +279,43 @@ def test_a_mart_reading_a_type_with_no_trino_mapping_stops_generate():
     assert generate._trino_type("DECIMAL(38,10) NOT NULL") == "decimal(38,10)"
 
 
-def test_the_parser_reads_identifier_fields():
-    assert ddl.parse(ROOT / cli.LAKE_SQL)["gold.trades"].identifier == ("exchange", "canonical_symbol", "trade_id")
-
-
 def test_the_product_page_says_how_each_mart_is_built(tree):
-    page = generate.render(ROOT)[f"{generate.PAGES}/market-analytics/candles.md"]
-    assert "| `market_analytics.candles.ohlcv_1m` | table |" in page
-    # In the diagram too, fed by what it reads: gold.trades is node n0, the mart the last one in the box.
-    assert '    n5["market_analytics.candles.ohlcv_1m"]\n  end' in page and "  n0 --> n5\n" in page
-    path = tree / "contracts/market-analytics/candles/product.yaml"
-    doc = yaml.safe_load(path.read_text())
-    doc["marts"][0]["materialized"] = "view"
-    path.write_text(yaml.safe_dump(doc, sort_keys=False))
-    assert "| `market_analytics.candles.ohlcv_1m` | view |" in generate.render(tree)[f"{generate.PAGES}/market-analytics/candles.md"]
+    page = generate.render(tree)[TRADES_PAGE]
+    assert f"| `{MART}` | table |" in page
+    # In the diagram too, fed by what it reads: the input is n0, the table n1, the mart n2.
+    assert f'    n2["{MART}"]\n  end' in page and "  n0 --> n1\n" in page and "  n1 --> n2\n" in page
+    edit(tree / TRADES_PRODUCT, lambda d: d["marts"][0].update(materialized="view"))
+    assert f"| `{MART}` | view |" in generate.render(tree)[TRADES_PAGE]
 
 
 def test_a_paused_table_shows_on_its_page_the_index_and_the_product_table(tree):
-    """ADR-050: running, paused, or `n of m tables paused`, per product; the mark per table.
-
-    Every contract unmarked first, then three marked, so the test does not depend on what
-    config/instruments.yaml says today."""
-    mark_these = {"market-capture/venue-frames/bronze.kraken_book", "market-analytics/book-snapshots/gold.book_top20",
-                  "market-analytics/book-snapshots/gold.bbo_1s"}
-    for contract in tree.glob("contracts/*/*/*.odcs.yaml"):
-        doc = yaml.safe_load(contract.read_text())
-        doc["customProperties"] = [p for p in doc["customProperties"] if p["property"] != "paused"]
-        if contract.relative_to(tree / "contracts").as_posix().removesuffix(".odcs.yaml") in mark_these:
-            doc["customProperties"].append({"property": "paused", "value": {"since": "2026-11-26", "adr": "ADR-050"}})
-        contract.write_text(yaml.safe_dump(doc, sort_keys=False))
+    """ADR-050: running, paused, or `n of m tables paused`, per product; the mark per table."""
+    mark = {"property": "paused", "value": {"since": "2026-11-26", "adr": "ADR-050"}}
+    # example-frames gets a second table, and only it is paused: 1 of 2.
+    second = tree / FRAMES / "bronze.example_frames_b.odcs.yaml"
+    shutil.copy(tree / FRAMES_CONTRACT, second)
+    edit(second, lambda d: (d.update(name="example_frames_b"), d["schema"][0].update(physicalName="bronze.example_frames_b"), d["customProperties"].append(mark)))
+    edit(tree / FRAMES / "product.yaml", lambda d: d["outputs"].append("bronze.example_frames_b"))
+    # A third product whose only table is paused: paused.
+    generate.scaffold(tree, "market-capture", "example-books")
+    edit(tree / "contracts/market-capture/example-books/bronze.example_books.odcs.yaml", lambda d: d["customProperties"].append(mark))
     assert cli.validate(tree) == []
     files = generate.render(tree)
 
     adr = cli.adr_file(tree, "ADR-050")
     assert adr is not None
-    mark = f"paused since 2026-11-26, [ADR-050](../../../docs/adr/{adr.name}): the data is readable, nothing new arrives"
-    frames = files[f"{generate.PAGES}/market-capture/venue-frames.md"]
-    assert "| Status | 1 of 7 tables paused |" in frames
-    book = frames[frames.index("## bronze.kraken_book"):]
-    assert book.splitlines()[6] == f"| Status | {mark} |", book
-    trade = frames[frames.index("## bronze.kraken_trade"):]
-    assert "| Status | running |" in trade.split("## ", 2)[1]
-    assert f"| Status | {mark} |" in files[f"{generate.PAGES}/market-analytics/book-snapshots.md"].split("## ")[0]
+    status = f"paused since 2026-11-26, [ADR-050](../../../docs/adr/{adr.name}): the data is readable, nothing new arrives"
+    frames = files[f"{generate.PAGES}/market-capture/example-frames.md"]
+    assert "| Status | 1 of 2 tables paused |" in frames
+    paused = frames[frames.index("## bronze.example_frames_b"):]
+    assert paused.splitlines()[6] == f"| Status | {status} |", paused
+    running = frames[frames.index("## bronze.example_frames\n"):frames.index("## bronze.example_frames_b")]
+    assert "| Status | running |" in running
+    assert f"| Status | {status} |" in files[f"{generate.PAGES}/market-capture/example-books.md"].split("## ")[0]
 
     for index in (f"{generate.PAGES}/README.md", generate.PRODUCT_TABLE):
         rows = {line.split("|")[1 if index.endswith("README.md") else 2].strip(): line for line in files[index].splitlines() if line.startswith("| [")}
         cell = {name: [c.strip() for c in line.split("|")] for name, line in rows.items()}
-        status = {name.split("]")[0].lstrip("["): cells[-3] for name, cells in cell.items()}
-        assert status["venue-frames"] == "1 of 7 tables paused", status
-        assert status["book-snapshots"] == "paused", status
-        assert status["venue-trades"] == "running", status
+        state = {name.split("]")[0].lstrip("["): cells[-3] for name, cells in cell.items()}
+        assert state == {"example-books": "paused", "example-frames": "1 of 2 tables paused", "example-trades": "running"}, state
+

@@ -6,8 +6,7 @@ dbt/package-lock.yml fails here.
 
     make test-airflow     # inside the image it has just built
 
-and against the image the stack runs, to see whether it needs a rebuild
-(docs/runbooks/dbt-marts.md):
+and against the image the stack runs, to see whether it needs a rebuild:
 
     docker run --rm --network none -v "$PWD":/repo:ro k2-airflow:3.3.2 \\
       python -m unittest discover -s /repo/docker/airflow/tests -p 'test_dbt_image.py'
