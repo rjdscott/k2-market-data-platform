@@ -1,0 +1,11 @@
+version: 2
+sources:
+  - name: spike
+    database: market_analytics
+    schema: spike_runcost_20261126
+    tables: [{name: src_tiny}]
+models:
+  - name: inc_tiny
+    columns:
+      - name: id
+        data_tests: [unique, not_null]
