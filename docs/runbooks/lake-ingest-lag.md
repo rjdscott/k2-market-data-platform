@@ -22,7 +22,7 @@ It does **not** cover a crashed run (that is safe and automatic ,
 | 2 | Scheduler stopped, no runs at all | < 15 min | not yet verified, Phase D burn-in |
 | 3 | `failOnDataLoss`, offsets point below broker retention | **a decision, then < 15 min** | **12 min, measured 2026-08-26**, detection to a green schedule (§3) |
 | 4 | Nightly rewrite missed, small files accumulating | < 24 h (next maintenance window) | not yet verified, Phase D burn-in |
-| 5 | A flow run failed with `exited 75`, the ingest lock held | **nothing to repair** | n/a, the lock working is not an incident |
+| 5 | A run exited 75, the ingest lock held: a skipped task under Airflow | **nothing to repair** | n/a, the lock working is not an incident |
 
 ---
 
@@ -523,9 +523,15 @@ both bronze tables using the sort order declared in `lake.sql`.
 
 ---
 
-## 5. A flow run failed with `exited 75`: the ingest lock held
+## 5. A run exited 75: the ingest lock held
 
-**Symptom**, one `lake-ingest-5min` flow run is Failed in the Prefect UI, its logs end in
+> **Since the Airflow cutover (2026-11-25)** a run that exits 75 is a *skipped* task in a
+> successful `lake_ingest` run, not a failed one, and three skips in a row with no
+> maintenance or rebuild running fire `AirflowLakeIngestSkippedRepeatedly`: the procedure for
+> that is [airflow-scheduling.md section 3](./airflow-scheduling.md#3-lake_ingest-skipped-three-runs-in-a-row).
+> What follows is why the lock exists, written when Prefect ran the ingest.
+
+**Symptom**, under Prefect, one `lake-ingest-5min` flow run is Failed in the Prefect UI, its logs end in
 
 ```
 ingest.py exited 75 after 3s
@@ -535,9 +541,9 @@ Two concurrent appends both commit and both write offsets; see LOCK_PATH above.
 
 and the next scheduled run five minutes later succeeds normally.
 
-**Detection**, none, and there should be none. No Prometheus alert covers this: a single
-refused run costs one cycle of freshness, which is an order of magnitude inside
-`LakeIngestFailed`'s 30-minute threshold. A red run in Prefect is the whole signal.
+**Detection**, none for one refused run, and there should be none: it costs one cycle of
+freshness, an order of magnitude inside `LakeIngestFailed`'s 30-minute threshold. Three in a
+row is `AirflowLakeIngestSkippedRepeatedly` (the note above).
 
 **Expected behaviour, this is the lock doing its job, and the correct response is
 nothing.** `main()` in `docker/lake/ingest.py` takes a non-blocking exclusive `flock` on

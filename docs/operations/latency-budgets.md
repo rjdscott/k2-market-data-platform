@@ -13,7 +13,7 @@ the dominant segment is transit plus the venue's clock skew, and it is published
 | 2 | Frame → parsed records | < 1 ms, single-threaded, no allocation on the hot path | [`handle_frame`](../../services/capture-rust/README.md) |
 | 3 | Record → Redpanda acked | < 2 ms; queue is the only buffer | [`sink.rs`](../../services/capture-rust/src/sink.rs), settings below |
 | 4a | Redpanda → ClickHouse `gold.trades` visible | ≤ 5 s | `kafka_flush_interval_ms = 5000` in [`20-gold-kafka.sql`](../../docker/clickhouse/ddl/20-gold-kafka.sql) |
-| 4b | Redpanda → lake `raw.messages` committed | 5 min cron + run wall time | `lake-ingest-5min` ([prefect-schedules.md](./prefect-schedules.md)); `k2_lake_ingest_lag_seconds` |
+| 4b | Redpanda → lake `raw.messages` committed | 5 min cron + run wall time | the Airflow DAG `lake_ingest` ([airflow-schedules.md](./airflow-schedules.md)); `time() - k2_lake_max_kafka_ts_seconds` in Prometheus |
 | 5 | Lake gold → ClickHouse `ohlcv_*` / `bbo_1s` | operator pull; 10.4 M trades in 4.4 s | [clickhouse-rebuild-from-lake.md](../runbooks/clickhouse-rebuild-from-lake.md) |
 
 Two read paths follow: **live** (`gold.ohlcv_live`, `gold.bbo_live`, computed on read over
@@ -37,7 +37,7 @@ predate the connection; the capture now excludes those frames from the histogram
 (`Handled.history`), and the lake keeps them as trades. The per-trade distribution over the lake
 (`recv_ts_ns − exchange_ts`) is in the same benchmark section. Segments 2–5 are bounds by
 construction or configuration and have not been measured end to end; the query that would do
-it is in [data-inspection.md](./data-inspection.md#trades--goldtrades).
+it is in [data-inspection.md](./data-inspection.md#trades-goldtrades).
 
 The v2 pipeline's 7-segment budget and its 2026-02-19 measurements are a dated record in
 [benchmarks/2026-02-19-v2-baseline.md](../benchmarks/2026-02-19-v2-baseline.md).

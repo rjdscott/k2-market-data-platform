@@ -87,8 +87,10 @@ with `Connection refused` or time out, and so must `:9001`, `:3000` and `:8080`.
 
 On 2026-11-26, before the change reached the running stack, check 1 listed fourteen `*:`
 listeners and check 2 printed `lan 200` for MinIO, while Lakekeeper's port, already on
-loopback, printed `000` from the LAN address. The same checks after the rollout are not yet
-run. <!-- VERIFY -->
+loopback, printed `000` from the LAN address. After the rollout (2026-11-25 23:50 to 23:54
+UTC), run 2026-11-26 at about 01:30 UTC: check 1 printed `PASS`, check 2 printed
+`loopback 200` and `lan 000`, and the LAN address answered `000` on 9001, 3000, 8080, 8090 and
+18181 as well. Check 3, from another machine, is not yet run. <!-- VERIFY: check 3 from a second machine -->
 
 ## Reporting
 

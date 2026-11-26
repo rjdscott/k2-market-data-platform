@@ -268,12 +268,13 @@ job (`max_kafka_ts`, `ingest_backlog`, the two audit counts) take the **newest s
 are not read), never the last entry of the metadata array:
 Lakekeeper 0.13.3 returned the same five snapshots in two different orders on two
 successive `loadTable` calls (2026-08-26), and reading by position reported a lag that had
-already been closed. Prefect runs each flow in
-a short-lived subprocess that exits long before Prometheus scrapes it, so a counter inside
-the job was never observable; the committed snapshot is the durable record of what ran.
+already been closed. Each lake job runs as a
+short-lived process (an Airflow task now, a Prefect flow before the 2026-11-25 cutover) that
+exits long before Prometheus scrapes it, so a counter inside the job was never observable; the
+committed snapshot is the durable record of what ran.
 
-It is a separate 128 MB service rather than a sidecar in `prefect-worker` on purpose: if the
-worker crashes, the exporter keeps reporting the rising ingest lag these alerts exist to
+It is a separate 128 MB service rather than a sidecar of the scheduler on purpose: if the
+scheduler crashes, the exporter keeps reporting the rising ingest lag these alerts exist to
 catch.
 
 | Metric | Type | Source |

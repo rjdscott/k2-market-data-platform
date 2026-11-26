@@ -1,9 +1,11 @@
 # Runbooks
 
-Incident procedures for the running v2 stack, plus the v3 capture and lake tiers being
-built alongside it. Runbooks record *how*; ADRs record *why* (`../adr/`). Every Prometheus
-alert annotation points at one of these; start from the alert that fired, or from the
-"when to use" column below.
+Incident procedures for the running stack: the capture tier, Redpanda, the ClickHouse hot
+tier, the Iceberg lake, its Airflow schedules and the host under them. Runbooks record
+*how*; ADRs record *why* (`../adr/`). Every Prometheus alert annotation points at one of
+these; start from the alert that fired, or from the "when to use" column below. Day-to-day
+operation (start, stop, health, consoles, recreating one service, rolling out a change) is
+not a runbook: it is the [operator guide](../operations/README.md).
 
 Load secrets before running any command here: `set -a && . ./.env && set +a`
 
@@ -89,6 +91,7 @@ no longer exists, do not follow them against this stack.
 |---------|-------------|------------------|
 | [fresh-install.md](./fresh-install.md) | Bringing the stack up from a fresh clone or after a Docker wipe: prerequisites, the measured timeline, what `docker compose ps` should show, and the capture image build race | none, manual check |
 | [docker-desktop-disk.md](./docker-desktop-disk.md) | Host `/` filling while `docker system df` reports far less: reclaiming space from a bloated `Docker.raw` with `fstrim`. Read the warning before touching the disk-image-size slider | none, manual check |
+| [docker-vm-oom-kill.md](./docker-vm-oom-kill.md) | Every container gone at once and `systemctl --user status docker-desktop` says `Result: oom-kill`: the host's out-of-memory killer ended the Docker VM. Confirm the cause, start Docker Desktop, start what did not come back, check the ingest retried, compare the hot tier with the lake, record the outage in `lake.audit.checks`; then size the VM against host RAM. One occurrence, 2026-11-25: 10 min 17 s from the kill to `make health` PASS, capture off 343 s | none: no container can see host memory, manual check |
 
 ## Triage
 

@@ -27,17 +27,25 @@ upgrading a stack that already holds data, and it does not cover restoring the l
   the host does not have fails the container at start with `invalid argument`. The compose
   default uses `-` and not `:-`, so an explicit empty value wins over `12-14`.
   See [`.env.example`](../../.env.example) for the full note.
-- **Port 4200 free**, or `K2_PREFECT_PORT` set to another port in `.env`. The variable
-  moves both the published port and the URL the Prefect UI calls from the browser; an
-  override file that remaps only the port gives a UI that loads and then fails every
-  request.
+- **The published ports free on `127.0.0.1`**: 3000, 4040, 8080, 8081, 8088, 8090, 8123,
+  9000, 9001, 9002, 9090, 9092, 9363, 9644, 15432, 18080, 18181 and 19092 (the `ports:` of
+  `docker-compose.yml`). `K2_AIRFLOW_PORT` (8090) and `K2_TRINO_PORT` (8088) in `.env` move
+  two of them; `K2_AIRFLOW_PORT` also moves the base URL Airflow's UI builds its links from,
+  so change the variable, not the mapping alone. (`K2_PREFECT_PORT`, 4200, matters only for
+  the Prefect rollback behind the `legacy` profile.)
+- **On Docker Desktop, a host with RAM to spare beyond the VM.** The VM grows to its whole
+  memory setting within hours, so host RAM must exceed that setting plus everything else the
+  host runs; on 2026-11-25 the host killed a 51,712 MiB VM on a desktop with 62.6 GiB of usable RAM
+  ([docker-vm-oom-kill.md](./docker-vm-oom-kill.md#2-size-the-vm-so-the-host-keeps-enough-memory)).
 - **Every `change-me-in-production` value in `.env` replaced**, and `MINIO_ROOT_PASSWORD`
   different from `MINIO_ROOT_USER`. `make up` stops before compose with
   `check-env: FAIL .env: <NAME> ...` lines naming each variable left, never its value
-  ([SECURITY.md](../../SECURITY.md)).
-- **Roughly 8 GB of image space.** The three built images are `k2-capture` 54 MB,
-  `k2-prefect-worker` 1.23 GB and `k2-spark-iceberg` 6.47 GB, on top of ~5.3 GB of
-  upstream pulls.
+  ([SECURITY.md](../../SECURITY.md)). The [operator guide](../operations/README.md#1-start-from-a-fresh-clone)
+  has a command that fills every one.
+- **Roughly 9 GB of image space.** The four built images are `k2-capture` 54.1 MB,
+  `k2-airflow` 1.72 GB, `k2-lake-metrics` 198 MB and `k2-spark-iceberg` 6.47 GB
+  (`docker images`, 2026-11-26), on top of the upstream pulls (~5.3 GB on 2026-08-28, before
+  Airflow, cAdvisor and Trino joined).
 
 ## Command sequence
 
@@ -48,7 +56,7 @@ cp .env.example .env            # set every change-me value: openssl rand -hex 2
                                 # LAKEKEEPER_ENCRYPTION_KEY: openssl rand -base64 32
 set -a && . ./.env && set +a
 make up                         # scripts/check-env.py, then docker compose up -d;
-                                # first run pulls 9 images and builds 3
+                                # first run pulls the upstream images and builds 4
 make health                     # every service healthy, a message on every venue in the last 2 min, lake committing
 docker exec k2-redpanda rpk topic consume market.crypto.v3.trades.binance --num 1
 bash scripts/lake-verify.sh

@@ -85,3 +85,5 @@ make gates                                   # includes the lock exit-code test
 docker compose --env-file .env.example --profile governance config -q
 docker inspect --format '{{.Config.Image}}' k2-lakekeeper
 ```
+
+_Phase P0 landed 2026-11-26 (AEDT), closed by #219 26fc22a and #220 791c77a: `make gates` passed on the live stack (exit 0, 01:35 to 01:55 UTC) with the parity pin at 2026-11-25 and its snapshots tagged. Where it differs from the text above: the candle parity pin carries one recorded gap, minute 22:33 UTC, where a host out-of-memory kill left the hot tier and the lake with different trades (ADR-029 Outcome 2026-11-26, `tests/parity/README.md`); the CI resource gate has since moved to the bootstrap peak at 25 CPU / 48 GiB (ADR-045)._
