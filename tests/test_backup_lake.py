@@ -31,12 +31,12 @@ case "$1" in
   run)
     echo "fake docker: $*" >&2   # a docker that echoes its command line, as some errors do
     [ -n "${MC_DOWN:-}" ] && { echo "mc: MinIO did not answer" >&2; exit 1; }
-    [ "${MINIO_ROOT_PASSWORD:-}" = "$WANT_PASSWORD" ] || { echo "credential not in the environment" >&2; exit 1; }
+    [[ "${MC_HOST_k2:-}" == *":$WANT_PASSWORD@minio:9000" ]] || { echo "credential not in the environment" >&2; exit 1; }
     host=""
     while [ $# -gt 0 ]; do
       case "$1" in
         -v) host=${2%:/backup}; shift 2 ;;
-        -c) shift 3; break ;;   # -c <script> mc <mc args>
+        minio/minio:*) shift; break ;;   # <image> <mc args>
         *) shift ;;
       esac
     done

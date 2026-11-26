@@ -64,8 +64,13 @@ done
 MINIO_ROOT_USER=$(env_var MINIO_ROOT_USER)
 MINIO_ROOT_PASSWORD=$(env_var MINIO_ROOT_PASSWORD)
 [ -n "$MINIO_ROOT_USER" ] && [ -n "$MINIO_ROOT_PASSWORD" ] || die "MINIO_ROOT_USER or MINIO_ROOT_PASSWORD is not set in .env"
-# Exported for mc_run's `-e NAME`, which takes the value from this environment.
+# Exported so the line below reads them from the environment.
 export MINIO_ROOT_USER MINIO_ROOT_PASSWORD
+# mc reads its endpoint and credential from MC_HOST_<alias>. Built here from the
+# environment (never an argument, so it is in no process's command line), with the
+# two parts URL-encoded so a password holding @ : or / still parses.
+MC_HOST_k2=$(python3 -c 'import os, urllib.parse as u; e = os.environ; print("http://%s:%s@minio:9000" % (u.quote(e["MINIO_ROOT_USER"], safe=""), u.quote(e["MINIO_ROOT_PASSWORD"], safe="")))')
+export MC_HOST_k2
 
 mkdir -p "$DIR/lake" "$DIR/catalog"
 chmod 700 "$DIR"
@@ -138,18 +143,15 @@ free=$(df -B1 --output=avail "$DIR" | tail -n 1)
   die "$DIR has $((free / 1024 ** 3)) GiB free, under the floor of $FLOOR_GIB GiB (K2_BACKUP_MIN_FREE_GIB)"
 
 # mc <args>, in a throwaway container on k2-minio's network, as this user so the
-# files are ours, with $DIR/lake at /backup. The credential reaches it as two
-# environment variables; the alias is set inside, from them.
+# files are ours, with $DIR/lake at /backup. The credential reaches it as one
+# environment variable (MC_HOST_k2), never as an argument.
 net=$(docker inspect -f '{{range $k, $v := .NetworkSettings.Networks}}{{$k}} {{end}}' k2-minio 2>/dev/null) ||
   die "k2-minio is not running"
 net=${net%% *}
 mc_run() {
   docker run --rm --network "$net" --user "$(id -u):$(id -g)" --cpus 1 --memory 512m \
-    -e MC_CONFIG_DIR=/tmp/.mc -e MINIO_ROOT_USER -e MINIO_ROOT_PASSWORD -v "$DIR/lake:/backup" \
-    --entrypoint /bin/bash minio/minio:RELEASE.2025-09-07T16-13-09Z -c \
-    'mc alias set k2 http://minio:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" >/dev/null 2>&1 ||
-       { echo "mc: MinIO did not accept the credential or did not answer" >&2; exit 1; }
-     exec mc "$@"' mc "$@"
+    -e MC_CONFIG_DIR=/tmp/.mc -e MC_HOST_k2 -v "$DIR/lake:/backup" \
+    --entrypoint mc minio/minio:RELEASE.2025-09-07T16-13-09Z "$@"
 }
 
 # (1) Each table's location and current metadata file, from the catalog: read
@@ -201,8 +203,6 @@ DUMP_lakekeeper=$DIR/catalog/$ts.sql.gz
 dump lakekeeper "$DUMP_lakekeeper"
 DUMP_airflow=$DIR/catalog/$ts.airflow.sql.gz
 dump airflow "$DUMP_airflow"
-prune "$DIR/catalog" '*Z.sql.gz'
-prune "$DIR/catalog" '*Z.airflow.sql.gz'
 
 # (3) Each table's objects, additive. mc exits 0 when it refuses an overwrite and
 # prints a JSON error line instead, so the lines are what decide.
@@ -223,3 +223,8 @@ for t in $TABLES; do
   echo "backup-lake: $t: $((n - n0)) files, $((b - b0)) bytes copied; $n files, $b bytes held"
   ROWS+=("$t|${LOC[$t]}|${META[$t]}|$n|$b|$((n - n0))|$((b - b0))")
 done
+
+# Old dumps go only now, after the copy held: a run that fails above never
+# removes the dump the last good restore point names.
+prune "$DIR/catalog" '*Z.sql.gz'
+prune "$DIR/catalog" '*Z.airflow.sql.gz'

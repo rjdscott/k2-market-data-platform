@@ -190,7 +190,7 @@ LOC=$(python3 -c "import json, os, sys; print(json.load(open(os.path.expanduser(
 NET=$(docker inspect -f '{{range $k, $v := .NetworkSettings.Networks}}{{$k}}{{end}}' k2-minio)
 docker run --rm --network "$NET" -e MC_CONFIG_DIR=/tmp/.mc -e MINIO_ROOT_USER -e MINIO_ROOT_PASSWORD \
   -v "$HOME/k2-backup/lake:/backup:ro" --entrypoint /bin/bash minio/minio:RELEASE.2025-09-07T16-13-09Z -c \
-  'mc alias set k2 http://minio:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" >/dev/null &&
+  'export MC_HOST_k2="http://$MINIO_ROOT_USER:$MINIO_ROOT_PASSWORD@minio:9000";
    mc mb --ignore-existing k2/k2-lake && mc mirror "/backup/$0" "k2/$1"' "$T" "${LOC#s3://}"
 
 # 3. Register the restore point's metadata file under the table's name. "overwrite": true
