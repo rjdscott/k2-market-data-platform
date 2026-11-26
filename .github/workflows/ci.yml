@@ -282,3 +282,24 @@ jobs:
         continue-on-error: true
         with:
           sarif_file: trivy-results.sarif
+
+      # The gate. The report above cannot fail the build; this can: a CRITICAL
+      # with a fix available, in any lockfile outside legacy/, fails unless
+      # .trivyignore.yaml lists it with a reason and an expiry date
+      # (tests/test_ci_security.py holds every entry to both). It runs after
+      # the upload so a failing scan still reaches code scanning. The
+      # third-party images compose runs are not scanned here: Prometheus
+      # v3.2.0 alone carries two fixable CRITICALs today, so that scan waits on
+      # the owner's upgrade-or-accept decision.
+      - name: Fail on a fixable CRITICAL
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          skip-dirs: legacy
+          scanners: vuln
+          severity: CRITICAL
+          ignore-unfixed: true
+          exit-code: '1'
+          format: table
+          trivyignores: .trivyignore.yaml

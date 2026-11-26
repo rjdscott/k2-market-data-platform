@@ -63,7 +63,9 @@ hardened for production use. What is protected, and what is not, plainly:
   `docker inspect` shows to anyone with the Docker socket. The Airflow scheduler and the
   Prefect worker hold that socket.
 - Container images are pinned but not rebuilt on a schedule; Dependabot and a Trivy scan in
-  CI surface known CVEs but nothing auto-patches.
+  CI surface known CVEs but nothing auto-patches. Trivy scans the repository's lockfiles and
+  fails CI on a CRITICAL with a fix available unless `.trivyignore.yaml` accepts it with a
+  reason and an expiry date. The third-party images compose runs are scanned by nothing yet.
 
 ## Check the binding
 
