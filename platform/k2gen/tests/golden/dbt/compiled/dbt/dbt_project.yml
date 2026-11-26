@@ -1,0 +1,52 @@
+# Compiled by k2gen (platform/k2gen/k2gen/emit/dbt.py) from the release's documents. Never edit it: change the documents.
+# The defaults below hold for every product; a model's own {{ config(...) }} wins over them.
+#   materialized table: a product model is a table unless it says incremental (or a view, which
+#     is then an invoker view: never a definer view, ADR-061).
+#   on_table_exists replace: a table is rebuilt with CREATE OR REPLACE, one Iceberg table whose
+#     history keeps every build (spike f).
+#   incremental_strategy merge, with unique_key the contract's primaryKey (set per model): the
+#     key holds every partition column, and incremental_predicates is never used (spike a).
+#   on_schema_change append_new_columns: a column a contract adds is added to the table.
+#   contract enforced: each model's columns and types are its ODCS contract's (_models.yml).
+#   populate_cache false: dbt looks up only the relations a node needs; a builder sees no other
+#     product's namespaces, so listing every schema of the project would fail.
+#   on-run-end k2_results: every test of the run, one row each (a stub until phase 002).
+# Each product folder is built into <domain>_build.<fence>__base, as dbt_<fence>, the only
+# principal that writes there; macros/k2_naming.sql takes the schema as written.
+name: k2
+version: 1.0.0
+profile: k2
+config-version: 2
+require-dbt-version:
+- '>=1.12.0'
+- <1.13.0
+model-paths:
+- models
+macro-paths:
+- macros
+seed-paths:
+- seeds
+flags:
+  populate_cache: false
+  require_certificate_validation: true
+on-run-end:
+- '{{ k2_results(results) }}'
+models:
+  k2:
+    +materialized: table
+    +on_table_exists: replace
+    +view_security: invoker
+    +incremental_strategy: merge
+    +on_schema_change: append_new_columns
+    +contract:
+      enforced: true
+    ops_insight:
+      daily_load:
+        +database: ops_insight_build
+        +schema: daily_load__base
+    sensor_net:
+      station_readings:
+        +database: sensor_net_build
+        +schema: station_readings__base
+seeds:
+  k2: {}

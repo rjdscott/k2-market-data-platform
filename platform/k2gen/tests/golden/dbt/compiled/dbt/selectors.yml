@@ -1,0 +1,14 @@
+# Compiled by k2gen (platform/k2gen/k2gen/emit/dbt.py) from the release's documents. Never edit it: change the documents.
+selectors:
+- name: daily_load
+  description: 'ops-insight.daily-load: its seeds and models, with their tests and unit tests; built as dbt_daily_load (the
+    wrapper''s dbt build --selector).'
+  definition:
+    method: fqn
+    value: k2.ops_insight.daily_load
+- name: station_readings
+  description: 'sensor-net.station-readings: its seeds and models, with their tests and unit tests; built as dbt_station_readings
+    (the wrapper''s dbt build --selector).'
+  definition:
+    method: fqn
+    value: k2.sensor_net.station_readings
