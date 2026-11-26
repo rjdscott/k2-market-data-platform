@@ -1,7 +1,7 @@
 # Runbook: A lake audit failed
 
 The nightly maintenance run ends in **24 checks of six kinds** over the lake, and any
-failure exits non-zero, fails the Prefect run and raises an alert.
+failure exits non-zero, fails the Airflow `lake_maintenance` run and raises an alert.
 `docker/lake/maintenance.py`'s `AUDITS` tuple is the list: `offset_continuity` on
 `raw.messages`; `duplicate_identifiers` on each of `bronze.trades`,
 `bronze.book_snapshots_l2` and the six per-venue bronze tables; `venue_replay` on
@@ -267,7 +267,12 @@ columns exist:
 ```bash
 # 2. Was ingest running more than once at a time? Concurrency 1 is a
 #    correctness setting, not a politeness one.   not yet run: Phase D burn-in
-docker exec k2-prefect-server prefect deployment inspect 'lake-ingest/lake-ingest-5min'
+#    Under Airflow (since 2026-11-25) the DAG allows one run at a time; run 2026-11-26:
+docker exec -e PYTHONWARNINGS=ignore k2-airflow-scheduler airflow dags details lake_ingest -o plain 2>/dev/null \
+  | grep -E '^max_active_runs '
+#   max_active_runs                  1
+#    Every lake writer also takes the flock in docker/lake/lock.py; a hand-run beside a
+#    scheduled one is the only other way two could overlap, and it exits 75.
 ```
 
 ```sql

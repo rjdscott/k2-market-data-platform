@@ -213,7 +213,7 @@ A difference means the ClickHouse feed skipped or double-counted something, chec
 What *is* a hard invariant internal to the lake, checked by the nightly audit:
 `raw.messages` holds an unbroken offset run per `(topic, partition)`, and no two
 `bronze.*` rows share their identifier fields. See
-[prefect-schedules.md](./prefect-schedules.md) and
+[airflow-schedules.md](./airflow-schedules.md) (the nightly `lake_maintenance` DAG) and
 [lake-audit-failed.md](../runbooks/lake-audit-failed.md).
 
 ## Storage and export
