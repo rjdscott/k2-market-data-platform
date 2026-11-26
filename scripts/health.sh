@@ -82,39 +82,50 @@ print(" ".join(sorted(n for n, d in svc.items() if d.get("restart", "no") != "no
 fi
 
 # ── (2) a message on every venue in the last 2 minutes ───────────────────────
-# 2>/dev/null, not 2>&1: rpk and clickhouse-client both write notices to stderr
-# ("<jemalloc>: Number of CPUs detected is not deterministic..."), and a merged
-# stream turns the first word of a warning into a venue name.
+# Until ADR-057 this counted each venue's rows in ClickHouse gold.trades, and
+# never failed. The hot tier is paused, so each venue is judged two ways, both
+# failing: the capture's own healthcheck, every stream against the bound its
+# watchdog and CaptureFeedStale share (60 s, 300 s for trades), says the venue
+# is talking; the records Redpanda acknowledged from it in the last 2 minutes
+# (the counter CaptureProduceStalled reads) say what it hears reaches the
+# broker. Kraken's and Coinbase's heartbeats are archived too, so a quiet market
+# there still delivers; Binance archives trades only. From 2026-11-24 to -26 the
+# one 2-minute window with nothing delivered was a network outage on all three.
 step "(2) venues, last 2 minutes"
-ch_out=$(docker exec k2-clickhouse clickhouse-client --password "$CLICKHOUSE_PASSWORD" -q \
-  "SELECT exchange, count() FROM gold.trades FINAL WHERE exchange_ts > now() - INTERVAL 2 MINUTE GROUP BY exchange" 2>/dev/null) || true
-if [ -z "$ch_out" ]; then
-  result "(2) clickhouse gold.trades" "WARN (no rows in the last 2 minutes — capture may be warming up)"
-else
-  while IFS=$'\t' read -r exch cnt; do
-    if [ -n "${cnt:-}" ] && [ "$cnt" -gt 0 ] 2>/dev/null; then
-      result "(2) $exch" "PASS ($cnt trades/2min)"
-    else
-      result "(2) $exch" "WARN (0 trades/2min)"
-    fi
-  done <<< "$ch_out"
-fi
+result "(2) clickhouse gold.trades" "SKIP (the ClickHouse hot tier is paused, ADR-057: not queried; each venue is judged below from its capture and Redpanda's acknowledgements)"
+# "<exchange> <records>" per venue, "" if Prometheus has none, "?" if it did not answer.
+delivered=$(curl -s --get localhost:9090/api/v1/query \
+  --data-urlencode 'query=sum by (exchange) (increase(k2_capture_records_delivered_total[2m]))' 2>/dev/null \
+  | python3 -c 'import json, sys
+for r in json.load(sys.stdin)["data"]["result"]: print(r["metric"]["exchange"], int(float(r["value"][1])))' 2>/dev/null) \
+  || delivered="?"
 
 declare -A cap_metrics=()
-for svc in capture-binance capture-kraken capture-coinbase; do
+for venue in binance kraken coinbase; do
+  svc=capture-$venue label="(2) $venue"
   cid=$(docker compose ps -q "$svc" 2>/dev/null || true)
-  [ -z "$cid" ] && continue || true
-  running=$(docker inspect -f '{{.State.Running}}' "$cid" 2>/dev/null || echo false)
-  [ "$running" != "true" ] && continue || true
+  running=$([ -n "$cid" ] && docker inspect -f '{{.State.Running}}' "$cid" 2>/dev/null || echo false)
+  if [ "$running" != "true" ]; then
+    bad "$label" "FAIL ($svc is not running: docs/runbooks/capture-down.md)"
+    continue
+  fi
+  # Step (4) reads the gauges; a capture that serves none is its WARN, not this line's.
   net=$(docker inspect -f '{{range $k,$v := .NetworkSettings.Networks}}{{$k}}{{end}}' "$cid" 2>/dev/null || true)
-  [ -z "$net" ] && continue || true
-  metrics=$(docker run --rm --network "$net" curlimages/curl:8.14.1 -s "http://${svc}:8082/metrics" 2>/dev/null || true)
-  cap_metrics[$svc]=$metrics
-  lastts=$(printf '%s\n' "$metrics" | grep '^k2_capture_last_message_ts_seconds' || true)
-  if [ -n "$lastts" ]; then
-    result "(2) $svc metrics" "PASS ($lastts)"
+  if [ -n "$net" ]; then
+    cap_metrics[$svc]=$(docker run --rm --network "$net" curlimages/curl:8.14.1 -s "http://${svc}:8082/metrics" 2>/dev/null || true)
+  fi
+  hc=$(docker exec "$cid" /k2-capture healthcheck 2>&1) && hc_ok=yes || hc_ok=no
+  records=$(printf '%s\n' "$delivered" | awk -v v="$venue" '$1 == v { print $2 }')
+  if [ "$hc_ok" = no ]; then
+    bad "$label" "FAIL ($svc healthcheck: ${hc:-no answer}; docs/runbooks/capture-feed-stale.md)"
+  elif [ "$delivered" = "?" ]; then
+    bad "$label" "FAIL (Prometheus did not answer, so delivery to Redpanda is unchecked; healthcheck $hc)"
+  elif [ -z "$records" ]; then
+    bad "$label" "FAIL (Prometheus has no k2_capture_records_delivered_total for $venue: is it scraping $svc? healthcheck $hc)"
+  elif [ "$records" -eq 0 ]; then
+    bad "$label" "FAIL (0 records delivered to Redpanda in 2 min while the feed is live: docs/runbooks/capture-produce-stalled.md)"
   else
-    result "(2) $svc metrics" "WARN (no k2_capture_last_message_ts_seconds yet — may be warming up)"
+    result "$label" "PASS ($records records delivered to Redpanda in 2 min; healthcheck $hc)"
   fi
 done
 

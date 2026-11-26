@@ -81,7 +81,7 @@ set instead, a second chaos record with schema id 0 still stalled partition 10 ,
 that failure is a registry 404 while fetching the schema, which "skip broken
 messages" does not cover. Stream mode caught it in 10 s and left one row in
 `feed_errors`. The lake archives the bytes and its audit counts them;
-`ClickHouseKafkaMessagesFailed` says it happened.
+`ClickHouseKafkaMessagesFailed` said it happened, until the pause removed it (below).
 
 ## Measured, 2026-08-27 (first live apply, commit of PR #98)
 
@@ -104,9 +104,14 @@ tables end there.
 
 ## Alerts
 
-`docker/prometheus/rules/clickhouse-alerts.yml`, group `clickhouse_gold`:
-`ClickHouseGoldFeedStale` (consumers silent 10 min while capture reports fresh
-trades, both conditions, so a stopped capture is not a broken feed) and
-`ClickHouseKafkaMessagesFailed` (a record AvroConfluent could not decode, it is in
-`gold.feed_errors`; a schema moved or a foreign producer). promtool cases in `rules/tests/clickhouse-gold-alerts_test.yml`,
-run by `make check-alerts`.
+None while the hot tier is paused
+([ADR-057](../../docs/adr/ADR-057-clickhouse-hot-tier-paused-during-platform-build.md)):
+on a stopped server `ClickHouseDown` would fire for ever and the rest would never fire.
+The six rules of `docker/prometheus/rules/clickhouse-alerts.yml`, among them the
+`clickhouse_gold` group's `ClickHouseGoldFeedStale` (consumers silent 10 min while
+capture reports fresh trades) and `ClickHouseKafkaMessagesFailed` (a record
+AvroConfluent could not decode, in `gold.feed_errors`), their promtool cases, the
+`clickhouse` scrape job and the ClickHouse dashboard were deleted with the pause;
+`git log --diff-filter=D --oneline -- docker/prometheus/rules/clickhouse-alerts.yml`
+finds the commit. The tier returns as the serving copy of a product of the new
+platform, under that platform's alerts.

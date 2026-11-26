@@ -1,9 +1,17 @@
 # Observability
 
-Prometheus scrapes the stack, Grafana renders it, and 36 alert rules (6 ClickHouse + 10 capture + 14 lake + 6 Airflow)
+Prometheus scrapes the stack, Grafana renders it, and 30 alert rules (10 capture + 14 lake + 6 Airflow)
 cover the things that actually break: capture goes down or silent, sequence gaps and book
-checksum failures, ClickHouse struggles, and the lake ingest falls behind or its nightly
-audit fails.
+checksum failures, and the lake ingest falls behind or its nightly audit fails.
+
+**ClickHouse is not observed while its hot tier is paused**
+([ADR-057](../adr/ADR-057-clickhouse-hot-tier-paused-during-platform-build.md)): its scrape
+job, its six alert rules and their promtool tests, the ClickHouse Overview dashboard and the
+ClickHouse panels of the pipeline overview were removed, because each would read a server the
+pause stops: `ClickHouseDown` would fire for ever and the other five would never fire, having no
+series. `scripts/health.sh` step (2) prints one `SKIP` line naming the ADR in place of its
+ClickHouse query, and judges each venue from its capture instead (below). They return with the
+tier, as the serving copy of a product of the new platform, under that platform's alerts.
 
 - Prometheus, http://localhost:9090 (`/targets`, `/alerts`)
 - Grafana, http://localhost:3000, `admin` / `$GRAFANA_PASSWORD`
@@ -19,7 +27,6 @@ container start, no click-ops.
 |-----|--------|----------|--------|
 | `prometheus` | `localhost:9090` | 15s | self |
 | `redpanda` | `redpanda:9644` | 10s | Redpanda admin API |
-| `clickhouse` | `clickhouse:9363` | 15s | `<prometheus>` block in [`docker/clickhouse/config.xml`](../../docker/clickhouse/config.xml) |
 | `grafana` | `grafana:3000` | 15s | Grafana internal metrics |
 | `capture-{binance,kraken,coinbase}` | `capture-<x>:8082` | 15s | `k2-capture`, see below |
 | `lake-metrics` | `lake-metrics:8000` | 30s | [`docker/lake/metrics.py`](../../docker/lake/metrics.py), see below |
@@ -47,7 +54,7 @@ reads is seeded at zero on startup, so a counter's *first* event is detectable.
 |--------|------|--------|---------|
 | `messages_total`, `bytes_total` | counter | `exchange`, `stream` | Frames and bytes off the WebSocket, per venue subscription |
 | `records_produced_total` | counter | `exchange`, `kind=raw\|trade\|book` | Records enqueued into librdkafka's queue |
-| `records_delivered_total` | counter | `exchange` | Records the broker actually acknowledged, the one that goes flat in an outage |
+| `records_delivered_total` | counter | `exchange` | Records the broker actually acknowledged, the one that goes flat in an outage. `make health` step (2) fails a venue with none in the last 2 minutes (`increase(...[2m])`, through Prometheus). Kraken's and Coinbase's heartbeat frames are archived and so delivered, so a quiet market there still counts; Binance archives trade frames only. From 2026-11-24, the oldest sample Prometheus held, to 2026-11-26, the one 2-minute window with nothing delivered was a network outage that cut all three venues (2026-11-26, 14:00 to 14:03 UTC) |
 | `produce_errors_total` | counter | `exchange`, `reason` | Records that failed to produce. There is no spill-to-disk, so these are lost |
 | `gaps_total`, `resyncs_total` | counter | `exchange` | Sequence continuity broke; book rebuilt |
 | `checksum_failures_total` | counter | `exchange`, `symbol` | Kraken CRC32 mismatch. Kraken only, the other two publish no checksum |
@@ -55,7 +62,7 @@ reads is seeded at zero on startup, so a counter's *first* event is detectable.
 | `reconnects_total` | counter | `exchange`, `reason=scheduled\|involuntary` | `scheduled` is Binance's 23 h pre-emptive recycle |
 | `precision_loss_total` | counter | `exchange`, `reason` | A venue quoted finer than the fixed-point 1e-8 scale |
 | `unknown_frames_total` | counter | `exchange`, `stream` | Frames the adapter did not recognise (still archived verbatim) |
-| `last_message_ts_seconds` | gauge | `exchange`, `stream` | Per-stream liveness. What `CaptureFeedStale` and `healthcheck` both read |
+| `last_message_ts_seconds` | gauge | `exchange`, `stream` | Per-stream liveness. What `CaptureFeedStale` and `healthcheck` both read; `make health` step (2) runs that `healthcheck` in each capture and fails the venue on a stale stream |
 | `exchange_to_recv_seconds` | histogram | `exchange` | Venue stamp → our receive. **Trades only.** Transit + clock skew, not a platform SLO |
 | `book_depth` | gauge | `exchange`, `symbol` | Resting levels for one symbol, across **both** sides. `CaptureBookDepthDegraded`'s input |
 | `book_levels_total` | gauge | `exchange` | Resting levels summed over every book on that venue |
@@ -71,8 +78,7 @@ other service: [dashboards.md](./dashboards.md).
 
 | Dashboard | UID | What it shows |
 |-----------|-----|---------------|
-| K2 Pipeline Overview | `k2-pipeline-overview` | The one to open first. Three rows: stack health (service up/down, trade records produced per exchange), ClickHouse (insert rate, memory, merge queue), Redpanda (throughput, connections) |
-| ClickHouse Overview (v2) | `clickhouse-v2` | Query rate, memory gauge, insert rate, background merges, the warm tier in isolation |
+| K2 Pipeline Overview | `k2-pipeline-overview` | The one to open first. Three rows: stack health (service up/down, trade records produced per exchange), Redpanda (throughput, connections), and the resources of the captures and Redpanda from cAdvisor |
 | K2 Capture (v3) | `k2-l2-capture` | The Rust capture tier, now the only ingestion tier: health (up, staleness, reconnects, gaps, checksum failures, resyncs), throughput (messages/bytes/records/produce errors), exchange→recv latency p50/p95/p99, book depth/levels/precision loss. `exchange` template variable filters all panels |
 | K2 Lake (v3) | `k2-lake` | Iceberg lake tier (Phase D): ingest lag and commit age per table, rows/files/bytes and mean file size, rows added by the last commit, audit failures, disk headroom, exporter scrape errors, and a maintenance row plotting compaction age per table and the exporter's own refresh age, the two alertable gauges that had no panel. Every panel reads an Iceberg snapshot summary, nothing here is an in-process counter. Its Resources row, like the pipeline overview's, plots the tier's containers from cAdvisor |
 | K2 Resources | `k2-resources` | Every running container against its compose limit: CPU and process memory in use against the 25 CPU / 48 GiB ceiling, a table of each container's use, limit and share of it (with file cache, working set and OOM kills columns), the top five consumers, and the share of time each was CPU-throttled. Limits come from the cgroups, not from the dashboard |
@@ -81,7 +87,7 @@ other service: [dashboards.md](./dashboards.md).
 
 ## Alert rules
 
-36 alert rules across four files (plus two ClickHouse recording rules and two Airflow ones). **Prometheus loads rule files at start and on SIGHUP only**, after editing anything under `docker/prometheus/rules/`, `docker kill -s HUP k2-prometheus` (or a restart); the rules dir is a mount and the file changing is not enough. Found 2026-08-27 when `ClickHouseKafkaMessagesFailed` could not fire because its group had never been loaded (`curl -s localhost:9090/api/v1/rules | grep -c <AlertName>` is the check). Every annotation carries the diagnostic commands and a
+30 alert rules across three files (plus two Airflow recording rules). **Prometheus loads rule files at start and on SIGHUP only**, after editing anything under `docker/prometheus/rules/`, `docker kill -s HUP k2-prometheus` (or a restart); the rules dir is a mount and the file changing is not enough. Found 2026-08-27 when a ClickHouse rule (since removed, ADR-057) could not fire because its group had never been loaded (`curl -s localhost:9090/api/v1/rules | grep -c <AlertName>` is the check). Every annotation carries the diagnostic commands and a
 `runbook:` annotation — enforced by `scripts/check-docs.sh` gate (d2), added
 2026-09-03 after the 6 ClickHouse rules were found carrying none while gate (d),
 which only checks that the paths present resolve, passed them. The tables below are the index. The three `FeedHandler*` rules retired with
@@ -92,22 +98,6 @@ deleted outright with the v2 offload path they watched, they described a compone
 longer exists ([ADR-019](../adr/ADR-019-rust-capture-tier.md) Outcome said they would go
 with it, and they did). Its six runbooks are archived at
 [`legacy/v2-offload/runbooks/`](../../legacy/v2-offload/runbooks/).
-
-### `clickhouse-alerts.yml`: served tier (6)
-
-| Alert | Severity | Fires when |
-|-------|----------|-----------|
-| `ClickHouseDown` | critical | `up{job="clickhouse"} == 0` for 2m, measured firing 160 s after a stop (`scripts/chaos/clickhouse-stop.sh`, 2026-08-27) |
-| `ClickHouseHighMemoryUsage` | critical | Resident memory >85% of system RAM for 5m |
-| `ClickHouseQueryFailureRateHigh` | critical | `rate(FailedQuery[5m]) > 0.1` for 3m |
-| `ClickHouseMergeQueueLarge` | warning | >10 background merge tasks queued for 5m |
-| `ClickHouseGoldFeedStale` | warning | the gold Kafka consumers read nothing for 10 min **while** capture reports fresh trades (both conditions, so a stopped capture is not a broken feed), for 5m |
-| `ClickHouseKafkaMessagesFailed` | warning | `increase(ClickHouseProfileEvents_KafkaMessagesFailed[15m]) > 0`, a record skipped into `gold.feed_errors`; measured firing on the next evaluation after the record (`scripts/chaos/clickhouse-corrupt-record.sh`, 2026-08-27) |
-
-promtool cases for the two gold rules: `docker/prometheus/rules/tests/clickhouse-gold-alerts_test.yml`.
-
-Recording rule: `clickhouse:query_duration_mean:5m`. (`clickhouse:insert_rate:5m` was archived with
-`ClickHouseBronzeInsertRateLow`, same expression, and no dashboard ever read it.)
 
 ### `capture-alerts.yml`: v3 capture tier, the live ingestion path (10)
 
@@ -130,8 +120,8 @@ fault they name**: `make chaos` ran for the first time on 2026-08-26 and `Captur
 ([`scripts/chaos/results/2026-08-26.tsv`](../../scripts/chaos/results/2026-08-26.tsv)). The
 other eight are unproven against a real fault; thresholds move when a run says so, not
 before.
-`CaptureFeedStale`, `CaptureProduceStalled` and `CaptureBookDepthDegraded` additionally
-carry `promtool` unit tests in
+`CaptureFeedStale`, `CaptureProduceStalled`, `CaptureBookDepthDegraded` and
+`CaptureChecksumFailure` additionally carry `promtool` unit tests in
 [`docker/prometheus/tests/capture-alerts.test.yml`](../../docker/prometheus/tests/capture-alerts.test.yml)
 (`make check-alerts`); those pin the expression, never the recovery time.
 
@@ -166,13 +156,12 @@ freezes at its last small value during exactly the outage it is the backstop for
 | `LakeDiskUsageHigh` | warning | `k2_lake_disk_used_ratio > 0.80` for 15m. **The rule is tested, the metric is host-dependent**, on a Docker Desktop host `os.statvfs` sees the VM's thin-provisioned disk (0.344) and not the machine's (0.79). See `docker/lake/README.md` |
 
 All fourteen carry unit tests in `docker/prometheus/rules/tests/lake-alerts_test.yml`, run
-by `make check-docs` gate (c2). They are not the only ones: three `Capture*` rules, two
-`ClickHouseGold*`/`ClickHouseKafka*` rules and the six Airflow rules below are covered too,
-**25 of the 36**:
+by `make check-docs` gate (c2). They are not the only ones: four `Capture*` rules and the
+six Airflow rules below are covered too, **24 of the 30**:
 
 ```bash
 grep -rhoE 'alertname: [A-Za-z]+' docker/prometheus/tests/*.test.yml \
-  docker/prometheus/rules/tests/*_test.yml | sort -u | wc -l   # 25 with ADR-047's rule (24 before it, 23 on 2026-11-25, 17 on 2026-09-03)
+  docker/prometheus/rules/tests/*_test.yml | sort -u | wc -l   # 24 on 2026-11-26, after ADR-057 removed the two ClickHouse gold rules' tests (26 before)
 ```
 
 Each case is either "must fire on a synthetic series" or "must not fire on healthy
@@ -215,7 +204,7 @@ for the `k2-*` containers and drops the rest, about 200 series in all.
 | `container_spec_cpu_quota`, `container_spec_cpu_period` | gauge | The CPU limit: quota ÷ period is cores, `cpus: '2.0'` reads 200000 / 100000 |
 | `container_spec_memory_limit_bytes` | gauge | The memory limit |
 
-Every series carries `name` (the container name, `k2-clickhouse`), `image` and `id`. Labels
+Every series carries `name` (the container name, `k2-redpanda`), `image` and `id`. Labels
 and names were read from a running v0.61.1 on 2026-11-25, not from the docs. CPU against its
 limit, per container:
 
@@ -230,7 +219,7 @@ It is not privileged and has no `/dev/kmsg`, so `container_oom_events_total` is 
 (`oom_event` is enabled) but stays 0 even after a kill: the authoritative check is
 `docker inspect -f '{{.State.OOMKilled}}' <container>` or the cgroup's `memory.events`.
 Every capability is dropped and its root filesystem is read-only. It does hold the Docker
-and containerd sockets, which is how a cgroup becomes `k2-clickhouse`, and a socket is not
+and containerd sockets, which is how a cgroup becomes `k2-redpanda`, and a socket is not
 narrowed by `:ro`: that is the same engine-level privilege `airflow-scheduler` holds.
 
 ### Reading the memory panels
@@ -320,9 +309,6 @@ Honest gaps, in priority order:
 2. **No exporters for MinIO, PostgreSQL or Spark.** Their health is only observable via
    `docker compose ps` and container logs; cAdvisor gives their CPU and memory, not whether
    they answer.
-3. **No query-latency percentiles for ClickHouse.** Its Prometheus endpoint exposes
-   counters only, no native histograms, so `clickhouse:query_duration_mean:5m` is a mean,
-   not a p99.
 
 ## Related
 

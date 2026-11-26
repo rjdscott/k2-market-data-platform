@@ -1,7 +1,8 @@
 # K2 Market Data Platform - Prometheus Configuration
-# Scrapes the v3 capture tier plus the shared v2 infrastructure (Redpanda,
-# ClickHouse, Iceberg offload). The Kotlin feed-handler jobs retired with the
-# handlers — ADR-019.
+# Scrapes the v3 capture tier plus the shared infrastructure (Redpanda, Grafana,
+# cAdvisor, the lake exporter, Airflow's statsd). The Kotlin feed-handler jobs
+# retired with the handlers (ADR-019); ClickHouse is not scraped while its hot
+# tier is paused (ADR-057), so no rule reads a target that is meant to be down.
 
 global:
   scrape_interval: 15s
@@ -40,16 +41,6 @@ scrape_configs:
           tier: 'streaming'
     metrics_path: '/metrics'
     scrape_interval: 10s
-
-  # ClickHouse metrics (Prometheus endpoint on port 8123 at /metrics)
-  - job_name: 'clickhouse'
-    static_configs:
-      - targets: ['clickhouse:9363']
-        labels:
-          service: 'clickhouse'
-          tier: 'warm-storage'
-    metrics_path: '/metrics'
-    scrape_interval: 15s
 
   # Grafana
   - job_name: 'grafana'

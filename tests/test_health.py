@@ -1,11 +1,14 @@
 """scripts/health.sh step (3), the last lake_ingest run, read through the Airflow
-CLI, step (1)'s check that every long-running service is running, and step (4)'s
-order-book switch, the capture's gauge against both copies of the registry. The whole
+CLI, step (1)'s check that every long-running service is running, step (2)'s
+per-venue liveness (the capture's healthcheck and the records Redpanda
+acknowledged, ClickHouse stood down under ADR-057), and step (4)'s order-book
+switch, the capture's gauge against both copies of the registry. The whole
 script runs against fakes on PATH: `git` points it at a scratch checkout,
 `docker` answers the CLI the way Airflow 3.3.2 does (a run whose only task
 skipped is `success`; the task says `skipped`) and compose the way Compose v2
-does, and `curl` gives Prometheus a fresh commit. Step (5), the backup's age,
-reads a STATUS.json each test writes."""
+does, and logs every call; `curl` gives Prometheus a fresh commit and each
+venue's delivered records. Step (5), the backup's age, reads a STATUS.json each
+test writes."""
 
 import json
 import os
@@ -19,6 +22,7 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent
 
 FAKE_DOCKER = """#!/usr/bin/env bash
+echo "$*" >> "$DOCKER_LOG"
 case "$*" in
   "compose ps --format"*) echo "k2-redpanda healthy" ;;
   "compose ps --services --status running"*) echo "$RUNNING" ;;
@@ -38,13 +42,28 @@ case "$*" in
     url=${@: -1}; venue=${url#http://capture-}; venue=${venue%%:*}; var="METRICS_$venue"
     printf '%s\n' "${!var:-}" ;;
   "exec k2-spark-iceberg cat /home/iceberg/config/instruments.yaml") printf '%s' "${SPARK_REGISTRY:-}" ;;
+  # The capture's own healthcheck: "ok: ..." exits 0, anything else 1, as the binary does.
+  "exec cid-"*" /k2-capture healthcheck")
+    var="HC_${2#cid-}"; out=${!var:-ok: trade is the stalest, 1.0s behind}; echo "$out"
+    [[ $out == ok:* ]]; exit $? ;;
 esac
 exit 0
 """
 FAKE_GIT = '#!/usr/bin/env bash\necho "$TOP"\n'
 FAKE_CURL = """#!/usr/bin/env bash
-echo '{"data": {"result": [{"value": [0, "60"]}]}}'
+case "$*" in
+  *k2_capture_records_delivered_total*) printf '%s\\n' "$DELIVERED" ;;
+  *) echo '{"data": {"result": [{"value": [0, "60"]}]}}' ;;
+esac
 """
+VENUES = ("binance", "kraken", "coinbase")
+
+
+def delivered(**records):
+    """Prometheus's answer to step (2)'s query: records per venue, 120 for any not named."""
+    return json.dumps({"status": "success", "data": {"resultType": "vector", "result": [
+        {"metric": {"exchange": v}, "value": [0, str(records.get(v, 120))]}
+        for v in VENUES if records.get(v, 120) is not None]}})
 
 
 def runs(*states):
@@ -151,8 +170,10 @@ def run_health(tmp_path, prefix="(3) last lake_ingest run: ", host_registry=None
         ["bash", str(ROOT / "scripts/health.sh")], capture_output=True, text=True, timeout=60,
         # HOME too: the backup check reads ~/.config/systemd/user, and this host's own must not leak in.
         env={**os.environ, "PATH": f"{bin_}:{os.environ['PATH']}", "TOP": str(top), "HOME": str(tmp_path),
-             "K2_BACKUP_DIR": str(tmp_path / "k2-backup"),
-             "K2_HEALTH_WAIT": "0", "RUNNING": "redpanda prometheus", "CONFIG": CONFIG, **env},
+             "K2_BACKUP_DIR": str(tmp_path / "k2-backup"), "DOCKER_LOG": str(tmp_path / "docker.log"),
+             "K2_HEALTH_WAIT": "0", "RUNNING": "redpanda prometheus", "CONFIG": CONFIG,
+             # Every venue live unless a test says otherwise: step (2) fails a stopped one.
+             "CAPTURES": " ".join(VENUES), "DELIVERED": delivered(), **env},
     )
     (line,) = [ln for ln in out.stdout.splitlines() if ln.startswith(prefix)]
     return line, out.returncode
@@ -177,8 +198,8 @@ def capture(book):
     return gauge + 'k2_capture_last_message_ts_seconds{exchange="binance",stream="trade"} 1\n'
 
 
-# Binance's capture against the host file and Spark's copy, the other two not
-# running (WARN). A capture not recreated, the reverse, a stale Spark mount, an
+# Binance's capture against the host file and Spark's copy, the other two serving
+# no metrics (WARN). A capture not recreated, the reverse, a stale Spark mount, an
 # image older than the gauge and a value PyYAML would read as a boolean each FAIL.
 @pytest.mark.parametrize("name, book, host, spark, verdict", [
     ("all three agree, books off", 0, "false", "false", "PASS (books off"),
@@ -191,7 +212,7 @@ def capture(book):
 ])
 def test_order_book_switch(tmp_path, name, book, host, spark, verdict):
     line, rc = run_health(tmp_path, prefix="(4) binance book_capture: ", host_registry=registry(host),
-                          CAPTURES="binance", METRICS_binance=capture(book), SPARK_REGISTRY=registry(spark),
+                          METRICS_binance=capture(book), SPARK_REGISTRY=registry(spark),
                           RUNS=runs("success"), TASK="success", MAINT="[]")
     assert line.split(": ", 1)[1].startswith(verdict), (name, line)
     assert rc == (1 if verdict.startswith("FAIL") else 0), (name, line)
@@ -206,4 +227,38 @@ def test_a_capture_that_is_not_running_is_not_compared(tmp_path):
                           CAPTURES="binance", METRICS_binance=capture(0), SPARK_REGISTRY=registry("false"),
                           RUNS=runs("success"), TASK="success", MAINT="[]")
     assert line.split(": ", 1)[1].startswith("WARN (no metrics from capture-kraken"), line
+    # Not compared here, but the run fails: step (2) fails a venue whose capture is stopped.
+    assert rc == 1, line
+
+
+# Step (2), each venue: its capture's own healthcheck and the records Redpanda
+# acknowledged from it in the last 2 minutes, through Prometheus. A venue that
+# stops talking, a broker that stops acknowledging, a capture not running and a
+# Prometheus that cannot answer each FAIL; nothing in it waits or warns.
+@pytest.mark.parametrize("name, env, verdict", [
+    ("talking and delivered", {}, "PASS (120 records delivered to Redpanda in 2 min; healthcheck ok: trade"),
+    ("the venue went silent", {"HC_binance": "stale: trade 412.3s (limit 300s)"},
+     "FAIL (capture-binance healthcheck: stale: trade 412.3s (limit 300s);"),
+    ("the broker stopped acknowledging", {"DELIVERED": delivered(binance=0)},
+     "FAIL (0 records delivered to Redpanda in 2 min"),
+    ("Prometheus has no series for the venue", {"DELIVERED": delivered(binance=None)},
+     "FAIL (Prometheus has no k2_capture_records_delivered_total for binance"),
+    ("Prometheus did not answer", {"DELIVERED": ""}, "FAIL (Prometheus did not answer"),
+    ("the capture is not running", {"CAPTURES": "kraken coinbase"}, "FAIL (capture-binance is not running"),
+])
+def test_venue_liveness(tmp_path, name, env, verdict):
+    line, rc = run_health(tmp_path, prefix="(2) binance: ", RUNS=runs("success"), TASK="success", MAINT="[]", **env)
+    assert line.split(": ", 1)[1].startswith(verdict), (name, line)
+    assert rc == (1 if verdict.startswith("FAIL") else 0), (name, line)
+
+
+# ADR-057: the ClickHouse half is stood down visibly, one SKIP line naming the
+# ADR, and nothing the script runs reaches ClickHouse.
+def test_clickhouse_is_skipped_not_queried(tmp_path):
+    line, rc = run_health(tmp_path, prefix="(2) clickhouse gold.trades: ", RUNS=runs("success"), TASK="success",
+                          MAINT="[]")
+    assert line.split(": ", 1)[1].startswith("SKIP (the ClickHouse hot tier is paused, ADR-057"), line
     assert rc == 0, line
+    calls = (tmp_path / "docker.log").read_text().splitlines()
+    assert any("/k2-capture healthcheck" in c for c in calls), calls
+    assert not [c for c in calls if "clickhouse" in c.lower()], calls
