@@ -9,8 +9,8 @@
 
 A market data platform for quantitative research. Three crypto exchanges are captured
 verbatim over public WebSocket feeds, archived to an Iceberg lakehouse that is the system of
-record, and served from ClickHouse as a derived tier, with Trino for SQL over the lake. One
-host, inside a 25 CPU / 48 GiB ceiling. Not a trading path.
+record, with Trino for SQL over the lake; the ClickHouse hot tier that served it is paused
+while the platform is built ([ADR-057](./docs/adr/ADR-057-clickhouse-hot-tier-paused-during-platform-build.md)). One host, inside a 25 CPU / 48 GiB ceiling. Not a trading path.
 
 [![CI](https://github.com/rjdscott/k2-market-data-platform/actions/workflows/ci.yml/badge.svg)](https://github.com/rjdscott/k2-market-data-platform/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
@@ -59,8 +59,8 @@ runs today**. Each phase of the plan updates them in the pull request that makes
 |---|---|
 | Complete | One Rust process per venue holds a single socket carrying trades and L2 book, stamps `recv_ts_ns` before parsing, verifies Kraken's CRC32 on every update, tracks each venue's sequence numbers, and publishes every frame verbatim. The L2 book is paused on every venue while the platform is built, by a per-venue switch; its tables stay readable up to the pause ([ADR-050](./docs/adr/ADR-050-order-book-capture-paused-during-platform-build.md)). |
 | Reproducible | Every 5 minutes Spark reads Redpanda by offset range into Iceberg: `raw` (never expired) to `bronze` (per venue, vendor schema) to `silver` (typed, flagged) to `gold` (one row per trade, OHLCV, BBO). Consumed offsets are committed in the same snapshot as the rows; any layer rebuilds from the one above. |
-| Disposable serving | ClickHouse `gold` is fed live from the topics and reloaded from the lake. Dedup is a `ReplacingMergeTree` key; candles are computed on read, so a replay cannot corrupt one. |
-| Proven | Nightly audits per layer, three-way OHLCV parity at a pinned snapshot, 36 alert rules as code, chaos scripts with measured recovery, a fresh-clone release check before every tag. |
+| Disposable serving | ClickHouse `gold`, fed live from the topics and reloaded from the lake, is paused behind the compose profile `hot-gold` while the platform is built, its DDL still tested by `make test-clickhouse` ([ADR-057](./docs/adr/ADR-057-clickhouse-hot-tier-paused-during-platform-build.md)). Dedup is a `ReplacingMergeTree` key; candles are computed on read, so a replay cannot corrupt one. |
+| Proven | Nightly audits per layer, OHLCV parity at a pinned snapshot (its ClickHouse leg skipped while the tier is paused), 30 alert rules as code, chaos scripts with measured recovery, a fresh-clone release check before every tag. |
 
 [![K2 Pipeline Overview on a live run: every scrape target up, trade records per venue, ClickHouse inserts, Redpanda throughput, and the pipeline's CPU and memory](docs/images/dashboards/01-pipeline-overview.png)](docs/operations/dashboards.md)
 
@@ -75,7 +75,7 @@ flowchart TB
   E["Exchanges · Binance · Kraken · Coinbase<br/>public WebSocket · 34 instruments"]:::ex
   F["k2-capture ×3 · Rust<br/>trades + L2 book on one socket<br/>L2 paused: ADR-050"]:::rs
   R[("Redpanda 25.3 · Avro + schema registry<br/>raw · trades · book per venue")]:::rp
-  C["ClickHouse 24.3 · gold<br/>ReplacingMergeTree · no TTL<br/>ohlcv_live · bbo_live on read"]:::ch
+  C["ClickHouse 24.3 · gold<br/>paused behind profile hot-gold<br/>ADR-057"]:::ch
   S["Airflow 3 → Spark 3.5 · every 5 min<br/>offset range · offsets in the snapshot"]:::sp
   subgraph L["Iceberg lakehouse · Lakekeeper + MinIO · system of record"]
     direction TB
@@ -87,15 +87,15 @@ flowchart TB
   end
   N["DuckDB notebooks"]:::nb
   T["Trino 484 · SQL over the lake, read-only<br/>dbt marts, one warehouse per domain"]:::nb
-  O["Prometheus · 36 rules<br/>Grafana · 6 dashboards"]:::ob
+  O["Prometheus · 30 rules<br/>Grafana · 5 dashboards"]:::ob
 
   E --> F --> R
-  R -->|Kafka engine| C
+  R -.->|Kafka engine, paused| C
   R --> S --> RAW
   GD -.->|reload| C
   GD --> N
   L --> T
-  F & S & C -.-> O
+  F & S -.-> O
 
   classDef ex fill:#e5e7eb,stroke:#374151,color:#111827
   classDef rs fill:#c7d2fe,stroke:#4338ca,color:#111827
@@ -107,8 +107,8 @@ flowchart TB
   classDef ob fill:#f3f4f6,stroke:#6b7280,color:#111827
 ```
 
-19 long-running services and 5 one-shot init containers, 19.30 CPU / 35.312 GiB of declared
-limits at steady state and 21.30 CPU / 37.812 GiB at the bootstrap peak, under a 25 CPU / 48 GiB
+18 long-running services and 5 one-shot init containers, 15.30 CPU / 27.312 GiB of declared
+limits at steady state and 17.30 CPU / 29.812 GiB at the bootstrap peak, under a 25 CPU / 48 GiB
 ceiling ([ADR-045](./docs/adr/ADR-045-ceiling-25-cpu-48-gib.md); [how the numbers are produced](./docs/operations/docker-resources.md#how-these-numbers-are-produced)).
 The scheduler Airflow replaced is archived in [`legacy/prefect/`](./legacy/prefect/README.md), with no rollback path in the compose file.
 
@@ -129,7 +129,7 @@ works, and the practices that enforce it.
 | [027](./docs/adr/ADR-027-book-snapshot-and-sequencing.md) | Top-20 snapshots at 1 Hz; per-venue sequencing and resync | Raw keeps the deltas; the product is what research joins against |
 | [008](./docs/adr/ADR-008-eliminate-prefect-orchestration.md) | Remove the orchestrator: reversed | A wrong call kept on the record with its outcome |
 
-All 42 ADRs: [`docs/adr/`](./docs/adr/README.md).
+All 44 ADRs: [`docs/adr/`](./docs/adr/README.md).
 
 ## Measured
 
@@ -161,8 +161,8 @@ Detail per failure: [failure modes](./docs/architecture/16-failure-modes.md).
 
 ## Quick start
 
-Requires a Docker engine with at least 38 GiB of memory so every declared limit is honoured,
-the 37.812 GiB bootstrap peak included ([setup](./docs/development/setup.md)); measured usage is
+Requires a Docker engine with at least 30 GiB of memory so every declared limit is honoured,
+the 29.812 GiB bootstrap peak included ([setup](./docs/development/setup.md)); measured usage is
 far lower. On Docker Desktop the VM grows to its whole memory setting, so the host needs more
 RAM than that setting plus everything else it runs
 ([sizing](./docs/runbooks/docker-vm-oom-kill.md#2-size-the-vm-so-the-host-keeps-enough-memory)).
@@ -220,8 +220,8 @@ hand-kept version of this table read 60 / 229 / 9 against a reality of 68 / 287 
 | Notebook helpers: `k2lake.trades()` / `completeness()` / `bars()` on synthetic tables, no stack | `make test-notebooks` |
 | Trino: the real `docker/trino/etc` starts, catalog `lake` refuses every commit and table procedure, only a domain's writer changes its tables with SQL statements (table procedures are not fenced per user, ADR-044); 134 checks [^trino], no stack | `make test-trino` |
 | dbt: sqlfluff, compile, a manifest check (only staging reads a source; every mart tested unique on its contract grain), then a build on empty sources with 10 unit tests and 22 data tests [^dbt], every test's result recorded in its domain's own catalog, a failing one included, and shown in the governance view, each domain's snapshot maintenance, and a project with no marts still parsing; no stack | `make test-dbt` |
-| Prometheus rule unit tests (25 of 36 alerts) and 11 documentation gates | `bash scripts/check-docs.sh` |
-| Live stack: per-layer parity, three-way OHLCV parity, event-bar parity, chaos | `make lake-verify`, `make parity-ohlcv`, `make parity-bars`, `make chaos` |
+| Prometheus rule unit tests (24 of 30 alerts) and 11 documentation gates | `bash scripts/check-docs.sh` |
+| Live stack: per-layer parity, OHLCV parity (its ClickHouse leg skipped while the tier is paused), event-bar parity, chaos | `make lake-verify`, `make parity-ohlcv`, `make parity-bars`, `make chaos` |
 
 [^rust]: `grep -rc '#\[test\]' services/capture-rust/src services/capture-rust/tests --include='*.rs' | awk -F: '{s+=$2} END {print s}'`
 [^py]: the last line `make test-python` prints, `708 passed` (2026-11-26, branch fix/guardrail-gates after merging #229)
@@ -240,9 +240,9 @@ pin checks, the documentation gates and Trivy on every pull request.
 services/capture-rust/     k2-capture: one binary, three exchanges
 docker/airflow/            the three lake DAGs, dbt_marts, and their image
 docker/lake/               Spark ingest, layer builders, audits, DDL
-docker/clickhouse/ddl/     gold contract (CI-tested) and Kafka feeds
+docker/clickhouse/ddl/     gold contract (CI-tested) and Kafka feeds; the tier is paused (ADR-057)
 docker/trino/              Trino config: catalog lake (read-only), one generated catalog per domain, access rules
-docker/prometheus/rules/   36 alert rules with unit tests
+docker/prometheus/rules/   30 alert rules with unit tests
 schemas/avro/              raw-message, trade, book-snapshot-l2
 config/instruments.yaml    instrument registry, the single source of truth
 contracts/                 a descriptor per data product, an ODCS v3 contract per lake table, five domains
@@ -256,7 +256,7 @@ legacy/                    v1, v2 Kotlin handlers, v2 ClickHouse DDL, v2 offload
 
 ## Not built
 
-No query API. No replication or failover: one broker, one ClickHouse, one host. No
+No query API. No replication or failover: one broker, one host. No
 Alertmanager routing. No load test above 1×. A pcap sidecar and a cross-venue security
 master are designed ([ADR-026](./docs/adr/ADR-026-four-layer-lake-and-gold-served-from-clickhouse.md),
 [data strategy](./docs/architecture/12-data-strategy.md)) and not started.

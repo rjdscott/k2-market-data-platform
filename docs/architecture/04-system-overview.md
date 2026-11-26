@@ -46,25 +46,25 @@ flowchart TB
         MNT["maintenance nightly<br/>compact · expire · audit"]
     end
     ICE[("Iceberg lake · Lakekeeper v0.13.9 + MinIO<br/>raw · bronze · silver · gold · audit")]
-    CH["ClickHouse 24.3 LTS · gold<br/>live via Kafka engine · reloaded from lake"]
+    CH["ClickHouse 24.3 LTS · gold<br/>paused behind profile hot-gold · ADR-057"]
     NB["DuckDB notebooks"]
     TR["Trino 484 · SQL over the lake, read-only<br/>dbt marts hourly · one warehouse per domain"]
     subgraph OBS["Observability"]
-        PR["Prometheus v3.2 · 36 rules"]
-        GR["Grafana 11.5 · 6 dashboards"]
+        PR["Prometheus v3.2 · 30 rules"]
+        GR["Grafana 11.5 · 5 dashboards"]
     end
 
     BIN --> FHB
     KRK --> FHK
     CBS --> FHC
     FHB & FHK & FHC -->|"raw · trades · book"| RP
-    RP -->|"trades + book"| CH
+    RP -.->|"trades + book, paused"| CH
     RP -->|"offset range"| ING --> ICE
     MNT --> ICE
     ICE -.->|"iceberg()"| CH
     ICE --> NB
     ICE --> TR
-    CAP & CH & ING -.-> PR --> GR
+    CAP & ING -.-> PR --> GR
 
     classDef ex fill:#e5e7eb,stroke:#4b5563,color:#1f2937
     classDef rs fill:#c7d2fe,stroke:#4338ca,color:#1f2937
@@ -100,11 +100,13 @@ Three invariants hold the shape together:
 2. **One wire format.** Avro with the registry, `int64` at 1e-8, `recv_ts_ns` in the body
    ([ADR-020](../adr/ADR-020-avro-fixed-point-contracts.md)). Nothing parses JSON downstream of capture.
 3. **Correctness is measured, not asserted.** Sequence and checksum counters at capture, per-layer
-   audits in the lake and a check of every ingest batch, three-way OHLCV parity at a pinned snapshot, chaos scripts with timed recovery.
+   audits in the lake and a check of every ingest batch, OHLCV parity at a pinned snapshot (its ClickHouse
+   leg skipped while the tier is paused), chaos scripts with timed recovery.
 
 ## The data path
 
-One trade, from the venue's socket to a candle in ClickHouse and a row in lake gold.
+One trade, from the venue's socket to a row in lake gold and a candle in the marts. ClickHouse, step 7,
+is paused while the platform is built ([ADR-057](../adr/ADR-057-clickhouse-hot-tier-paused-during-platform-build.md)).
 
 1. **The frame arrives.** `k2-capture` holds one WebSocket per venue carrying trades and L2 book
    together, and stamps `recv_ts_ns` as the first statement after the frame leaves the socket, before
@@ -128,7 +130,7 @@ One trade, from the venue's socket to a candle in ClickHouse and a row in lake g
 6. **Gold makes it one trade:** first delivery per `(exchange, canonical_symbol, trade_id)` wins;
    OHLCV buckets are `MERGE`d under the total order `(exchange_ts, recv_ts_ns, trade_seq)`, so a
    late delivery re-opens its candle ([lake-layers.md](09-lake-layers.md)).
-7. **ClickHouse served it within seconds** (Kafka engine flush every 5 s) ([clickhouse-gold.md](10-clickhouse-gold.md)): the trade
+7. **ClickHouse served it within seconds, until the pause** ([ADR-057](../adr/ADR-057-clickhouse-hot-tier-paused-during-platform-build.md)) (Kafka engine flush every 5 s) ([clickhouse-gold.md](10-clickhouse-gold.md)): the trade
    reached `gold.trades` from the topic as a `ReplacingMergeTree` row, earliest delivery winning, and
    `ohlcv_live(bucket)` computes the candle on read over `FINAL`. Lake history arrives by `iceberg()`.
 8. **Every hour it reaches the marts.** Airflow's `dbt_marts` runs dbt through Trino as each
@@ -136,9 +138,9 @@ One trade, from the venue's socket to a candle in ClickHouse and a row in lake g
    `lake.gold.trades`, and every dbt test's result lands in that domain's
    `dq.dbt_test_results`, read beside the lake's own checks through
    `governance.quality_results.dq_results` ([chapter 19](19-lakehouse-and-domain-warehouses.md)).
-9. **Every step above is measured.** Capture counters, lake gauges read from Iceberg snapshot
-   summaries and ClickHouse's own `/metrics` feed 36 Prometheus rules as code; all 36 carry a
-   runbook annotation and 25 have a promtool unit test; eleven chaos scripts in `scripts/chaos/` fire the
+9. **Every step above is measured.** Capture counters and lake gauges read from Iceberg snapshot
+   summaries feed 30 Prometheus rules as code; all 30 carry a
+   runbook annotation and 24 have a promtool unit test; nine chaos scripts in `scripts/chaos/` fire the
    ones that can be induced on a single host ([observability.md](11-observability.md)).
 
 Research reads the lake, not the database: `notebooks/` is a uv project where DuckDB queries the
@@ -163,7 +165,7 @@ forensics. Nothing in the notebooks reads ClickHouse.
 
 ## Resource footprint
 
-19 long-running services at 19.30 CPU / 35.312 GiB of limits, plus five one-shot init containers;
+18 long-running services at 15.30 CPU / 27.312 GiB of limits, plus five one-shot init containers;
 per-service table and the command that produces it in
 [operations/docker-resources.md](../operations/docker-resources.md). Budget and reasoning per limit:
 [ADR-010](../adr/ADR-010-resource-budget.md).

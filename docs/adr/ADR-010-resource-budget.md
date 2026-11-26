@@ -666,3 +666,23 @@ PASS: bootstrap default within 25 CPU / 48 GiB; limits and pins hold across 6 Do
 
 Headroom at the gated peak: 3.70 CPU and 10.188 GiB. The summary comment at the end of
 `docker-compose.yml` carries the same sums.
+
+### Outcome addendum (2026-11-26, ClickHouse behind the profile hot-gold)
+
+`clickhouse` (4.0 CPU / 8G) moves behind the compose profile `hot-gold`, paused for the platform
+build by [ADR-057](ADR-057-clickhouse-hot-tier-paused-during-platform-build.md). Its limits are
+unchanged; it leaves the default profile, so the gated bootstrap peak no longer counts it and
+`check-budget.py` reports it on the `hot-gold` line instead. No default-profile service depends
+on it (`docker compose config --services | grep -cx clickhouse` prints 0, and 1 with
+`--profile hot-gold`).
+
+```
+$ python3 scripts/check-budget.py
+steady default         18 services   15.30 CPU   27.312 GiB
+bootstrap default      23 services   17.30 CPU   29.812 GiB
+bootstrap hot-gold     24 services   21.30 CPU   37.812 GiB
+PASS: bootstrap default within 25 CPU / 48 GiB; limits, pins and loopback ports hold across 5 Dockerfiles and 40 scripts and workflows
+```
+
+Headroom at the gated peak: 7.70 CPU and 18.188 GiB. The summary comment at the end of
+`docker-compose.yml` carries the same sums.

@@ -35,7 +35,7 @@ flowchart LR
 
 Known readers outside the contracts:
 
-- ClickHouse gold reload, docs/runbooks/clickhouse-rebuild-from-lake.md
+- ClickHouse gold reload, paused (ADR-057), docs/runbooks/clickhouse-rebuild-from-lake.md
 - notebooks/k2lake.py
 - scripts/parity_ohlcv.py
 - scripts/parity_bars.py

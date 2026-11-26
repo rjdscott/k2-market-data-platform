@@ -4,6 +4,13 @@
 > **Read this if** dashboard and notebook authors, anyone tuning ClickHouse.
 > **Before this** chapter 09.
 
+**Paused.** Since [ADR-057](../adr/ADR-057-clickhouse-hot-tier-paused-during-platform-build.md) the `clickhouse` service starts only under the compose
+profile `hot-gold`, and it is stopped while the platform is built. Its volume and its DDL are
+kept, `make test-clickhouse` still applies the DDL in CI, and its alerts, dashboard, health
+check, chaos scripts and parity leg are stood down with it. The rest of this chapter is the
+design as it ran until the pause; the tier returns as the serving copy of a product of the new
+platform, rebuilt from that platform's lake.
+
 ## Problem
 
 The lake answers any question correctly and none quickly: a 5-minute batch ingest and
@@ -100,14 +107,14 @@ flowchart TB
 
 | Practice | Where it is enforced |
 |---|---|
-| Schema is a tested contract | `make test-clickhouse` (CI `clickhouse` job): 9 assertions incl. the two-block OHLCV regression |
+| Schema is a tested contract | `make test-clickhouse` (CI `clickhouse` job): 10 assertions incl. the two-block OHLCV regression |
 | Idempotent ingestion | `ReplacingMergeTree` keys on the logical trade; `FINAL` count == distinct count asserted |
-| Deterministic aggregates | total order in `ohlcv_live`; three-way parity `make parity-ohlcv` at a pinned snapshot, 0 differ |
-| Poison records isolated | `kafka_handle_error_mode='stream'` → `feed_errors`; `ClickHouseKafkaMessagesFailed` alert; chaos `clickhouse-corrupt-record.sh` (4 s) |
+| Deterministic aggregates | total order in `ohlcv_live`; three-way parity `make parity-ohlcv` at a pinned snapshot, 0 differ; while paused it skips the ClickHouse leg |
+| Poison records isolated | `kafka_handle_error_mode='stream'` → `feed_errors`; until the pause, `ClickHouseKafkaMessagesFailed` and chaos `clickhouse-corrupt-record.sh` (4 s), both removed with it (ADR-057) |
 | Least privilege | `quant` readonly profile in `users.xml`; notebooks and `make parity-ohlcv` use it |
 | Memory bounded below the container | `config.xml` server cap 6.5 GiB under an 8 GiB limit |
 | Rebuildable, timed | `clickhouse-rebuild-from-lake.md` with the command and the measured time |
-| Feed liveness alerted | `ClickHouseGoldFeedStale` (topics moving, tables not); `clickhouse-stop.sh`: `ClickHouseDown` at 160 s under a 150 s stop, healthy 7 s after restart |
+| Feed liveness alerted | until the pause, which removed both alerts and the script (ADR-057): `ClickHouseGoldFeedStale` (topics moving, tables not); `clickhouse-stop.sh`: `ClickHouseDown` at 160 s under a 150 s stop, healthy 7 s after restart |
 
 ## Trade-offs
 
