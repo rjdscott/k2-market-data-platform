@@ -107,7 +107,19 @@ curl -sG localhost:9090/api/v1/query \
 docker logs --since 5m k2-capture-binance | grep -iE 'error|reconnect'
 # No shell in the image, so config comes from the container spec, not `env`
 docker inspect k2-capture-binance --format '{{range .Config.Env}}{{println .}}{{end}}' | grep K2_
+
+# The order-book switch (ADR-050): the file, the lake's copy, and what each capture read at start
+grep -A3 '^book_capture:' config/instruments.yaml
+docker exec k2-spark-iceberg grep -A3 '^book_capture:' /home/iceberg/config/instruments.yaml
+curl -sG localhost:9090/api/v1/query --data-urlencode 'query=k2_capture_book_capture' \
+  | jq -r '.data.result[] | "\(.metric.exchange) \(.value[1])"'       # 1 on, 0 off; make health step (4) compares
+
+# The 15-minute gate after recreating one capture: gaps plus reconnects, 0 per venue
+curl -sG localhost:9090/api/v1/query --data-urlencode 'query=sum by (exchange) (increase(k2_capture_gaps_total[15m])) + on (exchange) sum by (exchange) (increase(k2_capture_reconnects_total[15m]))' \
+  | jq -r '.data.result[] | "\(.metric.exchange) \(.value[1])"'
 ```
+
+Changing the switch, and the order its first rollout needs: [README.md, section 6](README.md#pause-or-resume-one-venues-order-book).
 
 ## Lake tier (Iceberg, scheduled by Airflow)
 
