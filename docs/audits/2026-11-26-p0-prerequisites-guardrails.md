@@ -198,6 +198,13 @@ Each line was checked by reading the cited code on `origin/main` at `1feaa1a`, 2
 - **Resolved in #229 (`4cd4569`):** LOW `docker-compose.yml`, no log caps. The `x-logging`
   anchor (`docker-compose.yml:58-63`, `max-size` 50m, `max-file` 5) is on every service, and
   `tests/test_compose_logging.py` fails a service without it.
+- **Resolved in #231 (`d25b805`), the copy outside the engine only:** BLOCKER
+  `SECURITY.md:41-56`. Checked on `origin/main` at `d25b805`. `scripts/backup-lake.sh` copies
+  `raw.messages`, `audit.checks`, `gold.dim_instrument` and `gold.dim_venue` from MinIO to a host
+  directory outside the checkout and outside Docker (`K2_BACKUP_DIR`, default `~/k2-backup`). It
+  also takes a `pg_dump` of the `lakekeeper` and `airflow` databases. The copy is additive and
+  never overwrites a file. `make backup-install` schedules it daily at 04:30 UTC through a
+  systemd user timer (`scripts/systemd/k2-backup.timer:8`). The rest stays open (below).
 
 ## Deferred to the hardening sprint
 
@@ -215,17 +222,24 @@ findings are open on `origin/main` at `1feaa1a` and are scheduled for that sprin
   `SECURITY.md:62-64` still omits cAdvisor's socket.
 - LOW `docs/adr/ADR-022-exactly-once-via-snapshot-offsets.md:114`: still "exits 2".
 - LOW `README.md:122`: the count moved to `README.md:201` (708, #228); `make test-python` on
-  this branch prints 766 passed.
+  this branch prints 787 passed.
 - LOW `scripts/check-docs.sh:19-23`: gates (a) and (b) still read the same set; the broken
   link in `notebooks/README.md` is fixed.
 - LOW GitHub code scanning: the four stale alerts on the old root `uv.lock` are still open.
 - LOW `k2-airflow-api-server` log: no change to how the UI admin password is set.
 
-Open BLOCKER and HIGH, which that decision does not defer:
+### Open BLOCKER and HIGH, accepted by the owner until the hardening sprint
 
-- BLOCKER `SECURITY.md:41-56`: no copy of `raw` outside the engine and no `soft` delete
-  profile on main (`git grep -i delete-profile` and `backup` find neither); MinIO root
-  rotation is not recorded on main.
+The owner reviewed these on 2026-11-26. Only the nightly copy outside the engine was fixed at
+the time (#231). Every item below is accepted as a known risk until the hardening sprint after
+plan phase P5, because this is a single-host research platform with every port bound to
+loopback, and the plan's phases come first.
+
+- BLOCKER `SECURITY.md:41-56`, the remainder after #231. The restore is not drilled
+  (`docs/runbooks/lake-backup-and-restore.md`, section 3). The copy is on the same host and
+  the same physical disk as the Docker disk image, and any process running as the owner's user
+  can delete it. No warehouse has a `soft` delete profile (`git grep -i delete-profile`
+  finds none). Rotation of the MinIO root credential is not recorded on main.
 - HIGH `CLAUDE.md:29`: `enforce_admins` is now `true` (`gh api .../branches/main/protection`,
   a repository setting with no commit), but `CLAUDE.md:29` and `.github/CODEOWNERS:4-7` still
   say main is unprotected.
