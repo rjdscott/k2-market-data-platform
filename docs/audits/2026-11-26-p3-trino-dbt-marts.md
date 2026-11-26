@@ -171,7 +171,12 @@ findings are open on `origin/main` at `1feaa1a` and are scheduled for that sprin
 - LOW `docs/adr/ADR-047-ingest-batch-audit-after-publish.md:84`: no Outcome.
 - LOW `003-trino-dbt-marts.md:26`, `:81`: the landed line does not name `LoadMode.DBT_LS`.
 
-Open BLOCKER and HIGH, which that decision does not defer:
+### Open BLOCKER and HIGH, accepted by the owner until the hardening sprint
+
+The owner reviewed these on 2026-11-26. Only the nightly copy outside the engine was fixed at
+the time (#231). Every item below is accepted as a known risk until the hardening sprint after
+plan phase P5, because this is a single-host research platform with every port bound to
+loopback, and the plan's phases come first.
 
 - BLOCKER `docker-compose.yml:263-264`, the remainder: rotation of the MinIO root credential
   is a change to the live stack, is not recorded on main, and was not checked here. The P0
