@@ -102,3 +102,31 @@ def sample_moment():
     from datetime import datetime, timezone
 
     return datetime(2026, 9, 3, 0, 0, tzinfo=timezone.utc)
+
+
+# ── bronze_schema_drift on a sample with no frame of the table's stream ─────
+#
+# It filed passed = true having sampled nothing, which the venue quality
+# scorecard counts as a passing check of that day (bronze.kraken_instrument most
+# nights; every book table once ADR-050 pauses them). No frame, no row.
+
+
+def _table(maintenance, name):
+    (t,) = [t for t in maintenance.bronze.VENUE_TABLES if t.name == name]
+    return t
+
+
+def test_a_drift_sample_with_no_frame_of_the_stream_files_no_row(maintenance, capsys):
+    t = _table(maintenance, "kraken_instrument")
+    assert maintenance.drift_result(t, 0, {}) == []
+    assert "no instrument frames in the sample, no row filed" in capsys.readouterr().out
+
+
+def test_a_drift_sample_with_frames_still_passes_and_fails(maintenance):
+    t = _table(maintenance, "kraken_book")
+    (ok,) = maintenance.drift_result(t, 13, {})
+    assert (ok["check_name"], ok["passed"], ok["observed"]) == ("bronze_schema_drift", True, 0)
+    assert "13 book frames" in ok["detail"]
+    (bad,) = maintenance.drift_result(t, 13, {"$.data[0]": {"new_key"}})
+    assert (bad["passed"], bad["observed"]) == (False, 1)
+

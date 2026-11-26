@@ -456,7 +456,8 @@ def audit_schema_drift(spark, t: bronze.VenueTable) -> list:
     check reads the *raw* frames, not bronze: a sample of the venue's last day,
     RawMessage-decoded, `json_object_keys` at each path the table declares,
     minus the declared keys. Anything left is a column to add (a schema
-    change: /schema-change) and a rebuild of the table.
+    change: /schema-change) and a rebuild of the table. A sample that held no
+    frame of the table's stream files no row at all (`drift_result`).
     """
     from catalog import fetch_schema
     from pyspark.sql.avro.functions import from_avro
@@ -467,21 +468,36 @@ def audit_schema_drift(spark, t: bronze.VenueTable) -> list:
         f"AND kafka_ts >= current_timestamp() - INTERVAL 1 DAY"
     )
     schema_ids = [r[0] for r in sample.select("schema_id").distinct().collect()]
-    if not schema_ids:
-        return [_result("bronze_schema_drift", t.table, True, 0, "no raw frames in the last day to sample")]
-    seen = {}
+    seen, sampled = {}, 0
     for schema_id in schema_ids:
         frames = sample.where(F.col("schema_id") == schema_id).select(
             from_avro(F.expr(wire.body_expr("payload")), fetch_schema(schema_id)).alias("r")
         )
         frames = frames.where(F.col("r.stream") == t.stream).select(F.col("r.payload").cast("string").alias("p"))
+        sampled += frames.count()
         for path in t.keys:
             expr = "json_object_keys(p)" if path == "$" else f"json_object_keys(get_json_object(p, '{path}'))"
             keys = frames.select(F.explode(F.expr(expr)).alias("k")).distinct().collect()
             seen.setdefault(path, set()).update(r["k"] for r in keys)
-    extra = bronze.drift(seen, t.keys)
+    return drift_result(t, sampled, bronze.drift(seen, t.keys))
+
+
+def drift_result(t: bronze.VenueTable, sampled: int, extra: dict) -> list:
+    """The schema-drift audit's rows, from how many frames of the table's stream it sampled.
+
+    **No frame, no row.** A pass over nothing reads as a healthy table: the venue
+    quality scorecard counts it as a passing check of that day, and a paused
+    product (ADR-050) would look like a live one. `audit.checks.passed` is NOT
+    NULL, so "not applicable" would be a schema change; an absent row is what the
+    governance view and the scorecard already read as "no result". Today this is
+    `bronze.kraken_instrument` most nights, whose channel is quiet for hours.
+    """
+    if sampled == 0:
+        print(f"  bronze_schema_drift {t.table}: no {t.stream} frames in the sample, no row filed")
+        return []
     if not extra:
-        return [_result("bronze_schema_drift", t.table, True, 0, f"sampled {DRIFT_SAMPLE_PERCENT}% of the last day: no undeclared keys")]
+        return [_result("bronze_schema_drift", t.table, True, 0,
+                        f"sampled {DRIFT_SAMPLE_PERCENT}% of the last day: {sampled} {t.stream} frames, no undeclared keys")]
     return [
         _result(
             "bronze_schema_drift",
