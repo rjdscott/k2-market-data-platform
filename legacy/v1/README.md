@@ -36,7 +36,7 @@ The decisions are in [`docs/adr/`](../../docs/adr/): Kafka to Redpanda ([ADR-001
 | Iceberg on MinIO | Iceberg on MinIO behind Lakekeeper: [`docker/lake/ddl/lake.sql`](../../docker/lake/ddl/lake.sql) |
 | DuckDB query engine (`src/k2/query/`) | ClickHouse `gold` for the hot tier ([`docker/clickhouse/ddl/10-gold-tables.sql`](../../docker/clickhouse/ddl/10-gold-tables.sql)); DuckDB research notebooks in [`notebooks/`](../../notebooks/) |
 | FastAPI (`src/k2/api/`) | none: the v2 query API was never built ([MIGRATION-JOURNEY](../../docs/MIGRATION-JOURNEY.md), predictions table) |
-| Prefect orchestration | Prefect 3, retained ([ADR-008](../../docs/adr/ADR-008-eliminate-prefect-orchestration.md) Outcome); flows in [`docker/lake/flows/`](../../docker/lake/flows/) |
+| Prefect orchestration | Prefect 3, retained ([ADR-008](../../docs/adr/ADR-008-eliminate-prefect-orchestration.md) Outcome); flows in `docker/lake/flows/` until ADR-034 replaced it with Airflow 3, then archived in [`legacy/prefect/`](../prefect/README.md) |
 | `docs/runbooks/` (14) | [`docs/runbooks/`](../../docs/runbooks/README.md) (v3 runbooks); the v1 ones describe an architecture that no longer exists |
 
 ## State at archive

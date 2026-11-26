@@ -8,7 +8,7 @@ service; `docker/prometheus/rules/lake-alerts.yml` reads everything it exports.
 
 **Everything comes from Iceberg snapshot summaries.** Not from in-process
 counters, for the same reason the deleted `docker/offload/metrics.py` did not use them:
-Prefect runs each job in a short-lived subprocess that exits long before
+Each job runs in a short-lived subprocess that exits long before
 Prometheus scrapes anything it counted. The snapshot summary is the durable
 record of what the pipeline actually did, and the ingest already writes its
 position there for the exactly-once contract — so these metrics are free.

@@ -13,8 +13,8 @@ default plus that profile's services) and exits 1 on any of:
   limits times its `deploy.replicas`, which compose also sets from `scale`) above 25 CPU /
   48 GiB, the ceiling ADR-045 sets in place of ADR-034's 20 CPU / 36 GiB
   (which replaced ADR-010's 16 CPU / 40 GB). The steady default and the
-  profiled bootstraps are reported only: today the one profile is legacy, the
-  Prefect rollback, run only in place of Airflow's writes.
+  profiled bootstraps are reported only. No service names a profile today, so
+  only the two default lines print.
 - a service under any profile that does not declare both a CPU and a memory
   limit, so a service behind a profile cannot ship without one.
 - an image that is not pinned (see `unpinned`): a compose image in any

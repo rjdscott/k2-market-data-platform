@@ -87,8 +87,8 @@ Lakekeeper warehouse, generated from `contracts/domains.yaml`
 [chapter 19](19-lakehouse-and-domain-warehouses.md)). A mart is a table built for consumers
 from lake tables. Airflow 3 starts every job ([ADR-034](../adr/ADR-034-airflow-3-replaces-prefect.md)):
 the Spark ingest and maintenance, and the `dbt_marts` DAG, which builds the marts through
-Trino every hour ([`dbt/`](../../dbt/README.md)). Prefect is stopped, kept behind
-`--profile legacy` as the rollback.
+Trino every hour ([`dbt/`](../../dbt/README.md)). The scheduler it replaced is archived in
+[`legacy/prefect/`](../../legacy/prefect/README.md).
 
 Three invariants hold the shape together:
 
@@ -154,8 +154,8 @@ forensics. Nothing in the notebooks reads ClickHouse.
 | [022](../adr/ADR-022-exactly-once-via-snapshot-offsets.md) | Kafka offsets committed inside the Iceberg snapshot | One atomic commit replaces a watermark table and its failure modes |
 | [026](../adr/ADR-026-four-layer-lake-and-gold-served-from-clickhouse.md) | raw / bronze-per-venue / silver-per-venue / gold-canonical; ClickHouse serves gold with no TTL | Typed venue fields survive; OHLCV on read fixes v2's `SummingMergeTree` candles resolving open/close arbitrarily |
 | [027](../adr/ADR-027-book-snapshot-and-sequencing.md) | Top-20 snapshots at 1 Hz; per-venue sequencing and resync policy | Raw holds the deltas; the product is what research joins against |
-| [008](../adr/ADR-008-eliminate-prefect-orchestration.md) | Remove Prefect, **reversed** | Wrong call, kept on the record with its Outcome |
-| [034](../adr/ADR-034-airflow-3-replaces-prefect.md) | Airflow 3 replaces Prefect | One scheduler for the Spark jobs and the dbt marts; Prefect kept stopped as the rollback |
+| [008](../adr/ADR-008-eliminate-prefect-orchestration.md) | Remove the orchestrator, **reversed**, then replaced by Airflow ([034](../adr/ADR-034-airflow-3-replaces-prefect.md)) | Wrong call, kept on the record with its Outcome |
+| [034](../adr/ADR-034-airflow-3-replaces-prefect.md) | Airflow 3 becomes the scheduler | One scheduler for the Spark jobs and the dbt marts; the one before it archived in [`legacy/prefect/`](../../legacy/prefect/README.md) |
 | [035](../adr/ADR-035-trino-and-dbt-for-marts.md) | Trino serves SQL; dbt on Trino builds the marts; Spark keeps every job that writes the lake | Consumer marts need a shared engine outside the ingest's container |
 | [044](../adr/ADR-044-producer-lake-and-domain-mart-warehouses.md) | One producer lake, read-only to Trino; one mart warehouse and writer per domain | The lake can lose data for good, a mart can always be rebuilt, and every product has an owner |
 

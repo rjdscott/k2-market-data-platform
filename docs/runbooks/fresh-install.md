@@ -31,8 +31,7 @@ upgrading a stack that already holds data, and it does not cover restoring the l
   9000, 9001, 9002, 9090, 9092, 9363, 9644, 15432, 18080, 18181 and 19092 (the `ports:` of
   `docker-compose.yml`). `K2_AIRFLOW_PORT` (8090) and `K2_TRINO_PORT` (8088) in `.env` move
   two of them; `K2_AIRFLOW_PORT` also moves the base URL Airflow's UI builds its links from,
-  so change the variable, not the mapping alone. (`K2_PREFECT_PORT`, 4200, matters only for
-  the Prefect rollback behind the `legacy` profile.)
+  so change the variable, not the mapping alone.
 - **On Docker Desktop, a host with RAM to spare beyond the VM.** The VM grows to its whole
   memory setting within hours, so host RAM must exceed that setting plus everything else the
   host runs; on 2026-11-25 the host killed a 51,712 MiB VM on a desktop with 62.6 GiB of usable RAM
@@ -68,22 +67,25 @@ prints `PASS` (no compose port on `*:` or `0.0.0.0:`) and check 2 prints `loopba
 
 ## Timeline
 
-Measured 2026-08-28 on a 28-core host, 40 GB Docker VM, 648 GB free, fast network.
-Elapsed is from the start of the first `docker compose up -d`.
+Measured 2026-08-28 on a 28-core host, 40 GB Docker VM, 648 GB free, fast network, and
+**not re-measured since 2026-08-28**: the stack then had 19 containers and no Airflow,
+cAdvisor or Trino, and the lake was scheduled by the scheduler Airflow replaced
+([`legacy/prefect/`](../../legacy/prefect/README.md)). Elapsed is from the start of the
+first `docker compose up -d`.
 
 | Elapsed | What happens | Duration |
 |---|---|---|
 | 0 s | `docker compose up -d`, no output while it pulls and builds | — |
 | +83 s | 9 upstream images pulled, ~5.3 GB | 83 s |
-| +83 s → +10 m | Builds: `k2-capture`, `k2-prefect-worker`, `k2-spark-iceberg` | ~9.5 min, dominated by the 6.47 GB Spark image |
+| +83 s → +10 m | Builds: `k2-capture`, the retired scheduler's worker image, `k2-spark-iceberg` | ~9.5 min, dominated by the 6.47 GB Spark image |
 | +10 m | All 19 containers created from cached images | 14 s wall |
 | +10 m 14 s | `lake-metrics` logs 15× `HTTP Error 404` — benign, see below | — |
 | +11 m | `lake-ddl` one-shot: `✓ 64 statements applied to catalog lake` | — |
-| +13 m 01 s | First Prefect `lake-ingest` flow run starts (deployment `lake-ingest-5min`) | — |
+| +13 m 01 s | First scheduled ingest run starts (the retired scheduler's; today the `lake_ingest` DAG) | n/a |
 | +13 m 16 s | `docker compose ps` reaches its steady state (below) | — |
 | +13 m 25 s | `rpk topic consume` returns an Avro record; 9 v3 topics + `_schemas`, 12 partitions each | — |
 | +13 m 30 s | Prometheus 8/8 targets up, Grafana `/api/health` 200, ClickHouse `gold` has 17 tables | — |
-| +14 m 21 s | First `lake-ingest` flow `Finished in state Completed()`; raw/bronze/silver/gold all written | — |
+| +14 m 21 s | First scheduled ingest run completes; raw/bronze/silver/gold all written | n/a |
 | +15 m | `bash scripts/lake-verify.sh` → `all checks passed` | 1 m 42 s |
 
 **Total: ≈15 min from zero to data in every layer** (≈25 min counting the failed first
@@ -100,22 +102,19 @@ held rows in both `gold.trades` and `gold.book_top20`.
 `make health` prints `health: PASS` (`scripts/health.sh`: container health, trades per
 venue in the last 2 minutes, last lake commit age, last ingest run state).
 
-The counts and the state table below are the **2026-08-28 measured snapshot**, before
-Airflow, cAdvisor and Trino joined. Today's default profile is 19 long-running services and
-5 one-shots (`python3 scripts/check-budget.py`: `steady default 19 services`,
-`bootstrap default 24 services`, 2026-11-25); a fresh install has not been re-measured since.
-
 Underneath it,
-`docker compose ps -a` shows **19 containers: 15 long-running and 4 one-shots** (plain
-`docker compose ps` hides the exited one-shots). Only 12 of
-the 15 ever report `healthy`; three have no healthcheck defined and stay at plain `Up`,
-which is correct and not a degraded state.
+`docker compose ps -a` shows **24 containers: 19 long-running and 5 one-shots** (plain
+`docker compose ps` hides the exited one-shots). Only 17 of
+the 19 ever report `healthy`; two have no healthcheck defined and stay at plain `Up`,
+which is correct and not a degraded state. Read from `docker ps -a` on the live stack on
+2026-11-26, not from a fresh install; it agrees with the healthchecks and `restart: "no"`
+in `docker compose config`.
 
 | State | Count | Containers |
 |---|---|---|
-| `Up (healthy)` | 12 | `redpanda`, `redpanda-console`, `clickhouse`, `minio`, `prometheus`, `grafana`, `prefect-db`, `prefect-server`, `lakekeeper`, `capture-binance`, `capture-kraken`, `capture-coinbase` |
-| `Up`, no healthcheck | 3 | `lake-metrics`, `prefect-worker`, `spark-iceberg` |
-| `Exited (0)` | 4 | `lakekeeper-migrate`, `redpanda-init`, `lake-init`, `lake-ddl` |
+| `Up (healthy)` | 17 | `redpanda`, `redpanda-console`, `clickhouse`, `minio`, `prometheus`, `grafana`, `cadvisor`, `prefect-db`, `lakekeeper`, `trino`, `capture-binance`, `capture-kraken`, `capture-coinbase`, `airflow-api-server`, `airflow-scheduler`, `airflow-dag-processor`, `airflow-statsd` |
+| `Up`, no healthcheck | 2 | `lake-metrics`, `spark-iceberg` |
+| `Exited (0)` | 5 | `lakekeeper-migrate`, `redpanda-init`, `lake-init`, `lake-ddl`, `airflow-migrate` |
 
 An `Exited (0)` one-shot is success. A one-shot at a non-zero exit code is not — read its
 logs before anything else, because the services after it in the dependency chain will come

@@ -78,11 +78,11 @@ no longer exists, do not follow them against this stack.
 > [`iceberg()` only, the `s3()` glob is banned](./lake-recovery.md#the-one-rule-on-this-page),
 > because the glob returns plausible wrong numbers after any compaction.
 
-### Orchestration (Airflow 3; Prefect behind the `legacy` profile as the rollback)
+### Orchestration (Airflow 3)
 
 | Runbook | When to use | Triggering alert |
 |---------|-------------|------------------|
-| [airflow-scheduling.md](./airflow-scheduling.md) | The one-time cutover from Prefect, the standing roll-back policy and the rollback itself (cutover run 2026-11-25; the rollback documented, not exercised); the Airflow scheduler stopped, a lake task failed after its retries, `lake_ingest` refused the writer lock three runs in a row, or a catch-up run with a bigger driver. Sections 1, 2 and the driver kill in 3 drilled on 2026-11-25; a real catch-up with a bigger driver ran after the cutover; the three-skip alert fired once, falsely, after the first maintenance run (fixed by a grace period). | `AirflowSchedulerHeartbeatLost`, `AirflowTaskFailed`, `AirflowLakeIngestSkippedRepeatedly` |
+| [airflow-scheduling.md](./airflow-scheduling.md) | The Airflow scheduler stopped, a lake task failed after its retries, `lake_ingest` refused the writer lock three runs in a row, `lake_ingest` not running at all (a stale DAG folder or a forgotten pause), or a catch-up run with a bigger driver. Sections 1, 2 and the driver kill in 3 drilled on 2026-11-25; a real catch-up with a bigger driver ran after the cutover; the three-skip alert fired once, falsely, after the first maintenance run (fixed by a grace period). | `AirflowSchedulerHeartbeatLost`, `AirflowTaskFailed`, `AirflowLakeIngestSkippedRepeatedly`, `AirflowLakeIngestNotRunning` |
 | [dbt-marts.md](./dbt-marts.md) | The hourly `dbt_marts` DAG has not succeeded for 3 hours (Trino unreachable, a stale lake, a failed test, the wrong writer, a pause, test results the `on-run-end` hook could not record, a governance catalog not rolled out), or its daily snapshot maintenance has not succeeded for 26 hours; an image older than the checkout. Trino unreachable was induced in a throwaway Airflow container before the first deployment: 37 s from Trino back to a successful run; the alerts' timing is proven by promtool, not observed | `DbtMartsNotSucceeding`, `DbtMartsSnapshotExpiryStale` |
 
 ### Host / operations
@@ -91,6 +91,7 @@ no longer exists, do not follow them against this stack.
 |---------|-------------|------------------|
 | [fresh-install.md](./fresh-install.md) | Bringing the stack up from a fresh clone or after a Docker wipe: prerequisites, the measured timeline, what `docker compose ps` should show, and the capture image build race | none, manual check |
 | [docker-desktop-disk.md](./docker-desktop-disk.md) | Host `/` filling while `docker system df` reports far less: reclaiming space from a bloated `Docker.raw` with `fstrim`. Read the warning before touching the disk-image-size slider | none, manual check |
+| [lake-backup-and-restore.md](./lake-backup-and-restore.md) | The nightly host copy of the irreplaceable tables (`raw.messages`, `audit.checks`, the two SCD2 dimensions) and the catalog database: what it holds and what it does not (same disk, writable by anything running as you), `make backup`, `make backup-install`, `make health` step (5), a failed or stale copy, and the restore. First copy measured 2026-11-26 (1 min 41 s, 25.3 GiB); **the restore is not yet drilled** | none: `make health` step (5), manual check |
 | [docker-vm-oom-kill.md](./docker-vm-oom-kill.md) | Every container gone at once and `systemctl --user status docker-desktop` says `Result: oom-kill`: the host's out-of-memory killer ended the Docker VM. Confirm the cause, start Docker Desktop, start what did not come back, check the ingest retried, compare the hot tier with the lake, record the outage in `lake.audit.checks`; then size the VM against host RAM. One occurrence, 2026-11-25: 10 min 17 s from the kill to `make health` PASS, capture off 343 s | none: no container can see host memory, manual check |
 
 ## Triage
@@ -155,7 +156,7 @@ follow it against this stack.
 
 ## v1 runbooks
 
-The 14 archived v1 runbooks, Kafka, Spark Streaming, Prefect OHLCV pipeline, blue-green
+The 14 archived v1 runbooks, Kafka, Spark Streaming, the v1 OHLCV pipeline, blue-green
 deploys, checkpoint corruption, are kept for reference in
 [`legacy/v1/docs/runbooks/`](../../legacy/v1/docs/runbooks/). They describe an
 architecture that no longer exists; do not follow them against the v2 stack.

@@ -75,8 +75,8 @@ PY
 docker exec k2-redpanda rpk cluster health
 docker exec k2-redpanda rpk topic list
 
-# Prefect: deployments registered
-docker exec k2-prefect-server prefect deployment ls
+# Airflow: the four DAGs (three lake, dbt_marts) registered, none paused
+docker exec k2-airflow-scheduler airflow dags list
 
 # Prometheus: every target up
 curl -s localhost:9090/api/v1/targets \

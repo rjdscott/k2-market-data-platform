@@ -519,3 +519,61 @@ is `LakeIngestLagHigh` at 900 s of lag.
 **Revisit when** ADR-048's change has run through one whole UTC day: the p90 of that day's
 scheduled runs, by the command above with that day's `--start-date`, is the measurement that
 clears this trigger (at or under 240 s) or keeps it open.
+
+---
+
+## Outcome (2026-11-26, Prefect archived)
+
+**Prefect is out of the compose file, and the rollback to it no longer exists.** The third
+pull request of plan phase P2 (#235) deleted the two Prefect services, `prefect-server` (its
+API and web UI) and `prefect-worker` (the process that ran each scheduled job), together with
+the compose `legacy` profile that had kept them defined but stopped since the cutover. A
+compose profile is a label on a service: `docker compose up` starts a labelled service only
+when the command names its profile, so after the cutover Prefect could be started by hand
+and never started by itself.
+
+**What was removed with them:** the worker image's build (`docker/prefect/`), its leg of the
+CI `docker` job (`Docker build (prefect)`, not a required check) and its Dependabot entry (the
+bot that proposes dependency upgrades); the `K2_PREFECT_PORT` variable and the step of
+`scripts/dev-up.sh` that set it; `scripts/airflow-shadow-check.sh`, its Python helper and its
+test, which compared Airflow's write-nothing probe runs with Prefect's real runs during the
+shadow and have nothing to compare once Prefect is gone; the runbook sections for the cutover,
+the standing rollback policy and the rollback (`docs/runbooks/airflow-scheduling.md`), and
+`docs/operations/prefect-schedules.md`. The anchor `airflow-scheduling.md#rollback-to-prefect`
+that the 2026-11 Outcome above links no longer exists; this section replaces it.
+
+**Where it went:** `legacy/prefect/`, moved unedited in a commit of its own: `flows/` holds
+the two Prefect flows (a flow is Prefect's unit of scheduled work; each of these ran one
+`docker exec` into the Spark container) and the script that registered them, from
+`docker/lake/flows/`; `image/` holds the worker's Dockerfile, from `docker/prefect/`. Its
+README records what it did, why it was retired, what replaced each piece and what is left.
+
+**How to bring it back**, if it is ever needed. There is no supported path and the procedure
+was never drilled (the 2026-11 Outcome above). It would be: move `legacy/prefect/image/` back to
+`docker/prefect/` and `legacy/prefect/flows/` to `docker/lake/flows/`; restore the two service
+definitions from `git show 410cc13:docker-compose.yml`, the last commit of `main` before the
+archive; pause the Airflow lake DAGs; then follow "Rollback to Prefect" in
+`git show 410cc13:docs/runbooks/airflow-scheduling.md`. Prefect's own run state was kept in the
+`prefect` database of `prefect-db`, which this change did not drop.
+
+**The budget did not move**, because Prefect had already left the default profile at the
+cutover. `python3 scripts/check-budget.py` after the change prints the steady default at 19
+services, 19.30 CPU / 35.312 GiB, and the bootstrap default at 24 services, 21.30 CPU /
+37.812 GiB, against the 25 CPU / 48 GiB ceiling of
+[ADR-045](ADR-045-ceiling-25-cpu-48-gib.md). The line it printed for the `legacy` profile
+(26 services, 22.80 CPU / 39.312 GiB, reported, not gated) is gone, because the script reports
+one line per profile that a service names and no service names one now.
+
+**What keeps the name**, as the Consequences above say: the PostgreSQL service `prefect-db`,
+its `prefect` role and database, and the `PREFECT_DB_*` variables. Each place that defines one
+says the name is historical. `tests/test_no_scheduler_name.py` fails if the word returns
+anywhere else outside `legacy/` and the dated documents.
+
+**The evidence the archive waited for**, read on the live stack on 2026-11-26 with
+`docker exec k2-airflow-scheduler airflow dags list-runs <dag> -o json`: the first 24 scheduled
+`lake_ingest` runs after the switch, `scheduled__2026-11-25T06:06:00+00:00` to
+`scheduled__2026-11-25T08:06:00+00:00`, were all `success`, five of them a skipped task while
+the first maintenance held the writer lock (an ingest that finds the lock held exits 75, which
+the DAG maps to skipped). The first nightly `lake_maintenance` that Airflow started on its own
+schedule, `scheduled__2026-11-26T03:00:00+00:00`, ran 03:00:00 to 03:44:30 UTC and ended
+`success` with every audit passing (10 check kinds in `lake.audit.checks`).

@@ -57,8 +57,8 @@ is what `scripts/lake-verify.sh` asserts.
 pair of concurrent ones: two appends racing each other both commit (Iceberg
 retries the loser onto the new base) and the second one's offsets overwrite the
 first's. An exclusive `flock` at the top of `main()` makes that unrepresentable
-on every dispatch path — cron, Prefect, runbook, chaos script — rather than only
-on the one Prefect's `concurrency_limit=1` covers.
+on every dispatch path, the scheduler, a runbook, a chaos script, rather than
+only the scheduled one.
 """
 
 from __future__ import annotations
@@ -103,7 +103,7 @@ EXIT_LOCK_HELD = os.EX_TEMPFAIL
 
 # One ingest at a time, per container, on every dispatch path.
 #
-# Prefect's `concurrency_limit=1` only gates runs Prefect launched, and the
+# A scheduler's own concurrency limit only gates the runs it launched, and the
 # runbooks, the chaos scripts and `make lake-verify` all dispatch by hand while
 # the 5-minute cron is armed. Two concurrent `writeTo(...).append()` calls do NOT
 # conflict: measured on a scratch table with this DDL's

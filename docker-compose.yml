@@ -420,7 +420,7 @@ services:
   # root filesystem read-only. The two sockets are what names a cgroup
   # `k2-clickhouse` (v0.61's Docker factory goes through containerd), and
   # `:ro` does not narrow a socket: whoever holds docker.sock can drive the
-  # engine, the same privilege prefect-worker and airflow-scheduler hold.
+  # engine, the same privilege airflow-scheduler holds.
   # cpu and memory only, one housekeeping pass per 15 s scrape instead of
   # cAdvisor's default 1 s, and Prometheus keeps seven series names of the
   # ~40 it exports (metric_relabel_configs in docker/prometheus/prometheus.yml).
@@ -469,14 +469,14 @@ services:
 #############################################################################
 
   # ───────────────────────────────────────────────────────────────────────
-  # PostgreSQL - Prefect, Airflow and Lakekeeper metadata
+  # PostgreSQL - Airflow and Lakekeeper metadata
   # ───────────────────────────────────────────────────────────────────────
-  # Keeps its name, its `prefect` role and the PREFECT_DB_* variables after
-  # Airflow arrives: the role is physically named `prefect` in every existing
-  # volume and the Lakekeeper URLs below carry it (ADR-034, Consequences).
+  # The name is historical. The service, its `prefect` role and the PREFECT_DB_*
+  # variables are kept from before Airflow (legacy/prefect/): the role is physically named `prefect`
+  # in every existing volume and the Lakekeeper URLs below carry it (ADR-034, Consequences).
   #
   # max_connections 200, up from the default 100, for Airflow's pools beside
-  # Prefect's and the catalog's. The `airflow` role is capped at 100 of them
+  # the catalog's. The `airflow` role is capped at 100 of them
   # (docker/airflow/init-db.sh), so Airflow cannot starve the catalog. Takes
   # effect on recreate: `docker compose up -d --force-recreate --no-deps prefect-db`.
   prefect-db:
@@ -530,121 +530,12 @@ services:
       com.k2.version: "v2"
 
   # ───────────────────────────────────────────────────────────────────────
-  # Prefect Server - Workflow orchestration UI/API (v3.x)
-  # ───────────────────────────────────────────────────────────────────────
-  # `legacy` profile since the Airflow cutover (ADR-034): a plain
-  # `docker compose up -d` leaves this and prefect-worker down, and the
-  # rollback starts both by name,
-  #   docker compose --profile legacy up -d prefect-server prefect-worker
-  # then resumes the Prefect schedule (docs/runbooks/airflow-scheduling.md,
-  # Rollback). Nothing in the default profile depends on either.
-  prefect-server:
-    logging: *k2-logging
-    profiles: ["legacy"]
-    image: prefecthq/prefect:3.9.5-python3.12
-    container_name: k2-prefect-server
-    hostname: prefect-server
-    networks:
-      - k2-net
-    # Host port is one variable, K2_PREFECT_PORT (.env, default 4200): it has to
-    # move in lockstep with PREFECT_UI_API_URL, which is the URL the SPA in the
-    # browser calls. Publishing on another port without moving that variable too
-    # gives a UI that loads and then fails every request.
-    ports:
-      - "127.0.0.1:${K2_PREFECT_PORT:-4200}:4200"
-    volumes:
-      - ./docker/prefect:/root/.prefect
-    environment:
-      PREFECT_SERVER_API_HOST: 0.0.0.0
-      PREFECT_API_URL: http://prefect-server:4200/api
-      PREFECT_UI_API_URL: http://localhost:${K2_PREFECT_PORT:-4200}/api   # what the browser on the host uses
-      PREFECT_API_DATABASE_CONNECTION_URL: postgresql+asyncpg://${PREFECT_DB_USER}:${PREFECT_DB_PASSWORD}@prefect-db:5432/${PREFECT_DB_NAME}
-    command: prefect server start --host 0.0.0.0
-    depends_on:
-      prefect-db:
-        condition: service_healthy
-    deploy:
-      resources:
-        limits:
-          cpus: '1.0'
-          memory: 1G
-        reservations:
-          cpus: '0.5'
-          memory: 512M
-    healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:4200/api/health')"]
-      interval: 15s
-      timeout: 10s
-      retries: 5
-      start_period: 30s
-    restart: unless-stopped
-    labels:
-      com.k2.service: "orchestration"
-      com.k2.tier: "control-plane"
-      com.k2.version: "v2"
-
-  # ───────────────────────────────────────────────────────────────────────
-  # Prefect Worker - Workflow executor (v3.x uses workers not agents)
-  # ───────────────────────────────────────────────────────────────────────
-  prefect-worker:
-    logging: *k2-logging
-    profiles: ["legacy"]   # the rollback, see prefect-server above
-    build:
-      context: .
-      dockerfile: docker/prefect/Dockerfile
-    image: k2-prefect-worker:3-python3.12  # local tag after build
-    container_name: k2-prefect-worker
-    hostname: prefect-worker
-    networks:
-      - k2-net
-    volumes:
-      - ./docker/prefect:/root/.prefect
-      - ./docker/lake/flows:/opt/prefect/lake-flows:ro   # v3 lake deployments
-      - /var/run/docker.sock:/var/run/docker.sock  # Docker socket for container orchestration
-    environment:
-      PREFECT_API_URL: http://prefect-server:4200/api
-      PYTHONPATH: /opt/prefect
-      DOCKER_API_VERSION: "1.44"
-    # Register (upsert) the two lake deployments, then start the worker.
-    # v2's cold-tier pool and its two deployments went with docker/offload/ in
-    # Phase D: a fresh clone must not register deployments whose code no longer
-    # exists. A stack upgraded in place keeps the old, empty pool until someone
-    # deletes it by hand — `prefect work-pool ls` shows it, nothing runs on it.
-    command: >
-      sh -c "prefect work-pool create lake --type process 2>/dev/null || true
-      && python /opt/prefect/lake-flows/deploy_lake.py
-      && prefect worker start --pool lake --type process"
-    depends_on:
-      prefect-server:
-        condition: service_healthy
-      # NOT gated on lake-ddl, and that is deliberate: lake-ddl is
-      # `restart: "no"`, so gating here means one transient DDL failure at boot
-      # leaves the worker down until someone notices. The cost of not gating is
-      # bounded and self-healing — the first lake-ingest-5min tick may hit
-      # TABLE_OR_VIEW_NOT_FOUND, the flow retries once after 60 s, and the next
-      # tick is five minutes later, against LakeIngestFailed's 35-minute
-      # threshold.
-    deploy:
-      resources:
-        limits:
-          cpus: '0.5'
-          memory: 512M
-        reservations:
-          cpus: '0.25'
-          memory: 256M
-    restart: unless-stopped
-    labels:
-      com.k2.service: "orchestration"
-      com.k2.tier: "control-plane"
-      com.k2.version: "v2"
-
-  # ───────────────────────────────────────────────────────────────────────
   # Airflow 3 - the lake schedules (ADR-034)
   # ───────────────────────────────────────────────────────────────────────
   # The only scheduler of the lake writes since the cutover: lake_ingest every
   # 5 minutes, lake_maintenance at 03:00 UTC, lake_rebuild by hand.
   # docker/airflow/dags/lake.py has the DAGs; docs/runbooks/airflow-scheduling.md
-  # the cutover, the rollback to Prefect and the recoveries.
+  # the recoveries.
   #
   # LocalExecutor, so tasks run inside airflow-scheduler, and that is the only
   # service given the Docker socket. No triggerer: nothing here defers.
@@ -730,7 +621,7 @@ services:
       com.k2.version: "v3"
 
   # Scheduler, and with LocalExecutor the four task slots too. The Docker
-  # socket is the same privilege prefect-worker holds today: root on the Docker
+  # socket is root on the Docker
   # engine, whatever the uid inside (ADR-034). It runs as the image's `airflow`
   # user; group_add gives it the socket's group, which is 0 on Docker Desktop
   # and `docker` on a Linux engine: set K2_DOCKER_GID (.env.example).
@@ -758,8 +649,7 @@ services:
     # lake-ddl too: lake_maintenance starts unpaused and runs its latest 03:00
     # slot as soon as it is parsed, and on a fresh clone that must not reach
     # the Spark container before the tables exist (retries=0: a failed run and
-    # an alert on every fresh install). The cost is prefect-worker's reason
-    # for not gating: a DDL that fails at boot leaves the scheduler down until
+    # an alert on every fresh install). The cost: a DDL that fails at boot leaves the scheduler down until
     # `docker compose up -d` runs again, which AirflowSchedulerHeartbeatLost
     # reports within 5 minutes. A later `up` of this service re-runs the
     # idempotent one-shots it depends on; `--no-deps` does not.
@@ -1117,12 +1007,11 @@ services:
   # Lake metrics exporter — Prometheus job 'lake-metrics'
   # ───────────────────────────────────────────────────────────────────────
   # Derives every metric from Iceberg snapshot summaries over the Lakekeeper
-  # REST API rather than from in-process counters: Prefect runs each job in a
+  # REST API rather than from in-process counters: each job runs in a
   # subprocess that exits long before Prometheus scrapes it. A separate service,
-  # not a sidecar in prefect-worker, so a worker crash still leaves the rising
+  # not a sidecar in the scheduler, so a scheduler crash still leaves the rising
   # commit age visible. Its own pinned image (docker/lake-metrics/) since
-  # ADR-034, so it outlives whichever orchestrator runs the jobs; until then it
-  # borrowed the Prefect worker image for its prometheus-client.
+  # ADR-034, so it outlives whichever orchestrator runs the jobs.
   #
   # NOT the Spark image, even though docker/lake/*.py otherwise runs there:
   # reading the catalog through PyIceberg needs a FileIO, and
@@ -1441,7 +1330,7 @@ services:
 # prometheus            | 1.0       | 2G           | Metrics collection
 # grafana               | 0.5       | 512M         | Visualization
 # cadvisor              | 0.1       | 128M         | Per-container CPU and memory (Prometheus job cadvisor)
-# prefect-db            | 1.0       | 1536M        | Prefect, Airflow and Lakekeeper metadata DB
+# prefect-db            | 1.0       | 1536M        | Airflow and Lakekeeper metadata DB
 # airflow-api-server    | 1.0       | 1536M        | Airflow 3 UI, REST and execution API (ADR-034)
 # airflow-scheduler     | 1.5       | 3G           | Airflow 3 scheduler + LocalExecutor, 4 slots; dbt_marts' dbt
 # airflow-dag-processor | 0.5       | 1G           | Airflow 3 DAG parsing
@@ -1479,15 +1368,6 @@ services:
 # 10.188 GiB. The host gives Docker 28 CPU / 49.5 GiB; 3 cores and 1.5 GiB stay
 # outside the ceiling for the OS and the engine (ADR-045 says why that is enough).
 #
-# `legacy` profile, the Prefect rollback, not started by default:
-#
-#   prefect-server     1.0  | 1G    Orchestration UI/API (Prefect 3.x)
-#   prefect-worker     0.5  | 512M  Workflow executor (Prefect 3.x)
-#
-# With it the peak is 22.80 CPU / 39.312 GiB across 26, inside the ceiling but
-# reported, not gated. Both go at the archive pull request. The Airflow limits
-# are the plan's estimates until ADR-034's measured figures replace them.
-#
 # History: retiring the three Kotlin feed handlers (ADR-019) gave back the
 # 1.5 CPU / 1.5 GB they declared, and deleting docker/offload/ took its metrics
 # exporter (0.1 CPU / 128M) and its DDL one-shot (0.5 CPU / 1G) with it.
@@ -1502,5 +1382,5 @@ services:
 # Target: 25 CPU / 48 GiB at the bootstrap peak (ADR-045)
 #
 # Instrument config: see config/instruments.yaml (single source of truth)
-# Last updated: 2026-11-26 (trino 4G -> 5G, ADR-010 and ADR-035 Outcomes; before it trino 2.0 CPU / 4G and the 25 CPU / 48 GiB ceiling, ADR-045)
+# Last updated: 2026-11-26 (the old scheduler archived to legacy/prefect/, the legacy profile deleted; before it trino 4G -> 5G, ADR-010 and ADR-035 Outcomes)
 #############################################################################

@@ -1,7 +1,7 @@
 # Operations: running the platform
 
 How to run K2 day to day: start it, check it, reach its consoles, stop it, restart one part of
-it, and roll out a change, in that order. Every command here runs from the root of the **live
+it, roll out a change, and back up what cannot be rebuilt, in that order. Every command here runs from the root of the **live
 checkout**, the directory the stack was started from (`docker compose ls` prints it), with the
 secrets loaded into your shell:
 
@@ -304,12 +304,11 @@ Prometheus, which answer 302 (a redirect to their login and query pages), and th
 | Spark master | http://localhost:18080 | Mostly empty by design: the lake jobs run as local drivers and never register with it | none |
 | Spark Thrift server | http://localhost:4040 | The UI of the image's always-on Thrift JDBC server (answers 302), **not** of the lake jobs. A running lake job's UI is port 4041 inside the container and is not published: `docker exec k2-spark-iceberg curl -s localhost:4041/api/v1/applications` | none |
 | JupyterLab | http://localhost:8889 | The research notebooks; only while `make notebooks` runs in a terminal (answers 000 otherwise) | token printed by `make notebooks` |
-| Prefect | `http://localhost:$K2_PREFECT_PORT` (4200 by default) | Not running: the Prefect rollback sits behind the compose `legacy` profile ([airflow-scheduling.md](../runbooks/airflow-scheduling.md#rollback-to-prefect)) | none |
 
 APIs rather than consoles, also on `127.0.0.1`: Redpanda's Kafka API `19092` (the listener host
 tools use; `9092` is advertised as `redpanda:9092`, for containers), its Admin API `9644` and
 Schema Registry `8081`; ClickHouse's native protocol `9002` and its Prometheus endpoint `9363`;
-MinIO's S3 API `9000`; PostgreSQL `15432` (`prefect-db`: the Airflow, Lakekeeper and Prefect
+MinIO's S3 API `9000`; PostgreSQL `15432` (`prefect-db`, a historical name: the Airflow and Lakekeeper
 metadata). The capture containers' `/metrics` (8082) is not published: Prometheus reads it on
 the compose network.
 
@@ -400,8 +399,7 @@ container already runs), and that changes the service's compose definition, so t
 `docker compose up -d` naming `prefect-db`, or a bare one, or one for a service that depends on
 it without `--no-deps` (`airflow-migrate`, `lakekeeper-migrate`), replaces the container of the
 catalog database. The data is on the `postgres-data` volume and survives. Every service using
-it drops its connection: `lakekeeper`, the three Airflow services, and `prefect-server` when the
-legacy profile runs. Do it deliberately, with the pattern below (`prefect-db` as `<service>` in
+it drops its connection: `lakekeeper` and the three Airflow services. Do it deliberately, with the pattern below (`prefect-db` as `<service>` in
 step 3), not as a side effect; until then, start or recreate other services with `--no-deps`.
 
 ### The pattern: pause, wait for idle, recreate, verify, unpause
@@ -791,6 +789,24 @@ at a time with the pattern in section 6.
 
 ---
 
+## 10. Back up the lake
+
+The raw archive, the audit history and the two dimension histories cannot be rebuilt from
+anything, and inside Docker they exist once. `make backup` copies them, as their own Iceberg
+files, plus a dump of the catalog database, to `~/k2-backup` on the host, outside Docker; it only
+reads from the stack. `make backup-install`, run once from this checkout, schedules it daily at
+04:30 UTC as a systemd user timer, and `make health` step (5) then FAILs when the last success
+is over 26 hours old (SKIP where it was never set up). The copy is on the same disk and any
+process running as you can delete it: it covers a lost Docker volume, a bad command or a
+dropped table, not a failed disk. What is copied, what is not, and the restore, not yet
+drilled: [lake-backup-and-restore.md](../runbooks/lake-backup-and-restore.md).
+
+**Disk:** `~/k2-backup` is never pruned and grows by every file the lake writes, compacted ones
+included: the first copy was 25.3 GiB on 2026-11-26, and a run refuses to start with under
+20 GiB free on that disk (`df -h ~`).
+
+---
+
 ## Guides
 
 | Doc | What it covers |
@@ -801,9 +817,8 @@ at a time with the pattern in section 6.
 | [observability.md](./observability.md) | Grafana dashboards, capture-tier and lake metrics, all 36 Prometheus alert rules |
 | [dashboards.md](./dashboards.md) | Every dashboard and console as a screenshot of a live run, in the order the data moves, with what to read from each and the runbook it leads to. Written by `make screenshots` |
 | [latency-budgets.md](./latency-budgets.md) | 7-segment latency budget plus the measured 2026-02-19 p50/p99 numbers |
-| [docker-resources.md](./docker-resources.md) | Per-service CPU/RAM limits, 19.30 CPU / 35.312 GiB across 19 long-running services, +5 one-shot (2.00 / 2.500 GiB), bootstrap peak 21.30 / 37.812 GiB against the 25 / 48 GiB ceiling; the Prefect rollback behind `--profile legacy` |
+| [docker-resources.md](./docker-resources.md) | Per-service CPU/RAM limits, 19.30 CPU / 35.312 GiB across 19 long-running services, +5 one-shot (2.00 / 2.500 GiB), bootstrap peak 21.30 / 37.812 GiB against the 25 / 48 GiB ceiling |
 | [airflow-schedules.md](./airflow-schedules.md) | The four Airflow DAGs, their crons, limits and runbooks: `lake_ingest`, `lake_maintenance`, `lake_rebuild` and the hourly `dbt_marts` |
-| [prefect-schedules.md](./prefect-schedules.md) | The two Prefect schedules Airflow replaced at the cutover, kept for the rollback: `lake-ingest-5min` and `lake-maintenance-daily` |
 | [clickhouse-database-standard.md](./clickhouse-database-standard.md) | Why everything served lives in the `gold` database (`k2` was dropped at the Phase E cutover) and how to keep it that way |
 | [adding-new-exchanges.md](./adding-new-exchanges.md) | End-to-end checklist for wiring up a 4th exchange |
 | [cost-model.md](./cost-model.md) | What this single host would cost as managed cloud services |

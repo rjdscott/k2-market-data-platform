@@ -1,0 +1,12 @@
+# Daily at 04:30 UTC, after the 03:00 UTC lake_maintenance run (its compaction
+# and snapshot expiry are what delete files). Persistent: a run missed while the
+# host was off or logged out happens at the next login.
+[Unit]
+Description=K2 nightly backup, daily at 04:30 UTC
+
+[Timer]
+OnCalendar=*-*-* 04:30:00 UTC
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -23,7 +23,8 @@ USER = "k2-minio-root"
 
 
 def filled(**overrides):
-    """Every secret distinct, long and real-looking, users as .env.example ships them."""
+    """Every secret distinct, long and real-looking, users as .env.example ships them
+    (the database role keeps its historical name, ADR-034)."""
     env = {n: f"filled-{i}-value-7f3a9c2e" for i, n in enumerate(NAMES)}
     return {**env, "MINIO_ROOT_USER": USER, "PREFECT_DB_USER": "prefect", **overrides}
 

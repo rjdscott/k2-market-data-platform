@@ -38,12 +38,11 @@ written ([ADR-010](../adr/ADR-010-resource-budget.md)), is a *deliberate* constr
 project, not a ceiling on the architecture: ADR-018's non-goal list keeps *no HA on this
 host*, which is a different sentence from *cannot scale*.
 
-> **Orchestration is still written for Prefect.** Prefect scheduled the lake when this page
-> was written; Airflow 3 has replaced it ([ADR-034](../adr/ADR-034-airflow-3-replaces-prefect.md)).
-> The rows that name Prefect (F7, §1.2, §3, §4, §7, §8) have not been re-derived for Airflow.
-> Their argument does not change: `max_active_runs=1` on the `lake_ingest` DAG
-> (`docker/airflow/dags/lake.py`) is the guard §1.2 calls `concurrency_limit=1`, and it too
-> covers only the runs it launches.
+> **Orchestration was first written for the scheduler Airflow 3 replaced**
+> ([ADR-034](../adr/ADR-034-airflow-3-replaces-prefect.md)). The rows below are ported:
+> `max_active_runs=1` on the `lake_ingest` DAG (`docker/airflow/dags/lake.py`) is the guard
+> §1.2 names, and like the one before it, it covers only the runs it launches. The
+> orchestration price in §8 is the earlier estimate and is not re-priced for Airflow.
 
 ---
 
@@ -62,7 +61,7 @@ is why chapter 16 remains the authority on anything with a stopwatch attached.
 | F4 | **Catalog database** | Lakekeeper's PostgreSQL down means no commits. The ingest writes its data files, fails to commit, and is a no-op with orphans — [ADR-022](../adr/ADR-022-exactly-once-via-snapshot-offsets.md)'s own table covers it | RDS PostgreSQL Multi-AZ: synchronous replication, failover in ~1–2 min | Lakekeeper must reconnect rather than wedge. **Unverified** — no failover has been exercised anywhere |
 | F5 | **Ingest job dies mid-commit** | **already safe, and for an exact reason** — §1.1 | unchanged. Exactly-once is a property of the Iceberg commit, so it does not care what launched the job | **the `flock` does not survive the move.** §1.2. This is the sharpest finding on this page |
 | F6 | **ClickHouse node** | the hot tier is gone; nothing is lost. [ADR-025](../adr/ADR-025-clickhouse-derived-hot-tier.md) makes it derived, rebuildable and originating nothing | `ReplicatedMergeTree` × 2+ replicas with a 3-node Keeper ensemble, or ClickHouse Cloud | the RTO is the **rebuild duration**, which is a function of lake size and is unmeasured at 200×. §3's hot-tier row argues that number should be measured before any replica is bought |
-| F7 | **Prefect** | no ingest is dispatched; the lake stalls and `LakeIngestFailed` fires. Nothing is lost only while the bus still holds the unread records, and the binding limit is **the per-partition byte cap, not 48 h** (2 GiB since 2026-11-25): measured 2026-08-26 at the old 512 MiB, that cap bound at **7.01 h** on `raw.kraken` partition 0, because keyed partitioning concentrates the busiest symbol, and records were evicted unread (`docker/redpanda/init.sh`; the count is in [ADR-021](../adr/ADR-021-raw-first-archive-and-lineage.md)'s Outcome) | Prefect Cloud, or server + worker on ECS across AZs with RDS Multi-AZ | `concurrency_limit=1` becomes the **only** mutual exclusion once the `flock` is gone (F5), so a control-plane bug becomes a correctness bug |
+| F7 | **Airflow** | no ingest is dispatched; the lake stalls and `LakeIngestFailed` fires. Nothing is lost only while the bus still holds the unread records, and the binding limit is **the per-partition byte cap, not 48 h** (2 GiB since 2026-11-25): measured 2026-08-26 at the old 512 MiB, that cap bound at **7.01 h** on `raw.kraken` partition 0, because keyed partitioning concentrates the busiest symbol, and records were evicted unread (`docker/redpanda/init.sh`; the count is in [ADR-021](../adr/ADR-021-raw-first-archive-and-lineage.md)'s Outcome) | Self-hosted Airflow on ECS across AZs with RDS Multi-AZ, or a managed Airflow | `max_active_runs=1` becomes the **only** mutual exclusion once the `flock` is gone (F5), so a control-plane bug becomes a correctness bug |
 | F8 | **S3 regional event** | not representable — MinIO is one container on one disk | nothing single-region can mitigate it. This row is why §7 exists | — |
 | F9 | **Region** | not representable | §7: S3 CRR, a catalog in the second region, re-placed capture. **Not** a warm standby — a cold rebuild with a stated RTO | Iceberg's absolute paths make this a *catalog and metadata* problem before it is a storage problem (§7.1) |
 | F10 | **Trino** | SQL over the lake and the marts stops, and `dbt_marts` fails, so the marts go stale. Nothing is lost: Trino's `lake` catalog cannot commit ([ADR-044](../adr/ADR-044-producer-lake-and-domain-mart-warehouses.md)), and the next run rebuilds every mart from the lake | Trino on ECS, one task per node across AZs; ECS replaces a failed task (§3) | the coordinator is one process, so losing it stops serving until its task is replaced. One kind of table in the mart warehouses is not rebuildable: each domain's `dq.dbt_test_results`, the dbt test history (§7.2) |
@@ -111,9 +110,9 @@ identical 5-row appends raised nothing and left 10 rows in two snapshots, becaus
 Iceberg's optimistic-concurrency retry re-applies the loser on the new base — correct
 for an append, and fatal for an append that also carries the reader's position.
 
-So the residual risk in F5 is exact: after the move, `concurrency_limit=1` on the Prefect
-deployment (`docker/lake/flows/deploy_lake.py:55`) is the only guard, and it covers only
-Prefect-launched runs — not the runbooks, the chaos scripts, `make lake-verify`, or an
+So the residual risk in F5 is exact: after the move, `max_active_runs=1` on the DAG
+(`docker/airflow/dags/lake.py`) is the only guard, and it covers only
+Airflow-launched runs, not the runbooks, the chaos scripts, `make lake-verify`, or an
 operator's hand-run during an incident, all of which dispatch directly today. The
 replacement is a DynamoDB conditional put with a lease TTL, changing `lock.py` and
 nothing else; the [research note §3.2](../research/2026-08-29-aws-ha-dr.md) has the
@@ -217,9 +216,9 @@ reasons are here.
 | **Schema registry** | **AWS Glue Schema Registry**; a Confluent-API registry on ECS as fallback | managed, regional | MSK ships no registry, so "the bus's registry" is not an option once MSK is the bus. Glue is free and IAM-native; the cost is a client-library change in the Rust producer, which is a bounded edit in one file. It is a lookup table with a strong compatibility rule, not an HA problem: a record decodes by schema id and the id is in the payload | `K2_SCHEMA_REGISTRY_URL`, and the registry client in `sink.rs` (Confluent wire format → Glue). **Not** the Avro contracts |
 | **Object store** | **S3** | already multi-AZ within a region | there is no other answer. The design work here is *lifecycle* (§6), not availability | `K2_S3_ENDPOINT` unset, `K2_S3_REGION`, `K2_S3_PATH_STYLE=false` |
 | **Catalog** | **Lakekeeper on ECS + RDS Multi-AZ** | 2+ stateless tasks behind an ALB; all state in a synchronously replicated database | Glue is cheaper *and is not the pick*: [ADR-023](../adr/ADR-023-lakekeeper-rest-catalog.md)'s argument is one REST protocol every engine speaks, and Glue makes the catalog an AWS-shaped dependency DuckDB and ClickHouse must each be taught | `K2_LAKE_CATALOG_URI`, `K2_LAKE_WAREHOUSE`, catalog auth |
-| **Ingest + maintenance** | **EMR Serverless** | a failed job is a retry, and §1.1 makes a retry safe | billing matches the shape exactly: 288 short jobs a day plus one nightly window, no idle cluster. **Precondition: §1.2's lock replacement** | the Prefect deployment's dispatch, and `docker/lake/lock.py`. Not `ingest.py`, `offsets.py` or `maintenance.py` |
+| **Ingest + maintenance** | **EMR Serverless** | a failed job is a retry, and §1.1 makes a retry safe | billing matches the shape exactly: 288 short jobs a day plus one nightly window, no idle cluster. **Precondition: §1.2's lock replacement** | the DAG's dispatch (`docker/airflow/dags/lake.py`), and `docker/lake/lock.py`. Not `ingest.py`, `offsets.py` or `maintenance.py` |
 | **Hot tier** | **measure the rebuild first**, then ClickHouse Cloud (quote) or 2 replicas + 3-node Keeper on EC2 | replication, or none | the only tier where the honest answer is a measurement this design does not have. ADR-025 already makes it derived and rebuildable, so **if the rebuild is fast enough the correct amount of HA here is none** and the money belongs in the lake | connection strings; the `iceberg()` reload path gains an S3 URL and an IAM role. The contract is unchanged |
-| **Orchestration** | **self-hosted on ECS + RDS Multi-AZ** | 2 server tasks, workers in ≥ 2 AZs, RDS Multi-AZ | not about Prefect: after §1.2, `concurrency_limit=1` is load-bearing for *correctness*. That belongs in an account you control until the distributed lock replaces it — then Prefect Cloud becomes the obvious pick | the API URL and the work-pool type. Not the flows or the schedules |
+| **Orchestration** | **self-hosted on ECS + RDS Multi-AZ** | scheduler, API server and DAG processor tasks, RDS Multi-AZ | after §1.2, `max_active_runs=1` is load-bearing for *correctness*. That belongs in an account you control until the distributed lock replaces it, then a managed Airflow becomes an option | the metadata database URL and the executor. Not the DAGs or the schedules |
 | **SQL serving and marts** | **Trino on ECS**: today's single node (coordinator and worker in one JVM) at 1×, workers added when the queries need them; dbt runs inside the orchestrator's tasks | ECS replaces a failed task; a failed `dbt_marts` run is rebuilt whole by the next | the fences of ADR-044 are Trino's `rules.json` and its read-only `lake` catalog, and an engine that attaches a warehouse directly reads around them ([ADR-035](../adr/ADR-035-trino-and-dbt-for-marts.md)), so the SQL engine stays Trino. The marts are derived, so, as for the hot tier, restart in place is enough HA | the catalog files' hard-coded endpoints (§3.1); `X-Trino-User` becomes an authenticated identity; each domain writer's storage access scoped to its own prefix, `warehouse/<domain>/` (ADR-044's limits). Not the dbt models, the contracts or `rules.json` |
 | **Observability** | **AMP + AMG** | managed, regional, multi-AZ | Alertmanager finally exists, and everything the repo owns — the rules, the `runbook:` annotations, the promtool tests gated by `scripts/check-docs.sh` — is a file that moves unedited. Caution: at 200× it is **cardinality**, not sample rate, that sets the bill | scrape config becomes remote-write |
 | **Notebooks** | SageMaker or any notebook host; SQL through the Trino tier above, where the fences are | none needed | DuckDB reads Iceberg through the same REST catalog it does today (spike S10) | the `ATTACH` endpoint and credentials |
@@ -281,7 +280,7 @@ flowchart LR
   subgraph R["one AWS region, three AZs"]
     CAP["Fargate · per venue:<br/>1 active + 1 standby, different AZs"]
     BUS["MSK · 3 brokers / 3 AZs<br/>RF=3 · min.insync=2 · acks=all"]
-    ORC["Prefect on ECS<br/>+ RDS Multi-AZ · concurrency 1"]
+    ORC["Airflow on ECS<br/>+ RDS Multi-AZ · 1 run at a time"]
     ING["EMR Serverless<br/>288 ingests/day + nightly maintenance"]
     CAT["Lakekeeper ×2 on ECS<br/>+ RDS PostgreSQL Multi-AZ"]
     S3[("S3 · Iceberg, lake + a prefix per domain<br/>multi-AZ · lifecycle to Glacier IR")]
@@ -307,7 +306,7 @@ argument rather than shopping:
 - **The catalog is stateless and the database is not.** All of Lakekeeper's HA is the
   RDS instance behind it; the tasks are replaceable.
 - **ClickHouse hangs off S3, not off the bus.** ADR-025 makes reload a *pull* through
-  `iceberg()`, so the hot tier's recovery does not depend on the bus, on Prefect, or on
+  `iceberg()`, so the hot tier's recovery does not depend on the bus, on the scheduler, or on
   anything upstream still being alive.
 - **Trino writes only the domain prefixes.** It reads the lake through a catalog that cannot
   commit, so losing it costs serving and fresh marts, never lake data.
@@ -608,7 +607,7 @@ one line that is cumulative rather than steady-state. Instance and task sizing i
 | Catalog | Lakekeeper ECS ×2–4 + RDS Multi-AZ | **$174** | **$504** | [rds/postgresql/pricing](https://aws.amazon.com/rds/postgresql/pricing/) · `AmazonRDS v20260828001733` |
 | Ingest | EMR Serverless, 288/day + nightly | **$58** | **$2,307** | [emr/pricing](https://aws.amazon.com/emr/pricing/) · `ElasticMapReduce v20260827162115` |
 | Hot tier | 2 → 4 × `r7i.2xlarge` + gp3 | **$945** | **$2,557** | [ec2 on-demand](https://aws.amazon.com/ec2/pricing/on-demand/) · `AmazonEC2` 2026-08-27 |
-| Orchestration | Prefect self-hosted, ECS + RDS Multi-AZ | **$244** | **$244** | same RDS/ECS offer files |
+| Orchestration | self-hosted, ECS + RDS Multi-AZ | **$244** | **$244** | same RDS/ECS offer files. Priced before ADR-034 as two server tasks and RDS ([research §5.8](../research/2026-08-29-aws-ha-dr.md)); Airflow's three services are not re-priced |
 | Observability | AMP + AMG, 1 editor + 2 viewers | **$249** | **$1,056** | [prometheus](https://aws.amazon.com/prometheus/pricing/) · `AmazonPrometheus v20260804172725`; [grafana](https://aws.amazon.com/grafana/pricing/) · `AmazonGrafana v20260126195257` |
 | Cross-AZ transfer | produce + consume, $0.01/GB each way | **$14** | **$2,894** | ec2 on-demand, Data Transfer · `AWSDataTransfer v20260720184645` |
 | | **Total** | **~$2,287** | **~$25,322** | |
@@ -630,8 +629,7 @@ discount.
 **Quote-based, so no number is invented for them:** **Redpanda Cloud** (Serverless
 "starts at $0" with metered dimensions, but the per-unit rates are not published),
 **ClickHouse Cloud** (the pricing page carries no numbers; the docs give us-east-1
-monthly examples only), and **Prefect Cloud** above the free tier — though Prefect does
-publish Starter at $100/month and Team at $100/user/month.
+monthly examples only), and any **managed Airflow** service, which is not priced here.
 
 ### 8.1 The two things the totals say
 

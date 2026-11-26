@@ -1,26 +1,24 @@
-# Runbook: The Airflow lake schedules: cutover, rollback, recovery
+# Runbook: The Airflow lake schedules: recovery
 
 The lake ingest, maintenance and rebuild run as three Airflow 3 DAGs
 ([ADR-034](../adr/ADR-034-airflow-3-replaces-prefect.md), `docker/airflow/dags/lake.py`),
 each a single task that runs one `docker/lake` script in the Spark container. This covers
-the one-time [cutover from Prefect](#cutover-from-prefect), the
-[standing policy](#standing-policy-until-the-archive) and the
-[rollback to Prefect](#rollback-to-prefect), then the four alerts in
-`docker/prometheus/rules/airflow-alerts.yml`: the scheduler stopping, a task failing,
-`lake_ingest` refused the writer lock run after run, and `lake_ingest` not running at all
-(§5, a stale DAG folder or a forgotten pause). It does not cover what a failing
-script found: that is [lake-ingest-lag.md](./lake-ingest-lag.md),
-[lake-audit-failed.md](./lake-audit-failed.md) and [lake-recovery.md](./lake-recovery.md).
+the four alerts in `docker/prometheus/rules/airflow-alerts.yml`: the scheduler stopping, a
+task failing, `lake_ingest` refused the writer lock run after run, and `lake_ingest` not
+running at all (§5, a stale DAG folder or a forgotten pause), and the catch-up after a long
+stall (§4). It does not cover what a failing script found: that is
+[lake-ingest-lag.md](./lake-ingest-lag.md), [lake-audit-failed.md](./lake-audit-failed.md)
+and [lake-recovery.md](./lake-recovery.md). The schedules and limits are in
+[airflow-schedules.md](../operations/airflow-schedules.md); pausing, triggering and reading
+runs are in the [operator guide](../operations/README.md#6-restart-or-recreate-one-service)
+and the [quick reference](../operations/quick-reference.md).
 
-**Airflow is the only scheduler of the lake writes** from the cutover on. Prefect's two
-services sit behind the compose `legacy` profile with no containers: a plain
-`docker compose up -d` does not start them, and nothing else depends on them. They stay until the archive pull
-request of plan phase P2, after 24 consecutive green `lake_ingest` runs.
+**Airflow is the only scheduler of the lake writes.** The scheduler it replaced is archived
+([`legacy/prefect/`](../../legacy/prefect/README.md)) and there is no rollback to it: nothing
+in the compose file starts it. If Airflow is down, the lake can be run by hand with the
+`docker exec` forms in [lake-ingest-lag.md](./lake-ingest-lag.md) while §1 to §5 bring it back.
 
 **Run every command from the repo root with `set -a && . ./.env && set +a` loaded.**
-
-> The cutover ran on the live stack on 2026-11-25 and each of its steps records what it
-> printed; the rollback is documented, not exercised (owner's decision, 2026-11-25).
 
 | # | Failure | MTTR target | Measured |
 |---|---------|-------------|----------|
@@ -29,270 +27,6 @@ request of plan phase P2, after 24 consecutive green `lake_ingest` runs.
 | 3 | `lake_ingest` skipped three runs in a row: the lock is held | < 15 min | orphan driver gone 284 ms after TERM (2026-11-25); the alert fired once, falsely, after the first maintenance run (fixed); not induced by a real stall |
 | 4 | Catch up after a long stall, with a bigger driver | a manual run | task 2.9 min to drain the stalled backlog, 2 g driver (2026-11-25); the run first waited for the scheduled run before it |
 | 5 | `lake_ingest` not running: a stale DAG folder, a forgotten pause | < 25 min | observed 2026-11-25 before the alert existed: 35 min with no run, then healthy within a minute of the recreate |
-
----
-
-## Cutover from Prefect
-
-One time, by hand, on the stack as pull request 1 left it: Prefect writing, `lake_ingest`
-running the shadow's write-nothing probe, `lake_maintenance` paused. No data moves: the
-lock in `docker/lake/lock.py` already allows one writer, and the ingest reads its position
-from the last snapshot ([ADR-022](../adr/ADR-022-exactly-once-via-snapshot-offsets.md)),
-whoever wrote it.
-
-**Before you start.** The shadow gate passed (`bash scripts/airflow-shadow-check.sh`
-printed `shadow check: PASS` over its 2 h window). Pick a time well clear of 03:00 UTC.
-Steps 1 to 3 run with the stack's checkout still at pull request 1's commit, so read this
-page from somewhere else: updating the checkout changes `docker/airflow/dags/lake.py`
-under the running scheduler, and that is step 4.
-
-Run on the live stack 2026-11-25, from 06:01:49Z: the Prefect schedule listed active
-(`True`) and `False` after its pause, the queue paused, and Airflow's pause printed
-`lake_ingest | False` (the old state). Step 3 waited from 06:01:58 to 06:04:40, when Prefect
-had no run in flight and `pgrep` printed nothing; Prefect's `flow-run ls` printed
-`No flow runs found.`
-
-```bash
-date -u +%FT%TZ    # the cutover's start, for ADR-034's Outcome
-
-# 1. Pause Prefect: the ingest schedule, then the work queue. These are the commands
-#    scripts/chaos/lib.sh ran before the cutover. A schedule pause deletes only future
-#    runs; the paused queue stops past-due ones and lake-maintenance-daily as well.
-docker exec k2-prefect-server prefect deployment schedule ls lake-ingest/lake-ingest-5min -o json
-docker exec k2-prefect-server prefect deployment schedule pause lake-ingest/lake-ingest-5min <schedule-id>   # each active id
-docker exec k2-prefect-server prefect work-queue pause default --pool lake
-docker exec k2-prefect-server prefect work-queue inspect default --pool lake -o json   # "is_paused": true
-
-# 2. Pause Airflow's probe as well, so nothing of Airflow's starts while its DAG file
-#    changes under it.
-docker exec k2-airflow-scheduler airflow dags pause lake_ingest
-
-# 3. Wait out whatever is in flight: Prefect's last ingest, or a probe. Repeat until
-#    Prefect lists no pending or running flow run (one dispatched just before the queue
-#    pause is still starting), pgrep prints nothing, and no lake_ingest task is queued
-#    or running.
-docker exec k2-prefect-server prefect flow-run ls --flow-name lake-ingest --flow-name lake-maintenance \
-  --state-type PENDING --state-type RUNNING
-docker exec k2-spark-iceberg pgrep -af 'lake/(ingest|maintenance)\.py'
-docker exec k2-airflow-scheduler airflow dags list-runs lake_ingest --state running
-docker exec k2-airflow-scheduler airflow tasks states-for-dag-run lake_ingest <run_id>   # for a run listed above
-```
-
-Run on the live stack 2026-11-25 from 06:04:53: both containers recreated and healthy
-after 25 seconds, both `grep -c` printed `0`, `details` showed `is_stale` `False` with
-`next_dagrun_logical_date` 2026-11-25 06:06:00, `list-import-errors` printed `No data
-found`, and the rules query printed `AirflowLakeIngestNotRunning`. The switch ran before
-merge, so the stack's checkout was moved to the branch tip, `943df7a`, instead of the
-`git pull` below.
-
-```bash
-# 4. Deploy the new DAG file. Both containers that mount docker/airflow/dags are
-#    recreated: a directory bind mount can keep the old file (CLAUDE.md, bind-mount
-#    gotcha), and recreating them is cheaper than finding out.
-git pull --ff-only                         # the stack's checkout, to the merged cutover commit
-docker compose up -d --force-recreate --no-deps airflow-scheduler airflow-dag-processor
-docker compose ps airflow-scheduler airflow-dag-processor     # both healthy, about a minute
-docker exec k2-airflow-scheduler     grep -c -- --probe /opt/airflow/dags/lake.py    # 0
-docker exec k2-airflow-dag-processor grep -c -- --probe /opt/airflow/dags/lake.py    # 0
-docker exec k2-airflow-dag-processor airflow dags reserialize
-docker exec k2-airflow-scheduler airflow dags details lake_ingest | grep -E 'is_stale|next_dagrun'
-docker exec k2-airflow-scheduler airflow dags list-import-errors
-
-# 4b. Prometheus reads rule files at start and on SIGHUP only, and this pull request
-#     adds AirflowLakeIngestNotRunning and changes two rule files.
-docker kill -s HUP k2-prometheus
-curl -s localhost:9090/api/v1/rules | jq -r '.data.groups[].rules[].name' | grep -x AirflowLakeIngestNotRunning
-```
-
-Run on the live stack 2026-11-25: after the 06:05:42 unpause the first run listed was the
-06:01 probe run (success in 21 s). The first real run was the 06:06 slot, 06:06:00 to
-06:09:30 `success`; its `running:` line had no `--probe` and its log said `stage 1:
-committing <n> offsets`. The commit age read 204 s just after it, and `make health`
-step (3) printed `last commit 36s ago`.
-
-```bash
-# 5. Unpause lake_ingest. With catchup=False the scheduler runs the most recent slot at
-#    once, then every 5 minutes.
-docker exec k2-airflow-scheduler airflow dags unpause lake_ingest
-
-# 6. Watch the first real commit: the run, its task, the log, then the lake itself.
-docker exec k2-airflow-scheduler airflow dags list-runs lake_ingest | head -5
-docker exec k2-airflow-scheduler airflow tasks states-for-dag-run lake_ingest <run_id>   # ingest | success
-docker exec k2-airflow-scheduler sh -c \
-  "find /opt/airflow/logs -path '*dag_id=lake_ingest*' -name '*.log' | sort | tail -1 | xargs grep -E 'running:|stage 1'"
-curl -s --get localhost:9090/api/v1/query \
-  --data-urlencode 'query=time() - k2_lake_last_commit_ts_seconds{table="raw.messages"}' \
-  | jq -r '.data.result[].value[1]'
-```
-
-Run on the live stack 2026-11-25: the unpause at 06:10:20 started
-`scheduled__2026-11-25T03:00:00+00:00` with no trigger. It ran 06:10:21 to 06:33:58 (23.6
-minutes) and ended `success`. The `lake_ingest` slots 06:11, 06:16, 06:21, 06:26 and 06:31
-each ended with the task `skipped` and none `failed`; 06:36 and 06:41 were `success`. During
-the run `make health` printed `PASS (scheduled__2026-11-25T06:06:00+00:00 success, then 2
-skipped: the lake lock was held)`.
-
-```bash
-# 7. Unpause lake_maintenance. Its is_paused_upon_creation=False does nothing here: the
-#    database already holds the DAG, paused by the shadow. Unpausing starts the most
-#    recent 03:00 slot at once (catchup=False runs the latest slot), and that run is the
-#    lock test: a second maintenance today is an ordinary one. If no run appears within
-#    two minutes, trigger it: docker exec k2-airflow-scheduler airflow dags trigger lake_maintenance
-docker exec k2-airflow-scheduler airflow dags unpause lake_maintenance
-docker exec k2-airflow-scheduler airflow dags list-runs lake_maintenance | head -3
-
-# 8. While it holds the lock, the ingest steps aside: exit 75, task skipped, run success.
-docker exec k2-spark-iceberg pgrep -af 'lake/maintenance\.py'
-docker exec k2-airflow-scheduler airflow dags list-runs lake_ingest | head -4
-docker exec k2-airflow-scheduler airflow tasks states-for-dag-run lake_ingest <run_id>   # ingest | skipped
-make health
-#    Once it ends: lake_maintenance's run is success and the next lake_ingest task is success.
-```
-
-Run on the live stack 2026-11-25: both Prefect containers were removed at 06:45:07 and
-`ps -a` listed neither. `make health` ended `health: PASS`. `make lake-verify` ended
-`✓ lake-verify passed` with `summary matches table @ 7100892857985855191: snapshot says
-<n> rows, COUNT(*) says <n>` (the same figure both times), and it printed `paused lake_ingest`, `paused
-lake_maintenance`, `resumed lake_ingest` and `resumed lake_maintenance` around its checks.
-The gates passed: `make test` (Rust, the ClickHouse schema test PASS, 8 notebook, 23
-generator and 17 DAG tests), `make parity-bars` (`parity: ok`, 0 rows differing in both
-comparisons; its pin was stale, so it ran at the current snapshot), `make check-alerts` (8
-SUCCESS) and `make check-docs` (all PASS). The cutover ran from 06:01:49Z to about 06:57Z.
-
-```bash
-# 9. Stop Prefect, and remove its two containers: a plain `docker compose up -d` leaves
-#    the legacy profile alone. Removed, not only stopped: a stopped container keeps the
-#    id of a network that `make down` deletes, and the rollback's `up -d` then fails with
-#    "network ... not found" (shown on a throwaway compose project, Compose v5.0.0,
-#    2026-11-25). Nothing is lost: Prefect's state is in prefect-db and docker/prefect/.
-docker compose --profile legacy rm --stop --force prefect-server prefect-worker
-docker compose --profile legacy ps -a prefect-server prefect-worker      # neither listed
-
-# 10. The stack, and the lake's exit criteria, with Airflow as the only scheduler.
-make health
-make lake-verify
-
-# 11. The rest of `make gates`, without parity-ohlcv: it needs the P0 re-pin, which needs
-#     a complete UTC day and measures the data, not the scheduler. Both parity gates run
-#     after the re-pin: make parity-ohlcv && make parity-bars
-make test && make parity-bars && make check-alerts && make check-docs
-date -u +%FT%TZ    # the cutover's end
-```
-
----
-
-## Standing policy until the archive
-
-The owner's rule from the cutover until the archive pull request: **if two scheduled
-`lake_ingest` runs in a row fail (not skip), or `raw.messages` goes 20 minutes without a
-commit while no `lake_maintenance` run is running, diagnose in place for up to 30 minutes
-with §1 to §3, then [roll back](#rollback-to-prefect).** A skip is the lock doing its
-job and does not count. Twenty minutes is tighter than `LakeIngestFailed` (30 minutes plus
-its 5 for), on purpose: it starts the clock before the page does. One run marked failed
-right after a DAG is unpaused (a run left `running` by the pause, past its
-`dagrun_timeout`) is noise and does not count towards the two.
-
-Run on the live stack 2026-11-25 (read-only): `dags list-runs lake_maintenance` listed the
-03:00 run with its start, end and `success`. The commit-age query ran in the cutover's
-steps 6 and 8 and printed seconds. No `lake_ingest` run has failed under Airflow, so the
-`--state failed` listing has not been seen to show a failure.
-
-```bash
-docker exec k2-airflow-scheduler airflow dags list-runs lake_ingest --state failed | head -4
-curl -s --get localhost:9090/api/v1/query \
-  --data-urlencode 'query=time() - k2_lake_last_commit_ts_seconds{table="raw.messages"}' \
-  | jq -r '.data.result[].value[1]'                                  # over 1200 = the trigger
-docker exec k2-airflow-scheduler airflow dags list-runs lake_maintenance --state running
-```
-
----
-
-## Rollback to Prefect
-
-**Not exercised** (owner's decision, 2026-11-25): documented, not drilled; each block
-below says so. Prefect's state survives in `prefect-db` while it has no containers: the
-deployments, the paused ingest schedule and the paused work queue as the cutover left
-them. The Prefect worker re-registers both deployments when it starts
-(`docker/lake/flows/deploy_lake.py`, `paused=False`), so its schedules can come back
-active by themselves; the work queue does not, and nothing dispatches until step 4.
-
-Not exercised (owner's decision, 2026-11-25): written from the commands the pre-cutover helper ran and from the cutover in reverse.
-
-```bash
-# 1. Stop Airflow's lake writes: both scheduled DAGs.
-docker exec k2-airflow-scheduler airflow dags pause lake_ingest
-docker exec k2-airflow-scheduler airflow dags pause lake_maintenance
-
-# 1a. The policy rolls back exactly when Airflow is broken, so the scheduler may not
-#     answer. The dag-processor runs the same image against the same database:
-docker exec k2-airflow-dag-processor airflow dags pause lake_ingest
-docker exec k2-airflow-dag-processor airflow dags pause lake_maintenance
-
-# 1b. If the database is what is broken, neither CLI can pause. Stop the scheduler and
-#     keep it stopped until the way back: with `restart: unless-stopped` a crashed one
-#     comes back with the DAGs unpaused and races Prefect on every slot. A stopped
-#     scheduler creates no run, and the stop runs each in-flight task's on_kill, which
-#     stops its driver inside stop_grace_period; a killed ingest commits all or nothing.
-docker compose stop airflow-scheduler
-
-# 2. Wait for the in-flight job. Repeat until pgrep prints nothing and no task listed
-#    is queued or running.
-docker exec k2-spark-iceberg pgrep -af 'lake/(ingest|maintenance|rebuild)\.py'
-docker exec k2-airflow-scheduler airflow dags list-runs lake_ingest --state running
-docker exec k2-airflow-scheduler airflow dags list-runs lake_maintenance --state running
-docker exec k2-airflow-scheduler airflow tasks states-for-dag-run <dag_id> <run_id>   # for a run listed above
-```
-
-Not exercised (owner's decision, 2026-11-25): written from the commands the pre-cutover helper ran and from the cutover in reverse.
-
-```bash
-# 3. Start Prefect from the legacy profile. With it the declared sum is 22.80 CPU,
-#    inside the 25 CPU ceiling (ADR-045).
-docker compose --profile legacy up -d prefect-server prefect-worker
-docker compose --profile legacy ps prefect-server prefect-worker
-docker logs --tail 50 k2-prefect-worker
-```
-
-Not exercised (owner's decision, 2026-11-25): written from the commands the pre-cutover helper ran and from the cutover in reverse. These are the resume commands
-scripts/chaos/lib.sh ran before the cutover, kept here verbatim because the helper no
-longer runs them.
-
-```bash
-# 4. Resume the Prefect schedule and its work queue.
-docker exec k2-prefect-server prefect deployment schedule ls lake-ingest/lake-ingest-5min -o json
-docker exec k2-prefect-server prefect deployment schedule resume lake-ingest/lake-ingest-5min <schedule-id>   # each inactive id
-docker exec k2-prefect-server prefect deployment schedule ls lake-maintenance/lake-maintenance-daily -o json
-docker exec k2-prefect-server prefect work-queue resume default --pool lake
-docker exec k2-prefect-server prefect work-queue inspect default --pool lake -o json   # "is_paused": false
-```
-
-Not exercised (owner's decision, 2026-11-25): written from the commands the pre-cutover helper ran and from the cutover in reverse.
-
-```bash
-# 5. Confirm a commit. A run left late from the cutover may dispatch first: each is an
-#    ordinary ingest from the committed offsets. `make health` step (3) reads Airflow and
-#    reports FAIL while Prefect writes; its other steps apply.
-docker exec k2-prefect-server prefect flow-run ls --flow-name lake-ingest --limit 3
-curl -s --get localhost:9090/api/v1/query \
-  --data-urlencode 'query=time() - k2_lake_last_commit_ts_seconds{table="raw.messages"}' \
-  | jq -r '.data.result[].value[1]'
-```
-
-**The way back to Airflow**, once the cause is fixed: the cutover's steps 1 and 3
-(pause Prefect's schedule and queue, wait out the in-flight run), then the following. A
-run that was `running` when its DAG was paused stays `running` (a paused DAG's runs are
-not examined); unpaused more than its `dagrun_timeout` later it may be marked failed
-once. Disregard that one failure: it is noise against the two-failed-in-a-row policy.
-
-Not exercised (owner's decision, 2026-11-25): written from the commands the pre-cutover helper ran and from the cutover in reverse.
-
-```bash
-docker compose up -d --no-deps airflow-scheduler          # only if step 1b stopped it
-docker exec k2-airflow-scheduler airflow dags unpause lake_ingest
-docker exec k2-airflow-scheduler airflow dags unpause lake_maintenance
-docker compose --profile legacy rm --stop --force prefect-server prefect-worker   # as cutover step 9
-make health
-```
 
 ---
 
@@ -459,7 +193,7 @@ the lock.
 
 **Recovery**
 
-Run on the live stack 2026-11-25. `pgrep -af` prints each running lake job, and it also prints the `sh -c` wrapper that started it: the writer is the line that begins `python3`. `ps -o pid,etime,args` works in the Spark image. Not yet induced: three skips in a row under Airflow, which needs `lake_ingest` writing for real (after the cutover).
+Run on the live stack 2026-11-25. `pgrep -af` prints each running lake job, and it also prints the `sh -c` wrapper that started it: the writer is the line that begins `python3`. `ps -o pid,etime,args` works in the Spark image. Not yet induced: three skips in a row outside a maintenance run.
 
 ```bash
 # 1. Every lake writer is a python3 process running one of these scripts. The flock
@@ -497,7 +231,7 @@ docker exec k2-spark-iceberg pgrep -af 'lake/(ingest|maintenance|rebuild)\.py'  
 ```
 
 **Measured**, not yet: no lock has been held across three slots under Airflow outside a
-maintenance run, which the rule excludes (cutover step 8 holds it for one).
+maintenance run, which the rule excludes (the nightly `lake_maintenance` holds it for several slots).
 
 ---
 
@@ -514,7 +248,7 @@ so no scheduled run starts beside it; one already in flight finishes first.
 The `docker exec` form in [lake-ingest-lag.md](./lake-ingest-lag.md) does the same outside
 Airflow, and the scheduled runs skip at the lock while it holds it.
 
-Run on the live stack 2026-11-25 during the shadow, so the run was a probe: its `running:` line carried `--env=K2_LAKE_DRIVER_MEMORY=2g` and `--max-offsets-per-partition=1000000`, and a trigger with `"driver_memory": "2 GB"` was refused with exit 1. Not yet run: a real catch-up through this trigger, which needs the cutover.
+Run on the live stack 2026-11-25 during the shadow, so the run was a probe: its `running:` line carried `--env=K2_LAKE_DRIVER_MEMORY=2g` and `--max-offsets-per-partition=1000000`, and a trigger with `"driver_memory": "2 GB"` was refused with exit 1. A real catch-up through this trigger ran after the cutover: `manual__2026-11-25T07:22:45`, task 07:24:23 to 07:27:20, `success`, with `driver_memory` 2g and `max_offsets_per_partition` 1000000 (ADR-034 Outcome).
 
 ```bash
 docker exec k2-airflow-scheduler airflow dags trigger lake_ingest \
@@ -571,7 +305,7 @@ containers are recreated, and a paused DAG stays paused.
 
 Run on the live stack 2026-11-25 (read-only, healthy mount): both containers and the host
 listed `lake.py` at 9473 bytes. A stale mount listing no `lake.py` was seen only on the
-day's fault, not in this listing. Step 3b's unpause ran as cutover step 5 and printed
+day's fault, not in this listing. Step 3b's unpause ran once, at the Airflow cutover on 2026-11-25, and printed
 `lake_ingest | True`; it has not been run against a fault.
 
 ```bash

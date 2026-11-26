@@ -1,0 +1,10 @@
+# The nightly host copy of the lake's irreplaceable tables and the catalog
+# database (scripts/backup-lake.sh). A user unit: `make backup-install` writes
+# it to ~/.config/systemd/user with @K2_ROOT@ set to the checkout it ran from.
+[Unit]
+Description=K2 nightly backup of the irreplaceable lake tables and the catalog database
+Documentation=file://@K2_ROOT@/docs/runbooks/lake-backup-and-restore.md
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/env bash "@K2_ROOT@/scripts/backup-lake.sh"

@@ -93,7 +93,7 @@ flowchart TB
 19 long-running services and 5 one-shot init containers, 19.30 CPU / 35.312 GiB of declared
 limits at steady state and 21.30 CPU / 37.812 GiB at the bootstrap peak, under a 25 CPU / 48 GiB
 ceiling ([ADR-045](./docs/adr/ADR-045-ceiling-25-cpu-48-gib.md); [how the numbers are produced](./docs/operations/docker-resources.md#how-these-numbers-are-produced)).
-Prefect, which Airflow replaced, waits behind `--profile legacy` as the rollback, not running.
+The scheduler Airflow replaced is archived in [`legacy/prefect/`](./legacy/prefect/README.md), with no rollback path in the compose file.
 
 **Read the book.** [`docs/architecture/`](./docs/architecture/README.md) is written as numbered
 chapters: what the platform is and is not, the market data and data engineering concepts it
@@ -110,7 +110,7 @@ works, and the practices that enforce it.
 | [022](./docs/adr/ADR-022-exactly-once-via-snapshot-offsets.md) | Kafka offsets committed inside the Iceberg snapshot | One atomic commit replaces a watermark table and its failure modes |
 | [026](./docs/adr/ADR-026-four-layer-lake-and-gold-served-from-clickhouse.md) | Four lake layers; ClickHouse serves gold with no TTL | Venue fields survive to silver; candles on read fix v2's per-block open/close bug |
 | [027](./docs/adr/ADR-027-book-snapshot-and-sequencing.md) | Top-20 snapshots at 1 Hz; per-venue sequencing and resync | Raw keeps the deltas; the product is what research joins against |
-| [008](./docs/adr/ADR-008-eliminate-prefect-orchestration.md) | Remove Prefect: reversed | A wrong call kept on the record with its outcome |
+| [008](./docs/adr/ADR-008-eliminate-prefect-orchestration.md) | Remove the orchestrator: reversed | A wrong call kept on the record with its outcome |
 
 All 42 ADRs: [`docs/adr/`](./docs/adr/README.md).
 
@@ -222,7 +222,7 @@ pin checks, the documentation gates and Trivy on every pull request.
 ```
 services/capture-rust/     k2-capture: one binary, three exchanges
 docker/airflow/            the three lake DAGs, dbt_marts, and their image
-docker/lake/               Spark ingest, layer builders, audits, DDL, the Prefect flows kept for rollback
+docker/lake/               Spark ingest, layer builders, audits, DDL
 docker/clickhouse/ddl/     gold contract (CI-tested) and Kafka feeds
 docker/trino/              Trino config: catalog lake (read-only), one generated catalog per domain, access rules
 docker/prometheus/rules/   36 alert rules with unit tests

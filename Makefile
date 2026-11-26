@@ -1,4 +1,4 @@
-.PHONY: chaos help up down logs ps health gates test test-python test-rust test-airflow record-fixtures test-notebooks test-legacy-kotlin dev-up check-docs check-alerts build-capture lint lake-verify lake-rebuild test-clickhouse test-trino test-dbt parity-ohlcv parity-bars notebooks notebooks-run test-k2gen generate new-product screenshots
+.PHONY: chaos help up down logs ps health backup backup-install gates test test-python test-rust test-airflow record-fixtures test-notebooks test-legacy-kotlin dev-up check-docs check-alerts build-capture lint lake-verify lake-rebuild test-clickhouse test-trino test-dbt parity-ohlcv parity-bars notebooks notebooks-run test-k2gen generate new-product screenshots
 
 # Stamped into the capture binary's k2_capture_build_info gauge. `git describe`
 # and not `rev-parse`: an image built from a dirty tree must not claim to be the
@@ -19,6 +19,19 @@ dev-up: ## Bring the stack up the safe way (override, rebuild, recreate mount ho
 
 health: ## Is it up: every service healthy, a message on every venue in the last 2 min, last lake commit + ingest run
 	bash scripts/health.sh
+
+backup:  ## Copy the irreplaceable lake tables and the catalog database to K2_BACKUP_DIR (default ~/k2-backup); read-only against the stack
+	bash scripts/backup-lake.sh
+
+# The owner runs this, once, from the main checkout: the unit runs the script from
+# the directory it was installed from. docs/runbooks/lake-backup-and-restore.md.
+backup-install:  ## Schedule `make backup` daily at 04:30 UTC: a systemd user timer in ~/.config/systemd/user, enabled
+	mkdir -p $(HOME)/.config/systemd/user
+	sed 's|@K2_ROOT@|$(CURDIR)|g' scripts/systemd/k2-backup.service > $(HOME)/.config/systemd/user/k2-backup.service
+	cp scripts/systemd/k2-backup.timer $(HOME)/.config/systemd/user/k2-backup.timer
+	systemctl --user daemon-reload
+	systemctl --user enable --now k2-backup.timer
+	@echo "Scheduled daily at 04:30 UTC. Run 'make backup' now for the first copy: make health FAILs (5) until one succeeds."
 
 check-docs: ## Doc gates (links, forbidden words, promtool, runbook paths, capacity-model gate, no em-dash on added lines, synthetic fixtures)
 	bash scripts/check-docs.sh
@@ -134,7 +147,7 @@ check-alerts:  ## promtool: syntax-check every rule file and run the capture + l
 
 # platform/k2gen is checked with the ruff and mypy pinned in its own lock, as CI's contracts job does.
 lint:  ## Ruff over the v3 lake, the Airflow DAGs, the gate scripts and other scripts/ Python, and the tests; ruff and mypy (strict) over platform/k2gen
-	uv run --no-project --with ruff==0.17.6 ruff check docker/lake docker/airflow scripts/airflow_shadow_check.py scripts/screenshots scripts/check_docs.py scripts/check-budget.py scripts/check-env.py scripts/make-synthetic-fixtures.py tests
+	uv run --no-project --with ruff==0.17.6 ruff check docker/lake docker/airflow scripts/screenshots scripts/check_docs.py scripts/check-budget.py scripts/check-env.py scripts/make-synthetic-fixtures.py tests
 	cd platform/k2gen && uv run --locked -q ruff check . && uv run --locked -q mypy
 
 lake-verify:  ## Lake exit criteria against the LIVE stack: offsets gapless, every layer level with its parent, double-run adds 0

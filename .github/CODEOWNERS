@@ -2,9 +2,9 @@
 #
 # One entry per contracts/<domain>/, the team named in contracts/domains.yaml in
 # the comment on its line. @rjdscott is the repository's only GitHub account,
-# so every team is that account today. With one account and main unprotected
-# (CLAUDE.md), this file records ownership and enforces nothing; a second
-# contributor is the trigger to give each line a real owner and turn protection on.
+# so every team is that account today. main requires green CI and no review
+# (CLAUDE.md), so with one account this file records ownership and enforces nothing; a
+# second contributor is the trigger to give each line a real owner and require review.
 
 /contracts/market-capture/    @rjdscott  # capture-team
 /contracts/reference-data/    @rjdscott  # reference-data-team
