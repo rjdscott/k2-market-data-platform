@@ -1,7 +1,7 @@
 # Operations: running the platform
 
 How to run K2 day to day: start it, check it, reach its consoles, stop it, restart one part of
-it, and roll out a change, in that order. Every command here runs from the root of the **live
+it, roll out a change, and back up what cannot be rebuilt, in that order. Every command here runs from the root of the **live
 checkout**, the directory the stack was started from (`docker compose ls` prints it), with the
 secrets loaded into your shell:
 
@@ -754,6 +754,24 @@ at a time with the pattern in section 6.
 5. Before any repair that deletes or rewrites data, read the runbook to the end: a lake gap is
    usually something to record, not to fix, because the venues' feeds do not replay
    ([runbook triage](../runbooks/README.md#triage)).
+
+---
+
+## 10. Back up the lake
+
+The raw archive, the audit history and the two dimension histories cannot be rebuilt from
+anything, and inside Docker they exist once. `make backup` copies them, as their own Iceberg
+files, plus a dump of the catalog database, to `~/k2-backup` on the host, outside Docker; it only
+reads from the stack. `make backup-install`, run once from this checkout, schedules it daily at
+04:30 UTC as a systemd user timer, and `make health` step (5) then FAILs when the last success
+is over 26 hours old (SKIP where it was never set up). The copy is on the same disk and any
+process running as you can delete it: it covers a lost Docker volume, a bad command or a
+dropped table, not a failed disk. What is copied, what is not, and the restore, not yet
+drilled: [lake-backup-and-restore.md](../runbooks/lake-backup-and-restore.md).
+
+**Disk:** `~/k2-backup` is never pruned and grows by every file the lake writes, compacted ones
+included: the first copy was 25.3 GiB on 2026-11-26, and a run refuses to start with under
+20 GiB free on that disk (`df -h ~`).
 
 ---
 
