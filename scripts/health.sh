@@ -99,9 +99,9 @@ age=$(curl -s --get localhost:9090/api/v1/query \
   --data-urlencode 'query=time() - max(k2_lake_last_commit_ts_seconds)' 2>/dev/null \
   | python3 -c 'import json,sys;r=json.load(sys.stdin)["data"]["result"];print(int(float(r[0]["value"][1])) if r else "")' 2>/dev/null || true)
 if [ -z "$age" ]; then
-  bad "(3) lake commit age" "FAIL (Prometheus has no k2_lake_last_commit_ts_seconds — lake-metrics down, or the lake has never committed)"
+  bad "(3) lake commit age" "FAIL (Prometheus has no k2_lake_last_commit_ts_seconds: Prometheus down, lake-metrics down, or the lake has never committed)"
 elif [ "$age" -gt "$LAKE_MAX_AGE" ]; then
-  bad "(3) lake commit age" "FAIL (last commit ${age}s ago = $((age / 3600))h — the lake is stale, see docs/runbooks/lake-ingest-failure.md)"
+  bad "(3) lake commit age" "FAIL (last commit ${age}s ago = $((age / 3600))h: the lake is stale, see docs/runbooks/lake-ingest-lag.md section 2)"
 else
   result "(3) lake commit age" "PASS (last commit ${age}s ago)"
 fi
