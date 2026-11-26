@@ -983,7 +983,7 @@ Where: [ADR-023](ADR-023-lakekeeper-rest-catalog.md),
 
 The terms of the target platform decided in [ADR-056](ADR-056-unified-data-product-platform.md).
 None of it runs yet; its phases build it. The target chapter,
-`../architecture/20-target-data-product-platform.md`, draws each one.
+[`20-target-data-product-platform.md`](../architecture/20-target-data-product-platform.md), draws each one.
 
 ### Data contract
 
@@ -1133,8 +1133,8 @@ spine (connector, landing, bronze, the dbt wrapper and marker, through the ECB r
 teaching, Kraken trades and the security master, the enriched product, catalog and lineage, and the
 REST API. Then to `v3.0.0`: remaining connectors, wider crypto, controls, infrastructure as code,
 hardening and the release gate.
-Where: `../plans/2026-11-26-unified-product-platform/README.md` and
-`../plans/2026-11-26-unified-product-platform-to-release/README.md`.
+Where: [`README.md`](../plans/2026-11-26-unified-product-platform/README.md) and
+[`README.md`](../plans/2026-11-26-unified-product-platform-to-release/README.md).
 
 ### Scratch namespace and the P4 spike
 

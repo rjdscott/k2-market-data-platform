@@ -2,7 +2,7 @@
 
 **Depends on:** `006` (tag `v3.0.0-alpha.8`: every grant, the full catalog site, lineage and
 usage); the owner's answer on the reset for the live-onboarding moment.
-**Decision it implements:** `docs/adr/ADR-056-unified-data-product-platform.md`: the REST routes
+**Decision it implements:** [`ADR-056-unified-data-product-platform.md`](../../adr/ADR-056-unified-data-product-platform.md): the REST routes
 frozen in the interfaces pull request, completed; the owner's decision that the demo is only a
 tag, `v3.0.0-beta.1`, placed when four moments can be shown on the real system, with no
 demo-only code.

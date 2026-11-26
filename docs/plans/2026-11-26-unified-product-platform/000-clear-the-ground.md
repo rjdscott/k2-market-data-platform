@@ -2,7 +2,7 @@
 
 **Depends on:** nothing; `main` at `64a07c2` and this documentation update (ADR-056, chapter 20,
 the research record, these plans).
-**Decision it implements:** `docs/adr/ADR-056-unified-data-product-platform.md`. The ClickHouse
+**Decision it implements:** [`ADR-056-unified-data-product-platform.md`](../../adr/ADR-056-unified-data-product-platform.md). The ClickHouse
 pause is recorded in its own ADR in this phase, with its resume trigger and the 7-day expiry of
 its consumer offsets. [ADR-034](../../adr/ADR-034-airflow-3-replaces-prefect.md) and
 [ADR-050](../../adr/ADR-050-order-book-capture-paused-during-platform-build.md) gain Outcome
@@ -36,7 +36,7 @@ new deploy model (review finding F1).
 ## Scope
 
 Steps in order, as pull-request-sized pieces. The step list with files, dependencies and proofs
-is section B of `docs/research/2026-11-26-unified-platform-architecture/IMPLEMENTATION-N0-N1.md`;
+is section B of [`IMPLEMENTATION-N0-N1.md`](../../research/2026-11-26-unified-platform-architecture/IMPLEMENTATION-N0-N1.md);
 this phase applies it with the plan review's changes (retirement moved here, three measurements
 struck).
 
@@ -50,7 +50,7 @@ struck).
   run costs about 6.5 s of Spark, far under the 200 s line, so per-product Spark sessions stay.
   The same document states the delete-file bound per silver table that phase `004`'s 48-hour
   exit tests, with the reasoning that sets it (F13).
-- **Struck as already answered** (`SPIKE-DBT.md`, `SPIKE-ACCESS.md`, `SPIKE-RUNCOST.md` in the
+- **Struck as already answered** ([`SPIKE-DBT.md`](../../research/2026-11-26-unified-platform-architecture/SPIKE-DBT.md), [`SPIKE-ACCESS.md`](../../research/2026-11-26-unified-platform-architecture/SPIKE-ACCESS.md), [`SPIKE-RUNCOST.md`](../../research/2026-11-26-unified-platform-architecture/SPIKE-RUNCOST.md) in the
   research directory): per-product run cost, dbt merge and rollback through the catalog, masks
   and filters on Iceberg, the read-only reader catalog, the refresh period itself. The contended
   chain measurement moves to phase `004`, where the first five-minute chain exists.

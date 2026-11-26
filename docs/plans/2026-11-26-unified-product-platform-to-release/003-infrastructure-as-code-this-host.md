@@ -3,7 +3,7 @@
 **Depends on:** `002` (tag `v3.0.0-beta.4`); the release's storage plan, built in the first
 plan's release spine so that this phase converges with it rather than rebuilding resource
 creation (review finding F21).
-**Decision it implements:** `docs/adr/ADR-056-unified-data-product-platform.md` and the owner's
+**Decision it implements:** [`ADR-056-unified-data-product-platform.md`](../../adr/ADR-056-unified-data-product-platform.md) and the owner's
 decision on scope: this host only, fully proven. A new ADR, in the pull request that builds it,
 records the tool and what it owns.
 **Delivers:** every resource the platform needs on this host declared and checkable: MinIO

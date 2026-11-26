@@ -36,6 +36,23 @@ run (`make screenshots` takes the current set): they show venue-derived figures 
 at the moment of capture, are for illustration only, and are not a data set
 ([`NOTICE`](./NOTICE), "Screenshots").
 
+## Where this is going
+
+K2 is being rebuilt from one crypto pipeline into a **domain-agnostic data product platform**:
+any dataset is defined once in a contract, brought in by its own connector, stored in layers,
+listed in one catalog, and served through one SQL endpoint and a REST API under the same
+permissions. Market data is the first tenant; the value is in joining products across domains.
+
+| Read | For |
+|---|---|
+| [Chapter 20, the target platform](docs/architecture/20-target-data-product-platform.md) | The design, its ethos and twelve diagrams |
+| [ADR-056](docs/adr/ADR-056-unified-data-product-platform.md) | The decision, its alternatives and its costs |
+| [The plan to the demo tag](docs/plans/2026-11-26-unified-product-platform/README.md) and [to release](docs/plans/2026-11-26-unified-product-platform-to-release/README.md) | The phases, each with an exit a command proves |
+| [The research note](docs/research/2026-11-26-unified-platform-architecture.md) | How the design was chosen: three competing designs, a judge, adversarial reviews, spikes |
+
+Everything below this section, and chapters 04 to 19 of the architecture book, describe **what
+runs today**. Each phase of the plan updates them in the pull request that makes a change real.
+
 ## Overview
 
 | Property | How |

@@ -6,7 +6,7 @@
 **Category:** Architecture (umbrella)
 **Decided by:** the owner on 2026-11-26, after an architecture tournament, two adversarial reviews,
 a plan review and three spikes, all kept with the research note,
-`../research/2026-11-26-unified-platform-architecture.md` (its inputs are cited below by file name)
+[`2026-11-26-unified-platform-architecture.md`](../research/2026-11-26-unified-platform-architecture.md) (its inputs are cited below by file name)
 **Supersedes:** the remaining phases, P4 to P7, of [ADR-031](ADR-031-governed-self-serve-platform.md);
 the clauses of other ADRs listed under [Consequences](#consequences), as their phases land
 
@@ -45,14 +45,14 @@ Trino, a SQL server, builds dbt marts over it ([ADR-035](ADR-035-trino-and-dbt-f
 and domain warehouses ([ADR-044](ADR-044-producer-lake-and-domain-mart-warehouses.md)); the contracts
 describe the pipeline but do not drive it, and a new source means editing the ingest's code.
 
-**The forces.** The owner's aim (`BRIEF.md`, `REQUIREMENTS-V2.md` D): "product and service
+**The forces.** The owner's aim ([`BRIEF.md`](../research/2026-11-26-unified-platform-architecture/BRIEF.md), [`REQUIREMENTS-V2.md`](../research/2026-11-26-unified-platform-architecture/REQUIREMENTS-V2.md) D): "product and service
 orientated with a unified ingestion layer, unified storage layers, a unified catalog, and a unified
 service layer or query layer"; domain-agnostic, market data the first tenant, the value in joining
-products across domains. The criteria, in order (`JUDGING-CRITERIA.md`): robust, never publishing
+products across domains. The criteria, in order ([`JUDGING-CRITERIA.md`](../research/2026-11-26-unified-platform-architecture/JUDGING-CRITERIA.md)): robust, never publishing
 unaudited data; easy to manage; easy for stakeholders to use; best practice; modern yet tried and
 tested. Definitions are documents whose store is a seam: git now, a registry later
-(`REQUIREMENTS-V2.md` B.3). A lab until the release gate, data disposable after a backup
-(`ADDENDUM-5.md`). One host, under [ADR-045](ADR-045-ceiling-25-cpu-48-gib.md)'s 25 CPU / 48 GiB.
+([`REQUIREMENTS-V2.md`](../research/2026-11-26-unified-platform-architecture/REQUIREMENTS-V2.md) B.3). A lab until the release gate, data disposable after a backup
+([`ADDENDUM-5.md`](../research/2026-11-26-unified-platform-architecture/ADDENDUM-5.md)). One host, under [ADR-045](ADR-045-ceiling-25-cpu-48-gib.md)'s 25 CPU / 48 GiB.
 
 **The evidence.**
 
@@ -62,13 +62,13 @@ tested. Definitions are documents whose store is a seam: git now, a registry lat
   pull request #238: a step for a product nobody was feeding failed the run every venue depends on.
 - **The job is near its slot:** over the 24 hours before 2026-11-26 11:08 UTC, a median of 189 s and
   a p90 of 253 s over 277 runs, against a 300 s slot and
-  [ADR-034](ADR-034-airflow-3-replaces-prefect.md)'s 240 s line (`SPIKE-RUNCOST.md`).
-- **The reviews.** A tournament of three designs and a judge's synthesis (`VERDICT.md`); an
-  adversarial review (`REVIEW.md`) found its contract-supplied Spark SQL could read the storage root
+  [ADR-034](ADR-034-airflow-3-replaces-prefect.md)'s 240 s line ([`SPIKE-RUNCOST.md`](../research/2026-11-26-unified-platform-architecture/SPIKE-RUNCOST.md)).
+- **The reviews.** A tournament of three designs and a judge's synthesis ([`VERDICT.md`](../research/2026-11-26-unified-platform-architecture/VERDICT.md)); an
+  adversarial review ([`REVIEW.md`](../research/2026-11-26-unified-platform-architecture/REVIEW.md)) found its contract-supplied Spark SQL could read the storage root
   password through `reflect`, its transform vocabulary a private language, any Trino reader able to
   roll back a mart today, services reading the working tree, and the Spark image's Python past end
-  of life. The revised design drew 96 findings, none rejected (`V2-CHANGELOG.md`); the plan review
-  said "go, with changes", its 2 critical and 8 high findings accepted (`FULL-PLAN-REVIEW.md`).
+  of life. The revised design drew 96 findings, none rejected ([`V2-CHANGELOG.md`](../research/2026-11-26-unified-platform-architecture/V2-CHANGELOG.md)); the plan review
+  said "go, with changes", its 2 critical and 8 high findings accepted ([`FULL-PLAN-REVIEW.md`](../research/2026-11-26-unified-platform-architecture/FULL-PLAN-REVIEW.md)).
 - **Side doors:** notebooks read MinIO with its root key (`notebooks/k2lake.py`); Lakekeeper is on a
   host port without authentication; the backup copies four fixed tables (`scripts/backup-lake.sh`);
   a checkout switch left Airflow no DAGs for 35 minutes on 2026-11-25 (`CLAUDE.md`).
@@ -307,7 +307,7 @@ the **documents**, opens a **pull request** that CI validates, and the merge is 
 the **registry** supplies the approved version. **Deploy time:** the **compiler** turns that set alone
 into **release R**; a failed **preflight** moves nothing; else the **pointers** move and are verified,
 a mismatch returning them to R-1. **Run time:** the **DAGs**, **Trino** and **k2-api** run R. All
-twelve target diagrams are in `../architecture/20-target-data-product-platform.md`.
+twelve target diagrams are in [`20-target-data-product-platform.md`](../architecture/20-target-data-product-platform.md).
 
 ### 7. Metadata from every step, in open standards
 
@@ -348,22 +348,22 @@ the date moves, never quality or order.
 ## Rationale
 
 - **Per-product pipelines remove the coupling that failed** (a derived product runs on what its
-  inputs published and shows `partial`), **and their cost fits** (`SPIKE-RUNCOST.md`, n = 5): a small
+  inputs published and shows `partial`), **and their cost fits** ([`SPIKE-RUNCOST.md`](../research/2026-11-26-unified-platform-architecture/SPIKE-RUNCOST.md), n = 5): a small
   run on Spark (session, branch, append, two audits, fast-forward) took a median 6.51 s, 10.54 s on a
   table of 200 snapshots; a dbt build of one model with two tests, 3.02 to 4.71 s (n = 6). By
   arithmetic, not measurement, one Spark slot fits about 46 small runs per five minutes.
-- **dbt-core on Trino carries silver and gold** (`SPIKE-DBT.md`, dbt-core 1.12.7, dbt-trino 1.12.0):
+- **dbt-core on Trino carries silver and gold** ([`SPIKE-DBT.md`](../research/2026-11-26-unified-platform-architecture/SPIKE-DBT.md), dbt-core 1.12.7, dbt-trino 1.12.0):
   merge on a key, schema change, an enforced contract failing before the table changes, type-2
   snapshots and publish-test-rollback all worked through Lakekeeper. It is the standard tool the
-  owner wants to learn (`REVIEW.md` section 6). Trino 484 cannot write Iceberg branches, and
+  owner wants to learn ([`REVIEW.md`](../research/2026-11-26-unified-platform-architecture/REVIEW.md) section 6). Trino 484 cannot write Iceberg branches, and
   rollback alone left bad rows visible for 2.6 s: the marker closes that.
-- **Trino holds as the one gate on the spike's conditions** (`SPIKE-ACCESS.md`): masks and a delay
+- **Trino holds as the one gate on the spike's conditions** ([`SPIKE-ACCESS.md`](../research/2026-11-26-unified-platform-architecture/SPIKE-ACCESS.md)): masks and a delay
   filter held on direct reads, joins and `SELECT *`, but vanished through a definer view (so, tables);
   `"t$files"` exposed hidden rows' timestamps and masked columns' bounds (so, denied); a read-only
   catalog refused the table procedures a plain reader ran on a writable one (so, reader catalogs);
   changed rules went live in 12 s with a 5 s refresh period, and only on restart without one.
 - **Releases and a rebuild:** an immutable release ends the working-tree deploy and rolls back images
-  too (`FULL-PLAN-REVIEW.md` F5); a live old pipeline would have to be carried through the new
+  too ([`FULL-PLAN-REVIEW.md`](../research/2026-11-26-unified-platform-architecture/FULL-PLAN-REVIEW.md) F5); a live old pipeline would have to be carried through the new
   compiler and deploy (F1), so it retires, and fixtures, a DuckDB recomputation of silver and
   re-pinned candle and bar parity replace old-against-new parity.
 
@@ -373,8 +373,8 @@ the date moves, never quality or order.
 
 | Option | Why not |
 |--------|---------|
-| An always-on metadata registry as the control plane now (tournament entry B) | Trino's rules would hang on a live service, so a registry failure at night could stop all SQL; it scored 2 of 5 on easy to manage (`VERDICT.md` 7.1). Kept for after 3.0, behind the seam, with the runtime still reading only a release |
-| A custom, config-driven transform vocabulary compiled to Spark (the verdict's spine) | Eleven operations, four incremental modes and a compiler are a private language, and its Spark SQL fragments could read the storage root password (`REVIEW.md` finding 1); dbt-core on Trino was measured to carry the work |
+| An always-on metadata registry as the control plane now (tournament entry B) | Trino's rules would hang on a live service, so a registry failure at night could stop all SQL; it scored 2 of 5 on easy to manage ([`VERDICT.md`](../research/2026-11-26-unified-platform-architecture/VERDICT.md) 7.1). Kept for after 3.0, behind the seam, with the runtime still reading only a release |
+| A custom, config-driven transform vocabulary compiled to Spark (the verdict's spine) | Eleven operations, four incremental modes and a compiler are a private language, and its Spark SQL fragments could read the storage root password ([`REVIEW.md`](../research/2026-11-26-unified-platform-architecture/REVIEW.md) finding 1); dbt-core on Trino was measured to carry the work |
 | An off-the-shelf ingestion or catalog tool (Airbyte, dlt, Redpanda Connect, OpenMetadata) | Each adds a service or a maturity risk for what one connector per kind does: Redpanda Connect's Iceberg output needs an Enterprise licence, dlt was borderline on the two-year rule, and a catalog service is one more heavy service where a site generated from the release suffices |
 | Keep the single pipeline, add per-component switches | ADR-050's book switch is one, and the shared job still failed; a switch gives no product an owner, lifecycle, permissions or catalog page |
 | A trimmed, demo-first scope postponing the safety machinery | Withdrawn by the owner on 2026-11-26: "simple now, proper later" pairs (trusted user names, shared storage keys, no deploy pointers) get built twice. Full scope, the demo a tag on the way |
@@ -392,7 +392,7 @@ pipeline's retirement until the Kraken phase lands; a few seconds before a build
 interactive readers, since the marker moves only after the tests; more services than today
 (`k2-api`, a fetch container, dbt runners, Alertmanager, about twenty DAGs), the bootstrap peak
 estimated to go from 21.30 CPU / 37.812 GiB to about 19.40 / 32.375 once ClickHouse is paused, under
-25 / 48 (`ARCHITECTURE-V2.md` section 6); every client changes to log in; `raw.messages`, the old
+25 / 48 ([`ARCHITECTURE-V2.md`](../research/2026-11-26-unified-platform-architecture/ARCHITECTURE-V2.md) section 6); every client changes to log in; `raw.messages`, the old
 audit rows and the stored book data are let go after a backup.
 
 **Committed to:** ODPS 1.1.0 and ODCS 3.2.0; dbt-core, never Fusion; Trino as the one gate; deploys
@@ -435,9 +435,9 @@ this host needs access (single sign-on becomes its own decision).
 
 ## References
 
-- Plans: `../plans/2026-11-26-unified-product-platform/README.md` (to the demo tag) and
-  `../plans/2026-11-26-unified-product-platform-to-release/README.md` (to `v3.0.0`)
-- Research note: `../research/2026-11-26-unified-platform-architecture.md`; the inputs cited above
-  are in `../research/2026-11-26-unified-platform-architecture/`, the owner's decisions in its
-  `DECISIONS-FINAL.md`
-- Target architecture, all twelve diagrams: `../architecture/20-target-data-product-platform.md`
+- Plans: [`README.md`](../plans/2026-11-26-unified-product-platform/README.md) (to the demo tag) and
+  [`README.md`](../plans/2026-11-26-unified-product-platform-to-release/README.md) (to `v3.0.0`)
+- Research note: [`2026-11-26-unified-platform-architecture.md`](../research/2026-11-26-unified-platform-architecture.md); the inputs cited above
+  are in [`2026-11-26-unified-platform-architecture`](../research/2026-11-26-unified-platform-architecture/), the owner's decisions in its
+  [`DECISIONS-FINAL.md`](../research/2026-11-26-unified-platform-architecture/DECISIONS-FINAL.md)
+- Target architecture, all twelve diagrams: [`20-target-data-product-platform.md`](../architecture/20-target-data-product-platform.md)

@@ -2,7 +2,7 @@
 
 **Depends on:** `003` (tag `v3.0.0-beta.5`); the phase audits of both plans, whose medium and low
 findings were deferred here.
-**Decision it implements:** `docs/adr/ADR-056-unified-data-product-platform.md`. Drafts resolved,
+**Decision it implements:** [`ADR-056-unified-data-product-platform.md`](../../adr/ADR-056-unified-data-product-platform.md). Drafts resolved,
 each accepted, revised or withdrawn in the pull request that builds it: ADR-051 telemetry
 (#225), ADR-052 backup and ADR-053 recoverable deletes and guards (#227). The upgrades carry
 ADR-010 Outcome lines where limits move.

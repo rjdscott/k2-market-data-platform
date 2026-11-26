@@ -2,7 +2,7 @@
 
 **Depends on:** `005` (tag `v3.0.0-alpha.7`: products in three domains and the joins between
 them); `004`'s Kafka connector, which lands the governance topic.
-**Decision it implements:** `docs/adr/ADR-056-unified-data-product-platform.md`: metadata is a
+**Decision it implements:** [`ADR-056-unified-data-product-platform.md`](../../adr/ADR-056-unified-data-product-platform.md): metadata is a
 first-class output of every step, in open standards where a mature one exists; the owner's
 decision on the catalog site. New ADRs, each in the pull request that builds it: usage capture
 from Trino's event listener; lineage events through the governance topic; retention as code,

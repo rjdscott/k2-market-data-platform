@@ -12,13 +12,13 @@ is breadth and assurance: the connector kinds not yet built, the other two crypt
 alerting on objectives and the controls catalogue, the host's infrastructure declared as code,
 the hardening the phase audits deferred, and a release gate from a fresh clone.
 
-It implements the same decision, `docs/adr/ADR-056-unified-data-product-platform.md`, toward the
-target in `docs/architecture/20-target-data-product-platform.md`; the reasoning is in
-`docs/research/2026-11-26-unified-platform-architecture.md`. Together with the plan to the demo
+It implements the same decision, [`ADR-056-unified-data-product-platform.md`](../../adr/ADR-056-unified-data-product-platform.md), toward the
+target in [`20-target-data-product-platform.md`](../../architecture/20-target-data-product-platform.md); the reasoning is in
+[`2026-11-26-unified-platform-architecture.md`](../../research/2026-11-26-unified-platform-architecture.md). Together with the plan to the demo
 tag it supersedes phases P4 to P7 of the
 [governed self-serve platform plan](../2026-11-24-governed-self-serve-platform/README.md).
 Review findings cited as F*n* are from
-`docs/research/2026-11-26-unified-platform-architecture/FULL-PLAN-REVIEW.md`. Terms are defined in
+[`FULL-PLAN-REVIEW.md`](../../research/2026-11-26-unified-platform-architecture/FULL-PLAN-REVIEW.md). Terms are defined in
 the first plan's README and the [ADR glossary](../../adr/glossary.md).
 
 **After 3.0, not in this plan.** The definition registry comes first: versions, approvals and

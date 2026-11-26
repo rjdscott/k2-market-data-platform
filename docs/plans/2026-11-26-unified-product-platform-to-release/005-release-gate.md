@@ -2,7 +2,7 @@
 
 **Depends on:** `004` (tag `v3.0.0-beta.6`); the owner's answers on the off-host backup
 destination, the `legacy/` layout and the lakehouse mode.
-**Decision it implements:** `docs/adr/ADR-056-unified-data-product-platform.md`: the platform is
+**Decision it implements:** [`ADR-056-unified-data-product-platform.md`](../../adr/ADR-056-unified-data-product-platform.md): the platform is
 a lab until this gate, and production rules apply from the `v3.0.0` tag.
 **Delivers:** the whole platform rebuilt from a fresh clone on an empty engine; the restore
 drill again, stopping the live stack; production mode; the governance pack, a capability

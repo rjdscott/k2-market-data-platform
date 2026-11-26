@@ -20,6 +20,20 @@ since archiving (only dependency pins and READMEs have moved), the v2 Kotlin tie
 in `legacy/v2-kotlin/`, and the deleted v2 offload in `legacy/v2-offload/`.
 Read this before writing code or docs. Architecture: `docs/architecture/README.md`.
 
+## Where this is going
+
+Everything above describes what runs today. K2 is being rebuilt into a domain-agnostic data
+product platform (ADR-056, Accepted 2026-11-26): a product is defined once in its contract and
+crosses one ingestion, storage, catalog and service layer. The authority is, in order:
+`docs/adr/ADR-056-unified-data-product-platform.md`, the plans
+`docs/plans/2026-11-26-unified-product-platform/` (to the demo tag) and
+`docs/plans/2026-11-26-unified-product-platform-to-release/`, and the target chapter
+`docs/architecture/20-target-data-product-platform.md`. Build each thing once, in plan order:
+the demo is a tag on that plan, never a branch of it, and nothing is built only for it. Until
+the `v3.0.0` tag the platform is a lab: data may be dropped and rebuilt when the plan calls for
+it, after a backup. A document that describes the running system keeps describing the running
+system; update it in the pull request that makes the change real.
+
 ## Branch + PR discipline
 
 - **Don't push to `main`.** Branch + PR, one PR per logical change.
