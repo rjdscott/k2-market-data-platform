@@ -1,0 +1,51 @@
+# Compiled by k2gen (platform/k2gen/k2gen/emit/dbt.py) from the release's documents. Never edit it: change the documents.
+version: 2
+models:
+- name: station_readings__silver_readings
+  description: One row per station and reading time, the value as a decimal.
+  config:
+    alias: silver_readings
+    properties:
+      partitioning: ARRAY['day(read_at)']
+      sorted_by: ARRAY['station_id']
+    unique_key:
+    - station_id
+    - read_at
+    meta:
+      k2:
+        contract: sensor-net.station-readings.silver_readings
+        reader: sensor_net.station_readings.silver_readings
+  columns:
+  - name: station_id
+    description: The made-up station's code.
+    data_type: varchar
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  - name: read_at
+    description: When the station took the reading.
+    data_type: timestamp(6) with time zone
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  - name: value
+    description: The reading.
+    data_type: decimal(12,3)
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  - name: region
+    description: The station's region.
+    data_type: varchar
+  - name: operator_note
+    description: Free text the made-up operator attached.
+    data_type: varchar
+  data_tests:
+  - k2_unique_key:
+      arguments:
+        columns:
+        - station_id
+        - read_at
