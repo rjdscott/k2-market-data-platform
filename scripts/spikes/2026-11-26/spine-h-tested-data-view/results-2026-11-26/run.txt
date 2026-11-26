@@ -1,0 +1,263 @@
+leftovers: live scratch warehouse spike_s01: absent; live scratch bucket spike-s01: gone; containers left 0, network spike-s01-catalog left 0
+live scratch: bucket spike-s01 made, warehouse spike_s01 HTTP 201
+fence lake: bootstrap HTTP 204 | warehouse fence HTTP 201
+trino up in 6 s
+PASS h1.01 the publisher creates its view through the writer catalog entry, in the reader namespace, its SQL naming the base through the reader catalog; readers read it through the reader catalog
+      ok; reader: ok [[3]]; stored: {'columns': ['id', 'region', 'secret', 'ts', 'amount'], 'owner': 'pub_a', 'dialects': ['trino'], 'sql': ["SELECT\n  id\n, region\n, secret\n, ts\n, amount\nFROM\n  s01.spike_s01_a__base.t FOR VERSION AS OF 'audited'\n"], 'default-catalog': None, 'default-namespace': ['spike_s01_a']}
+PASS h1.02 so the publisher holds catalog access ALL on the reader catalog (the definer-view owner check requires it); the read-only connector still refuses it every write there, and nothing changed
+      {"CREATE VIEW": "denied: Cannot create view s01.spike_s01_a.y", "CREATE OR REPLACE VIEW t": "denied: Cannot create view s01.spike_s01_a.t", "INSERT": "denied: Cannot insert into table s01.spike_s01_a__base.t", "DELETE": "denied: Cannot delete from table s01.spike_s01_a__base.t", "rollback_to_snapshot": "denied: Cannot execute table procedure ROLLBACK_TO_SNAPSHOT on spike_s01_a__base.t", "optimize": "denied: Cannot execute table procedure OPTIMIZE on spike_s01_a__base.t", "CALL rollback_to_snapshot": "denied: Cannot execute procedure s01.system.rollback_to_snapshot", "DROP TABLE": "denied: Cannot drop table s01.spike_s01_a__base.t", "DROP VIEW": "denied: Cannot drop view s01.spike_s01_a.t"}
+PASS h1.03 a reader sees no other principal's query text (system.runtime.queries, /v1/query); svc.platform does, so the history held the builder's INSERT
+      reader: table denied: Cannot select from table system.runtime.queries, REST 0 foreign queries; svc.platform sees 1 of dbt_a's
+PASS h1.04 full reader: exactly the tagged rows, row scope applied
+      [[1, "open", "zz-sec-1", 10], [2, "open", "zz-sec-2", 20], [5, "open", "zz-sec-5", 555555]]
+PASS h1.05 delayed reader: the tagged rows with scope, the 20-minute delay and the mask (a predicate on the masked column matches nothing)
+      [[1, 'open', None, 10], [2, 'open', None, 20]]; [[0]]
+PASS h1.06 the untested row is never returned, though main holds it
+      readers {'p.reader-full': [[0]], 'p.reader-delayed': [[0]]}; builder on main [[1]]
+PASS h1.07 an unrelated user: the view denied, nothing listed
+      denied: Cannot select from table s01.spike_s01_a.t; listing ok
+PASS h1.08 every base path refused to every reader: table, time travel by id, 'audited' and timestamp, 11 metadata tables, table_changes, DESCRIBE, SHOW STATS, SHOW CREATE; both catalogs, both products
+      228/228 refused {'Cannot select from table': 90, 'Cannot select from branch audited in tab': 6, 'Cannot execute function': 12, 'Cannot show columns of table': 6, 'Cannot show create table for': 6, 'Cannot access catalog': 108}; not refused []; invalid controls []
+PASS h1.09 time travel on the view, by snapshot id and by timestamp, is refused
+      {"id": "NOT_SUPPORTED: line 1:22: Views do not support versioning", "timestamp": "NOT_SUPPORTED: line 1:22: Views do not support versioning"}
+PASS h1.10 a string version on the view is ignored, never honoured: 'main' and 'zzz' both return the tag's rows
+      {"main": [[1], [2], [5]], "zzz": [[1], [2], [5]]}
+PASS h1.11 the view has no metadata tables, and readers cannot reach it through the writer catalog
+      {'snapshots': 'TABLE_NOT_FOUND: line 1:22: Table \'s01.spike_s01_a."t$snapshots"\' does not exist', 'files': 'TABLE_NOT_FOUND: line 1:22: Table \'s01.spike_s01_a."t$files"\' does not exist', 'refs': 'TABLE_NOT_FOUND: line 1:22: Table \'s01.spike_s01_a."t$refs"\' does not exist'}; writer catalog: denied: Cannot access catalog s01_build
+PASS h1.12 builders, another product's builder and another publisher cannot create, replace, drop, rename or comment a reader view, or put a table in the reader namespace; the view is unchanged
+      {"dbt_a CREATE VIEW A.x": "denied: Cannot create view s01_build.spike_s01_a.x", "dbt_a CREATE OR REPLACE VIEW A.t": "denied: Cannot create view s01_build.spike_s01_a.t", "dbt_a DROP VIEW A.t": "denied: Cannot drop view s01_build.spike_s01_a.t", "dbt_a RENAME A.t": "denied: Cannot rename view from s01_build.spike_s01_a.t to s01_build.spike_s01_a.t_old", "dbt_a COMMENT ON VIEW A.t": "denied: Cannot comment view to s01_build.spike_s01_a.t", "dbt_a CREATE TABLE A.t2": "denied: Cannot create table s01_build.spike_s01_a.t2", "dbt_a CREATE OR REPLACE VIEW s01.A.t": "denied: Cannot create view s01.spike_s01_a.t", "dbt_b CREATE OR REPLACE VIEW A.t": "denied: Cannot create view s01_build.spike_s01_a.t", "pub_b CREATE OR REPLACE VIEW A.t": "denied: Cannot create view s01_build.spike_s01_a.t"}
+PASS h1.13 publisher B (no privilege on A's base) cannot serve A's rows through a view of its own
+      create: denied: Cannot select from branch audited in table s01.spike_s01_a__base.t; read: not reached
+PASS h1.14 a publisher with SELECT but no GRANT_SELECT on A's base: its definer view is created, reading it is refused (GRANT_SELECT is the boundary)
+      create: ok; read: denied: View owner does not have sufficient privileges: View owner 'pub_x' cannot create view that selects from branch audited in s01.spike_s01_a__bas
+PASS h1.15 an invoker view over the base gives a reader nothing (no reader holds a base privilege)
+      create: ok; read: denied: Cannot select from branch audited in table s01.spike_s01_a__base.t
+PASS h1.16 materialized views cannot be created on the REST catalog
+      {"dbt_a": "NOT_SUPPORTED: createMaterializedView is not supported for Iceberg REST catalog", "pub_a": "NOT_SUPPORTED: createMaterializedView is not supported for Iceberg REST catalog"}
+INFO h1.17 B4 (known, held by k2_input and the lint): a builder with SELECT on an input's base copies its untested main into its own base
+      create: ok; copied ids [[1], [2], [3], [4], [5]]
+PASS h1.18 no reader can read that copy: it sits in a base namespace
+      {"p.reader-full": "denied: Cannot select from table s01.spike_s01_b__base.copy", "p.reader-delayed": "denied: Cannot select from table s01.spike_s01_b__base.copy", "p.unrelated": "denied: Cannot select from table s01.spike_s01_b__base.copy"}
+PASS h1.19 SET AUTHORIZATION on a view, schema or table is refused to every principal (no authorization rules), and the owners are unchanged
+      {"pub_a: view A.t to pub_b": "denied: Cannot set authorization for view s01_build.spike_s01_a.t to USER pub_b", "pub_b: view B.t to pub_a": "denied: Cannot set authorization for view s01_build.spike_s01_b.t to USER pub_a", "pub_a: schema A to dbt_a": "denied: Cannot set authorization for schema s01_build.spike_s01_a to USER dbt_a", "dbt_a: schema AB to pub_a": "denied: Cannot set authorization for schema s01_build.spike_s01_a__base to USER pub_a", "dbt_a: table AB.t to pub_a": "denied: Cannot set authorization for table s01_build.spike_s01_a__base.t to USER pub_a", "svc.platform: view A.t to itself": "denied: Cannot set authorization for view s01_build.spike_s01_a.t to USER svc.platform"}
+PASS h1.20 SHOW STATS on the view (and on a query over it): no low or high bound, no row count, no hidden value
+      left visible: {'p.reader-full s01.spike_s0': [], 'p.reader-full (SELECT * FR': [], 'p.reader-delayed s01.spike_s0': ['secret: distinct 0.0, nulls 1.0'], 'p.reader-delayed (SELECT * FR': ['secret: distinct 0.0, nulls 1.0']}; leaks []
+PASS h1.21f EXPLAIN ANALYZE VERBOSE as p.reader-full: no hidden value, no estimate from statistics
+      hidden values found []; estimates ['?']; Input rows ['4', '4']; scan s01:spike_s01_a__base.t$data@6320623142862475577,
+PASS h1.21d EXPLAIN ANALYZE VERBOSE as p.reader-delayed: no hidden value, no estimate from statistics
+      hidden values found []; estimates ['?']; Input rows ['4', '4']; scan s01:spike_s01_a__base.t$data@6320623142862475577,
+PASS h1.22f p.reader-full: the processed-rows counter counts the tagged snapshot only, never the untested row
+      returned [[3]]; client protocol stats processedRows 4, processedBytes 948, physicalInputBytes 905; so 1 rows hidden by policy are countable (Q2)
+PASS h1.22d p.reader-delayed: the processed-rows counter counts the tagged snapshot only, never the untested row
+      returned [[2]]; client protocol stats processedRows 4, processedBytes 948, physicalInputBytes 905; so 2 rows hidden by policy are countable (Q2)
+INFO h1.22q Q2, not a criterion: a reader can count the tagged rows its policy hides (processedRows in the client protocol, Input rows in EXPLAIN ANALYZE), not read them
+      {"p.reader-full": "1 of 4", "p.reader-delayed": "2 of 4"}
+PASS h1.23 a reader's SET SESSION s01.statistics_enabled = true is refused by the rule
+      {"p.reader-full": "denied: Cannot set catalog session property statistics_enabled", "p.reader-delayed": "denied: Cannot set catalog session property statistics_enabled", "p.unrelated": "denied: Cannot set catalog session property statistics_enabled"}
+PASS h1.24 the same property in the session header (the CLI's --session) is refused too
+      {"p.reader-full": "denied: Cannot set catalog session property statistics_enabled", "p.reader-delayed": "denied: Cannot set catalog session property statistics_enabled", "p.unrelated": "denied: Cannot set catalog session property statistics_enabled"}
+PASS h1.25 control: a pipeline principal may set it, and the bounds come back (so the rule is what holds)
+      ["id: distinct 4.0, nulls 0.0, low 1, high 5", "region: size 213.0, distinct 2.0, nulls 0.0", "secret: size 162.0, distinct 4.0, nulls 0.0", "ts: distinct 2.0, nulls 0.0, low 2026-11-26 15:22:25.247 UTC, high 2026-11-26 17:22:25.247 UTC", "amount: distinct 4.0, nulls 0.0, low 10, high 555555", "(table): rows 4.0"]
+PASS h1.26 no other boolean catalog session property a reader may set brings a bound back (17 flipped one at a time)
+      {"bounds": [], "refused": [], "other error": [], "accepted, no bounds": ["bucket_execution_enabled", "collect_extended_statistics_on_write", "incremental_refresh_enabled", "merge_manifests_on_write", "orc_bloom_filters_enabled", "orc_lazy_read_small_ranges", "orc_nested_lazy_enabled", "parquet_ignore_statistics", "parquet_use_bloom_filter", "parquet_use_column_index", "parquet_vectorized_decoding_enabled", "parquet_writer_delta_length_byte_array_encoding_enabled", "plaintext_files_allowed_for_encrypted_tables", "projection_pushdown_enabled", "query_partition_filter_required", "sorted_writing_enabled", "use_file_size_from_metadata"]}
+PASS h1.27 a reader's retention session property is refused
+      denied: Cannot set catalog session property expire_snapshots_min_retention
+PASS h1.28 SHOW CREATE VIEW is refused to a reader
+      denied: Cannot show create table for s01.spike_s01_a.t
+INFO h1.29 B5: what information_schema.views shows each reader
+      {"p.reader-full": ["spike_s01_a.inv: SELECT id , region , secret , ts , amount FROM s01.spike_s01_a__base.t FOR VERSION AS OF 'audited'", "spike_s01_a.t: SELECT id , region , secret , ts , amount FROM s01.spike_s01_a__base.t FOR VERSION AS OF 'audited'", "spike_s01_b.t: SELECT id , region , secret , ts , amount FROM s01.spike_s01_b__base.t FOR VERSION AS OF 'audited'", "spike_s01_x.v: SELECT id , region , secret , ts , amount FROM s01.spike_s01_a__base.t FOR VERSION AS OF 'audited'"], "p.reader-delayed": ["spike_s01_a.inv: SELECT id , region , secret , ts , amount FROM s01.spike_s01_a__base.t FOR VERSION AS OF 'audited'", "spike_s01_a.t: SELECT id , region , secret , ts , amount FROM s01.spike_s01_a__base.t FOR VERSION AS OF 'audited'"], "p.unrelated": []}
+PASS h1.30 no base table is listed to a reader (information_schema.tables, SHOW TABLES)
+      listed {'p.reader-full': [['spike_s01_a', 'inv'], ['spike_s01_a', 't'], ['spike_s01_b', 't'], ['spike_s01_x', 'v']], 'p.reader-delayed': [['spike_s01_a', 'inv'], ['spike_s01_a', 't']]}; SHOW TABLES on a base ['denied: Cannot show tables of schema s01.spike_s01_a__base', 'denied: Cannot show tables of schema s01.spike_s01_a__base']
+PASS h1.31 a view planted in A's reader namespace under a name no rule grants is denied to readers
+      planted by svc.platform: ok; read: denied: Cannot select from table s01.spike_s01_a.foreign_view
+INFO h1.32 the view as the catalog stores it (the drift check's input)
+      {"columns": ["id", "region", "secret", "ts", "amount"], "owner": "pub_a", "dialects": ["trino"], "sql": ["SELECT\n  id\n, region\n, secret\n, ts\n, amount\nFROM\n  s01.spike_s01_a__base.t FOR VERSION AS OF 'audited'\n"], "default-catalog": null, "default-namespace": ["spike_s01_a"]}
+PASS h1.33 svc.platform (OWNERSHIP, no GRANT_SELECT) replacing a reader view without the tag: readers get an error, not rows
+      replace: ok; owner now svc.platform; reader: denied: View owner does not have sufficient privileges: View owner 'svc.platform' cannot create view that selects from s01_build.spike_s01_a__base.t
+PASS h1.34 a builder that drops and recreates its base (the tag goes with the old table): readers get an error, never the new rows
+      INVALID_VIEW: line 1:16: Failed analyzing stored view 's01.spike_s01_a.t': Cannot find snapshot with reference name: audited
+PASS h2.00 the poll checker flags a planted untested row, failed-build row, empty, torn, unstraddled mixed, stale and erroring poll (self-check on synthetic polls)
+      check_polls()
+PASS h2.01 (ii) a failing build: its test fails, neither tag moves, and CREATE OR REPLACE ... AS SELECT * FROM t FOR VERSION AS OF <id> restores main to the tagged rows
+      test passed False; tags unchanged True; main = tag {'t1': True, 't2': True}
+PASS h2.02 (iii) an added column: the view gains it after the tag moves
+      ["id", "batch", "flag", "amount", "note"]
+PASS h2.03 (iv) a dropped column under the rule (C ∩ old ∩ new, tag, C ∩ new): the view drops it first
+      ["id", "batch", "flag", "note"]
+PASS h2.04 (v) a kill between the tag commit and the view update: reads go on with the old columns; the reconcile completes it, and a second reconcile changes nothing
+      child exit -9; t2 after the kill ['id', 'batch', 'flag', 'total']; reconcile ["t2: ['id', 'batch', 'flag', 'total', 'note2']"]; again []; now ['id', 'batch', 'flag', 'total', 'note2']
+PASS h2.05 one stale requirement in the multi-table commit: 409, and neither tag moves
+      HTTP 409 CatalogCommitConflicts: CatalogCommitConflicts, context: { expected: 4294057595749274739, found: 4294057595749274738 } => Requirement failed: Branch or tag `audited`'s snapshot has cha; tags unchanged True
+PASS h2.06 multi-table tag commit (2 tables), from the host: n=23
+      median 13.2 ms, p95 18.0 ms, max 30.1 ms
+PASS h2.07 reader polls: 122 over 25 s; none errored, under the view rule
+      122 answered; poll latency median 145 ms, max 454 ms; polls during (ii) 7, (iii) 6, (iv) 6, (v) 14; errors []
+PASS h2.08 no poll returned an untested row (a failed build's, or a batch before its commit was sent)
+      0 of 122 answered polls []
+PASS h2.09 no poll returned an empty table
+      0 of 122 answered polls
+PASS h2.10 no poll returned a partly loaded table (rows = the tested count of the batch seen)
+      0 of 122 answered polls []
+PASS h2.11 the two tables disagree only while a commit is in flight during that very poll
+      mixed polls: 2 during a commit, 0 outside one, of 122 answered; [(677693.160917422, 677693.246408889, [20, 10, 0, 11, 11, 0], None), (677697.765576255, 677697.872682883, [30, 15, 0, 16, 16, 0], None)]
+INFO h2.12 polls that started after a commit returned yet showed an older batch
+      0 of 122 answered
+INFO h2.13 view replace (CREATE OR REPLACE VIEW as pub_c): n=5
+      median 48.7 ms, max 63.4 ms
+PASS h2.14 control: tag first, then view, on a dropped column breaks reads (the rule is load-bearing); the reconcile repairs it
+      tag commit HTTP 200; read INVALID_VIEW: line 1:22: Failed analyzing stored view 's01.spike_s01_c.t2': line 5:3: Column 'total' cannot be resolved; reconcile ["t2: ['id', 'batch', 'flag', 'note2']"]; read after ok [[24]]
+PASS h3.01 the throwaway Lakekeeper (the stack's pin) is on its own network only, with no host port
+      networks ['spike-s01-catalog']; published ports none; quay.io/lakekeeper/catalog:v0.13.9
+PASS h3.02 from a container on k2-net the catalog API is unreachable, by name and by address
+      http://spike-s01-lakekeeper:8181/catalog/v1/config?warehouse=fence -> unreachable after 0.0 s: [Errno -2] Name or service not known
+http://172.20.0.4:8181/catalog/v1/config?warehouse=fence -> unreachable after 4.0 s: timed out
+PASS h3.03 from k2-net both forgeries fail to connect, and the catalog is unchanged (drift check clean, exit 0)
+      forged view: exit 2 unreachable: timed out; graft: exit 2 unreachable: timed out; drift: exit 0 clean: catalog equals the release
+PASS h3.04 inside the catalog network a view POSTed with a forged owner (pub_a) replaces B's view: B's reader gets A's untested row and A's secrets
+      exit 0 forged view spike_s01_b.t owner pub_a: HTTP [204, 200]; B's reader before [[101], [102]], now [[1, 'zz-sec-1'], [2, 'zz-sec-2'], [3, 'zz-sec-3'], [4, 'zz-sec-4'], [5, 'zz-sec-5']]
+PASS h3.05 the drift check then exits non-zero and names the planted view
+      exit 1: DRIFT view spike_s01_b.t: owner 'pub_a', release says 'pub_b'
+DRIFT view spike_s01_b.t: SQL 'SELECT id , region , secret , ts , amount FROM fence.spike_s01_a__base.t', release says "SELECT id , region , secret , ts , amount FROM fence.spike_s01_b__base.t FOR VERSION AS OF 'audited'"
+PASS h3.06 republishing B's view from the release (the reconcile) makes it clean again
+      exit 0: clean: catalog equals the release
+PASS h3.07 inside, add-snapshot plus set-snapshot-ref grafts A's untested snapshot into B's base as its audited tag: B's own view now serves A's untested row
+      exit 0 grafted snapshot 400986248961976460 of spike_s01_a__base.t into spike_s01_b__base.t as audited: HTTP 200; B's reader now [[1, 'zz-sec-1'], [2, 'zz-sec-2'], [3, 'zz-sec-3'], [4, 'zz-sec-4'], [5, 'zz-sec-5']]
+PASS h3.08 the drift check then exits non-zero and names the moved tag
+      exit 1: DRIFT tag spike_s01_b__base.t audited: 400986248961976460, release records 6993861353032140452
+INFO h3.09 the host and the throwaway catalog's address
+      unreachable after 3.0 s: timed out
+run took 85 s
+
+====================================================================================================
+spine-h-tested-data-view: results (FAIL = a leak or a pass criterion not met; INFO = recorded, not a criterion)
+====================================================================================================
+h1.01  PASS  the publisher creates its view through the writer catalog entry, in the reader namespace, its SQL naming the base through the reader catalog; readers read it through the reader catalog
+            ok; reader: ok [[3]]; stored: {'columns': ['id', 'region', 'secret', 'ts', 'amount'], 'owner': 'pub_a', 'dialects': ['trino'], 'sql': ["SELECT\n  id\n, region\n, secret\n, ts\n, amount\nFROM\n  s01.spike_s01_a__base.t FOR VERSION AS OF 'audited'\n"], 'default-catalog': None, 'default-namespace': ['spike_s01_a']}
+h1.02  PASS  so the publisher holds catalog access ALL on the reader catalog (the definer-view owner check requires it); the read-only connector still refuses it every write there, and nothing changed
+            {"CREATE VIEW": "denied: Cannot create view s01.spike_s01_a.y", "CREATE OR REPLACE VIEW t": "denied: Cannot create view s01.spike_s01_a.t", "INSERT": "denied: Cannot insert into table s01.spike_s01_a__base.t", "DELETE": "denied: Cannot delete from table s01.spike_s01_a__base.t", "rollback_to_snapshot": "denied: Cannot execute table procedure ROLLBACK_TO_SNAPSHOT on spike_s01_a__base.t", "optimize"
+h1.03  PASS  a reader sees no other principal's query text (system.runtime.queries, /v1/query); svc.platform does, so the history held the builder's INSERT
+            reader: table denied: Cannot select from table system.runtime.queries, REST 0 foreign queries; svc.platform sees 1 of dbt_a's
+h1.04  PASS  full reader: exactly the tagged rows, row scope applied
+            [[1, "open", "zz-sec-1", 10], [2, "open", "zz-sec-2", 20], [5, "open", "zz-sec-5", 555555]]
+h1.05  PASS  delayed reader: the tagged rows with scope, the 20-minute delay and the mask (a predicate on the masked column matches nothing)
+            [[1, 'open', None, 10], [2, 'open', None, 20]]; [[0]]
+h1.06  PASS  the untested row is never returned, though main holds it
+            readers {'p.reader-full': [[0]], 'p.reader-delayed': [[0]]}; builder on main [[1]]
+h1.07  PASS  an unrelated user: the view denied, nothing listed
+            denied: Cannot select from table s01.spike_s01_a.t; listing ok
+h1.08  PASS  every base path refused to every reader: table, time travel by id, 'audited' and timestamp, 11 metadata tables, table_changes, DESCRIBE, SHOW STATS, SHOW CREATE; both catalogs, both products
+            228/228 refused {'Cannot select from table': 90, 'Cannot select from branch audited in tab': 6, 'Cannot execute function': 12, 'Cannot show columns of table': 6, 'Cannot show create table for': 6, 'Cannot access catalog': 108}; not refused []; invalid controls []
+h1.09  PASS  time travel on the view, by snapshot id and by timestamp, is refused
+            {"id": "NOT_SUPPORTED: line 1:22: Views do not support versioning", "timestamp": "NOT_SUPPORTED: line 1:22: Views do not support versioning"}
+h1.10  PASS  a string version on the view is ignored, never honoured: 'main' and 'zzz' both return the tag's rows
+            {"main": [[1], [2], [5]], "zzz": [[1], [2], [5]]}
+h1.11  PASS  the view has no metadata tables, and readers cannot reach it through the writer catalog
+            {'snapshots': 'TABLE_NOT_FOUND: line 1:22: Table \'s01.spike_s01_a."t$snapshots"\' does not exist', 'files': 'TABLE_NOT_FOUND: line 1:22: Table \'s01.spike_s01_a."t$files"\' does not exist', 'refs': 'TABLE_NOT_FOUND: line 1:22: Table \'s01.spike_s01_a."t$refs"\' does not exist'}; writer catalog: denied: Cannot access catalog s01_build
+h1.12  PASS  builders, another product's builder and another publisher cannot create, replace, drop, rename or comment a reader view, or put a table in the reader namespace; the view is unchanged
+            {"dbt_a CREATE VIEW A.x": "denied: Cannot create view s01_build.spike_s01_a.x", "dbt_a CREATE OR REPLACE VIEW A.t": "denied: Cannot create view s01_build.spike_s01_a.t", "dbt_a DROP VIEW A.t": "denied: Cannot drop view s01_build.spike_s01_a.t", "dbt_a RENAME A.t": "denied: Cannot rename view from s01_build.spike_s01_a.t to s01_build.spike_s01_a.t_old", "dbt_a COMMENT ON VIEW A.t": "denied: Cannot 
+h1.13  PASS  publisher B (no privilege on A's base) cannot serve A's rows through a view of its own
+            create: denied: Cannot select from branch audited in table s01.spike_s01_a__base.t; read: not reached
+h1.14  PASS  a publisher with SELECT but no GRANT_SELECT on A's base: its definer view is created, reading it is refused (GRANT_SELECT is the boundary)
+            create: ok; read: denied: View owner does not have sufficient privileges: View owner 'pub_x' cannot create view that selects from branch audited in s01.spike_s01_a__bas
+h1.15  PASS  an invoker view over the base gives a reader nothing (no reader holds a base privilege)
+            create: ok; read: denied: Cannot select from branch audited in table s01.spike_s01_a__base.t
+h1.16  PASS  materialized views cannot be created on the REST catalog
+            {"dbt_a": "NOT_SUPPORTED: createMaterializedView is not supported for Iceberg REST catalog", "pub_a": "NOT_SUPPORTED: createMaterializedView is not supported for Iceberg REST catalog"}
+h1.17  INFO  B4 (known, held by k2_input and the lint): a builder with SELECT on an input's base copies its untested main into its own base
+            create: ok; copied ids [[1], [2], [3], [4], [5]]
+h1.18  PASS  no reader can read that copy: it sits in a base namespace
+            {"p.reader-full": "denied: Cannot select from table s01.spike_s01_b__base.copy", "p.reader-delayed": "denied: Cannot select from table s01.spike_s01_b__base.copy", "p.unrelated": "denied: Cannot select from table s01.spike_s01_b__base.copy"}
+h1.19  PASS  SET AUTHORIZATION on a view, schema or table is refused to every principal (no authorization rules), and the owners are unchanged
+            {"pub_a: view A.t to pub_b": "denied: Cannot set authorization for view s01_build.spike_s01_a.t to USER pub_b", "pub_b: view B.t to pub_a": "denied: Cannot set authorization for view s01_build.spike_s01_b.t to USER pub_a", "pub_a: schema A to dbt_a": "denied: Cannot set authorization for schema s01_build.spike_s01_a to USER dbt_a", "dbt_a: schema AB to pub_a": "denied: Cannot set authorization for
+h1.20  PASS  SHOW STATS on the view (and on a query over it): no low or high bound, no row count, no hidden value
+            left visible: {'p.reader-full s01.spike_s0': [], 'p.reader-full (SELECT * FR': [], 'p.reader-delayed s01.spike_s0': ['secret: distinct 0.0, nulls 1.0'], 'p.reader-delayed (SELECT * FR': ['secret: distinct 0.0, nulls 1.0']}; leaks []
+h1.21f PASS  EXPLAIN ANALYZE VERBOSE as p.reader-full: no hidden value, no estimate from statistics
+            hidden values found []; estimates ['?']; Input rows ['4', '4']; scan s01:spike_s01_a__base.t$data@6320623142862475577,
+h1.21d PASS  EXPLAIN ANALYZE VERBOSE as p.reader-delayed: no hidden value, no estimate from statistics
+            hidden values found []; estimates ['?']; Input rows ['4', '4']; scan s01:spike_s01_a__base.t$data@6320623142862475577,
+h1.22f PASS  p.reader-full: the processed-rows counter counts the tagged snapshot only, never the untested row
+            returned [[3]]; client protocol stats processedRows 4, processedBytes 948, physicalInputBytes 905; so 1 rows hidden by policy are countable (Q2)
+h1.22d PASS  p.reader-delayed: the processed-rows counter counts the tagged snapshot only, never the untested row
+            returned [[2]]; client protocol stats processedRows 4, processedBytes 948, physicalInputBytes 905; so 2 rows hidden by policy are countable (Q2)
+h1.22q INFO  Q2, not a criterion: a reader can count the tagged rows its policy hides (processedRows in the client protocol, Input rows in EXPLAIN ANALYZE), not read them
+            {"p.reader-full": "1 of 4", "p.reader-delayed": "2 of 4"}
+h1.23  PASS  a reader's SET SESSION s01.statistics_enabled = true is refused by the rule
+            {"p.reader-full": "denied: Cannot set catalog session property statistics_enabled", "p.reader-delayed": "denied: Cannot set catalog session property statistics_enabled", "p.unrelated": "denied: Cannot set catalog session property statistics_enabled"}
+h1.24  PASS  the same property in the session header (the CLI's --session) is refused too
+            {"p.reader-full": "denied: Cannot set catalog session property statistics_enabled", "p.reader-delayed": "denied: Cannot set catalog session property statistics_enabled", "p.unrelated": "denied: Cannot set catalog session property statistics_enabled"}
+h1.25  PASS  control: a pipeline principal may set it, and the bounds come back (so the rule is what holds)
+            ["id: distinct 4.0, nulls 0.0, low 1, high 5", "region: size 213.0, distinct 2.0, nulls 0.0", "secret: size 162.0, distinct 4.0, nulls 0.0", "ts: distinct 2.0, nulls 0.0, low 2026-11-26 15:22:25.247 UTC, high 2026-11-26 17:22:25.247 UTC", "amount: distinct 4.0, nulls 0.0, low 10, high 555555", "(table): rows 4.0"]
+h1.26  PASS  no other boolean catalog session property a reader may set brings a bound back (17 flipped one at a time)
+            {"bounds": [], "refused": [], "other error": [], "accepted, no bounds": ["bucket_execution_enabled", "collect_extended_statistics_on_write", "incremental_refresh_enabled", "merge_manifests_on_write", "orc_bloom_filters_enabled", "orc_lazy_read_small_ranges", "orc_nested_lazy_enabled", "parquet_ignore_statistics", "parquet_use_bloom_filter", "parquet_use_column_index", "parquet_vectorized_decoding_
+h1.27  PASS  a reader's retention session property is refused
+            denied: Cannot set catalog session property expire_snapshots_min_retention
+h1.28  PASS  SHOW CREATE VIEW is refused to a reader
+            denied: Cannot show create table for s01.spike_s01_a.t
+h1.29  INFO  B5: what information_schema.views shows each reader
+            {"p.reader-full": ["spike_s01_a.inv: SELECT id , region , secret , ts , amount FROM s01.spike_s01_a__base.t FOR VERSION AS OF 'audited'", "spike_s01_a.t: SELECT id , region , secret , ts , amount FROM s01.spike_s01_a__base.t FOR VERSION AS OF 'audited'", "spike_s01_b.t: SELECT id , region , secret , ts , amount FROM s01.spike_s01_b__base.t FOR VERSION AS OF 'audited'", "spike_s01_x.v: SELECT id , 
+h1.30  PASS  no base table is listed to a reader (information_schema.tables, SHOW TABLES)
+            listed {'p.reader-full': [['spike_s01_a', 'inv'], ['spike_s01_a', 't'], ['spike_s01_b', 't'], ['spike_s01_x', 'v']], 'p.reader-delayed': [['spike_s01_a', 'inv'], ['spike_s01_a', 't']]}; SHOW TABLES on a base ['denied: Cannot show tables of schema s01.spike_s01_a__base', 'denied: Cannot show tables of schema s01.spike_s01_a__base']
+h1.31  PASS  a view planted in A's reader namespace under a name no rule grants is denied to readers
+            planted by svc.platform: ok; read: denied: Cannot select from table s01.spike_s01_a.foreign_view
+h1.32  INFO  the view as the catalog stores it (the drift check's input)
+            {"columns": ["id", "region", "secret", "ts", "amount"], "owner": "pub_a", "dialects": ["trino"], "sql": ["SELECT\n  id\n, region\n, secret\n, ts\n, amount\nFROM\n  s01.spike_s01_a__base.t FOR VERSION AS OF 'audited'\n"], "default-catalog": null, "default-namespace": ["spike_s01_a"]}
+h1.33  PASS  svc.platform (OWNERSHIP, no GRANT_SELECT) replacing a reader view without the tag: readers get an error, not rows
+            replace: ok; owner now svc.platform; reader: denied: View owner does not have sufficient privileges: View owner 'svc.platform' cannot create view that selects from s01_build.spike_s01_a__base.t
+h1.34  PASS  a builder that drops and recreates its base (the tag goes with the old table): readers get an error, never the new rows
+            INVALID_VIEW: line 1:16: Failed analyzing stored view 's01.spike_s01_a.t': Cannot find snapshot with reference name: audited
+h2.00  PASS  the poll checker flags a planted untested row, failed-build row, empty, torn, unstraddled mixed, stale and erroring poll (self-check on synthetic polls)
+            check_polls()
+h2.01  PASS  (ii) a failing build: its test fails, neither tag moves, and CREATE OR REPLACE ... AS SELECT * FROM t FOR VERSION AS OF <id> restores main to the tagged rows
+            test passed False; tags unchanged True; main = tag {'t1': True, 't2': True}
+h2.02  PASS  (iii) an added column: the view gains it after the tag moves
+            ["id", "batch", "flag", "amount", "note"]
+h2.03  PASS  (iv) a dropped column under the rule (C ∩ old ∩ new, tag, C ∩ new): the view drops it first
+            ["id", "batch", "flag", "note"]
+h2.04  PASS  (v) a kill between the tag commit and the view update: reads go on with the old columns; the reconcile completes it, and a second reconcile changes nothing
+            child exit -9; t2 after the kill ['id', 'batch', 'flag', 'total']; reconcile ["t2: ['id', 'batch', 'flag', 'total', 'note2']"]; again []; now ['id', 'batch', 'flag', 'total', 'note2']
+h2.05  PASS  one stale requirement in the multi-table commit: 409, and neither tag moves
+            HTTP 409 CatalogCommitConflicts: CatalogCommitConflicts, context: { expected: 4294057595749274739, found: 4294057595749274738 } => Requirement failed: Branch or tag `audited`'s snapshot has cha; tags unchanged True
+h2.06  PASS  multi-table tag commit (2 tables), from the host: n=23
+            median 13.2 ms, p95 18.0 ms, max 30.1 ms
+h2.07  PASS  reader polls: 122 over 25 s; none errored, under the view rule
+            122 answered; poll latency median 145 ms, max 454 ms; polls during (ii) 7, (iii) 6, (iv) 6, (v) 14; errors []
+h2.08  PASS  no poll returned an untested row (a failed build's, or a batch before its commit was sent)
+            0 of 122 answered polls []
+h2.09  PASS  no poll returned an empty table
+            0 of 122 answered polls
+h2.10  PASS  no poll returned a partly loaded table (rows = the tested count of the batch seen)
+            0 of 122 answered polls []
+h2.11  PASS  the two tables disagree only while a commit is in flight during that very poll
+            mixed polls: 2 during a commit, 0 outside one, of 122 answered; [(677693.160917422, 677693.246408889, [20, 10, 0, 11, 11, 0], None), (677697.765576255, 677697.872682883, [30, 15, 0, 16, 16, 0], None)]
+h2.12  INFO  polls that started after a commit returned yet showed an older batch
+            0 of 122 answered
+h2.13  INFO  view replace (CREATE OR REPLACE VIEW as pub_c): n=5
+            median 48.7 ms, max 63.4 ms
+h2.14  PASS  control: tag first, then view, on a dropped column breaks reads (the rule is load-bearing); the reconcile repairs it
+            tag commit HTTP 200; read INVALID_VIEW: line 1:22: Failed analyzing stored view 's01.spike_s01_c.t2': line 5:3: Column 'total' cannot be resolved; reconcile ["t2: ['id', 'batch', 'flag', 'note2']"]; read after ok [[24]]
+h3.01  PASS  the throwaway Lakekeeper (the stack's pin) is on its own network only, with no host port
+            networks ['spike-s01-catalog']; published ports none; quay.io/lakekeeper/catalog:v0.13.9
+h3.02  PASS  from a container on k2-net the catalog API is unreachable, by name and by address
+            http://spike-s01-lakekeeper:8181/catalog/v1/config?warehouse=fence -> unreachable after 0.0 s: [Errno -2] Name or service not known
+http://172.20.0.4:8181/catalog/v1/config?warehouse=fence -> unreachable after 4.0 s: timed out
+h3.03  PASS  from k2-net both forgeries fail to connect, and the catalog is unchanged (drift check clean, exit 0)
+            forged view: exit 2 unreachable: timed out; graft: exit 2 unreachable: timed out; drift: exit 0 clean: catalog equals the release
+h3.04  PASS  inside the catalog network a view POSTed with a forged owner (pub_a) replaces B's view: B's reader gets A's untested row and A's secrets
+            exit 0 forged view spike_s01_b.t owner pub_a: HTTP [204, 200]; B's reader before [[101], [102]], now [[1, 'zz-sec-1'], [2, 'zz-sec-2'], [3, 'zz-sec-3'], [4, 'zz-sec-4'], [5, 'zz-sec-5']]
+h3.05  PASS  the drift check then exits non-zero and names the planted view
+            exit 1: DRIFT view spike_s01_b.t: owner 'pub_a', release says 'pub_b'
+DRIFT view spike_s01_b.t: SQL 'SELECT id , region , secret , ts , amount FROM fence.spike_s01_a__base.t', release says "SELECT id , region , secret , ts , amount FROM fence.spike_s01_b__base.t FOR VERSION AS OF 'audited'"
+h3.06  PASS  republishing B's view from the release (the reconcile) makes it clean again
+            exit 0: clean: catalog equals the release
+h3.07  PASS  inside, add-snapshot plus set-snapshot-ref grafts A's untested snapshot into B's base as its audited tag: B's own view now serves A's untested row
+            exit 0 grafted snapshot 400986248961976460 of spike_s01_a__base.t into spike_s01_b__base.t as audited: HTTP 200; B's reader now [[1, 'zz-sec-1'], [2, 'zz-sec-2'], [3, 'zz-sec-3'], [4, 'zz-sec-4'], [5, 'zz-sec-5']]
+h3.08  PASS  the drift check then exits non-zero and names the moved tag
+            exit 1: DRIFT tag spike_s01_b__base.t audited: 400986248961976460, release records 6993861353032140452
+h3.09  INFO  the host and the throwaway catalog's address
+            unreachable after 3.0 s: timed out
+cleanup: live scratch warehouse spike_s01: deleted
+cleanup: live scratch bucket spike-s01: gone
+cleanup: containers left 0, network spike-s01-catalog left 0
+
+61 rows: 54 PASS, 0 FAIL, 7 INFO
+exit 0
