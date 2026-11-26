@@ -615,6 +615,17 @@ paused ones inside one pause.
 
 ## 8. Logs
 
+**Logs are capped.** Each container keeps at most five files of 50 MB (older ones compressed),
+about 250 MB, set once for every service in `docker-compose.yml` (`x-logging`). So `docker logs`
+reaches back a bounded distance: about two days for the Airflow scheduler, about five weeks for
+Redpanda at the rates measured on 2026-11-26, longer for the quiet services. A cap
+applies only from the moment a container is recreated; a container still running from before
+2026-11-26 has no cap until its next recreate (`docker inspect -f '{{.HostConfig.LogConfig.Config}}' <name>`
+shows `map[]` when uncapped). There is no central log store yet.
+Because the logging block is part of every service's definition, a bare `docker compose up -d`
+after this change recreates every container that has not yet picked it up; recreate services one
+at a time with the pattern in section 6.
+
 | What | Where | Kept until |
 |---|---|---|
 | Any container's output | `docker compose logs --since 10m <service>`, or `docker logs -f k2-<service>`; `make logs` follows all of them | the container is removed (`make down`, a recreate). Save it first: `docker logs k2-<service> > <file> 2>&1` |

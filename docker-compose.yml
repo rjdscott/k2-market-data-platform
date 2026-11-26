@@ -48,6 +48,20 @@ volumes:
     driver: local
 
 
+# Every container's local log is capped. Docker's json-file driver keeps a container's
+# output in one file that grows without limit unless told otherwise; on 2026-11-26 the
+# catalog's log alone was growing about 15 GiB a day (measured over ingest-only windows
+# with `docker logs --tail N --timestamps`). 50 MB a file, five files, older files
+# compressed: at most about 250 MB a container. A cap takes effect only when a container
+# is recreated, not on restart. json-file is kept (not `local`) so a log collector can
+# tail the files later.
+x-logging: &k2-logging
+  driver: json-file
+  options:
+    max-size: "50m"
+    max-file: "5"
+    compress: "true"
+
 # ── shared build definition for the three capture-* services ────────────────
 # Context is the REPOSITORY ROOT, not the crate: src/record.rs compiles the wire
 # contract in with `include_str!("../../../schemas/avro/trade.avsc")`, and
@@ -108,6 +122,7 @@ services:
   # Redpanda - Kafka-compatible streaming platform (C++, single binary)
   # ───────────────────────────────────────────────────────────────────────
   redpanda:
+    logging: *k2-logging
     image: docker.redpanda.com/redpandadata/redpanda:v25.3.4
     container_name: k2-redpanda
     hostname: redpanda
@@ -160,6 +175,7 @@ services:
   # Redpanda Console - Web UI for Redpanda/Kafka
   # ───────────────────────────────────────────────────────────────────────
   redpanda-console:
+    logging: *k2-logging
     image: docker.redpanda.com/redpandadata/console:v3.5.1
     container_name: k2-redpanda-console
     hostname: console
@@ -205,6 +221,7 @@ services:
   # ClickHouse - OLAP database for real-time analytics
   # ───────────────────────────────────────────────────────────────────────
   clickhouse:
+    logging: *k2-logging
     image: clickhouse/clickhouse-server:24.3-alpine
     container_name: k2-clickhouse
     # Pinned off the capture cores (12-14) so a compaction or a heavy query
@@ -263,6 +280,7 @@ services:
   # warehouse was a bind-mounted hadoop catalog (ADR-013), deleted in Phase D.
   # The v3 `k2-lake` bucket behind Lakekeeper is its first real user.
   minio:
+    logging: *k2-logging
     image: minio/minio:RELEASE.2025-09-07T16-13-09Z  # console still present at :9001
     container_name: k2-minio
     hostname: minio
@@ -305,6 +323,7 @@ services:
   # Prometheus - Metrics collection
   # ───────────────────────────────────────────────────────────────────────
   prometheus:
+    logging: *k2-logging
     image: prom/prometheus:v3.2.0
     container_name: k2-prometheus
     hostname: prometheus
@@ -347,6 +366,7 @@ services:
   # Grafana - Metrics visualization
   # ───────────────────────────────────────────────────────────────────────
   grafana:
+    logging: *k2-logging
     image: grafana/grafana:11.5.0
     container_name: k2-grafana
     hostname: grafana
@@ -406,6 +426,7 @@ services:
   # ~40 it exports (metric_relabel_configs in docker/prometheus/prometheus.yml).
   # Measured standalone on 2026-11-25: 18 MiB RSS, under 0.3% of a core.
   cadvisor:
+    logging: *k2-logging
     image: ghcr.io/google/cadvisor:v0.61.1
     container_name: k2-cadvisor
     hostname: cadvisor
@@ -459,6 +480,7 @@ services:
   # (docker/airflow/init-db.sh), so Airflow cannot starve the catalog. Takes
   # effect on recreate: `docker compose up -d --force-recreate --no-deps prefect-db`.
   prefect-db:
+    logging: *k2-logging
     # 15.19-alpine as k2-prefect-db runs it (pulled 2026-08-13). By digest
     # alone: the 15.19-alpine tag has since moved to a rebuild, and a tag that
     # disagrees with its digest only confuses.
@@ -517,6 +539,7 @@ services:
   # then resumes the Prefect schedule (docs/runbooks/airflow-scheduling.md,
   # Rollback). Nothing in the default profile depends on either.
   prefect-server:
+    logging: *k2-logging
     profiles: ["legacy"]
     image: prefecthq/prefect:3.9.5-python3.12
     container_name: k2-prefect-server
@@ -564,6 +587,7 @@ services:
   # Prefect Worker - Workflow executor (v3.x uses workers not agents)
   # ───────────────────────────────────────────────────────────────────────
   prefect-worker:
+    logging: *k2-logging
     profiles: ["legacy"]   # the rollback, see prefect-server above
     build:
       context: .
@@ -637,6 +661,7 @@ services:
   # One-shot: creates the `airflow` role and database on prefect-db when
   # missing (docker/airflow/init-db.sh), then `airflow db migrate`.
   airflow-migrate:
+    logging: *k2-logging
     build:
       context: .
       dockerfile: docker/airflow/Dockerfile
@@ -671,6 +696,7 @@ services:
   # built from it too. Log in as `admin`; the password is generated on first
   # start: docker exec k2-airflow-api-server cat /opt/airflow/simple_auth_manager_passwords.json.generated
   airflow-api-server:
+    logging: *k2-logging
     image: k2-airflow:3.3.2  # built by airflow-migrate
     container_name: k2-airflow-api-server
     hostname: airflow-api-server
@@ -713,6 +739,7 @@ services:
   # (up to 10 s) before the container goes: without it, `docker compose stop`
   # would leave a driver holding the lake lock.
   airflow-scheduler:
+    logging: *k2-logging
     image: k2-airflow:3.3.2  # built by airflow-migrate
     container_name: k2-airflow-scheduler
     hostname: airflow-scheduler
@@ -765,6 +792,7 @@ services:
   # Parses docker/airflow/dags into the database; in Airflow 3 the scheduler
   # no longer does. No socket, no published port.
   airflow-dag-processor:
+    logging: *k2-logging
     image: k2-airflow:3.3.2  # built by airflow-migrate
     container_name: k2-airflow-dag-processor
     hostname: airflow-dag-processor
@@ -808,6 +836,7 @@ services:
   # Counters live in this process: a restart resets them, which the rules in
   # docker/prometheus/rules/airflow-alerts.yml allow for.
   airflow-statsd:
+    logging: *k2-logging
     image: prom/statsd-exporter:v0.31.0
     container_name: k2-airflow-statsd
     hostname: airflow-statsd
@@ -841,6 +870,7 @@ services:
   # Spark + Iceberg - batch engine for the v3 lake ingest and maintenance
   # ───────────────────────────────────────────────────────────────────────
   spark-iceberg:
+    logging: *k2-logging
     build:
       context: .
       dockerfile: docker/spark/Dockerfile
@@ -919,6 +949,7 @@ services:
   # file above only has to create an empty database.
   # ───────────────────────────────────────────────────────────────────────
   lakekeeper-migrate:
+    logging: *k2-logging
     image: quay.io/lakekeeper/catalog:v0.13.9
     container_name: k2-lakekeeper-migrate
     networks:
@@ -954,6 +985,7 @@ services:
   # `healthcheck` subcommand — it GETs http://localhost:8181/health and exits
   # non-zero on failure. CMD form, not CMD-SHELL: there is no shell to run.
   lakekeeper:
+    logging: *k2-logging
     image: quay.io/lakekeeper/catalog:v0.13.9
     container_name: k2-lakekeeper
     hostname: lakekeeper
@@ -965,6 +997,10 @@ services:
       LAKEKEEPER__PG_DATABASE_URL_READ: postgres://${PREFECT_DB_USER}:${PREFECT_DB_PASSWORD}@prefect-db:5432/lakekeeper
       LAKEKEEPER__PG_DATABASE_URL_WRITE: postgres://${PREFECT_DB_USER}:${PREFECT_DB_PASSWORD}@prefect-db:5432/lakekeeper
       LAKEKEEPER__PG_ENCRYPTION_KEY: ${LAKEKEEPER_ENCRYPTION_KEY}
+      # The catalog signs every storage request the engines make, and its audit
+      # trace wrote one log line per request: 99% of about 15 GiB a day of log
+      # (2026-11-26). Off; the request traffic itself is unchanged.
+      LAKEKEEPER__AUDIT__TRACING__ENABLED: "false"
       # BASE_URI stays on the compose network: it is what the catalog puts in
       # the links it hands back to Spark and PyIceberg *inside* docker.
       # The SPA runs in the browser on the host, which cannot resolve
@@ -1003,6 +1039,7 @@ services:
   # minio/mc has no curl, curlimages/curl has no mc, and either alone would cost
   # a second one-shot service. Idempotent; see docker/lake/init-lake.sh.
   lake-init:
+    logging: *k2-logging
     image: minio/minio:RELEASE.2025-09-07T16-13-09Z
     container_name: k2-lake-init
     networks:
@@ -1040,6 +1077,7 @@ services:
   # Idempotent (CREATE TABLE IF NOT EXISTS + converging ALTERs); verified as a
   # no-op on re-run against a live warehouse.
   lake-ddl:
+    logging: *k2-logging
     image: k2-spark-iceberg:3.5.5_1.8.1  # built by the spark-iceberg service
     container_name: k2-lake-ddl
     # Pinned off the capture cores (12-14) so a compaction or a heavy query
@@ -1094,6 +1132,7 @@ services:
   # minio-data is mounted read-only purely so `os.statvfs` can report free space
   # on the filesystem the lake actually lands on. Nothing reads the objects.
   lake-metrics:
+    logging: *k2-logging
     build:
       context: .
       dockerfile: docker/lake-metrics/Dockerfile
@@ -1140,6 +1179,7 @@ services:
   # the rest is for concurrent dbt threads. 4G until the dbt marts' first
   # builds left the cgroup's anon memory 0.2 GiB under it (ADR-035 Outcome).
   trino:
+    logging: *k2-logging
     image: trinodb/trino:484
     container_name: k2-trino
     hostname: trino
@@ -1203,6 +1243,7 @@ services:
   # so recreating redpanda-init alone is sufficient here. `./docker/lake` is
   # NOT — see docker/README.md "A bind-mounted script runs its old contents".
   redpanda-init:
+    logging: *k2-logging
     image: docker.redpanda.com/redpandadata/redpanda:v25.3.4
     container_name: k2-redpanda-init
     networks:
@@ -1251,6 +1292,7 @@ services:
   # Binance Capture - Rust k2-capture (trades + L2 book, one connection)
   # ───────────────────────────────────────────────────────────────────────
   capture-binance:
+    logging: *k2-logging
     build: *capture-build
     image: k2-capture:v3
     container_name: k2-capture-binance
@@ -1297,6 +1339,7 @@ services:
   # Kraken Capture - Rust k2-capture (trades + L2 book, one connection)
   # ───────────────────────────────────────────────────────────────────────
   capture-kraken:
+    logging: *k2-logging
     image: k2-capture:v3
     container_name: k2-capture-kraken
     hostname: capture-kraken
@@ -1344,6 +1387,7 @@ services:
   # 512M not 256M: Coinbase's full-depth BTreeMap<i64,i64> book (vs. Binance's
   # top-20 no-state and Kraken's depth=25) is the larger resident structure.
   capture-coinbase:
+    logging: *k2-logging
     image: k2-capture:v3
     container_name: k2-capture-coinbase
     hostname: capture-coinbase
