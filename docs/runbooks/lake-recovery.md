@@ -76,7 +76,7 @@ Note the name: it is `iceberg`, **not** `icebergS3`, that function does not exis
 after a schema change. Dashboards are empty or partial; the lake is fine.
 
 **Detection**, `ClickHouseDown` from
-[`docker/prometheus/rules/clickhouse-alerts.yml`](../../docker/prometheus/rules/clickhouse-alerts.yml)
+`docker/prometheus/rules/clickhouse-alerts.yml`
 (removed while ClickHouse is paused, ADR-057), or a `k2_lake_rows_total` / ClickHouse row-count divergence noticed by hand.
 
 **Expected behaviour**, **no data is lost.** The hot tier originates nothing
