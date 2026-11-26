@@ -5,16 +5,16 @@ Docker Desktop on Linux stores the VM's whole filesystem in one sparse file,
 own**, so the host can run out of disk while Docker itself reports plenty free. This
 recovers the host space without losing images or volumes.
 
-It does not cover disk pressure *inside* the platform (the lake filling the disk is
-[lake-disk-usage-high.md](./lake-disk-usage-high.md); ClickHouse and Redpanda bound
-themselves), and it does not apply to a plain Docker engine on Linux, which has no VM and
-no `Docker.raw`.
+Section 2 is the other disk: the VM's own filesystem, which every named volume shares,
+filling from the inside. That one has alerts. Section 1 does not apply to a plain Docker
+engine on Linux, which has no VM and no `Docker.raw`.
 
 **Run every command from the repo root with `set -a && . ./.env && set +a` loaded.**
 
 | # | Failure | MTTR target | Measured |
 |---|---------|-------------|----------|
 | 1 | Host `/` filling, `Docker.raw` far larger than the VM's real usage | < 15 min | ~3 min, 2026-08-28 (506 GB → 56 GB) |
+| 2 | The VM disk the volumes share past 80 %, then 90 % | < 30 min | not measured: neither alert has fired |
 
 ---
 
@@ -83,6 +83,59 @@ trim reclaims only unallocated space, so images and volumes are untouched.
 
 ---
 
+## 2. The disk the volumes share is filling
+
+**Symptom**, the VM's filesystem, the one under every named volume (MinIO's, Redpanda's,
+PostgreSQL's), passes 80 %. Nothing has failed yet. At 100 % MinIO refuses writes and
+Redpanda stops accepting produce requests, and capture then loses what the venues send.
+
+**Detection**, `DockerDiskUsageHigh` (above 0.80 for 15 min, warning) and
+`DockerDiskUsageCritical` (above 0.90 for 5 min, critical), from
+`docker/prometheus/rules/platform-alerts.yml`:
+`1 - redpanda_storage_disk_free_bytes / redpanda_storage_disk_total_bytes`, Redpanda's
+own gauges for the filesystem under its data directory (scrape job `redpanda-public`).
+They read the VM's disk, not the host's: section 1 can fill the host while these read low.
+Read the gauges straight from Redpanda:
+
+```bash
+docker exec k2-redpanda curl -s localhost:9644/public_metrics | grep '^redpanda_storage_disk_\(free\|total\)_bytes'
+# redpanda_storage_disk_free_bytes{} 199091920896.000000
+# redpanda_storage_disk_total_bytes{} 277881561088.000000      (2026-11-26: 28 % used)
+```
+
+**Expected behaviour**, nothing frees space by itself. Redpanda grows with traffic up to
+its retention caps, bytes on the `raw.*` topics and seven days on `trades.*` and `book.*`
+([redpanda.md](./redpanda.md)); the lake, images and build cache only grow.
+
+**Recovery**, find what grew before removing anything.
+
+```bash
+# 1. Images, containers, volumes and build cache, and how much of each is reclaimable.
+docker system df
+
+# 2. The five largest volumes.
+docker system df -v --format '{{json .Volumes}}' \
+  | python3 -c 'import json,sys; [print(v["Size"], v["Name"], sep="\t") for v in json.load(sys.stdin)]' \
+  | sort -h | tail -5
+# 30.15GB  k2-market-data-platform_redpanda-data   (2026-11-26, the largest)
+```
+
+Then, by what step 2 names: build cache and images no container uses are the safe space
+(`docker builder prune` and `docker image prune`, never `docker image prune -a`, which
+deletes the rollback images a service is pinned back to); lake data goes only through
+`make drop`, which copies it first ([drop-and-rebuild.md](./drop-and-rebuild.md)); a
+Redpanda volume past its retention ceiling is [redpanda.md](./redpanda.md). If nothing is
+reclaimable, raise the disk-image-size slider, which is safe upward and destroys every
+volume downward (the warning below).
+
+The two prune commands were not run while writing this section: nothing needed the room.
+
+**Measured**, the thresholds only: `docker/prometheus/rules/tests/platform-alerts_test.yml`
+asserts both alerts fire on synthetic gauges and stay quiet at 70 %. No disk has been
+filled to prove MinIO and Redpanda refuse writes.
+
+---
+
 ## Warning: do not shrink the disk image to cap growth
 
 Docker Desktop's **Settings → Resources → Disk image size** slider looks like the obvious
@@ -122,4 +175,5 @@ after any Docker Desktop upgrade — check whether the drive is now attached wit
 `discard=unmap` (`pgrep -af qemu` while Docker is running), which would make this runbook
 unnecessary.
 
-**Last verified:** 2026-08-28 on Docker Desktop for Linux, VM 40 GB RAM / 28 CPU.
+**Last verified:** 2026-08-28 on Docker Desktop for Linux, VM 40 GB RAM / 28 CPU (section 1);
+2026-11-26, the read-only commands of section 2 against the running stack.

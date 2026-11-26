@@ -5,7 +5,7 @@
 > **Before this** chapter 04.
 
 Prometheus scrapes every running tier, the rules in `docker/prometheus/rules/` carry runbooks
-and half of them (6 of 12) carry `promtool` cases, the Grafana dashboards in `docker/grafana/dashboards/` ship from
+and most of them (8 of 14) carry `promtool` cases, the Grafana dashboards in `docker/grafana/dashboards/` ship from
 the repo, and the failure modes those rules watch are induced on purpose with timed recovery. No
 Alertmanager: rules are evaluated and shown, not routed. Operator detail:
 [operations/observability.md](../operations/observability.md); FMEA:
@@ -92,7 +92,8 @@ flowchart TB
 - **ClickHouse** shipped its own `/metrics`, and two gold-feed rules watched
   `ClickHouseProfileEvents_KafkaMessagesFailed` and topic movement versus table growth, until
   the pause removed the scrape job, the rules and the dashboard (ADR-057).
-- **Rules** are one file per running tier, capture and Airflow, each rule with a severity and,
+- **Rules** are one file per running tier, capture and Airflow, plus `platform-alerts.yml` for the
+  disk the Docker volumes share (Redpanda's own disk gauges), each rule with a severity and,
   bar `AirflowTaskFailed`, a `for`; the lake and ClickHouse files went with their tiers. Every
   rule carries a `runbook` annotation that gate (d) of `check-docs.sh` resolves to a file and
   gate (d2) requires; unit tests sit in `docker/prometheus/tests/*.test.yml` and

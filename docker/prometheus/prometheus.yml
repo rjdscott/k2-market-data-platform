@@ -44,6 +44,24 @@ scrape_configs:
     metrics_path: '/metrics'
     scrape_interval: 10s
 
+  # Redpanda's public endpoint, for the two disk gauges only: the free and total
+  # bytes of the filesystem under its data directory. On Docker Desktop that is the
+  # VM disk every named volume shares (MinIO's, Redpanda's, PostgreSQL's), so it
+  # is the platform's disk signal; rules/platform-alerts.yml reads it. The other
+  # public series repeat what /metrics already gives, and are dropped at scrape.
+  - job_name: 'redpanda-public'
+    static_configs:
+      - targets: ['redpanda:9644']
+        labels:
+          service: 'redpanda'
+          tier: 'streaming'
+    metrics_path: '/public_metrics'
+    scrape_interval: 30s
+    metric_relabel_configs:
+      - source_labels: [__name__]
+        regex: 'redpanda_storage_disk_(free|total)_bytes'
+        action: keep
+
   # Grafana
   - job_name: 'grafana'
     static_configs:

@@ -294,7 +294,7 @@ curl -sG localhost:9090/api/v1/query --data-urlencode 'query=sum by (exchange) (
 ```
 
 Run 2026-11-26: the produce errors read `binance 0`, `coinbase 0`, `kraken 0`. The 12 alert rules
-that remain (30 until the 14 lake rules and four Airflow rules retired with the v3 lake, 36 before
+that remained then (14 since the two disk rules, `platform-alerts.yml`; 30 until the 14 lake rules and four Airflow rules retired with the v3 lake, 36 before
 the six ClickHouse rules left with the pause, ADR-057), what each means and its runbook:
 [observability.md](./observability.md#alert-rules).
 
@@ -777,7 +777,7 @@ it never deletes a table copy, nor anything under `~/k2-backup/drop/` (the copie
 | [quick-reference.md](./quick-reference.md) | The per-component commands: Redpanda, ClickHouse (paused), capture, the lake catalog, Trino |
 | [data-catalog.md](./data-catalog.md) | **Archived** with the v3 lake ingest pipeline: what replaces it, and where it is kept |
 | [data-inspection.md](./data-inspection.md) | **Archived** with the v3 lake ingest pipeline: what replaces it, and where it is kept |
-| [observability.md](./observability.md) | Grafana dashboards, capture-tier metrics, the 12 Prometheus alert rules |
+| [observability.md](./observability.md) | Grafana dashboards, capture-tier metrics, the 14 Prometheus alert rules |
 | [dashboards.md](./dashboards.md) | Every dashboard and console as a screenshot of a live run, in the order the data moves, with what to read from each and the runbook it leads to. Written by `make screenshots` |
 | [latency-budgets.md](./latency-budgets.md) | 7-segment latency budget plus the measured 2026-02-19 p50/p99 numbers |
 | [docker-resources.md](./docker-resources.md) | Per-service CPU/RAM limits, 15.20 CPU / 27.188 GiB across 17 long-running services, +4 one-shot (1.50 / 1.500 GiB), bootstrap peak 16.70 / 28.688 GiB against the 25 / 48 GiB ceiling, ClickHouse paused and outside them |

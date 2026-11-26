@@ -1,8 +1,8 @@
 # Observability
 
-Prometheus scrapes the stack, Grafana renders it, and 12 alert rules (10 capture + 2 Airflow)
+Prometheus scrapes the stack, Grafana renders it, and 14 alert rules (10 capture, 2 Airflow, 2 disk)
 cover the things that actually break: capture goes down or silent, sequence gaps and book
-checksum failures, and the scheduler stops or a task fails.
+checksum failures, the scheduler stops or a task fails, and the disk the volumes share fills.
 
 **The lake is not observed while it receives no live data.** The old lake ingest retired to
 [`legacy/v3-lake-ingest/`](../../legacy/v3-lake-ingest/) ([ADR-056](../adr/ADR-056-unified-data-product-platform.md)),
@@ -94,7 +94,7 @@ other service: [dashboards.md](./dashboards.md).
 
 ## Alert rules
 
-12 alert rules across two files, and no recording rules. **Prometheus loads rule files at start and on SIGHUP only**, after editing anything under `docker/prometheus/rules/`, `docker kill -s HUP k2-prometheus` (or a restart); the rules dir is a mount and the file changing is not enough. Found 2026-08-27 when a ClickHouse rule (since removed, ADR-057) could not fire because its group had never been loaded (`curl -s localhost:9090/api/v1/rules | grep -c <AlertName>` is the check). Every annotation carries the diagnostic commands and a
+14 alert rules across three files, and no recording rules. **Prometheus loads rule files at start and on SIGHUP only**, after editing anything under `docker/prometheus/rules/`, `docker kill -s HUP k2-prometheus` (or a restart); the rules dir is a mount and the file changing is not enough. Found 2026-08-27 when a ClickHouse rule (since removed, ADR-057) could not fire because its group had never been loaded (`curl -s localhost:9090/api/v1/rules | grep -c <AlertName>` is the check). Every annotation carries the diagnostic commands and a
 `runbook:` annotation — enforced by `scripts/check-docs.sh` gate (d2), added
 2026-09-03 after the 6 ClickHouse rules were found carrying none while gate (d),
 which only checks that the paths present resolve, passed them. The tables below are the index. The three `FeedHandler*` rules retired with
@@ -149,14 +149,30 @@ promtool cases in `docker/prometheus/rules/tests/airflow-alerts_test.yml`.
 | `AirflowSchedulerHeartbeatLost` | warning | no scheduler heartbeat for 2m, held 3m, or none at all |
 | `AirflowTaskFailed` | warning | a task of any DAG ended `failed`, its retries spent, a 15-minute pulse |
 
+### `platform-alerts.yml`: the disk the volumes share (2)
+
+From Redpanda's `/public_metrics` (job `redpanda-public`, which keeps its two disk gauges only),
+with promtool cases in `docker/prometheus/rules/tests/platform-alerts_test.yml`. Redpanda reports
+the filesystem under its data directory; on Docker Desktop that is the VM disk every named volume
+shares, MinIO's included, so it stands in for the lake's disk gauge that retired with the
+`lake-metrics` exporter. It is the VM's disk, not the host's: a bloated `Docker.raw` fills the
+host's `/` while this reads low, and that check is by hand
+([docker-desktop-disk.md](../runbooks/docker-desktop-disk.md) section 1).
+
+| Alert | Severity | Fires when |
+|-------|----------|-----------|
+| `DockerDiskUsageHigh` | warning | `1 - redpanda_storage_disk_free_bytes / redpanda_storage_disk_total_bytes > 0.80` for 15m |
+| `DockerDiskUsageCritical` | critical | the same ratio above 0.90 for 5m |
+
 ### Tested rules
 
-Six of the twelve carry promtool unit tests, run by `make check-alerts` and by
-`make check-docs` gate (c2): the four `Capture*` rules above and both Airflow rules.
+Eight of the fourteen carry promtool unit tests, run by `make check-alerts` and by
+`make check-docs` gate (c2): the four `Capture*` rules above, both Airflow rules and both disk
+rules.
 
 ```bash
 grep -rhoE 'alertname: [A-Za-z]+' docker/prometheus/tests/*.test.yml \
-  docker/prometheus/rules/tests/*_test.yml | sort -u | wc -l   # 6 on 2026-11-26, after the lake and old-DAG rules retired (24 before)
+  docker/prometheus/rules/tests/*_test.yml | sort -u | wc -l   # 8 on 2026-11-26 with the disk rules; 6 after the lake and old-DAG rules retired, 24 before
 ```
 
 Each case is either "must fire on a synthetic series" or "must not fire on healthy

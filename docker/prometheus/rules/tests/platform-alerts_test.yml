@@ -1,0 +1,112 @@
+# promtool unit tests for docker/prometheus/rules/platform-alerts.yml
+#
+#   docker run --rm --entrypoint sh -v "$PWD/docker/prometheus/rules:/r" \
+#     prom/prometheus:v3.2.0 -c 'promtool test rules /r/tests/*_test.yml'
+#
+# Run by `make check-alerts` and `make check-docs` gate (c2). The series carry no
+# labels of their own (Redpanda serves them as `{}`); the scrape adds job and
+# the target's labels. A 1000-byte disk keeps the ratios readable: free 300 is
+# 70 % used, 150 is 85 %, 50 is 95 %. At a 1m interval the value at position i is
+# the value at minute i.
+
+rule_files:
+  - ../platform-alerts.yml
+
+evaluation_interval: 30s
+
+tests:
+  # 70 % used for an hour: neither fires.
+  - interval: 1m
+    input_series:
+      - series: 'redpanda_storage_disk_total_bytes{job="redpanda-public"}'
+        values: '1000x60'
+      - series: 'redpanda_storage_disk_free_bytes{job="redpanda-public"}'
+        values: '300x60'
+    alert_rule_test:
+      - eval_time: 60m
+        alertname: DockerDiskUsageHigh
+        exp_alerts: []
+      - eval_time: 60m
+        alertname: DockerDiskUsageCritical
+        exp_alerts: []
+
+  # 85 % from minute 10: pending through the 15m `for`, then the warning only.
+  - interval: 1m
+    input_series:
+      - series: 'redpanda_storage_disk_total_bytes{job="redpanda-public"}'
+        values: '1000x60'
+      - series: 'redpanda_storage_disk_free_bytes{job="redpanda-public"}'
+        values: '300x9 150x50'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: DockerDiskUsageHigh
+        exp_alerts: []
+      - eval_time: 30m
+        alertname: DockerDiskUsageHigh
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              component: storage
+              tier: infrastructure
+              job: redpanda-public
+            exp_annotations:
+              summary: "The Docker volumes' disk is 85% full"
+              description: |
+                The filesystem that holds every named volume (MinIO, Redpanda,
+                PostgreSQL) is past 80 %. Nothing fails yet. At 100 % MinIO refuses
+                writes and Redpanda stops accepting produce requests, and every
+                record capture cannot deliver is lost.
+
+                Find what grew with `docker system df -v` before deleting anything.
+              runbook: docs/runbooks/docker-desktop-disk.md
+      - eval_time: 30m
+        alertname: DockerDiskUsageCritical
+        exp_alerts: []
+
+  # 95 % from minute 10: the critical after its 5m `for`, the warning after 15m.
+  - interval: 1m
+    input_series:
+      - series: 'redpanda_storage_disk_total_bytes{job="redpanda-public"}'
+        values: '1000x60'
+      - series: 'redpanda_storage_disk_free_bytes{job="redpanda-public"}'
+        values: '300x9 50x50'
+    alert_rule_test:
+      - eval_time: 14m
+        alertname: DockerDiskUsageCritical
+        exp_alerts: []
+      - eval_time: 17m
+        alertname: DockerDiskUsageCritical
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              component: storage
+              tier: infrastructure
+              job: redpanda-public
+            exp_annotations:
+              summary: "The Docker volumes' disk is 95% full"
+              description: |
+                Past 90 %. MinIO and Redpanda refuse writes when it fills, and from
+                then on capture loses everything the venues send. Free space now:
+                the runbook names what is safe to remove.
+              runbook: docs/runbooks/docker-desktop-disk.md
+      - eval_time: 17m
+        alertname: DockerDiskUsageHigh
+        exp_alerts: []
+      - eval_time: 30m
+        alertname: DockerDiskUsageHigh
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              component: storage
+              tier: infrastructure
+              job: redpanda-public
+            exp_annotations:
+              summary: "The Docker volumes' disk is 95% full"
+              description: |
+                The filesystem that holds every named volume (MinIO, Redpanda,
+                PostgreSQL) is past 80 %. Nothing fails yet. At 100 % MinIO refuses
+                writes and Redpanda stops accepting produce requests, and every
+                record capture cannot deliver is lost.
+
+                Find what grew with `docker system df -v` before deleting anything.
+              runbook: docs/runbooks/docker-desktop-disk.md
