@@ -90,7 +90,8 @@ The lake bucket in MinIO (the object store) held 43.3 GiB in all (`du` in `k2-mi
 - **The hot tier** ([glossary](glossary.md#hot-tier)): ClickHouse's `gold.book_top20` is fed from
   the book topics.
 - **Three notebooks** and the helpers in `notebooks/k2lake.py`, and the release check's smoke
-  queries.
+  queries. The release check is the fresh-clone gate run before a tag (the `/release-check`
+  skill): it clones the repository, starts the whole stack from nothing and queries every tier.
 - **No mart reads a book table.** A mart is a table built by dbt for consumers
   ([glossary](glossary.md#mart)); two of them read audit rows, including the book audits'.
 
@@ -135,7 +136,7 @@ Asked and answered on 2026-11-26, quoted as given:
 ## Decision
 
 **We will stop subscribing to order-book channels on all three venues until P7's release tag
-(v3.0.0), reviewing the pause on 2027-02-26 if that tag has not come, through a required
+(`3.0.0`), reviewing the pause on 2027-02-26 if that tag has not come, through a required
 per-venue switch in `config/instruments.yaml` that each capture reads at start and reports as a
 metric, and keep every book row already stored, because book frames are 95% of the bytes the
 captures download and nothing the build is working on reads them.**
@@ -214,9 +215,10 @@ heartbeats.
 **Coinbase's gap rule without its book.** Coinbase numbers every frame on a connection, across all
 channels; `check_sequence` answers any gap with `Action::Reconnect`, a rule written to repair the
 book. With books off it stays as it is: a gap now means a lost trade or heartbeat frame, and the
-reconnect still helps, because Coinbase's `market_trades` subscribe resends recent trades, which
-refills the lost ones. Each venue's flip is gated on no gaps and no reconnects for 15 minutes
-(section 7).
+reconnect may still help: Coinbase's `market_trades` subscribe sends recent trades
+(`Handled.history` in `exchanges/mod.rs`), which should refill the lost ones. That refill is **not
+verified**: no measurement shows the resend covers every trade a gap lost, and the rollout must
+check it (section 8). Each venue's flip is gated on no gaps and no reconnects for 15 minutes.
 
 ### 2. What restarting a capture costs
 
@@ -239,7 +241,8 @@ open, from the old connection's close to the new one's subscribe:
 - **What it loses:** Binance and Kraken trades printed in that window are gone (neither replays
   trades on subscribe), and silver records them, because trade ids are sequential per symbol on
   all three venues: the next trade carries `seq_gap` and `missing_before`, the count never
-  received. Coinbase sends its recent trades on subscribe, so its window is refilled. Each
+  received. Coinbase sends its recent trades on subscribe, which should refill its window; not
+  verified (section 8). Each
   recreate also starts a new connection id, the key every book and sequence check is scoped to
   ([glossary](glossary.md#connection-and-conn_id)).
 
@@ -260,11 +263,11 @@ Full inventory, with every alert expression, in note §3. In short:
 | Ingest stage 2b | appends an empty snapshot to each bronze book table per run, as `bronze.kraken_instrument` already does most runs (verified) | no change |
 | Ingest stage 2e | runs on empty input and commits empty snapshots | no change, and it must keep running: bronze keeps committing every run, so a silver book table that stopped reading would, after a week, be resuming from a bronze snapshot expiry has removed. First-run gate: this empty path has not run live |
 | The eighteen nightly book audits | whole-table checks re-prove the same frozen rows every night; `bronze_schema_drift` files a pass having sampled no book frame | skipped while the venue is off (section 6) |
-| `bronze_schema_drift` on any table whose stream had no frame in the sample | files `passed = true`, which the venue quality scorecard counts as a passing check of that day; `bronze.kraken_instrument` does this most nights today | files no row and logs why; `audit.checks.passed` is `NOT NULL`, so "not applicable" would be a schema change, and no row is what the governance view already reads as "no result" |
+| `bronze_schema_drift` on any table whose stream had no frame in the sample | files `passed = true`, which the venue quality scorecard counts as a passing check of that day; `bronze.kraken_instrument` does this most nights today | files no row and logs why; `audit.checks.passed` is `NOT NULL`, so "not applicable" would be a schema change, and no row is what the governance view (`governance.quality_results.dq_results`, one Trino view unioning the lake's audit rows with every dbt test result, [ADR-046](ADR-046-governance-domain-and-quality-results.md)) already reads as "no result" |
 | Compaction, snapshot expiry, orphan removal | none removes a kept row (constraints above); compaction rewrites files, never rows, and only partitions newer than 2 days | no change |
 | `gold.dim_instrument.book_depth`, `gold.dim_venue` | keep claiming "the L2 subscription depth in force" for a subscription that is off | the venue dimension records the switch (section 4) |
-| `scripts/health.sh` | the capture health check would go unhealthy (fixed by section 1); nothing compares file and process | new check: each capture's `k2_capture_book_capture` against the registry |
-| `scripts/lake-verify.sh`, `make gates` | pass on kept data | none |
+| `scripts/health.sh` | the capture health check would go unhealthy (fixed by section 1); nothing compares file and process | new check: each capture's `k2_capture_book_capture` against the switch as both the host file and the Spark container's mounted copy read it, because a stale copy in Spark would mislead the audit skip and the `dim_venue` record |
+| `scripts/lake-verify.sh`, `make gates` (every pre-merge gate in order: tests, the lake's exit criteria against the live stack, both parity checks, the alert tests, the doc gates) | pass on kept data | none |
 | Release check (`.claude/skills/release-check/`) | its hot-tier smoke expects book rows from all three venues on a fresh clone | expects rows only for venues whose switch is on |
 | `k2lake.trades(book=True)` and `completeness()` | the as-of join (each trade paired with the latest quote at or before it) has no age bound, so a trade in the pause is paired with a quote from before it, possibly days old, and counted as covered; Kraken's `checksum_failed` reads 0 for a window with no book frame | a quote older than a stated bound comes back NULL; `checksum_failed` NULL where no frame exists |
 | Grafana "K2 Capture (v3)", book row | panels show no data | a panel shows `k2_capture_book_capture` per venue |
@@ -279,7 +282,9 @@ drift audit's pass on an empty sample (`bronze.kraken_instrument`, most nights).
 `gold.dim_venue` and `gold.dim_instrument` are slowly changing dimensions of type 2: every change
 to a tracked attribute closes the current row and opens a new one with its own validity interval,
 so a query can ask what was configured at any past time
-([glossary](glossary.md#scd2-security-master)). Stage 2d reloads them from the registry every run.
+([glossary](glossary.md#scd2-security-master)). Stage 2d, the gold step of each ingest run (it
+appends new trades to `gold.trades`, rebuilds the candles and bars they touch, and reloads the two
+dimensions; [glossary](glossary.md#stage-2d)), reloads them from the registry every run.
 Today `dim_instrument.book_depth` is documented as "the L2 subscription depth in force", which
 would be false for the whole pause. Two ways to stay honest: owe
 [ADR-030](ADR-030-scd2-security-master.md) an Outcome saying the dimensions describe configured
@@ -296,7 +301,9 @@ it:
   `docker/lake/ddl/lake.sql`, the projection and tracked attributes in `docker/lake/gold.py`, the
   `dim_venue` contract, the schema chapter (`docs/architecture/13-schema-design.md`) and tests.
   `dim_venue` is not in ClickHouse or in an Avro schema.
-- Two costs, stated: adding a tracked attribute changes every venue's change hash, so each venue
+- Two costs, stated: each version stores a change hash, `attr_hash`, a sha256 over its tracked
+  attributes that the reload compares to decide whether anything changed; adding a tracked
+  attribute changes every venue's hash, so each venue
   opens one new version when it ships, carrying `true`; and a version's `valid_from` is the first
   ingest run that read the new registry, not the moment the capture was recreated. The operator
   rows of section 6 carry the exact capture times; the difference is bounded by the rollout.
@@ -319,7 +326,11 @@ K2 custom property in `contracts/schema/k2.schema.json`:
 It goes on the nine book tables: per venue, its bronze and silver book tables
 (`bronze.binance_depth20`, `bronze.kraken_book`, `bronze.coinbase_level2`, `silver.book_binance`,
 `silver.book_kraken`, `silver.book_coinbase`); and the three shared gold tables `gold.book_state`,
-`gold.book_top20`, `gold.bbo_1s`. Then [k2gen](glossary.md#k2gen-make-generate-and-the-drift-gate):
+`gold.book_top20`, `gold.bbo_1s`. Then k2gen, K2's contract tool
+([glossary](glossary.md#k2gen-make-generate-and-the-drift-gate)): `k2gen validate` checks every
+contract against the standard and the lake DDL, `make generate` writes the files the contracts
+imply (product pages, catalog, Trino access rules, dbt sources), and CI fails if a generated file
+differs from what it would write:
 
 - `validate` checks the date and that the ADR file exists, and refuses a paused table that
   declares a `latency` target, because nothing may promise freshness for a table nothing feeds.
@@ -401,7 +412,8 @@ included; then the flip, one venue at a time, each followed by 15 minutes with n
 no reconnect (longer than `CaptureSequenceGaps`'s 10-minute window plus its 5-minute `for`) and two
 ingest runs of checks. The image gets its own step because it changes more than the switch: the
 running captures report build `v3-phase-e-26-g9932f42` (2026-09-03), and seven commits have
-touched the capture since, mostly dependency upgrades. Then the first full trades-only UTC day is
+touched the capture since, mostly dependency upgrades. Coinbase's flip also checks that its
+subscribe resend refilled the trades its recreate missed (note §7 step 4). Then the first full trades-only UTC day is
 measured, and the retune is its own reviewed change. Note §6 to §8 has the files, tests, commands
 and the list of measurements.
 
@@ -499,6 +511,8 @@ outlives its reason: the date review below is the guard.
 - That Kraken sends heartbeats on a connection with only `instrument` and `trade`: the venue
   documents it; it has not been observed here.
 - That Coinbase's sequence stays gapless with `level2` absent.
+- That Coinbase's subscribe resend of recent trades refills every trade a gap or a recreate lost;
+  the rollout checks it (note §7 step 4).
 - The dark window of a graceful recreate; to be read from connection boundaries in the silver trade
   tables after rollout (note §5; Trino cannot read `bronze.binance_trade`, note §12).
 - Whether trade capture got worse: the first paused day's trade-id gaps per venue against the days
@@ -508,8 +522,9 @@ outlives its reason: the date review below is the guard.
 
 **Revisit when**, whichever comes first:
 
-1. **P7's release tag** (v3.0.0; plan 007 says "a tag" and does not yet fix the name): the release
-   decision states whether L2 is on, and the release check runs with that value.
+1. **P7's release tag**, `3.0.0`: by the owner's decision of 2026-11-26 the first tag is
+   `3.0.0-alpha.1`, now, with one pre-release per phase and `3.0.0` at the P7 release gate. The
+   release decision states whether L2 is on, and the release check runs with that value.
 2. **2027-02-26**, 90 days after the pause: the pause is ended or restated with a new date,
    because format drift at the venues cannot be seen while paused.
 3. **Any change, notebook or mart that needs book rows newer than the pause.**
@@ -544,7 +559,8 @@ code; all are adopted, three with a correction:
   unreadable through Trino; Spark reads it, and builds `silver.trades_binance` from it every run.
 - **The book audits run once after compaction's two-night window**, not right after the flip, so
   the frozen tables are audited in their final form.
-- **The P7 tag's name**, v3.0.0, is the review's; plan 007 does not name it yet.
+- **The P7 tag's name**, `3.0.0`, is the owner's decision of 2026-11-26: `3.0.0-alpha.1` now,
+  one pre-release per phase, `3.0.0` at the P7 release gate.
 
 ---
 

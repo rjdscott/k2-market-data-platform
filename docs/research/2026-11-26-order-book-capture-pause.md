@@ -248,7 +248,7 @@ Eighteen audits read book tables: per bronze book table `duplicate_identifiers`,
 | Surface | Effect | Treatment |
 |---|---|---|
 | `scripts/health.sh` (1) container health | capture health check exits 1 on a seeded, never-stamped book stream, so the container goes unhealthy and (1) fails | fixed at the source (§6) |
-| `scripts/health.sh` (2) | nothing compares what a capture does with what the registry says | new check: each capture's `k2_capture_book_capture` against `book_capture.<venue>` in `config/instruments.yaml`; a difference is a FAIL naming `docker compose up -d --force-recreate --no-deps capture-<venue>` |
+| `scripts/health.sh` (2) | nothing compares what a capture does with what the registry says | new check: each capture's `k2_capture_book_capture` against `book_capture.<venue>` read twice, from the host's `config/instruments.yaml` and from the Spark container's mounted copy (`docker exec k2-spark-iceberg cat /home/iceberg/config/instruments.yaml`); any of the three disagreeing is a FAIL. A capture that differs names `docker compose up -d --force-recreate --no-deps capture-<venue>`; a Spark copy that differs is a stale mount, which would mislead the audit skip and the `dim_venue` record, and names a recreate of `spark-iceberg` when no ingest is running |
 | `scripts/health.sh` (3) | lake commit age only | none |
 | `scripts/lake-verify.sh` | book parity passes on kept rows; the book topics already carry committed offsets | none |
 | `make gates` (test, lake-verify, parity-ohlcv, parity-bars, check-alerts, check-docs) | none reads live book traffic | none |
@@ -328,7 +328,8 @@ docker exec k2-trino trino --user reviewer --output-format TSV_HEADER --execute 
 
 - Lost trades: Binance and Kraken trades in the window; recorded by silver's `seq_gap` and
   `missing_before`, because trade ids are sequential per symbol (`docker/lake/silver.py`
-  docstring). Coinbase's `market_trades` subscribe snapshot refills its window. After the rollout
+  docstring). Coinbase's `market_trades` subscribe snapshot should refill its window; not verified
+  (§7 step 4 checks it). After the rollout
   the same queries, on the silver trade tables of all three venues, give the measured dark window
   per recreate, and `sum(missing_before)` over the window gives what it cost.
 
@@ -354,7 +355,7 @@ Three pull requests, so the code lands and runs unchanged before anything is swi
 | `docker/prometheus/rules/capture-alerts.yml` | `CaptureBookDepthDegraded`, `CaptureChecksumFailure` gain `and on (exchange) k2_capture_book_capture == 1`, with the reason in a comment |
 | `docker/prometheus/tests/capture-alerts.test.yml` | the cases in test 8 below |
 | `docker/grafana/dashboards/k2-l2-capture.json` | Book row: a stat panel of `k2_capture_book_capture` |
-| `scripts/health.sh`, `tests/test_health.py` | the gauge-against-registry check |
+| `scripts/health.sh`, `tests/test_health.py` | the gauge against the switch as both the host file and the Spark container's mounted copy read it (§3.4) |
 | `docker/lake/instruments.py` | `book_capture()` from the same file, same rules |
 | `docker/lake/maintenance.py` | the book audit skip and `--with-paused`; `bronze_schema_drift` files no row on a zero-frame sample (a pure helper builds the result) |
 | `notebooks/k2lake.py` | `MAX_QUOTE_AGE` bound in `_trades_sql`; `checksum_failed` NULL with no frames |
@@ -363,6 +364,16 @@ Three pull requests, so the code lands and runs unchanged before anything is swi
 
 The notebook bound and the zero-sample drift fix are bugs today; they can land first, on their
 own, ahead of the rest.
+
+Two explicit items, outside these three pull requests:
+
+- **The health check reads the switch twice.** `scripts/health.sh` compares each capture's gauge
+  with the switch as the host file and as the Spark container's mounted copy read it (§3.4). The
+  lake's audit skip and `dim_venue` record read the Spark copy, so a stale mount there would skip
+  the wrong audits and record the wrong state while every capture looked right.
+- **Found while writing this:** `lake.bronze.binance_trade` cannot be read through Trino (field
+  names differing only by case, §12). Filed separately, with a Trino smoke test that reads one
+  column of every table.
 
 ### Pull request 2: `dim_venue.book_capture`, through `/schema-change`
 
@@ -503,6 +514,17 @@ time to alert.
    docker exec k2-trino trino --user reviewer --execute \
      "SELECT (SELECT max(recv_ts) FROM lake.bronze.binance_depth20), (SELECT max(recv_ts) FROM lake.silver.trades_binance)"
    ```
+   For Coinbase, also check the refill, which is not verified: Coinbase's `market_trades`
+   subscribe resends recent trades, and no trade id the recreate missed should stay missing.
+   Silver flags a resent trade `venue_replay` when an earlier delivery exists, and a trade id that
+   never arrived as `missing_before` on the next one:
+   ```bash
+   docker exec k2-trino trino --user reviewer --execute      "SELECT sum(missing_before) FROM lake.silver.trades_coinbase
+      WHERE recv_ts >= TIMESTAMP '<recreate time> UTC' - INTERVAL '5' MINUTE
+        AND recv_ts <  TIMESTAMP '<recreate time> UTC' + INTERVAL '15' MINUTE"
+   ```
+   Zero confirms the refill; anything else is recorded in ADR-050's Outcome, and the Kraken and
+   Binance windows are read the same way, where loss is expected.
    Only then the next venue.
 5. **Record the pause**, per venue, with the last book frame's time from step 4 (the same shape as
    the 2026-11-25 `capture_outage` row in `docs/runbooks/failure-recovery.md`):
@@ -616,6 +638,7 @@ provenance (`/benchmark-report`).
 - That Binance answers a client Ping (§7 step 2 observes it).
 - Kraken heartbeats with only `instrument` and `trade` subscribed; Coinbase sequence continuity
   without `level2`.
+- That Coinbase's subscribe resend refills every trade a gap or a recreate lost (§7 step 4).
 - A graceful recreate's dark window (§5).
 - `dim_venue`'s new version per venue on deploy, and its `valid_from` lead over the captures
   (§7 step 3), until pull request 2 runs.
@@ -644,3 +667,8 @@ A query that names no field of `data` still fails, opening the file; files of bo
 run and committed 55 s before the check. So the table is unreadable through Trino, and any
 measurement of Binance through Trino reads silver. The fix is a schema change of its own, not
 designed here.
+
+**Filed separately, as two items:** the schema change that makes `lake.bronze.binance_trade`
+readable through Trino (field names that differ only by case); and a Trino smoke test that reads
+one column of every lake table, so a table Trino cannot open fails a check instead of a query
+someone happens to run.
