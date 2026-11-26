@@ -40,6 +40,14 @@ differently by the two engines is a failure (ADR-035).
 
 Exit 0 when every side run equals B on every bucket of the day, non-zero with the
 first differences printed otherwise.
+
+`--known-gaps` (the wrapper passes `known_gaps` from the pin) takes one listed window,
+at most 60 minutes, out of A against B and nothing else: a capture outage recorded as a
+row in `lake.audit.checks`, inside whose scope the window must sit, where the stores
+cannot be made equal without deleting data (tests/parity/README.md). The gap is printed
+with its cause, its audit row and the buckets it removed; a gap whose window has no
+difference left fails the run, and a run with a gap applied ends `PARITY: ok (...)`,
+never `PARITY: PASS`.
 """
 
 from __future__ import annotations
@@ -47,8 +55,10 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
+from datetime import datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 
@@ -64,6 +74,15 @@ SCALE = 100_000_000
 
 KEY = ["exchange", "canonical_symbol", "window_start"]
 COLS = ["open_e8", "high_e8", "low_e8", "close_e8", "trade_count", "volume"]
+
+# Known gaps (tests/parity/README.md): their fields, the one comparison a gap may name,
+# the bounds that keep an exclusion to one short window, and the text forms it must use.
+GAP_FIELDS = {"start", "end", "sides", "cause", "recorded", "audit_ref"}
+GAP_SIDES = ["clickhouse"]
+MAX_GAPS = 1
+MAX_GAP = timedelta(minutes=60)
+MINUTE, SECOND, DAY = "%Y-%m-%dT%H:%MZ", "%Y-%m-%dT%H:%M:%SZ", "%Y-%m-%d"
+AUDIT_REF = re.compile(r"lake\.audit\.checks job=([a-z_]+) check_name=([a-z_]+) scope=stack/([^ ]+)\.\.([^ ]+)")
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "notebooks"))  # for k2lake, once
 
@@ -260,13 +279,113 @@ def lake_vs_dbt(lake_rows: list, dbt_rows: list, lake_type: str) -> int:
     return (0 if alike else 1) + diff("lake.gold.ohlcv_1m", normalise(lake_rows, exact=True), "dbt.ohlcv_1m", normalise(dbt_rows, exact=True))
 
 
-def diff(name_a: str, a: dict, name_b: str, b: dict, limit: int = 5) -> int:
-    keys = sorted(set(a) | set(b))
+def utc(text, fmt: str = MINUTE) -> datetime:
+    """`text` in exactly `fmt`, read as UTC: a naive datetime, like the bucket keys. ValueError otherwise.
+
+    Parsed, then printed back and compared, so only the one canonical spelling passes:
+    no basic format, week date, missing field or unpadded number.
+    """
+    try:
+        t = datetime.strptime(text, fmt)
+    except (TypeError, ValueError):
+        t = None
+    if t is None or t.strftime(fmt) != text:
+        raise ValueError(f"{text!r} is not written exactly like {datetime(2001, 1, 1).strftime(fmt)}")
+    return t
+
+
+def audit_scope(ref) -> tuple:
+    """The [start, end) of the outage an `audit_ref` names, rounded outward to whole minutes."""
+    m = AUDIT_REF.fullmatch(ref) if isinstance(ref, str) else None
+    if not m:
+        raise ValueError(
+            f"audit_ref {ref!r} is not 'lake.audit.checks job=<job> check_name=<name> "
+            f"scope=stack/<YYYY-MM-DDTHH:MM:SSZ>..<YYYY-MM-DDTHH:MM:SSZ>'"
+        )
+    lo, hi = utc(m[3], SECOND), utc(m[4], SECOND)
+    if hi <= lo:
+        raise ValueError(f"audit_ref scope {m[3]}..{m[4]} does not end after it starts")
+    return lo.replace(second=0), hi if not hi.second else hi.replace(second=0) + timedelta(minutes=1)
+
+
+def gap_problem(g, first: datetime) -> str | None:
+    """Why one `known_gaps` entry is refused for the day starting at `first`, or None."""
+    if not isinstance(g, dict):
+        return "is not an object"
+    if set(g) != GAP_FIELDS:
+        return f"unknown keys {sorted(set(g) - GAP_FIELDS)}, missing keys {sorted(GAP_FIELDS - set(g))}"
+    try:
+        lo, hi = utc(g["start"]), utc(g["end"])
+        utc(g["recorded"], DAY)
+        if hi <= lo:
+            return f"end {g['end']} is not after start {g['start']}"
+        if hi - lo > MAX_GAP:
+            return f"{g['start']} to {g['end']} is longer than {MAX_GAP // timedelta(minutes=1)} minutes"
+        if lo < first or hi > first + timedelta(days=1):
+            return f"{g['start']} to {g['end']} is not inside the day compared, {first:%Y-%m-%d}"
+        if g["sides"] != GAP_SIDES:
+            return (
+                f"sides {g['sides']!r} must be {GAP_SIDES}: lake against DuckDB over silver and lake against dbt "
+                f"check the lake's own computation, which a capture outage cannot make differ, so they are never excluded"
+            )
+        if not isinstance(g["cause"], str) or not g["cause"].strip():
+            return "cause is not a non-empty string"
+        scope_lo, scope_hi = audit_scope(g["audit_ref"])
+    except ValueError as e:
+        return str(e)
+    if lo < scope_lo or hi > scope_hi:
+        return f"{g['start']} to {g['end']} is not inside the audit row's scope, rounded out to whole minutes: {scope_lo:{MINUTE}} to {scope_hi:{MINUTE}}"
+    return None
+
+
+def load_gaps(gaps, day: str) -> list:
+    """The pin's `known_gaps`, validated, each with `lo` and `hi` as naive UTC datetimes.
+
+    A gap takes buckets out of a comparison, so every rule exits rather than warns:
+    a wide, second, misdated or unrecorded exclusion must never pass quietly.
+    """
+    if not isinstance(gaps, list):
+        raise SystemExit("known_gaps is not a list")
+    if len(gaps) > MAX_GAPS:
+        raise SystemExit(
+            f"known_gaps has {len(gaps)} entries, at most {MAX_GAPS}: a second incident that needs an exclusion is the "
+            f"trigger, in ADR-029's 2026-11-26 Outcome, to read loss windows from lake.audit.checks instead of listing them"
+        )
+    first = datetime.strptime(day, DAY)
+    for i, g in enumerate(gaps):
+        problem = gap_problem(g, first)
+        if problem:
+            raise SystemExit(f"known_gaps[{i}]: {problem}")
+    return [{**g, "lo": utc(g["start"]), "hi": utc(g["end"])} for g in gaps]
+
+
+def diff(name_a: str, a: dict, name_b: str, b: dict, gaps: list = (), limit: int = 5) -> int:
+    """Buckets that differ, after `gaps` take their windows out; plus one per gap with no difference left in it."""
+    keys = set(a) | set(b)
+    dead = 0
+    for g in gaps:
+        inside = {k for k in keys if g["lo"] <= k[2] < g["hi"]}
+        differing = sum(1 for k in inside if a.get(k) != b.get(k))
+        keys -= inside
+        line = f"known gap {g['start']} to {g['end']} ({g['cause']}; {g['audit_ref']}): {len(inside)} buckets removed, {differing} of them differing"
+        if not differing:
+            dead += 1
+            why = "it matches no bucket, so it is stale or mistyped" if not inside else "its window now matches in full, so it excludes nothing"
+            line += f": FAIL, {why}: remove it from tests/parity/pinned.json"
+        print(f"  {name_a} vs {name_b} {line}")
+    keys = sorted(keys)
     bad = [k for k in keys if a.get(k) != b.get(k)]
     for k in bad[:limit]:
         print(f"  {name_a} vs {name_b} {k}: {a.get(k)} != {b.get(k)}")
-    print(f"{name_a} vs {name_b}: {len(keys)} buckets, {len(bad)} differ")
-    return len(bad)
+    print(f"{name_a} vs {name_b}: {len(keys)} buckets, {len(bad)} differ" + (f" (and {len(gaps)} known gap applied)" if gaps else ""))
+    return len(bad) + dead
+
+
+def verdict(bad: int, applied: int) -> str:
+    """The last line. `PASS` only for a run that left nothing out."""
+    if not applied:
+        return "PARITY: " + ("PASS" if bad == 0 else "FAIL")
+    return f"PARITY: {'ok' if bad == 0 else 'FAIL'} ({applied} known gap applied, see above)"
 
 
 def not_empty(**sides) -> int:
@@ -290,6 +409,7 @@ def main() -> int:
     ap.add_argument("--skip-silver", action="store_true", help="leave out C, DuckDB over silver")
     ap.add_argument("--dbt", action="store_true", help="add D, dbt's ohlcv_1m SQL through Trino at the gold.trades snapshot B was computed from")
     ap.add_argument("--write-pin", action="store_true", help="on success, record the ids in tests/parity/pinned.json")
+    ap.add_argument("--known-gaps", default="[]", help="JSON: the pin's known_gaps, which the wrapper passes (tests/parity/README.md)")
     args = ap.parse_args()
     if not args.skip_silver and not args.silver_snapshots:
         ap.error("--silver-snapshots is required unless --skip-silver")
@@ -297,6 +417,10 @@ def main() -> int:
         ap.error("--write-pin records the silver ids, so it needs side C: drop --skip-silver")
     if args.skip_silver and args.skip_clickhouse and not args.dbt:
         ap.error("nothing to compare lake.gold.ohlcv_1m with: keep side A or C, or add --dbt")
+    gaps = load_gaps(json.loads(args.known_gaps), args.day)
+    applied = 0 if args.skip_clickhouse else len(gaps)
+    for g in gaps if args.skip_clickhouse else ():
+        print(f"known gap {g['start']} to {g['end']} not applied: clickhouse not compared in this run")
 
     c = duck(os.environ["MINIO_ROOT_USER"], os.environ["MINIO_ROOT_PASSWORD"])
 
@@ -332,7 +456,7 @@ def main() -> int:
         a = normalise(clickhouse_candles(args.day, os.environ["CLICKHOUSE_PASSWORD"]))
         if not_empty(**{"clickhouse.ohlcv_live": a}):
             return 1
-        bad += diff("clickhouse.ohlcv_live", a, "lake.gold.ohlcv_1m", b)
+        bad += diff("clickhouse.ohlcv_live", a, "lake.gold.ohlcv_1m", b, gaps)
     if bad == 0 and args.write_pin:
         # Read-modify-write: scripts/parity_bars.py keeps its ids in the `bars`
         # block of the same file, and a plain overwrite here deleted them.
@@ -340,7 +464,7 @@ def main() -> int:
         doc = json.loads(pin.read_text()) if pin.exists() else {}
         doc.update({"day": args.day, "ohlcv_1m_snapshot": ohlcv_snapshot, "silver_snapshots": silver_snaps})
         pin.write_text(json.dumps(doc, indent=2) + "\n")
-    print("PARITY: " + ("PASS" if bad == 0 else "FAIL"))
+    print(verdict(bad, applied))
     return 0 if bad == 0 else 1
 
 

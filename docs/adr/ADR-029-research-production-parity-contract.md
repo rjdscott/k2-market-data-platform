@@ -273,3 +273,55 @@ would show as a difference, not pass. `make parity-ohlcv` stays three-way; the f
 fallback took the newest snapshot by commit time, which a branch spike on 2026-11-25 showed can
 be an unpublished commit; they now resolve the snapshot `main` points at, and a pin is used only
 if it is on `main`'s lineage.
+
+## Outcome (2026-11-26, a known gap in the pinned day)
+
+**The candle parity gate can now leave out one listed minute of a recorded outage, and only
+that.** The gate is `make parity-ohlcv` ([`scripts/parity_ohlcv.py`](../../scripts/parity_ohlcv.py)):
+for one UTC day it computes every 1-minute candle three ways, in ClickHouse on read over the
+topic-fed `gold.trades`, in the lake's stored `gold.ohlcv_1m`, and in DuckDB over silver,
+optionally a fourth way through dbt's SQL on Trino, and requires each of them to equal the
+lake's on every bucket (one exchange, symbol and minute) at tolerance zero, at the snapshot
+ids pinned in `tests/parity/pinned.json`. It is the release gate clause 3 names.
+
+What happened: at 22:33:43 UTC on 2026-11-25 the host's out-of-memory killer killed the
+Docker VM, and the stack came back at 22:39:26 UTC. For UTC day 2026-11-25 the lake equals
+DuckDB over silver and dbt on every bucket, and ClickHouse equals the lake on every bucket
+except those of minute 22:33 UTC on every venue. For that minute ClickHouse holds fewer
+trades than the lake, and a few the lake never received. Reloading the window into
+ClickHouse from the lake would make them equal by deleting those trades, so the owner left
+both stores as they are and closed the phase on that day. The outage is recorded in
+`lake.audit.checks`, the lake's append-only table of check results, one row per check per
+run with its job, check name, scope, pass or fail, an observed number and a free-text
+detail: job `operator`, check `capture_outage`, scope
+`stack/2026-11-25T22:33:43Z..2026-11-25T22:39:26Z`, failed, observed 343 (the seconds capture
+was off), written at 2026-11-26 01:00:44 UTC.
+
+What the gate does now: the pin may list `known_gaps`, at most one entry, with exactly the
+fields `start`, `end`, `sides`, `cause`, `recorded` and `audit_ref`. The run stops on any
+entry that breaks a rule: times not written exactly `YYYY-MM-DDTHH:MMZ` (UTC, end
+exclusive); an end not after the start; a window longer than 60 minutes or outside the day
+compared; `sides` other than `["clickhouse"]`, because the lake against silver and against
+dbt check the lake's own computation, which an outage cannot make differ; an empty cause; a
+`recorded` that is not a `YYYY-MM-DD` date; an `audit_ref` not written exactly
+`lake.audit.checks job=<job> check_name=<name> scope=stack/<start>..<end>` with times to the
+second; or a window not inside that scope rounded out to whole minutes. A second entry stops
+the run with a pointer to the trigger below. The run takes the window out of ClickHouse
+against the lake only, prints it with its cause, its `audit_ref` and the buckets it removed,
+fails if the window has no difference left in it (stale, mistyped or dead), and ends
+`PARITY: ok (1 known gap applied, see above)` instead of `PARITY: PASS`. CI checks the
+committed entry against every rule except the last, which needs the stack. Bars parity needs
+nothing: all three of its sides read the lake.
+
+What it still guarantees: the three-way guarantee holds for every minute of the pinned day
+except the listed one, and inside that minute the lake still equals DuckDB over silver and
+dbt; an exclusion cannot be longer than an hour, be a second one, sit outside the day or
+outside the outage its audit row records, or stay in the pin once it hides nothing, without
+the run refusing it; and no run with a gap reads as a clean pass. It does not guarantee
+ClickHouse inside the window, which is the point of listing it. The first revisit trigger
+above still holds: a gap is a recorded loss, never a tolerance for a difference nobody has
+explained ([`tests/parity/README.md`](../../tests/parity/README.md) says when one may be
+listed).
+
+**Revisit when:** a second incident needs an exclusion. The gate should then read the loss
+windows from `lake.audit.checks` itself, rather than a copy kept by hand in the pin.
