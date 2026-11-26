@@ -264,3 +264,42 @@ def test_every_venue_off_skips_all_eighteen_and_nothing_of_trades(maintenance):
 def test_two_venues_off_still_audit_the_shared_gold_tables(maintenance):
     kept, _ = maintenance.paused_audits(maintenance.AUDITS, {**ON, "binance": False, "coinbase": False})
     assert {"lake.gold.book_top20", "lake.gold.bbo_1s"} <= {scope for _, scope, _ in kept}
+
+
+# A registry copy the switch cannot be read from (the stale single-file mount in
+# spark-iceberg after a pull, or a bad value) must not stop the night: every
+# audit runs, and one failed row says what to fix.
+_REGISTRY = "version: 2\ninstruments:\n  binance: []\n  kraken: []\n  coinbase: []\n"
+
+
+@pytest.mark.parametrize("switch, why", [
+    ("", "book_capture is required"),
+    ("book_capture: {binance: on, kraken: false, coinbase: false}\n", "not true or false"),
+])
+def test_an_unreadable_switch_skips_no_audit_and_files_one_failed_row(maintenance, tmp_path, switch, why):
+    import instruments
+
+    path = tmp_path / "instruments.yaml"
+    path.write_text(_REGISTRY + switch)
+    audits, skipped = maintenance.audits_to_run(lambda: instruments.book_capture(path), with_paused=False)
+    assert skipped == []
+    assert audits[:-1] == list(maintenance.AUDITS)
+    name, _, check = audits[-1]
+    (row,) = check(None)
+    assert (name, row["check_name"], row["passed"], row["observed"]) == ("book_capture_switch", "book_capture_switch", False, -1)
+    assert why in row["detail"] and "recreate spark-iceberg" in row["detail"], row["detail"]
+
+
+def test_a_missing_registry_file_is_the_same_failed_row(maintenance, tmp_path):
+    import instruments
+
+    audits, skipped = maintenance.audits_to_run(lambda: instruments.book_capture(tmp_path / "gone.yaml"), with_paused=False)
+    assert skipped == [] and audits[-1][0] == "book_capture_switch"
+    assert "FileNotFoundError" in audits[-1][2](None)[0]["detail"]
+
+
+def test_a_readable_switch_files_no_extra_row(maintenance):
+    audits, skipped = maintenance.audits_to_run(lambda: {**ON, "kraken": False}, with_paused=False)
+    assert len(skipped) == 6 and "book_capture_switch" not in {name for name, _, _ in audits}
+    audits, skipped = maintenance.audits_to_run(lambda: {**ON, "kraken": False}, with_paused=True)
+    assert skipped == [] and audits == list(maintenance.AUDITS)

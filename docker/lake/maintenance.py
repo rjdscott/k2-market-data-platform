@@ -817,6 +817,31 @@ def paused_audits(audits, switch: dict) -> tuple:
     return kept, skipped
 
 
+def audits_to_run(read_switch, with_paused: bool) -> tuple:
+    """`(audits, skipped)` for tonight, from the switch `read_switch()` returns.
+
+    **Reading the switch never stops maintenance.** spark-iceberg mounts
+    config/instruments.yaml as one file, pinned by inode, so after a `git pull`
+    it can go on reading the old copy, with no `book_capture` at all, while this
+    code is already live. Any failure to read it (no key, no file, a value that
+    is not a boolean) skips no audit and adds one failed `book_capture_switch`
+    row naming the problem, so compaction, expiry and every audit still run and
+    `LakeAuditFailed` says the registry copy is what to fix.
+    """
+    try:
+        switch = read_switch()
+    except Exception as exc:  # noqa: BLE001 - any failure to read it is the finding
+        path = str(instruments.INSTRUMENTS_PATH)
+        row = _result(
+            "book_capture_switch", path, False, -1,
+            f"could not read book_capture ({type(exc).__name__}: {exc}), so no book audit was skipped. "
+            "A copy without the key is a stale file mount: recreate spark-iceberg between ingest runs "
+            "(docs/operations/README.md, Pause or resume one venue's order book)",
+        )
+        return [*AUDITS, ("book_capture_switch", path, lambda s: [row])], []
+    return (list(AUDITS), []) if with_paused else paused_audits(AUDITS, switch)
+
+
 def run_audits(spark, run_ts: datetime, audits=AUDITS) -> list:
     results = []
     for name, scope, check in audits:
@@ -884,7 +909,7 @@ def main() -> int:
 
     # The switch the Spark container's own registry copy holds, which is the one
     # this run acts on; scripts/health.sh fails while it differs from the host's.
-    audits, skipped = (list(AUDITS), []) if args.with_paused else paused_audits(AUDITS, instruments.book_capture())
+    audits, skipped = audits_to_run(instruments.book_capture, args.with_paused)
     for name, scope, _ in skipped:
         print(f"skipping {name} on {scope}: its venue's book_capture is false (ADR-050); --with-paused runs it")
 
