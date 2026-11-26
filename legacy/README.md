@@ -1,6 +1,6 @@
 # legacy/
 
-Archived components of earlier K2 generations. Each directory is kept so the migration story ([`docs/MIGRATION-JOURNEY.md`](../docs/MIGRATION-JOURNEY.md)) and the decisions behind it can be checked against the code they describe. The rule: an archive is moved here unmodified, and is runnable only where its own README says so. Nothing here is part of `make test` or CI unless its README states it; today only `make test-legacy-kotlin` runs anything, and it is outside both. Every archive has the same six sections in its README: what it was, why it was archived, what replaced each piece, state at archive, running or verifying it today, known residue.
+Archived components of earlier K2 generations. Each directory is kept so the migration story ([`docs/MIGRATION-JOURNEY.md`](../docs/MIGRATION-JOURNEY.md)) and the decisions behind it can be checked against the code they describe. The rule: an archive is moved here with its source unchanged (v1 has had dependency pins bumped since, see its README), and is runnable only where its own README says so. Nothing here is part of `make test` or CI unless its README states it; today only `make test-legacy-kotlin` runs anything, and it is outside both. Every archive has the same six sections in its README: what it was, why it was archived, what replaced each piece, state at archive, running or verifying it today, known residue.
 
 | Directory | What it was | Archived on | Decided by | Replaced by |
 |---|---|---|---|---|
