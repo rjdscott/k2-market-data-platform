@@ -115,6 +115,17 @@ def words(paths: list[str], terms=TERMS) -> list[str]:
 # notebook carries no outputs and no execution counts; under legacy/ (archived
 # unmodified) one that does must be listed in NOTICE. Raster images, by
 # extension or by content, live only under docs/images/ (NOTICE, Screenshots).
+#
+# Three more rules, each a floor the ones above do not lower:
+#
+# - the path rule this gate had before: a file under a fixtures/ or samples/
+#   directory, or named *sample*, with one of OLD_EXT, is a data file whatever
+#   its content (a one-line or pretty-printed JSON array is one);
+# - a .json or .yaml file on such a path that holds a list of records passes
+#   only from the manifest, NOTICE does not excuse it;
+# - any binary file (zip, tar, sqlite, pickle, lz4, parquet, avro, under any
+#   name) fails unless NOTICE lists it, except images under docs/images/ and
+#   KNOWN_BINARY.
 
 DATA_EXT = {".jsonl", ".ndjson", ".csv", ".tsv", ".parquet", ".avro", ".pcap", ".pcapng",
             ".arrow", ".feather", ".orc", ".gz", ".zst", ".xz", ".bz2"}
@@ -126,6 +137,11 @@ IMAGE_EXT = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tif", ".tiff"}
 IMAGE_MAGIC = (b"\x89PNG", b"\xff\xd8\xff", b"GIF8", b"BM", b"II*\x00", b"MM\x00*")
 MANIFEST = "tests/fixtures/SHA256SUMS"
 DIGEST = re.compile(rb"[0-9a-f]{64}\n?")
+FIXTURE_PATH = re.compile(r"(^|/)(fixtures|samples)/|sample[^/]*$", re.I)
+OLD_EXT = {".json", ".jsonl", ".ndjson", ".csv", ".tsv", ".txt", ".parquet", ".avro", ".pcap", ".pcapng",
+           ".bin", ".gz", ".zst", ".sha256"}
+KNOWN_BINARY = {"legacy/v2-kotlin/gradle/wrapper/gradle-wrapper.jar"}  # the archived Gradle wrapper
+YAML_RECORD = re.compile(r"""-[ \t]+(\{|\[|("[^"]*"|'[^']*'|[^\s#:][^:#]*?)[ \t]*:([ \t]|$))""")
 
 
 def binary(head: bytes) -> bool:
@@ -159,8 +175,29 @@ def sniff(head: bytes) -> str | None:
 
 
 def image(path: str, head: bytes) -> bool:
-    return Path(path).suffix.lower() in IMAGE_EXT or head.startswith(IMAGE_MAGIC) or (
-        head[:4] == b"RIFF" and head[8:12] == b"WEBP")
+    return Path(path).suffix.lower() in IMAGE_EXT or binary(head) and (
+        head.startswith(IMAGE_MAGIC) or (head[:4] == b"RIFF" and head[8:12] == b"WEBP"))
+
+
+def records(path: str, content: bytes) -> bool:
+    """A .json or .yaml/.yml document whose top level is a list of objects or
+    of rows. YAML is read for its first line of content only: stdlib has no
+    parser, and a top-level `- key: value` or `- {` is the shape of a record
+    list."""
+    suffix = Path(path).suffix.lower()
+    text = content.decode("utf-8", errors="replace")
+    if suffix == ".json":
+        try:
+            doc = json.loads(text)
+        except ValueError:
+            return False
+        return isinstance(doc, list) and bool(doc) and (
+            all(isinstance(x, dict) for x in doc) or all(isinstance(x, list) for x in doc))
+    if suffix in (".yaml", ".yml"):
+        first = next((x for x in text.splitlines() if x.strip() and not x.lstrip().startswith("#")
+                      and x.strip() != "---"), "")
+        return bool(YAML_RECORD.match(first))
+    return False
 
 
 def notebook_problem(content: bytes) -> str | None:
@@ -184,7 +221,9 @@ def data_problems(tracked: dict[str, bytes], notice: str) -> list[str]:
     for path, content in sorted(tracked.items()):
         name, head = Path(path).name, content[:65536]
         if path in manifest:
-            if hashlib.sha256(content).hexdigest() != manifest[path]:
+            if not name.startswith("synthetic-"):
+                problems.append(f"{path}: in {MANIFEST} but not named synthetic-*, as everything the generator writes is")
+            elif hashlib.sha256(content).hexdigest() != manifest[path]:
                 problems.append(f"{path}: differs from its hash in {MANIFEST}; run python3 scripts/make-synthetic-fixtures.py")
             continue
         if name.startswith("synthetic-"):
@@ -200,7 +239,16 @@ def data_problems(tracked: dict[str, bytes], notice: str) -> list[str]:
             if not path.startswith("docs/images/"):
                 problems.append(f"{path}: a raster image outside docs/images/")
             continue
-        fmt = "extension" if Path(path).suffix.lower() in DATA_EXT else sniff(head)
+        if binary(head):
+            if path not in KNOWN_BINARY and path not in listed:
+                problems.append(f"{path}: a binary file ({sniff(head) or 'format unknown'}) not listed in NOTICE")
+            continue
+        under = bool(FIXTURE_PATH.search(path))
+        if under and records(path, content):
+            problems.append(f"{path}: a list of records under a fixtures or samples path, not in {MANIFEST}")
+            continue
+        suffix = Path(path).suffix.lower()
+        fmt = "extension" if suffix in DATA_EXT or (under and suffix in OLD_EXT) else sniff(head)
         if fmt and path not in listed:
             problems.append(f"{path}: a data file ({fmt}) neither in {MANIFEST} nor listed by path in NOTICE")
     problems += [f"{MANIFEST}: lists {path}, which is not tracked" for path in sorted(manifest.keys() - tracked.keys())]

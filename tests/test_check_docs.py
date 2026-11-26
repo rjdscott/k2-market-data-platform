@@ -175,6 +175,68 @@ def test_a_manifest_entry_for_a_file_not_tracked_fails():
     assert problems(t) == [check_docs.MANIFEST]
 
 
+OLD_RULE_PATHS = ["tests/fixtures/x{ext}", "services/a/tests/fixtures/deep/x{ext}", "docs/samples/x{ext}",
+                  "docs/research/s/frames.sample{ext}", "tests/sample-trades{ext}"]
+
+
+@pytest.mark.parametrize("path", [p.format(ext=e) for p in OLD_RULE_PATHS for e in sorted(check_docs.OLD_EXT)])
+def test_everything_the_old_path_rule_failed_still_fails(path):
+    # The rule before this gate (fixtures/ or samples/ or *sample*, by extension),
+    # on content no sniffer would call data: it is the floor.
+    assert problems(tree(**{path.replace("/", "__"): b"plain text\n"})) == [path]
+
+
+@pytest.mark.parametrize("content", [
+    b'[{"px": 1, "qty": 2}, {"px": 3, "qty": 4}]',                       # one line
+    b'[\n  {\n    "px": 1\n  },\n  {\n    "px": 3\n  }\n]\n',            # pretty-printed
+    b"[[1, 2], [3, 4]]",
+])
+def test_a_json_array_of_records_in_a_fixtures_path_fails(content):
+    # the review's case: tests/fixtures/trades.json passed the sniffers
+    assert problems(tree(**{"tests__fixtures__trades.json": content})) == ["tests/fixtures/trades.json"]
+
+
+@pytest.mark.parametrize("content", [b"- px: 1\n  qty: 2\n- px: 3\n  qty: 4\n", b"# c\n---\n- {px: 1}\n"])
+def test_a_list_of_records_in_a_fixtures_path_passes_only_from_the_manifest(content):
+    name = "tests/fixtures/book.yaml"
+    assert problems(tree(**{name.replace("/", "__"): content}), notice=name) == [name]
+    t = tree(**{name.replace("/", "__"): content})
+    t[check_docs.MANIFEST] += f"{hashlib.sha256(content).hexdigest()}  {name}\n".encode()
+    assert problems(t) == [name], "a manifest entry does not make a non-synthetic name pass"
+    synthetic = "tests/fixtures/synthetic-book.yaml"
+    t = tree(**{synthetic.replace("/", "__"): content})
+    t[check_docs.MANIFEST] += f"{hashlib.sha256(content).hexdigest()}  {synthetic}\n".encode()
+    assert problems(t) == []
+
+
+def test_config_shaped_yaml_and_json_in_a_fixtures_path_pass():
+    files = tree(**{"tests__fixtures__config.yaml": b"name: x\nitems:\n  - a: 1\n",
+                    "tests__fixtures__contract.yml": b"# c\nkind: contract\n"})
+    assert problems(files) == []
+
+
+@pytest.mark.parametrize("path, content", [
+    ("docs/x/archive.zip", b"PK\x03\x04\x14\x00\x00\x00"),
+    ("docs/x/bundle.tar", b"frames.jsonl" + b"\x00" * 88 + b"0000644\x00"),
+    ("tests/x/state.db", b"SQLite format 3\x00\x10\x00"),
+    ("tests/x/frames.pkl", b"\x80\x04\x95\x10\x00\x00\x00"),
+    ("tests/x/frames.lz4", b"\x04\x22\x4d\x18\x64\x40"),
+    ("tests/x/frames.md", b"PAR1\x15\x04\x15"),
+    ("tests/x/frames.txt", b"Obj\x01\x04\x16avro.schema"),
+    ("legacy/v1/x.jar", b"PK\x03\x04\x14\x00"),
+])
+def test_a_binary_file_under_any_name_fails_unless_listed(path, content):
+    assert problems(tree(**{path.replace("/", "__"): content})) == [path]
+    assert problems(tree(**{path.replace("/", "__"): content}), notice=path) == []
+
+
+def test_the_known_binaries_pass():
+    files = tree(**{"legacy__v2-kotlin__gradle__wrapper__gradle-wrapper.jar": b"PK\x03\x04\x14\x00",
+                    "docs__images__a.png": b"\x89PNG\r\n\x1a\n\x00"})
+    assert problems(files) == []
+    assert problems(tree(**{"docs__readme.txt": b"BMW is not a bitmap\n"})) == []  # image magic needs binary
+
+
 def test_the_tree_as_committed_passes():
     assert check_docs.data_problems(check_docs.tracked_files(), (ROOT / "NOTICE").read_text()) == []
 

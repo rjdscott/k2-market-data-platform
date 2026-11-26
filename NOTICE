@@ -21,6 +21,9 @@ writes:
   tests/fixtures/bronze/synthetic-*                   one frame per bronze table
   docs/research/2026-08-26-v3-spikes/*/synthetic-*    the S2 and S5 spike samples
 
+The manifest proves a file is what the committed generator writes, not that
+the generator invents its values, so a review must read the generator's diff.
+
 Hand-written synthetic rows, invented values on round numbers, for the
 ClickHouse schema test (scripts/clickhouse-schema-test.sh):
 
