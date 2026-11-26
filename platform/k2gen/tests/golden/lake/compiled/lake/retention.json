@@ -1,0 +1,7 @@
+{
+  "k2.station_readings.audit_checks": 7,
+  "k2.station_readings.bronze_readings": 7,
+  "k2.station_readings.landing_files": 7,
+  "ops_insight.daily_load__base.gold_daily_load": 7,
+  "sensor_net.station_readings__base.silver_readings": 7
+}

@@ -1,0 +1,42 @@
+{
+  "landing": {
+    "bucket": "k2-landing",
+    "prefixes": []
+  },
+  "warehouses": [
+    {
+      "name": "fx_reference",
+      "namespaces": [],
+      "remoteSigningEnabled": false
+    },
+    {
+      "name": "governance",
+      "namespaces": [
+        "access_canary",
+        "access_canary__base",
+        "run_records"
+      ],
+      "remoteSigningEnabled": false
+    },
+    {
+      "name": "k2",
+      "namespaces": [],
+      "remoteSigningEnabled": false
+    },
+    {
+      "name": "market_analytics",
+      "namespaces": [],
+      "remoteSigningEnabled": false
+    },
+    {
+      "name": "market_capture",
+      "namespaces": [],
+      "remoteSigningEnabled": false
+    },
+    {
+      "name": "reference_data",
+      "namespaces": [],
+      "remoteSigningEnabled": false
+    }
+  ]
+}

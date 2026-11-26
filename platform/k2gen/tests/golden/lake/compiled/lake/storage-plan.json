@@ -1,0 +1,33 @@
+{
+  "landing": {
+    "bucket": "k2-landing",
+    "prefixes": [
+      "sensor-net/station-readings/"
+    ]
+  },
+  "warehouses": [
+    {
+      "name": "k2",
+      "namespaces": [
+        "station_readings"
+      ],
+      "remoteSigningEnabled": false
+    },
+    {
+      "name": "ops_insight",
+      "namespaces": [
+        "daily_load",
+        "daily_load__base"
+      ],
+      "remoteSigningEnabled": false
+    },
+    {
+      "name": "sensor_net",
+      "namespaces": [
+        "station_readings",
+        "station_readings__base"
+      ],
+      "remoteSigningEnabled": false
+    }
+  ]
+}
