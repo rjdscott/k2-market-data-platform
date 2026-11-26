@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # "Is it up?" in one command: every container healthy, a message on every venue
-# in the last 2 minutes, a lake that is still committing, and every capture doing
-# what the registry says about its order book.
+# in the last 2 minutes, a lake that is still committing, every capture doing
+# what the registry says about its order book, and, on a host where the nightly
+# backup is scheduled, a copy under 26 hours old.
 #
 # `make health` runs this, and scripts/dev-up.sh calls it for its steps (e) and
 # (f) — one implementation, so a check added here is a check the bring-up does.
@@ -243,6 +244,38 @@ for venue in binance kraken coinbase; do
     result "$label" "PASS (books $proc: $states)"
   fi
 done
+
+# ── (5) the nightly host copy ────────────────────────────────────────────────
+# Only on a host that opted in with `make backup-install`; every other host gets a
+# SKIP, not a FAIL. 26 h is a daily run plus two hours of slack.
+step "(5) backup"
+backup_dir=${K2_BACKUP_DIR:-$HOME/k2-backup}
+backup_runbook=docs/runbooks/lake-backup-and-restore.md
+if [ ! -f "$HOME/.config/systemd/user/k2-backup.timer" ]; then
+  result "(5) backup" "SKIP (not set up on this host: make backup-install schedules it, $backup_runbook)"
+else
+  # "<age of the last success, s or NONE> <status of the last run> <error>"
+  backup=$(python3 -c '
+import json, sys, time
+from datetime import datetime
+try:
+    s = json.load(open(sys.argv[1]))
+except (OSError, ValueError):
+    print("NONE none"); sys.exit()
+ok = s.get("last_success_utc")
+age = int(time.time() - datetime.fromisoformat(ok.replace("Z", "+00:00")).timestamp()) if ok else "NONE"
+print(age, s.get("status"), s.get("error") or "")' "$backup_dir/STATUS.json" 2>/dev/null || echo "NONE none")
+  read -r backup_age backup_status backup_error <<< "$backup"
+  if [ "$backup_age" = NONE ]; then
+    bad "(5) backup" "FAIL (the timer is installed and no backup has succeeded into $backup_dir: run make backup, $backup_runbook)"
+  elif [ "$backup_age" -gt $((26 * 3600)) ]; then
+    bad "(5) backup" "FAIL (last successful backup $((backup_age / 3600))h ago, over 26h: journalctl --user -u k2-backup, $backup_runbook)"
+  elif [ "$backup_status" != ok ]; then
+    result "(5) backup" "WARN (the last run failed: ${backup_error:-no error recorded}; last success $((backup_age / 3600))h ago, FAIL at 26h)"
+  else
+    result "(5) backup" "PASS (last successful backup $((backup_age / 3600))h ago, $backup_dir)"
+  fi
+fi
 
 step "summary"
 [ "$fail" = "0" ] && result "health" "PASS" || result "health" "FAIL (see the FAIL lines above)"
