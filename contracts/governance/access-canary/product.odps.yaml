@@ -1,0 +1,44 @@
+# The access canary: a product that exists only so that every release can prove its access
+# control on real reader names. Every row is synthetic, from the seed beside this file.
+apiVersion: v1.1.0
+kind: DataProduct
+id: governance.access-canary
+name: access-canary
+version: 1.0.0
+status: active
+domain: governance
+type: consumerAligned
+description:
+  purpose: >-
+    Proves on every release that readers see only tested rows, with their role's policy applied:
+    five synthetic rows that each canary principal sees differently, read through the reader view
+    governance.access_canary.events.
+  limitations: >-
+    Synthetic, and useful for nothing else. Its event times are the build's own clock minus each
+    seed row's age, so they move with every build: the delay proof needs a build that passed in
+    the last 19 minutes, which the 10-minute schedule gives. A stale canary fails the delayed
+    reader's expectation rather than passing it.
+  usage: >-
+    At build, rows 1 (north) and 4 (south) are a day old, row 2 (north) 21 minutes, and rows 3
+    (north) and 5 (south) 1 minute. p.canary-full (full_reader) sees all five; p.canary-delayed
+    (delayed_reader: delay 20 minutes on event_ts, note masked) sees 1, 2 and 4 with note null;
+    p.canary-scoped (public_reader: row scope region north) sees 1, 2 and 3. Any other id is not
+    from the seed, so it was never tested. Each is a row of tests/access/expectations.yaml.
+team:
+  name: platform-team
+outputPorts:
+  - name: events
+    version: 1.0.0
+    contractId: governance.access-canary.events
+customProperties:
+  - property: schedule
+    value:
+      # Every 10 minutes, so the 1-minute rows stay under 20 minutes old while builds pass,
+      # and the 21-minute row is always over it.
+      cron: "*/10 * * * *"
+  - property: terms
+    value:
+      redistribution: allowed
+  - property: seeds
+    value:
+      - {path: seeds/event_offsets.csv, synthetic: true}

@@ -91,7 +91,7 @@ def test_generated_ddl_reads_back_as_the_contract_declares(bare):
 
 def test_contract_schemas_state_every_table_as_its_contract_does(tree):
     schemas = json.loads(generate.render(tree)[generate.CONTRACT_SCHEMAS])
-    contracts = {yaml.safe_load(p.read_text())["schema"][0]["physicalName"] for p in (tree / "contracts").glob(f"*/*/*{cli.SUFFIX}")}
+    contracts = {yaml.safe_load(p.read_text())["schema"][0]["physicalName"] for p in cli.old_contracts(tree / "contracts")}
     assert schemas.keys() == contracts == {"bronze.example_frames", "gold.example_trades"}
     # Its own columns in order, NOT NULL split out, and no identifier fields, since its generated DDL sets none.
     assert schemas["gold.example_trades"] == {
