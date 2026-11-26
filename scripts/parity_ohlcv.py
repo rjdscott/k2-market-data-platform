@@ -3,7 +3,7 @@
 Three-way OHLCV parity at a pinned lake snapshot — the Phase E exit gate and the
 seed of the Phase G CI parity job (plan 004).
 
-    uv run --no-project --with duckdb==1.4.4 --with clickhouse-connect \
+    uv run --no-project --with duckdb==1.4.4 --with clickhouse-connect==0.8.18 \
         python scripts/parity_ohlcv.py --day 2026-08-27 \
         --trades-snapshot <lake.gold.trades snapshot id> --ohlcv-snapshot <lake.gold.ohlcv_1m snapshot id>
 

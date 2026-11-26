@@ -51,7 +51,7 @@ gates:  ## Every gate before a merge, in order, stopping at the first failure: l
 
 
 test-python:  ## Contract, parity, lake-offset and wire-format unit tests (needs uv)
-	uv run --no-project --with pytest --with pyyaml --with fastavro==1.12.2 --with duckdb==1.4.4 pytest tests -q
+	uv run --no-project --with pytest==9.2.0 --with pyyaml==6.0.4 --with fastavro==1.12.2 --with duckdb==1.4.4 pytest tests -q
 
 # Inside the Airflow image itself: it carries no pytest and the root suite has no
 # Airflow, so the DAG tests are stdlib unittest. The repo is mounted read-only,
@@ -86,10 +86,10 @@ test-trino:  ## Trino on a throwaway trinodb/trino, no stack: etc/ starts, catal
 test-dbt:  ## dbt/ on a throwaway trinodb/trino, no stack: sqlfluff, deps, parse, compile, the manifest check (layering, every mart's grain), then build with its unit tests on empty sources
 	bash scripts/dbt-test.sh
 
-test-rust:  ## Rust capture unit tests (runs in rust:1-bookworm; no local cargo needed)
+test-rust:  ## Rust capture unit tests (runs in rust:1.100.0-bookworm; no local cargo needed)
 	docker run --rm -v "$(CURDIR)":/repo -w /repo/services/capture-rust \
 	  -v k2-capture-cargo:/usr/local/cargo/registry \
-	  -v k2-capture-target:/repo/services/capture-rust/target rust:1-bookworm \
+	  -v k2-capture-target:/repo/services/capture-rust/target rust:1.100.0-bookworm \
 	  sh -c 'apt-get update -qq && apt-get install -y -qq cmake clang libclang-dev >/dev/null && cargo test --locked'
 
 # The committed replay fixtures are synthetic (NOTICE). This is the stronger
@@ -101,7 +101,7 @@ test-rust:  ## Rust capture unit tests (runs in rust:1-bookworm; no local cargo 
 record-fixtures:  ## Record real venue sessions into services/capture-rust/tests/recorded/ (git-ignored) and replay-test them
 	docker run --rm -v "$(CURDIR)":/repo -w /repo/services/capture-rust \
 	  -v k2-capture-cargo:/usr/local/cargo/registry \
-	  -v k2-capture-target:/repo/services/capture-rust/target rust:1-bookworm \
+	  -v k2-capture-target:/repo/services/capture-rust/target rust:1.100.0-bookworm \
 	  sh -c 'apt-get update -qq && apt-get install -y -qq cmake clang libclang-dev >/dev/null && mkdir -p tests/recorded && \
 	    rec() { cargo run -q --locked -- record --exchange $$1 --seconds $$2 --symbols $$3 \
 	      --instruments-file ../../config/instruments.yaml > tests/recorded/$$1-$$2s.jsonl; } && \
@@ -134,7 +134,7 @@ check-alerts:  ## promtool: syntax-check every rule file and run the capture + l
 
 # platform/k2gen is checked with the ruff and mypy pinned in its own lock, as CI's contracts job does.
 lint:  ## Ruff over the v3 lake, the Airflow DAGs, the gate scripts and other scripts/ Python, and the tests; ruff and mypy (strict) over platform/k2gen
-	uv run --no-project --with ruff ruff check docker/lake docker/airflow scripts/airflow_shadow_check.py scripts/screenshots scripts/check_docs.py scripts/check-budget.py scripts/check-env.py scripts/make-synthetic-fixtures.py tests
+	uv run --no-project --with ruff==0.17.6 ruff check docker/lake docker/airflow scripts/airflow_shadow_check.py scripts/screenshots scripts/check_docs.py scripts/check-budget.py scripts/check-env.py scripts/make-synthetic-fixtures.py tests
 	cd platform/k2gen && uv run --locked -q ruff check . && uv run --locked -q mypy
 
 lake-verify:  ## Lake exit criteria against the LIVE stack: offsets gapless, every layer level with its parent, double-run adds 0

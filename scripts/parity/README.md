@@ -368,7 +368,7 @@ records — no Kafka, no registry, no running stack. Run with the repo's usual
 invocation:
 
 ```bash
-uv run --no-project --with pytest --with prefect pytest tests/test_parity.py -q
+uv run --no-project --with pytest==9.2.0 --with prefect==3.9.5 pytest tests/test_parity.py -q
 ```
 
 It is picked up by `make test-python` along with the rest of `tests/`.

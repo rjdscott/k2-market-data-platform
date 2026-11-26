@@ -5,7 +5,7 @@ This is a personal portfolio project. Issues and questions are welcome; pull req
 ## Prerequisites
 
 - Docker Engine with Compose v2
-- Nothing else is required: `make test-rust` runs the Rust suite in a `rust:1-bookworm` container, so no local `cargo` or JDK is needed
+- Nothing else is required: `make test-rust` runs the Rust suite in a `rust:1.100.0-bookworm` container, so no local `cargo` or JDK is needed
 - [`uv`](https://docs.astral.sh/uv/) (only for the Python unit tests and ruff)
 
 ## Setup
@@ -22,10 +22,10 @@ make ps
 
 ```bash
 make test                # everything CI runs: Python + Rust + ClickHouse
-make test-rust           # cargo test inside rust:1-bookworm
-make test-python         # uv run --no-project --with pytest --with pyyaml --with fastavro==1.12.2 --with duckdb==1.4.4 pytest tests -q
+make test-rust           # cargo test inside rust:1.100.0-bookworm
+make test-python         # uv run --no-project --with pytest==9.2.0 --with pyyaml==6.0.4 --with fastavro==1.12.2 --with duckdb==1.4.4 pytest tests -q
 make test-clickhouse     # the gold DDL and its assertions on a throwaway 24.3 server
-make lint                # uv run --no-project --with ruff ruff check docker/lake tests
+make lint                # uv run --no-project --with ruff==0.17.6 ruff check docker/lake tests
 ```
 
 CI (`.github/workflows/ci.yml`) runs the same three suites plus a Docker build of every image, a compose config check, the doc gates and a Trivy scan.

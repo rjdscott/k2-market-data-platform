@@ -405,7 +405,7 @@ the builder image once:
 
 ```bash
 docker build -t k2-rust-builder - <<'EOF'
-FROM rust:1-bookworm
+FROM rust:1.100.0-bookworm
 RUN apt-get update && apt-get install -y --no-install-recommends cmake clang libclang-dev
 RUN rustup component add clippy rustfmt
 EOF

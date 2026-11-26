@@ -4,7 +4,7 @@ One archived WebSocket connection out of `raw.messages`, at a pinned snapshot,
 in the JSONL shape `k2-capture replay` reads (Phase G, ADR-029).
 
     # which connections does the archive hold for a venue?
-    uv run --no-project --with duckdb==1.4.4 --with pytz --with fastavro==1.12.2 \
+    uv run --no-project --with duckdb==1.4.4 --with pytz==2026.6 --with fastavro==1.12.2 \
         python scripts/replay_export.py --exchange kraken --list
 
     # one connection, every frame, in conn_msg_seq order, as a replay input
