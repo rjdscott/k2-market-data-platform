@@ -45,7 +45,9 @@ first differences printed otherwise.
 `--known-gaps` (the wrapper passes `known_gaps` from the pin) takes one listed window,
 at most 60 minutes, out of A against B and nothing else: a capture outage recorded as a
 row in `lake.audit.checks`, inside whose scope the window must sit, where the stores
-cannot be made equal without deleting data (tests/parity/README.md). The gap is printed
+cannot be made equal without deleting data (tests/parity/README.md). Before anything is
+compared the run reads that row from `lake.audit.checks` and stops if it is absent, not a
+failed operator row, or cannot be read (`confirm_audit_row`). The gap is printed
 with its cause, its audit row and the buckets it removed; a gap whose window has no
 difference left fails the run, and a run with a gap applied ends `PARITY: ok (...)`,
 never `PARITY: PASS`.
@@ -327,6 +329,32 @@ def audit_scope(ref) -> tuple:
     return lo.replace(second=0), hi if not hi.second else hi.replace(second=0) + timedelta(minutes=1)
 
 
+def confirm_audit_row(c, ref: str) -> None:
+    """Stop the run unless `lake.audit.checks` holds the failed operator row `ref` names, exactly.
+
+    `load_gaps` checks the reference as text, which an invented row of the right
+    shape passes; this reads the table, over the gate's own DuckDB connection to
+    the lake, so it adds nothing the gate does not already need. Two failures, told
+    apart: a query that raises (catalog or storage unreachable, table missing) is
+    "could not read", and a query that answers with no row is "no row". Neither can
+    pass, and the first is never read as an empty answer. Read at main's head, not
+    at a pin: the row is recorded after the day it explains, so no pin of that day
+    holds it.
+    """
+    job, check, lo, hi = AUDIT_REF.fullmatch(ref).groups()
+    try:
+        rows = c.execute(
+            "SELECT job, passed FROM lake.audit.checks WHERE job = ? AND check_name = ? AND scope = ?", [job, check, f"stack/{lo}..{hi}"]
+        ).fetchall()
+    except Exception as e:  # duckdb raises its own types; any of them means the row was not read
+        raise SystemExit(f"known gap: could not read lake.audit.checks to find {ref}: {e}. The gap is applied only once its row is read") from e
+    if not rows:
+        raise SystemExit(f"known gap: lake.audit.checks has no row job={job} check_name={check} scope=stack/{lo}..{hi}; a gap needs a recorded outage")
+    if any(row_job != "operator" or passed for row_job, passed in rows):
+        raise SystemExit(f"known gap: the row {ref} names is not a failed operator row (job, passed: {sorted(set(rows))})")
+    print(f"known gap: audit row found, {ref}")
+
+
 def gap_problem(g, first: datetime) -> str | None:
     """Why one `known_gaps` entry is refused for the day starting at `first`, or None."""
     if not isinstance(g, dict):
@@ -442,6 +470,8 @@ def main() -> int:
         print(f"known gap {g['start']} to {g['end']} not applied: clickhouse not compared in this run")
 
     c = duck(os.environ["MINIO_ROOT_USER"], os.environ["MINIO_ROOT_PASSWORD"])
+    for g in gaps:  # before anything is compared, whether or not this run applies it
+        confirm_audit_row(c, g["audit_ref"])
 
     def q(sql):
         return c.execute(sql).fetchall()

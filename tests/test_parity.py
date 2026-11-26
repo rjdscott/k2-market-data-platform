@@ -1171,21 +1171,38 @@ def _differs_at(*minutes):
     return [_bucket(m, close=9 if m in minutes else 2) for m in range(3)]
 
 
-class _Q:
-    """DuckDB stand-in for main()'s own lookups on the dbt side."""
+# The row _REF names, as `SELECT job, passed FROM lake.audit.checks ...` returns it.
+_OUTAGE_ROW = [("operator", False)]
 
-    def execute(self, sql):
-        rows = [(7,)] if "src_snapshot_id" in sql else [(1, 7)] if "iceberg_snapshots" in sql else [("decimal(38,10)",)]
+
+class _Q:
+    """DuckDB stand-in for main()'s own lookups: the dbt side's, and the known gap's audit row.
+
+    `audit` is what the audit query returns, or an exception it raises; `asked` keeps
+    the parameters it was given.
+    """
+
+    def __init__(self, audit=_OUTAGE_ROW):
+        self.audit, self.asked = audit, []
+
+    def execute(self, sql, params=None):
+        if "lake.audit.checks" in sql:
+            self.asked.append(params)
+            if isinstance(self.audit, Exception):
+                raise self.audit
+            rows = self.audit
+        else:
+            rows = [(7,)] if "src_snapshot_id" in sql else [(1, 7)] if "iceberg_snapshots" in sql else [("decimal(38,10)",)]
         return type("Result", (), {"fetchall": lambda self: rows})()
 
 
-def _main(monkeypatch, capsys, gaps, *, clickhouse=_CLEAN, silver=_CLEAN, dbt=_CLEAN, flags=("--dbt",)):
+def _main(monkeypatch, capsys, gaps, *, clickhouse=_CLEAN, silver=_CLEAN, dbt=_CLEAN, flags=("--dbt",), audit=_OUTAGE_ROW):
     """main() with all four sides stubbed, the lake's always _CLEAN. Returns (exit code, stdout)."""
     import parity_ohlcv as p
 
     for var in ("MINIO_ROOT_USER", "MINIO_ROOT_PASSWORD", "CLICKHOUSE_PASSWORD"):
         monkeypatch.setenv(var, "x")
-    monkeypatch.setattr(p, "duck", lambda user, password: _Q())
+    monkeypatch.setattr(p, "duck", lambda user, password: _Q(audit))
     monkeypatch.setattr(p, "table_refs", lambda table: ([7, 1], {}))  # 1 the pins, 7 the dbt side's source snapshot
     monkeypatch.setattr(p, "lake_candles", lambda c, day, snapshot: _CLEAN)
     monkeypatch.setattr(p, "silver_candles", lambda c, day, snapshots: silver)
@@ -1200,6 +1217,7 @@ def _main(monkeypatch, capsys, gaps, *, clickhouse=_CLEAN, silver=_CLEAN, dbt=_C
 def test_a_difference_inside_a_known_gap_is_skipped(monkeypatch, capsys):
     code, out = _main(monkeypatch, capsys, [_gap()], clickhouse=_differs_at(1))
     assert code == 0
+    assert f"known gap: audit row found, {_REF}" in out
     assert (f"known gap 2001-01-01T00:01Z to 2001-01-01T00:02Z (the host killed the VM; {_REF}): "
             "1 buckets removed, 1 of them differing") in out
     assert "clickhouse.ohlcv_live vs lake.gold.ohlcv_1m: 2 buckets, 0 differ" in out
@@ -1330,4 +1348,48 @@ def test_the_wrapper_passes_the_pins_known_gaps(tmp_path, pin_current):
     pin = {"day": _DAY, "ohlcv_1m_snapshot": 1, "silver_snapshots": {"x": 5}, "known_gaps": [_gap()]}
     given = _wrapper(tmp_path, *(["--pin-current", _DAY] if pin_current else []), pin=pin)
     assert json.loads(given[given.index("--known-gaps") + 1]) == [_gap()]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# The audit row a known gap names: scripts/parity_ohlcv.py confirm_audit_row
+#
+# load_gaps checks `audit_ref` as text, which an invented reference of the right
+# shape passes. Against the stack the run reads lake.audit.checks for exactly the
+# job, check_name and scope the reference names, before anything is compared.
+# "Could not read" and "no row" are different failures, and neither passes.
+# ─────────────────────────────────────────────────────────────────────────────
+
+from parity_ohlcv import confirm_audit_row  # noqa: E402
+
+
+def test_a_present_failed_operator_row_lets_the_gap_through_and_is_asked_for_exactly(capsys):
+    c = _Q()
+    confirm_audit_row(c, _REF)
+    assert c.asked == [["operator", "capture_outage", "stack/2001-01-01T00:00:30Z..2001-01-01T00:04:10Z"]]
+    assert f"audit row found, {_REF}" in capsys.readouterr().out
+
+
+def test_a_missing_audit_row_stops_the_run():
+    with pytest.raises(SystemExit, match="lake.audit.checks has no row job=operator check_name=capture_outage scope=stack/"):
+        confirm_audit_row(_Q(audit=[]), _REF)
+
+
+@pytest.mark.parametrize("row", [("operator", True), ("decode", False)])  # passed; not an operator's
+def test_a_row_that_is_not_a_failed_operator_row_stops_the_run(row):
+    with pytest.raises(SystemExit, match="is not a failed operator row"):
+        confirm_audit_row(_Q(audit=[row]), _REF)
+
+
+def test_an_unreachable_lake_is_an_error_not_a_pass_and_not_a_missing_row():
+    down = RuntimeError("IO Error: Connection refused, http://localhost:18181/catalog/v1/config")
+    with pytest.raises(SystemExit, match="could not read lake.audit.checks .* Connection refused") as stop:
+        confirm_audit_row(_Q(audit=down), _REF)
+    assert "has no row" not in str(stop.value.code)
+
+
+def test_main_stops_on_an_invented_audit_ref_before_comparing_anything(monkeypatch, capsys):
+    # A reference of the right shape that names no row: load_gaps accepts it, the table does not.
+    with pytest.raises(SystemExit, match="has no row"):
+        _main(monkeypatch, capsys, [_gap()], clickhouse=_differs_at(1), audit=[])
+    assert "vs" not in capsys.readouterr().out, "no comparison may run before the row is found"
 
