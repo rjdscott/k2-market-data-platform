@@ -157,7 +157,7 @@ test-k2gen:  ## k2gen: contracts/ against ODCS v3, the K2 schema and lake.sql, p
 	cd platform/k2gen && uv run --locked -q pytest -q
 
 # CI runs this and fails on any diff or untracked file: generated files are never edited by hand.
-generate:  ## Validate contracts/, then rewrite docker/lake/ddl/generated/, docker/lake/generated/{retention.json,warehouses.txt}, docs/products/, and the per-domain Trino catalogs and rules.json under docker/trino/
+generate:  ## Validate contracts/, then rewrite docker/lake/ddl/generated/, docker/lake/generated/{retention.json,contract_schemas.json,warehouses.txt}, docs/products/, and the per-domain Trino catalogs and rules.json under docker/trino/
 	cd platform/k2gen && uv run --locked -q k2gen generate
 
 new-product:  ## Scaffold contracts/DOMAIN/NAME/: a descriptor and one contract with inline columns that validates (DOMAIN=x NAME=y)

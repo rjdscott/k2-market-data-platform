@@ -18,6 +18,7 @@ compares them before the old path is deleted.
 | `ddl/lake.sql` | Every table: `raw.messages`, the six per-venue `bronze.<venue>_<msgtype>` plus `bronze.kraken_instrument`, silver, gold, and `audit.checks`. The Phase D unified `bronze.*` pair was dropped at the Phase E cutover (comment above `bronze.binance_trade`) |
 | `ddl/generated/` | Written by `k2gen generate`, never by hand: DDL for data product contracts with inline columns ([ADR-032](../../docs/adr/ADR-032-odcs-contracts-and-k2gen.md)). None today |
 | `generated/retention.json` | Written by `k2gen generate`: snapshot expiry in days per table, from the contracts. Nothing reads it until phase P5 |
+| `generated/contract_schemas.json` | Written by `k2gen generate`: per lake table, what its contract states (columns in order with their Spark SQL type and `NOT NULL`, partitioning, sort order, identifier fields). The nightly `contract_schema` audit reads it, since `contracts/` is not mounted here |
 | `apply_ddl.py` | Applies `ddl/lake.sql`, then `ddl/generated/*.sql` in name order. The `lake-ddl` one-shot runs it; idempotent, so a re-run is a no-op |
 | `spark_conf.py` | The one Spark session builder. Every catalog and S3 setting lives here, env-driven |
 | `init-lake.sh` | The `lake-init` one-shot: MinIO bucket, Lakekeeper bootstrap, warehouse, namespaces |
@@ -35,6 +36,7 @@ compares them before the old path is deleted.
 | `record_check.py` | One `audit.checks` row from the command line, `job='replay'`: what `scripts/replay-lake.sh` files after every replay (snapshot id, conn_id, crate sha, output sha256), so a research result is reproducible by re-running the same ids and comparing one digest |
 | `rebuild.py` | `make lake-rebuild LAYER=bronze|silver|gold|books|bars`: drop, recreate and re-decode a layer from its parent, one day per venue at a time (`bars` rebuilds `gold.bars` alone, leaving the candles' snapshots pinned) |
 | `maintenance.py` | Nightly compaction, snapshot expiry, and the audits. Non-zero exit on a failure |
+| `contract_schema.py` | Pure: the live table against its contract, from Iceberg's own JSON for its schema, partition spec and sort order. `maintenance.py` files one `contract_schema` row per lake table with it, and one per table with no contract outside a `scratch_` namespace; run from the host, it does the same comparison read-only over the REST catalog (`python3 docker/lake/contract_schema.py`). [Runbook](../../docs/runbooks/lake-audit-failed.md#15-contract_schema-a-live-table-is-not-what-its-contract-states) section 15 |
 | `metrics.py` | The `lake-metrics` exporter. Reads snapshot summaries over the catalog's REST API |
 | `flows/` | The two Prefect deployments: `lake-ingest-5min`, `lake-maintenance-daily` |
 
@@ -156,6 +158,10 @@ docker exec k2-spark-iceberg python3 /home/iceberg/lake/ingest.py --accept-data-
 # compaction, expiry, audits
 docker exec k2-spark-iceberg python3 /home/iceberg/lake/maintenance.py
 docker exec k2-spark-iceberg python3 /home/iceberg/lake/maintenance.py --audit-only
+
+# every live lake table against its contract, from the host, read-only, no Spark:
+# the nightly contract_schema audit's comparison (exit 1 on any difference)
+python3 docker/lake/contract_schema.py
 
 # tables, idempotently
 docker exec k2-spark-iceberg python3 /home/iceberg/lake/apply_ddl.py
