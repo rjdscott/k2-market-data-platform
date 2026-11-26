@@ -1,6 +1,8 @@
 # ADR-050: Pause order-book capture while the platform is built
 
-**Status:** Proposed
+**Status:** Accepted
+**Accepted:** by the owner on 2026-11-26, after an independent design review in two rounds;
+the findings and their resolution are in pull request #223
 **Date:** 2026-11-26
 **Author:** Platform
 **Category:** Ingestion / Capture
