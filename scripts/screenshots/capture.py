@@ -9,9 +9,8 @@ MINIO_ROOT_USER, MINIO_ROOT_PASSWORD, K2_QUANT_PASSWORD, AIRFLOW_PASSWORD. They
 live in this process only: nothing here prints one, writes one, or saves a
 cookie, and a page whose text contains one fails instead of being saved.
 
-Read-only. It logs in, opens pages and runs one SELECT as ClickHouse's
-read-only `quant` user. It clicks nothing that triggers, pauses or changes a
-setting; the two UI preferences it needs (MinIO's licence notice, Airflow's grid
+Read-only. It logs in and opens pages. It clicks nothing that triggers, pauses
+or changes a setting; the two UI preferences it needs (MinIO's licence notice, Airflow's grid
 width) are set in this browser's own localStorage.
 
 A page that times out, shows a spinner, reads "No data" where shots.py does not
@@ -115,18 +114,6 @@ def open_lakekeeper(page, shot):
     return url
 
 
-def open_clickhouse(page, shot):
-    page.goto(shot["url"] + "?theme=dark")
-    page.fill("#user", "quant")
-    page.fill("#password", env("K2_QUANT_PASSWORD"))
-    page.fill("#query", "-- gold.trades, fed live from Redpanda: trades per venue in the last hour\n"
-                        "SELECT exchange, count() AS trades_last_hour, max(exchange_ts) AS newest\n"
-                        "FROM gold.trades\nWHERE exchange_ts > now() - INTERVAL 1 HOUR\n"
-                        "GROUP BY exchange\nORDER BY exchange")
-    page.click("#run")
-    return shot["url"]  # play puts the query, never the password, in its own URL
-
-
 def open_airflow_task_log(page, shot):
     # The latest *successful* run: the newest column in the grid may still be
     # queued, with no log yet. The UI's own session token, held in memory only.
@@ -144,7 +131,7 @@ def open_airflow_task_log(page, shot):
     return url
 
 
-OPEN = {"lakekeeper": open_lakekeeper, "clickhouse": open_clickhouse, "airflow_task_log": open_airflow_task_log}
+OPEN = {"lakekeeper": open_lakekeeper, "airflow_task_log": open_airflow_task_log}
 
 
 def wait_quiet(page):

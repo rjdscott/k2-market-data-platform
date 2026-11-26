@@ -200,8 +200,11 @@ screenshots:  ## Capture every dashboard and console into docs/images/dashboards
 	  -e K2_AIRFLOW_PORT -e K2_GIT_SHA -v "$(CURDIR)":/repo -w /repo k2-screenshots:1.65.2 \
 	  python3 scripts/screenshots/capture.py $(if $(ONLY),--only $(ONLY),)
 
-parity-ohlcv:  ## Three-way OHLCV parity (ClickHouse on-read, lake gold, DuckDB over silver) at tests/parity/pinned.json
-	scripts/parity-ohlcv.sh
+# Side A, ClickHouse, stands down while the hot tier is paused (ADR-057); dbt's
+# SQL on Trino keeps the check three-way. `make test` runs `dbt deps` first.
+parity-ohlcv:  ## Three-way OHLCV parity (lake gold, DuckDB over silver, dbt on Trino; ClickHouse skipped while paused, ADR-057) at tests/parity/pinned.json
+	@echo "SKIP parity-ohlcv side A, ClickHouse: the hot tier is paused (ADR-057)"
+	scripts/parity-ohlcv.sh --skip-clickhouse --dbt
 
 parity-bars:  ## Three-way event-bar parity (lake gold.bars, DuckDB window SQL, Python reference) at tests/parity/pinned.json
 	scripts/parity-bars.sh
@@ -219,7 +222,5 @@ chaos:  ## Inject each capture and lake failure, wait for its alert, measure rec
 	scripts/chaos/lake-minio-stop.sh
 	scripts/chaos/lake-ingest-kill.sh
 	scripts/chaos/lake-corrupt-payload.sh
-	scripts/chaos/clickhouse-stop.sh
-	scripts/chaos/clickhouse-corrupt-record.sh
 	@echo "results: scripts/chaos/results/$$(date -u +%F).tsv"
 	@echo "copy the measured recovery times into docs/architecture/16-failure-modes.md by hand, with the date"
