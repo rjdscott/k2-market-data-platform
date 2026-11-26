@@ -38,7 +38,6 @@ compares them before the old path is deleted.
 | `maintenance.py` | Nightly compaction, snapshot expiry, and the audits. Non-zero exit on a failure |
 | `contract_schema.py` | Pure: the live table against its contract, from Iceberg's own JSON for its schema, partition spec and sort order. `maintenance.py` files one `contract_schema` row per lake table with it, and one per table with no contract outside a `scratch_` namespace; run from the host, it does the same comparison read-only over the REST catalog (`python3 docker/lake/contract_schema.py`). [Runbook](../../docs/runbooks/lake-audit-failed.md#15-contract_schema-a-live-table-is-not-what-its-contract-states) section 15 |
 | `metrics.py` | The `lake-metrics` exporter. Reads snapshot summaries over the catalog's REST API |
-| `flows/` | The two Prefect deployments: `lake-ingest-5min`, `lake-maintenance-daily` |
 
 ---
 
@@ -123,10 +122,15 @@ container). The full-archive rebuild runs at the 2g maintenance heap, one day
 per venue at a time:
 
 ```bash
-docker exec k2-prefect-server prefect deployment schedule pause lake-ingest/lake-ingest-5min <schedule-id>   # id from: prefect deployment schedule ls lake-ingest/lake-ingest-5min
+docker exec k2-airflow-scheduler airflow dags pause lake_ingest
 make lake-rebuild LAYER=bronze            # or EXCHANGE=kraken for one venue
-docker exec k2-prefect-server prefect deployment schedule resume lake-ingest/lake-ingest-5min <schedule-id>
+docker exec k2-airflow-scheduler airflow dags unpause lake_ingest
 ```
+
+Each prints the DAG with the state it had before: the pause `lake_ingest | False` and the
+unpause `lake_ingest | True`, both as run on the live stack on 2026-11-25 (the
+[operator guide](../../docs/operations/README.md#the-pattern-pause-wait-for-idle-recreate-verify-unpause)
+§6 and [airflow-scheduling.md](../../docs/runbooks/airflow-scheduling.md) §5).
 
 ---
 
@@ -171,9 +175,9 @@ docker exec k2-spark-iceberg python3 /home/iceberg/lake/apply_ddl.py
 make lake-verify
 ```
 
-Under Prefect the same commands run on a schedule, `lake-ingest-5min` every
-five minutes at concurrency 1, `lake-maintenance-daily` at 03:00 UTC. The flows
-add no logic; see `flows/lake_flows.py` for why.
+Under Airflow the same commands run on a schedule, `lake_ingest` every five
+minutes with one run at a time, `lake_maintenance` at 03:00 UTC. The DAGs add no
+logic; see `docker/airflow/dags/lake.py` for why.
 
 ---
 
@@ -413,8 +417,8 @@ Two consequences worth knowing:
   on the new base. The summary makes a *sequence* of runs exactly-once, not a
   pair of concurrent ones. `ingest.py` takes an exclusive `flock` on
   `/tmp/k2-lake-ingest.lock` (`$K2_LAKE_LOCK`) in `main()` and exits 75 (`EX_TEMPFAIL`) if it is
-  held; `lake-ingest-5min`'s `concurrency_limit=1` sits behind that and covers
-  only the runs Prefect launched, which is not the ones in these runbooks.
+  held; `lake_ingest`'s `max_active_runs=1` sits behind that and covers
+  only the runs Airflow launched, which is not the ones in these runbooks.
   `maintenance.py` takes the same lock *blocking*, it waits out a running ingest,
   then holds the lock for its whole run. That is what lets it use a 2g driver heap
   (`K2_LAKE_MAINTENANCE_DRIVER_MEMORY`) in what was then a 4 GiB container (8 GiB since): compaction of
@@ -800,7 +804,7 @@ nothing bootstrapped.
   121.9                       # MiB peak RSS, from a 10.9 MiB bare interpreter
 
   # metrics.py against the live Lakekeeper, five full refreshes over four tables
-  $ docker exec k2-prefect-worker python /tmp/rss.py
+  $ docker exec <exporter container> python /tmp/rss.py   # 2026-08-26: the worker image the exporter then ran in, archived in legacy/prefect/image/
   5 full refreshes over 4 tables, 0 errors; peak RSS 26.6 MiB
   ```
 
@@ -808,6 +812,8 @@ nothing bootstrapped.
   run was measured against four scratch tables created with
   `apply_ddl.py --namespace-map`, because the real `raw`/`bronze`/`audit` tables
   do not exist on this host yet.
+
+  Not re-measured in the exporter's own image (`docker/lake-metrics/`, since ADR-034).
 
 ---
 

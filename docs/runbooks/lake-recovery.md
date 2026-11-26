@@ -231,7 +231,7 @@ curl -s localhost:18181/health | jq .
 docker ps --filter name=k2-lakekeeper --format '{{.Names}}\t{{.Status}}'   # ✅ verified
 #   k2-lakekeeper  Up 4 hours (healthy)
 
-# 2. Its database. Lakekeeper shares the Prefect PostgreSQL server.        ✅ verified
+# 2. Its database. Lakekeeper shares the metadata PostgreSQL server (prefect-db).        ✅ verified
 docker ps --filter name=k2-prefect-db --format '{{.Names}}\t{{.Status}}'
 #   k2-prefect-db  Up 4 hours (healthy)
 ```
@@ -341,8 +341,7 @@ unreferenced" is not something `mc ls` can tell you.
 
 ## 5. Ingest killed mid-run
 
-**Symptom**, a `lake_ingest` run shows failed in Airflow (Prefect's `lake-ingest-5min`
-before the cutover, ADR-034); the container was killed, OOMed, or the host restarted.
+**Symptom**, a `lake_ingest` run shows failed in Airflow; the container was killed, OOMed, or the host restarted.
 
 **Detection**, `AirflowTaskFailed` once its retry is spent; `LakeIngestLagHigh` if it repeats.
 

@@ -23,22 +23,20 @@ docker/
 │   ├── offsets.py        # Consumed offsets in the Iceberg snapshot summary (ADR-022)
 │   ├── wire.py           # Confluent framing + schema-registry lookup
 │   ├── metrics.py        # Prometheus exporter (the lake-metrics service)
-│   ├── spark_conf.py     # lake_session(), the only `lake` catalog config; --smoke self-check
-│   └── flows/            # Prefect flow + deployment definitions (deploy_lake.py)
+│   └── spark_conf.py     # lake_session(), the only `lake` catalog config; --smoke self-check
 ├── airflow/              # Airflow 3 image, the three lake DAGs (dags/lake.py) and their tests (ADR-034)
 ├── lake-metrics/         # The lake-metrics exporter's own image (runs lake/metrics.py)
 ├── redpanda/             # Topic + Avro subject bootstrap (init.sh, run by redpanda-init)
-├── prefect/              # Prefect worker image (Dockerfile) + deployment storage
 ├── spark/                # Spark image (Iceberg 1.8.1, Kafka + Avro jars, pinned by sha256)
 ├── trino/                # Trino 484: catalog `lake` (read-only), generated domain catalogs and rules (ADR-035, ADR-044)
 ├── grafana/
 │   ├── provisioning/     # Auto-provisioned datasource (Prometheus) + dashboard loader
-│   └── dashboards/       # Dashboard JSON, 5: pipeline overview, ClickHouse, k2-l2-capture, k2-lake, v2-migration-tracker
+│   └── dashboards/       # Dashboard JSON, 6: pipeline overview, ClickHouse, k2-l2-capture, k2-lake, k2-airflow, k2-resources
 ├── prometheus/
 │   ├── prometheus.yml    # Scrape configs
 │   └── rules/            # Alerting rules (ClickHouse, capture, lake, Airflow)
 └── postgres/
-    └── ddl/              # Lakekeeper catalog DB, created beside the Prefect metadata DB (Airflow's: airflow/init-db.sh)
+    └── ddl/              # Lakekeeper catalog DB, created on the shared PostgreSQL (Airflow's: airflow/init-db.sh)
 ```
 
 ## Services
@@ -50,10 +48,9 @@ docker/
 | `minio` | long-running | S3 object storage, holds the v3 `k2-lake` bucket |
 | `lakekeeper` | long-running | **v3** Iceberg REST catalog ([ADR-018](../docs/adr/ADR-018-v3-lake-first-rust-capture.md)); `127.0.0.1:18181` |
 | `spark-iceberg` | long-running | Batch engine for the v3 lake ingest and maintenance |
-| `prefect-db` | long-running | PostgreSQL for the Airflow, Lakekeeper and Prefect metadata |
+| `prefect-db` | long-running | PostgreSQL for the Airflow and Lakekeeper metadata; the name is historical, kept from before ADR-034 |
 | `trino` | long-running | SQL over the lake: catalog `lake` (warehouse `k2`, read-only at the connector) and one writable catalog and warehouse per data domain ([ADR-035](../docs/adr/ADR-035-trino-and-dbt-for-marts.md), [ADR-044](../docs/adr/ADR-044-producer-lake-and-domain-mart-warehouses.md), [trino/README.md](trino/README.md)); `127.0.0.1:8088` (`K2_TRINO_PORT`) |
 | `airflow-api-server`, `airflow-scheduler`, `airflow-dag-processor`, `airflow-statsd` | long-running | Airflow 3, the lake schedules ([ADR-034](../docs/adr/ADR-034-airflow-3-replaces-prefect.md)); UI on `127.0.0.1:8090` |
-| `prefect-server`, `prefect-worker` | `legacy` profile | The Prefect rollback, stopped; `docker compose --profile legacy up -d prefect-server prefect-worker` ([airflow-scheduling.md](../docs/runbooks/airflow-scheduling.md#rollback-to-prefect)) |
 | `prometheus`, `grafana`, `lake-metrics` | long-running | Observability |
 | `capture-{binance,kraken,coinbase}` | long-running | **v3** Rust WebSocket capture (trades + L2 book); metrics on `:8082/metrics` ([ADR-019](../docs/adr/ADR-019-rust-capture-tier.md)) |
 | `redpanda-init` | one-shot | Topics + Avro subjects (`redpanda/init.sh`) |
@@ -87,21 +84,16 @@ docker exec k2-prefect-db psql -U "$PREFECT_DB_USER" -d postgres -c 'CREATE DATA
 
 ## Lake pipeline
 
-> Since the Airflow cutover the lake jobs run as the `lake_ingest`, `lake_maintenance` and
-> `lake_rebuild` DAGs (`airflow/dags/lake.py`, [airflow-scheduling.md](../docs/runbooks/airflow-scheduling.md)).
-> The Prefect description below is the rollback's.
+The lake jobs do not run on a systemd timer or cron, they are scheduled as three Airflow 3 DAGs
+(`airflow/dags/lake.py`, [airflow-schedules.md](../docs/operations/airflow-schedules.md)),
+dispatched by `k2-airflow-scheduler` into `k2-spark-iceberg`:
 
-The lake jobs do not run on a systemd timer or cron, they are scheduled as Prefect
-deployments on the `lake` work pool, dispatched by the `k2-prefect-worker` container into
-`k2-spark-iceberg`:
+- `lake_ingest`, runs `lake/ingest.py`, cron `1-59/5 * * * *`, one run at a time
+- `lake_maintenance`, runs `lake/maintenance.py`
+  (compact / expire / remove orphans / audit), nightly at 03:00 UTC
+- `lake_rebuild`, runs `lake/rebuild.py`, manual only
 
-- `lake-ingest/lake-ingest-5min`, runs `lake/ingest.py`, cron `1-59/5 * * * *`,
-  concurrency 1
-- `lake-maintenance/lake-maintenance-daily`, runs `lake/maintenance.py`
-  (compact / expire / remove orphans / audit), nightly
-
-Deployment definitions live in `lake/flows/deploy_lake.py`, which the worker re-runs at
-start so the two deployments are upserted on every boot. There is no watermark table: the
+There is no watermark table: the
 offsets each run consumed are written into the Iceberg snapshot summary of the commit that
 wrote the rows ([ADR-022](../docs/adr/ADR-022-exactly-once-via-snapshot-offsets.md)).
 
@@ -113,7 +105,7 @@ make down           # stop and remove the containers (volumes kept)
 make logs           # tail all service logs
 make ps             # show service status
 
-# The lake DAGs (Airflow; Prefect is the stopped rollback)
+# The lake DAGs
 docker exec k2-airflow-scheduler airflow dags list
 docker exec k2-airflow-scheduler airflow dags trigger lake_ingest
 ```

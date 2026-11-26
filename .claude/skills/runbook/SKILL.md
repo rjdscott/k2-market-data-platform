@@ -55,5 +55,5 @@ the ADR instead.
 
 - Exact commands, never paraphrases ("restart the broker" ✗,
   `docker compose restart redpanda` ✓).
-- Container names are real (`k2-clickhouse`, `k2-redpanda`, `k2-prefect-db`).
+- Container names are real (`k2-clickhouse`, `k2-redpanda`, `k2-airflow-scheduler`).
 - Destructive steps carry a reconciliation check before them.

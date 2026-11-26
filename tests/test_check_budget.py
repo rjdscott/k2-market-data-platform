@@ -22,14 +22,14 @@ def svc(cpus, gib, image="k2-thing:1.0.0", restart="unless-stopped"):
     return {"image": image, "restart": restart, "deploy": {"resources": {"limits": limits}}}
 
 
-def check(default, governance=None, legacy=None, every=None, dockerfiles=()):
-    governance, legacy = governance or default, legacy or default
-    profiles = {"governance": governance, "legacy": legacy}
-    return budget.check(default, profiles, every or {**default, **governance, **legacy}, list(dockerfiles))
+def check(default, governance=None, other=None, every=None, dockerfiles=()):
+    governance, other = governance or default, other or default
+    profiles = {"governance": governance, "other": other}
+    return budget.check(default, profiles, every or {**default, **governance, **other}, list(dockerfiles))
 
 
-def failures(default, governance=None, dockerfiles=(), legacy=None, every=None):
-    return check(default, governance, legacy, every, dockerfiles)[1]
+def failures(default, governance=None, dockerfiles=(), other=None, every=None):
+    return check(default, governance, other, every, dockerfiles)[1]
 
 
 def test_one_shots_count_towards_the_gated_bootstrap_peak():
@@ -57,18 +57,18 @@ def test_the_governance_profile_is_reported_not_gated():
     assert "26.00 CPU" in report[2]
 
 
-def test_the_legacy_profile_is_reported_not_gated_but_its_limits_and_pins_are():
-    # The Prefect rollback: default plus two services, over the ceiling here on
-    # purpose, so only its report line moves.
+def test_a_second_profile_is_reported_not_gated_but_its_limits_and_pins_are():
+    # Default plus one service, over the ceiling here on purpose, so only its
+    # report line moves.
     default = {"a": svc(23.0, 30)}
-    legacy = {**default, "prefect-server": svc(3.0, 8, image="prefecthq/prefect:3.9.5-python3.12")}
-    report, fails = check(default, legacy=legacy)
+    other = {**default, "rollback-server": svc(3.0, 8, image="example/rollback:3.9.5-python3.12")}
+    report, fails = check(default, other=other)
     assert fails == []
-    assert report[3].startswith("bootstrap legacy") and "26.00 CPU" in report[3]
-    # A service only the legacy profile starts is still held to limits and pins.
-    bare = {**default, "prefect-worker": {"image": "k2-prefect-worker", "deploy": {}}}
-    named = " ".join(failures(default, legacy=bare))
-    assert "limits: prefect-worker" in named and "service prefect-worker" in named
+    assert report[3].startswith("bootstrap other") and "26.00 CPU" in report[3]
+    # A service only that profile starts is still held to limits and pins.
+    bare = {**default, "rollback-worker": {"image": "k2-rollback-worker", "deploy": {}}}
+    named = " ".join(failures(default, other=bare))
+    assert "limits: rollback-worker" in named and "service rollback-worker" in named
 
 
 def test_a_service_with_no_restart_key_is_reported_as_steady():
@@ -81,7 +81,7 @@ def test_a_service_with_no_restart_key_is_reported_as_steady():
 @pytest.mark.parametrize("image", [
     "redis", "redis:latest", "localhost:5000/redis",
     # the floating tags the audit found passing: a bare major or a word
-    "rust:1-bookworm", "postgres:15-alpine", "prefecthq/prefect:3-python3.12",
+    "rust:1-bookworm", "postgres:15-alpine", "example/worker:3-python3.12",
     "gcr.io/distroless/cc-debian12:nonroot", "python:3", "eclipse-temurin:21-jre-alpine",
     "x:stable", "x:v3",
 ])
@@ -130,7 +130,7 @@ def test_replicas_and_scale_multiply_the_limits():
 
 
 def test_a_service_under_any_profile_is_held_to_limits_and_pins():
-    # `tools` is neither governance nor legacy: only the `--profile '*'` resolve has it.
+    # `tools` is in neither profile above: only the `--profile '*'` resolve has it.
     default = {"a": svc(1.0, 1)}
     every = {**default, "tools": {"image": "busybox:latest", "deploy": {}}}
     named = " ".join(failures(default, every=every))

@@ -44,7 +44,7 @@ stops a run before it fills the disk.
   Each is a function of `raw.messages` and is rebuilt from it, not restored.
 - each data domain's `dq.dbt_test_results`, the history of dbt test outcomes. A lost MinIO
   volume loses that history.
-- ClickHouse, Redpanda, Grafana, Prometheus, and the legacy Prefect database.
+- ClickHouse, Redpanda, Grafana, Prometheus, and the retired scheduler's database.
 - `.env`. Keep your own copy somewhere else: the catalog stores the warehouses' storage
   credential encrypted with `LAKEKEEPER_ENCRYPTION_KEY`, so a restored catalog dump needs the
   same key.

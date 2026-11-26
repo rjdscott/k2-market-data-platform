@@ -83,3 +83,5 @@ git grep -li prefect -- ':!legacy' ':!docs/adr' ':!docs/audits' ':!docs/benchmar
 
 The last command must print only `docker-compose.yml`, `.env.example`,
 `docker/postgres/ddl/10-lakekeeper-db.sql` and the scripts that read `PREFECT_DB_*`.
+
+_Phase P2 landed 2026-11-26 (AEDT), commits #189 564a282, #195 c572727 and #235: `make gates` passed with Airflow as the only scheduler (the P0 run, 01:35 to 01:55 UTC), and the first 24 scheduled `lake_ingest` runs after the switch were `success`, five of them skipped at the lock during the first maintenance. Where it differs from the text above: the cutover's `make gates` ran without the parity gates, which ran after the P0 re-pin; unpausing `lake_maintenance` ran a maintenance at once, which served as the lock test; the rollback was documented, never drilled, and went with the archive; the ceiling is 25 CPU / 48 GiB (ADR-045); the shadow check was deleted, not archived; the grep also lists files naming `prefect-db`, linking ADR-008 or ADR-034, or pointing at `legacy/prefect/` (`tests/test_no_scheduler_name.py`)._

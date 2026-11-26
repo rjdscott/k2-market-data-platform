@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """
-K2 v3 lake maintenance — compact, expire, audit. Runs nightly under Prefect
-(`lake-maintenance-daily`), or by hand:
+K2 v3 lake maintenance: compact, expire, audit. Runs nightly as the Airflow DAG
+`lake_maintenance`, or by hand:
 
     docker exec k2-spark-iceberg python3 /home/iceberg/lake/maintenance.py
     docker exec k2-spark-iceberg python3 /home/iceberg/lake/maintenance.py --audit-only
     docker exec k2-spark-iceberg python3 /home/iceberg/lake/maintenance.py --audit-only --with-paused
 
 **Exit code is the product.** Any failed audit exits non-zero, which fails the
-Prefect flow run, which is what `LakeAuditFailed` alerts on. Every check also
+Airflow task, which is what `LakeAuditFailed` alerts on. Every check also
 lands as a row in `lake.audit.checks` so "when did this last hold" is a query
 rather than a log grep — including a check that *raised*, which is why every
 call is wrapped: a run that dies with nothing written fires the alert and leaves

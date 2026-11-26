@@ -28,31 +28,6 @@ if ! python3 scripts/check-env.py; then
   exit 1
 fi
 
-# (b) prefect-server host port, idempotent
-# One variable, not an override file: compose interpolates K2_PREFECT_PORT into
-# both the `ports` mapping and PREFECT_UI_API_URL, and a UI published on a port
-# its own API URL does not name is a UI that loads and then fails every request.
-step "(b) prefect-server host port"
-if grep -q '^K2_PREFECT_PORT=' .env; then
-  result "(b) prefect port" "SKIP (.env already sets K2_PREFECT_PORT=$(grep -m1 '^K2_PREFECT_PORT=' .env | cut -d= -f2))"
-else
-  busy=0
-  if command -v ss >/dev/null 2>&1; then
-    ss -ltn 2>/dev/null | awk '{print $4}' | grep -q ':4200$' && busy=1 || true
-  elif command -v lsof >/dev/null 2>&1; then
-    lsof -iTCP:4200 -sTCP:LISTEN >/dev/null 2>&1 && busy=1 || true
-  fi
-  if [ "$busy" = "1" ]; then
-    run sh -c 'printf "\n# host 4200 was busy at bring-up (scripts/dev-up.sh)\nK2_PREFECT_PORT=14200\n" >> .env'
-    result "(b) prefect port" "WROTE (host port 4200 busy -> K2_PREFECT_PORT=14200 in .env)"
-  else
-    result "(b) prefect port" "SKIP (port 4200 free, compose default)"
-  fi
-fi
-if [ -f docker-compose.override.yml ] && grep -q '4200' docker-compose.override.yml; then
-  result "(b) legacy override" "WARN (docker-compose.override.yml still remaps 4200 — delete it, K2_PREFECT_PORT replaces it)"
-fi
-
 # (c) build + start — daemon caches, so plain --build is cheap on a no-op
 # K2_GIT_SHA is the capture image's build arg; it lands in
 # k2_capture_build_info's `git_sha` label. `git describe --always --dirty`, not

@@ -42,7 +42,7 @@ in it, and what does not.
 | `.claude/` | the Claude Code skills, one per doc surface | session logs, handoffs, local settings |
 | `.github/` | the CI workflow and Dependabot config | anything no workflow reads |
 | `config/` | registries the services read: instruments, bar thresholds | secrets, host-specific values (those are `.env`) |
-| `docker/` | per-service images, DDL, lake jobs, Prefect flows, alert rules, dashboards | volumes, backups, warehouse files |
+| `docker/` | per-service images, DDL, lake jobs, alert rules, dashboards | volumes, backups, warehouse files |
 | `docs/` | the architecture book, ADRs, runbooks, plans, audits, benchmarks, research | progress trackers, phase status files, pasted market data |
 | `legacy/` | v1, the v2 Kotlin tier, v2 ClickHouse DDL, the v2 offload: archived, source unchanged since archiving (v1 has had dependency pins bumped, see its README); index in [`legacy/README.md`](legacy/README.md) | new work or fixes |
 | `notebooks/` | DuckDB research notebooks and the `k2lake` helpers, outputs cleared | executed outputs, which are your venue data |

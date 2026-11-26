@@ -250,7 +250,7 @@ one outcome the whole v3 design exists to prevent
 correct behaviour; the recovery is a human decision, and its deliverable is a record, not a
 restart.
 
-**Recovery, the whole procedure, run end to end on 2026-08-26** under Prefect. ✅ verified
+**Recovery, the whole procedure, run end to end on 2026-08-26**, before the Airflow cutover. ✅ verified
 for the ingest steps (3 and 4); steps 1, 2 and 5 read and pause Airflow since the cutover
 (2 and 5 ran on 2026-11-25; 1 awaits a failed ingest).
 
@@ -264,7 +264,7 @@ hit `DATA LOSS`, and none has occurred since the cutover.
 docker exec k2-airflow-scheduler sh -c \
   "find /opt/airflow/logs -path '*dag_id=lake_ingest*' -name '*.log' | sort | tail -1 | xargs grep 'DATA LOSS'"
 #   stage 1: DATA LOSS market.crypto.v3.raw.kraken/0: committed <committed>,
-#            broker LOG-START <log-start>, <n> records evicted   (2026-08-26, Prefect's log; values here are placeholders)
+#            broker LOG-START <log-start>, <n> records evicted   (2026-08-26, the run log of the time; values here are placeholders)
 
 #    The broker's own view, for a second opinion and for the partitions that are
 #    close to it but not over yet.
@@ -531,9 +531,9 @@ both bronze tables using the sort order declared in `lake.sql`.
 > successful `lake_ingest` run, not a failed one, and three skips in a row with no
 > maintenance or rebuild running fire `AirflowLakeIngestSkippedRepeatedly`: the procedure for
 > that is [airflow-scheduling.md section 3](./airflow-scheduling.md#3-lake_ingest-skipped-three-runs-in-a-row).
-> What follows is why the lock exists, written when Prefect ran the ingest.
+> What follows is why the lock exists, written before the cutover.
 
-**Symptom**, under Prefect, one `lake-ingest-5min` flow run is Failed in the Prefect UI, its logs end in
+**Symptom**, before the cutover, one scheduled ingest run was marked Failed, its logs ending in
 
 ```
 ingest.py exited 75 after 3s
@@ -541,7 +541,8 @@ another ingest holds /tmp/k2-lake-ingest.lock, refusing to run a second one.
 Two concurrent appends both commit and both write offsets; see LOCK_PATH above.
 ```
 
-and the next scheduled run five minutes later succeeds normally.
+and the next scheduled run five minutes later succeeds normally. Under Airflow the same exit is a
+skipped task (the note above).
 
 **Detection**, none for one refused run, and there should be none: it costs one cycle of
 freshness, an order of magnitude inside `LakeIngestFailed`'s 30-minute threshold. Three in a
@@ -553,8 +554,8 @@ nothing.** `main()` in `docker/lake/ingest.py` takes a non-blocking exclusive `f
 queueing if another process holds it. Two concurrent ingests would both read the same
 committed offsets from the last snapshot summary and both append the same records, so
 concurrency is the one thing that breaks the exactly-once argument
-([ADR-022](../adr/ADR-022-exactly-once-via-snapshot-offsets.md)). The deployment's
-`concurrency_limit=1` only gates runs *Prefect* launched; the runbooks, the chaos scripts
+([ADR-022](../adr/ADR-022-exactly-once-via-snapshot-offsets.md)). The DAG's
+`max_active_runs=1` only gates runs *Airflow* launched; the runbooks, the chaos scripts
 and `make lake-verify` all `docker exec` an ingest directly, and the flock is the guard
 that covers every path.
 

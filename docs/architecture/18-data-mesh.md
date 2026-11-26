@@ -12,7 +12,7 @@ what it reads, how it is classified, or how long its snapshots live, and before 
 the [governed self-serve platform plan](../plans/2026-11-24-governed-self-serve-platform/README.md)
 nothing in the repository did. The facts that did exist lived in several places that could
 disagree: columns and partitioning in `lake.sql`, retention as one CLI default in
-`maintenance.py`, schedules in the Prefect deployment, descriptions in the hand-kept
+`maintenance.py`, schedules in the orchestrator's deployment script, descriptions in the hand-kept
 [data catalog](../operations/data-catalog.md).
 
 ## Options

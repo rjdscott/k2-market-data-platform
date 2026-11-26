@@ -2,8 +2,9 @@
 
 The working contract for this repo. K2 is a single-host crypto market data
 platform: Rust capture (`services/capture-rust/`) → Redpanda → a Spark batch
-ingest into an Iceberg lake on MinIO under Airflow 3 (ADR-034; Prefect waits,
-not running, behind `--profile legacy` as the rollback), catalogued by Lakekeeper.
+ingest into an Iceberg lake on MinIO under Airflow 3 (ADR-034; the scheduler
+it replaced is archived in `legacy/prefect/`, with no rollback in the compose file),
+catalogued by Lakekeeper.
 Trino 484 serves SQL over the lake through a catalog that is read-only at the
 connector (ADR-035), and writes only the dbt marts, in one Lakekeeper warehouse
 per data domain generated from `contracts/domains.yaml` by `make generate`
@@ -26,12 +27,13 @@ Read this before writing code or docs. Architecture: `docs/architecture/README.m
 - **Conventional commits**, as in `CONTRIBUTING.md`: `feat(scope): …`,
   `fix(scope): …`, `docs: …`, `chore: …`, `ci: …`.
 
-**None of this is enforced.** `main` is unprotected — this is a solo-maintainer
-portfolio repo and a required-review gate on a repo with one reviewer costs more
-than it catches. A push straight to `main` will succeed, so don't. A second
-contributor is the trigger to turn protection on. `CONTRIBUTING.md` states the
-conventions for outsiders; `SECURITY.md` states what to do with a vulnerability.
-What *is* enforced is CI (`.github/workflows/ci.yml`) on every PR.
+**`main` is protected.** A merge needs every required CI check
+(`.github/workflows/ci.yml`) green, and that applies to admins too; a push straight
+to `main` is refused. No review is required: this is a solo-maintainer repo, and a
+required-review gate with one reviewer costs more than it catches. A second
+contributor is the trigger to add one. The naming and commit conventions above are
+not enforced, so follow them. `CONTRIBUTING.md` states the conventions for outsiders;
+`SECURITY.md` states what to do with a vulnerability.
 
 ## Skills
 
@@ -127,7 +129,7 @@ considered before committing*.
 
 ```bash
 make test          # everything CI runs: python + rust + clickhouse + trino + dbt
-make test-python   # uv run --no-project --with pytest --with pyyaml --with fastavro==1.12.2 --with duckdb==1.4.4 pytest tests -q
+make test-python   # uv run --no-project --with pytest==9.2.0 --with pyyaml==6.0.4 --with fastavro==1.12.2 --with duckdb==1.4.4 pytest tests -q
 make test-rust     # rust:1-bookworm container; no local cargo needed
 make test-clickhouse  # the gold DDL + assertions on a throwaway 24.3 server
 make test-trino    # docker/trino/etc starts; lake refuses every commit; only a domain's writer changes its catalog
@@ -139,7 +141,7 @@ make test-dbt      # dbt/ (its own uv project): lint, compile, manifest check, b
   deliberately outside `make test` and outside CI — the archive is verifiable,
   not merely present.
 - Python has no root `pyproject.toml` — root tests run against ad-hoc `uv`
-  deps, as above. Lint: `make lint` — `uv run --no-project --with ruff ruff check docker/lake tests`.
+  deps, as above. Lint: `make lint`, which runs `uv run --no-project --with ruff==0.17.6 ruff check ...` over the paths the `Makefile` lists.
 - Legacy v1 is a real uv project: `cd legacy/v1 && uv sync --all-extras && uv run pytest`.
 - New Python deps: pin the version (`uv add pkg==x.y.z`), check the current
   stable release first, note the choice if it's constrained by compatibility.

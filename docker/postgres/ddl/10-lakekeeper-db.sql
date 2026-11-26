@@ -2,7 +2,7 @@
 -- K2 v3 — Lakekeeper catalog database
 -- Purpose: give the Lakekeeper REST catalog its own database on the existing
 --          prefect-db instance, rather than a second PostgreSQL container.
--- Database: PostgreSQL (prefect-db)
+-- Database: PostgreSQL (prefect-db; the name and PREFECT_DB_* are historical, ADR-034)
 -- ADR:      ADR-018 (Lakekeeper REST catalog replaces the hadoop bind mount)
 -- Added:    2026-08-26
 -- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

@@ -147,7 +147,7 @@ check-alerts:  ## promtool: syntax-check every rule file and run the capture + l
 
 # platform/k2gen is checked with the ruff and mypy pinned in its own lock, as CI's contracts job does.
 lint:  ## Ruff over the v3 lake, the Airflow DAGs, the gate scripts and other scripts/ Python, and the tests; ruff and mypy (strict) over platform/k2gen
-	uv run --no-project --with ruff==0.17.6 ruff check docker/lake docker/airflow scripts/airflow_shadow_check.py scripts/screenshots scripts/check_docs.py scripts/check-budget.py scripts/check-env.py scripts/make-synthetic-fixtures.py tests
+	uv run --no-project --with ruff==0.17.6 ruff check docker/lake docker/airflow scripts/screenshots scripts/check_docs.py scripts/check-budget.py scripts/check-env.py scripts/make-synthetic-fixtures.py tests
 	cd platform/k2gen && uv run --locked -q ruff check . && uv run --locked -q mypy
 
 lake-verify:  ## Lake exit criteria against the LIVE stack: offsets gapless, every layer level with its parent, double-run adds 0

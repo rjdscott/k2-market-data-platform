@@ -231,8 +231,7 @@ It is not privileged and has no `/dev/kmsg`, so `container_oom_events_total` is 
 `docker inspect -f '{{.State.OOMKilled}}' <container>` or the cgroup's `memory.events`.
 Every capability is dropped and its root filesystem is read-only. It does hold the Docker
 and containerd sockets, which is how a cgroup becomes `k2-clickhouse`, and a socket is not
-narrowed by `:ro`: that is the same engine-level privilege `prefect-worker` and
-`airflow-scheduler` hold.
+narrowed by `:ro`: that is the same engine-level privilege `airflow-scheduler` holds.
 
 ### Reading the memory panels
 
@@ -269,7 +268,7 @@ are not read), never the last entry of the metadata array:
 Lakekeeper 0.13.3 returned the same five snapshots in two different orders on two
 successive `loadTable` calls (2026-08-26), and reading by position reported a lag that had
 already been closed. Each lake job runs as a
-short-lived process (an Airflow task now, a Prefect flow before the 2026-11-25 cutover) that
+short-lived process (an Airflow task, and a flow of the scheduler before it until the 2026-11-25 cutover) that
 exits long before Prometheus scrapes it, so a counter inside the job was never observable; the
 committed snapshot is the durable record of what ran.
 
