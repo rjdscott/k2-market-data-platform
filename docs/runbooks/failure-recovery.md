@@ -31,7 +31,7 @@ exists to tell you what "normal recovery" looks like so you can spot when it isn
 | 1 | Redpanda restart | <2 min | ~10 s |
 | 2 | ClickHouse restart | <3 min | ~32 s |
 | 3 | Capture container crash | <1 min | ~30 s (Kotlin, 2026-02-19; not re-measured on Rust) |
-| 4 | Spark / Prefect batch-job failure | <15 min | next scheduled run |
+| 4 | Spark batch-job failure (the lake ingest) | <15 min | next scheduled run |
 | 5 | MinIO unavailable | <5 min | ~5 s |
 | 6 | Network partition | <5 min | ~20–30 s |
 
@@ -124,15 +124,15 @@ and until it runs this is an inherited number, not a measurement of what is depl
 
 ---
 
-## 4. Spark / Prefect batch-job failure
+## 4. Spark batch-job failure (the lake ingest)
 
-**Symptom**, a Prefect flow run for `lake-ingest-5min` is marked Failed; lake row counts
-stop advancing.
+**Symptom**, a `lake_ingest` run is marked failed in Airflow (Prefect's `lake-ingest-5min`
+until the 2026-11-25 cutover); lake row counts stop advancing.
 
 **Detection**, `LakeIngestFailed`, then `LakeIngestLagHigh` from
 [`docker/prometheus/rules/lake-alerts.yml`](../../docker/prometheus/rules/lake-alerts.yml)
-(see [observability.md](../operations/observability.md#alert-rules)); also visible in
-Prefect run history.
+(see [observability.md](../operations/observability.md#alert-rules)), and
+`AirflowTaskFailed` once the run's retry has failed too; also visible in the Airflow UI.
 
 **Expected behaviour**, the consumed Kafka offsets are written into the Iceberg snapshot
 summary by the same commit that writes the rows ([ADR-022](../adr/ADR-022-exactly-once-via-snapshot-offsets.md)),
@@ -142,8 +142,8 @@ re-reads the same range. Idempotent by construction: no duplicates, no gap.
 **Recovery**, usually none. Wait for the next 5-minute run.
 
 ```bash
-# Force a run rather than waiting
-docker exec k2-prefect-server prefect deployment run 'lake-ingest/lake-ingest-5min'
+# Force a run rather than waiting (airflow-scheduling.md section 2 reads the failed one)
+docker exec k2-airflow-scheduler airflow dags trigger lake_ingest
 ```
 
 **Measured**, not yet verified for the lake path; the Phase D burn-in
@@ -158,7 +158,7 @@ triage entry point, not a second copy of it.
 
 **Symptom**, lake ingest and maintenance runs fail; the hot tier is completely unaffected.
 
-**Detection**, `LakeIngestFailed` and Prefect flow-run failures. There is no MinIO
+**Detection**, `LakeIngestFailed` and failed `lake_ingest` runs in Airflow. There is no MinIO
 exporter, and `LakeExporterDown` does not fire: `docker/lake/metrics.py` reads the catalog,
 never MinIO.
 
@@ -216,7 +216,8 @@ their output is what the healthy state looks like.
 
 **Symptom**, queries get slower or start failing; `gold` reads time out.
 
-**Detection**, `ClickHouseHighMemoryUsage` (RSS > 85% of host RAM, 5m),
+**Detection**, `ClickHouseHighMemoryUsage` (RSS > 85% of `OSMemoryTotal`, 5m; on Docker
+Desktop that is the VM's memory, not the host's),
 `ClickHouseQueryFailureRateHigh` (> 0.1 failed queries/s, 3m),
 `ClickHouseMergeQueueLarge` (> 10 background merge tasks, 5m).
 

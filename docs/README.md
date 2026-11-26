@@ -7,7 +7,8 @@ say so, the divergence is usually the interesting part.
 
 For a reviewer opening this repo cold, in order:
 
-1. [Root README](../README.md), what the platform is, and how to run it.
+1. [Root README](../README.md), what the platform is, and how to run it; the
+   [operator guide](operations/README.md) is the full path.
 2. [architecture/README.md](architecture/README.md), each component: how it is built,
    how it works, what it trades away; and what is *not* built.
 3. [adr/ADR-026](adr/ADR-026-four-layer-lake-and-gold-served-from-clickhouse.md), the
@@ -36,11 +37,11 @@ research/  →  adr/  →  plans/  →  audits/
 | Surface | Holds | Conventions |
 |---------|-------|-------------|
 | [research/](research/) | Analysis before a decision, dated. Allowed to be wrong in hindsight | [README](research/README.md) |
-| [adr/](adr/) | 41 ADRs. Immutable once accepted; divergence recorded in an `Outcome` section | [README](adr/README.md) · [template](adr/template.md) |
+| [adr/](adr/) | 42 ADRs. Immutable once accepted; divergence recorded in an `Outcome` section | [README](adr/README.md) · [template](adr/template.md) |
 | [plans/](plans/) | Multi-phase design documents with exit criteria per phase | [README](plans/README.md) |
 | [audits/](audits/) | Point-in-time sweeps of one surface, with a findings table | [README](audits/README.md) |
 | [benchmarks/](benchmarks/) | Dated measurement snapshots. Every published number traces here | [README](benchmarks/README.md) |
-| [runbooks/](runbooks/) | 14 incident procedures, one per alert family, with measured MTTR | [README](runbooks/README.md) · [template](runbooks/template.md) |
+| [runbooks/](runbooks/) | 18 incident procedures, one per alert family or host failure, with measured MTTR where a failure was induced | [README](runbooks/README.md) · [template](runbooks/template.md) |
 
 ## Reference
 
@@ -61,7 +62,7 @@ The system as built, for readers who want the detail rather than the argument.
 | [architecture/16-failure-modes.md](architecture/16-failure-modes.md) | FMEA: one row per component × failure, with its detection signal, blast radius, recovery step and proof |
 | [architecture/06-capture-venues.md](architecture/06-capture-venues.md) | How a capture process works, the per-venue dialects, and what a fourth exchange costs |
 | [architecture/01-what-k2-is.md](architecture/01-what-k2-is.md) | What this platform is for, the workloads it is deliberately wrong for, and the six rules the design is held to |
-| [operations/](operations/) | Running the stack: [quick reference](operations/quick-reference.md), [data catalog](operations/data-catalog.md), [Docker budget](operations/docker-resources.md), [observability](operations/observability.md), [dashboards and consoles](operations/dashboards.md), [latency budgets](operations/latency-budgets.md), [Prefect schedules](operations/prefect-schedules.md), [data inspection](operations/data-inspection.md), [adding an exchange](operations/adding-new-exchanges.md), [cost model](operations/cost-model.md) |
+| [operations/](operations/README.md) | Running the stack: the [operator guide](operations/README.md) (start, health, consoles, stop, recreate one service, roll out a change, logs), [quick reference](operations/quick-reference.md), [data catalog](operations/data-catalog.md), [Docker budget](operations/docker-resources.md), [observability](operations/observability.md), [dashboards and consoles](operations/dashboards.md), [latency budgets](operations/latency-budgets.md), [Airflow schedules](operations/airflow-schedules.md), [Prefect schedules (the rollback)](operations/prefect-schedules.md), [data inspection](operations/data-inspection.md), [adding an exchange](operations/adding-new-exchanges.md), [cost model](operations/cost-model.md) |
 | [development/](development/) | [setup.md](development/setup.md) and [testing.md](development/testing.md), prerequisites, and how to run the Rust and Python suites; [golden-path.md](development/golden-path.md), adding a data product; [lakehouse-labs.md](development/lakehouse-labs.md), five guided labs on the catalog, a record's path to the marts, the fence, a new domain and a failing test |
 
 ## Migration journey

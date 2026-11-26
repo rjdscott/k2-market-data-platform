@@ -9,6 +9,7 @@ The book at the end of each second, top 20 per side, every venue in one schema, 
 | Owner | `analytics-team` |
 | Kind | consumer-aligned |
 | Lifecycle | draft |
+| Status | running |
 | Descriptor | [`contracts/market-analytics/book-snapshots/product.yaml`](../../../contracts/market-analytics/book-snapshots/product.yaml) |
 
 ## Inputs and outputs
@@ -48,6 +49,7 @@ Book states at 1 Hz, top 20 per side as four parallel fixed-point arrays, replay
 
 | | |
 |---|---|
+| Status | running |
 | Classification | internal |
 | Entitlement | realtime |
 | Retention | snapshots expire after 7 days; no row is deleted ([ADR-032](../../../docs/adr/ADR-032-odcs-contracts-and-k2gen.md)) |
@@ -86,6 +88,7 @@ Best bid and offer per second with mid, spread, imbalance and microprice, a SQL 
 
 | | |
 |---|---|
+| Status | running |
 | Classification | internal |
 | Entitlement | realtime |
 | Retention | snapshots expire after 7 days; no row is deleted ([ADR-032](../../../docs/adr/ADR-032-odcs-contracts-and-k2gen.md)) |

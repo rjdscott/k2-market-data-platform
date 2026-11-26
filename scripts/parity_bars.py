@@ -4,7 +4,7 @@ Three-way event-bar parity at pinned lake snapshots (ADR-029): the materialised
 `gold.bars`, the same window SQL run by DuckDB over `gold.trades`, and the
 pure-Python reference in docker/lake/bars.py — compared at tolerance ZERO.
 
-    uv run --no-project --with duckdb==1.4.4 --with pytz --with pyyaml \
+    uv run --no-project --with duckdb==1.4.4 --with pytz==2026.6 --with pyyaml==6.0.4 \
         python scripts/parity_bars.py --day 2026-08-26 \
         --bars-snapshot <lake.gold.bars snapshot id> --trades-snapshot <lake.gold.trades snapshot id> \
         [--reference-symbols BTC/USD,ETH/USDT]
@@ -32,7 +32,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "docker" / "lake"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import bars  # noqa: E402
-from parity_ohlcv import main_lineage, resolve_snapshot  # noqa: E402  - same stale-pin fallback, one copy
+from parity_ohlcv import pin_tag, resolve_snapshot, table_refs  # noqa: E402  - the same pin rule, one copy
 
 LAKEKEEPER = os.environ.get("K2_LAKEKEEPER_HOST_URL", "http://localhost:18181/catalog")
 S3_ENDPOINT = os.environ.get("K2_S3_HOST_ENDPOINT", "localhost:9000")
@@ -138,8 +138,8 @@ def main() -> int:
                 k, _, v = line.partition("=")
                 env.setdefault(k.strip(), v.strip())
     c = duck(env["MINIO_ROOT_USER"], env["MINIO_ROOT_PASSWORD"])
-    bars_snapshot = resolve_snapshot(main_lineage("lake.gold.bars"), "lake.gold.bars", args.bars_snapshot)
-    trades_snapshot = resolve_snapshot(main_lineage("lake.gold.trades"), "lake.gold.trades", args.trades_snapshot)
+    bars_snapshot = resolve_snapshot(*table_refs("lake.gold.bars"), "lake.gold.bars", args.bars_snapshot, pin_tag(args.day))
+    trades_snapshot = resolve_snapshot(*table_refs("lake.gold.trades"), "lake.gold.trades", args.trades_snapshot, pin_tag(args.day))
 
     a = lake_bars(c, args.day, bars_snapshot)
     b = duck_bars(c, args.day, trades_snapshot)
@@ -164,7 +164,7 @@ def main() -> int:
         doc = json.loads(pin.read_text())
         doc["bars"] = {"day": args.day, "bars_snapshot": bars_snapshot, "trades_snapshot": trades_snapshot, "reference_symbols": symbols}
         pin.write_text(json.dumps(doc, indent=2) + "\n")
-        print(f"pinned in {pin}")
+        print(f"pinned in {pin}: tag these snapshots now (tests/parity/README.md); an untagged pin fails the gate once expiry removes it")
     print("parity: ok")
     return 0
 

@@ -1,9 +1,11 @@
 # Runbooks
 
-Incident procedures for the running v2 stack, plus the v3 capture and lake tiers being
-built alongside it. Runbooks record *how*; ADRs record *why* (`../adr/`). Every Prometheus
-alert annotation points at one of these; start from the alert that fired, or from the
-"when to use" column below.
+Incident procedures for the running stack: the capture tier, Redpanda, the ClickHouse hot
+tier, the Iceberg lake, its Airflow schedules and the host under them. Runbooks record
+*how*; ADRs record *why* (`../adr/`). Every Prometheus alert annotation points at one of
+these; start from the alert that fired, or from the "when to use" column below. Day-to-day
+operation (start, stop, health, consoles, recreating one service, rolling out a change) is
+not a runbook: it is the [operator guide](../operations/README.md).
 
 Load secrets before running any command here: `set -a && . ./.env && set +a`
 
@@ -62,7 +64,7 @@ no longer exists, do not follow them against this stack.
 
 | Runbook | When to use | Triggering alert |
 |---------|-------------|------------------|
-| [clickhouse-rebuild-from-lake.md](./clickhouse-rebuild-from-lake.md) | ClickHouse `gold` lost, or disagreeing with the lake: reload trades and candles through `iceberg()` (measured 4.4 s for 10.4 M trades), then the three-way OHLCV parity check | `ClickHouseDown`, `ClickHouseGoldFeedStale`, `ClickHouseKafkaMessagesFailed` |
+| [clickhouse-rebuild-from-lake.md](./clickhouse-rebuild-from-lake.md) | ClickHouse `gold` lost, or disagreeing with the lake: reload trades and candles through `iceberg()` (measured 4.4 s for the whole lake `gold.trades`), then the three-way OHLCV parity check | `ClickHouseDown`, `ClickHouseGoldFeedStale`, `ClickHouseKafkaMessagesFailed` |
 | [lake-recovery.md](./lake-recovery.md) | Rebuilding ClickHouse from the lake, Redpanda replay as a cold start, Lakekeeper down, MinIO down, an ingest killed mid-run, the nightly rewrite not running | `ClickHouseDown`, `LakeIngestFailed`, `LakeExporterDown`, `LakeExporterStalled`, `LakeScrapeErrors`, `LakeCompactionStale` |
 | [lake-disk-usage-high.md](./lake-disk-usage-high.md) | Host disk at 80 % or 90 %. The archive is kept forever, so this is a capacity decision with a lead time, **never** a TTL | `LakeDiskUsageHigh`, `LakeDiskUsageCritical` |
 | [lake-ingest-lag.md](./lake-ingest-lag.md) | Ingest behind cadence, scheduler stopped, `failOnDataLoss`, small files accumulating | `LakeIngestLagHigh`, `LakeCommitAgeHigh`, `LakeIngestFailed` |
@@ -89,6 +91,7 @@ no longer exists, do not follow them against this stack.
 |---------|-------------|------------------|
 | [fresh-install.md](./fresh-install.md) | Bringing the stack up from a fresh clone or after a Docker wipe: prerequisites, the measured timeline, what `docker compose ps` should show, and the capture image build race | none, manual check |
 | [docker-desktop-disk.md](./docker-desktop-disk.md) | Host `/` filling while `docker system df` reports far less: reclaiming space from a bloated `Docker.raw` with `fstrim`. Read the warning before touching the disk-image-size slider | none, manual check |
+| [docker-vm-oom-kill.md](./docker-vm-oom-kill.md) | Every container gone at once and `systemctl --user status docker-desktop` says `Result: oom-kill`: the host's out-of-memory killer ended the Docker VM. Confirm the cause, start Docker Desktop, start what did not come back, check the ingest retried, compare the hot tier with the lake, record the outage in `lake.audit.checks`; then size the VM against host RAM. One occurrence, 2026-11-25: 10 min 17 s from the kill to `make health` PASS, capture off 343 s | none: no container can see host memory, manual check |
 
 ## Triage
 

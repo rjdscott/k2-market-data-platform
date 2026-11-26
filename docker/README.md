@@ -108,16 +108,18 @@ wrote the rows ([ADR-022](../docs/adr/ADR-022-exactly-once-via-snapshot-offsets.
 ## Usage
 
 ```bash
-make up            # start the full stack (docker compose up -d)
-make down           # stop the stack (volumes kept)
+make up            # check-env, then docker compose up -d (refused on a stack built before 2026-11-26)
+make down           # stop and remove the containers (volumes kept)
 make logs           # tail all service logs
 make ps             # show service status
 
-# Prefect deployments
-docker exec k2-prefect-worker prefect deployment ls
-docker exec k2-prefect-worker prefect deployment run 'lake-ingest/lake-ingest-5min'
-docker compose logs prefect-worker --tail 100
+# The lake DAGs (Airflow; Prefect is the stopped rollback)
+docker exec k2-airflow-scheduler airflow dags list
+docker exec k2-airflow-scheduler airflow dags trigger lake_ingest
 ```
+
+Starting, stopping, recreating one service and rolling out a change on the live stack are the
+[operator guide](../docs/operations/README.md).
 
 ## Troubleshooting
 
@@ -171,6 +173,11 @@ docker compose up -d --force-recreate --no-deps redpanda-init
 # Which services mount the directory you edited:
 grep -n 'docker/lake' docker-compose.yml
 ```
+
+Observed since, on 2026-11-26: files changed *inside* a directory mount did reach a running
+container (every file changed in `dbt/` after `k2-airflow-scheduler` was created had the same
+sha256 inside it as on the host), and the stale case seen on 2026-11-25 was the directory
+itself deleted and recreated by a checkout switch. Check before you recreate.
 
 Confirm what the container actually sees before debugging the script:
 

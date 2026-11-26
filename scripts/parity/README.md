@@ -127,13 +127,13 @@ millisecond resolution.
 ### Counts are unique trade IDs, not records
 
 Venues re-send trades, and a record count reads that as one tier inventing them.
-Measured on the 2026-08-26T14:15Z→16:15Z window, Coinbase re-sent trade `69662829`
-— exchange `time` `15:31:09.261488Z` — in raw frame `sequence_num` 1017853 at
+Measured on the 2026-08-26T14:15Z→16:15Z window, Coinbase re-sent a trade
+(exchange `time` `15:31:09.261488Z`) in a later raw frame at
 `15:52:58.890Z`, 21 minutes stale, on the **same connection** (`conn_id`
 `8e980ee6-…`, zero `k2_capture_reconnects_total`). Both tiers wrote it to their topic
 again: `market.crypto.v3.trades.coinbase` p1@4345 and p1@4784/4785,
-`market.crypto.trades.coinbase` p3@51157 and p3@52885. Over that window 2,533 v3 and
-1,538 v2 Coinbase IDs arrived more than once, and every copy was byte-identical to
+`market.crypto.trades.coinbase` p3@51157 and p3@52885. Over that window
+Coinbase IDs arrived more than once on both tiers (counted in [ADR-019](../../docs/adr/ADR-019-rust-capture-tier.md)), and every copy was byte-identical to
 its first.
 
 So the `v2` / `v3` / `Δ` columns count **unique `trade_id`s**. Repeat records get
@@ -213,8 +213,8 @@ that is actually dropping messages.
 **The floor of 2 was a prediction; it has now been measured once.** `EDGE_ALLOWANCE
 = 2` says a window edge can move at most one trade per edge per symbol. First
 full-window check, 2026-08-26T14:15Z→16:15Z: Binance came back **12/12 symbols with
-`only-v2` and `only-v3` both exactly 0** over 1,569,505 records on each side —
-1.57 M trades and not one landed on opposite sides of a boundary. The edges moved
+`only-v2` and `only-v3` both exactly 0** over the same record count on each side
+(in [ADR-019](../../docs/adr/ADR-019-rust-capture-tier.md)'s Outcome): not one trade landed on opposite sides of a boundary. The edges moved
 nothing at all, so on that evidence the floor of 2 is loose rather than tight.
 
 That is one window on one venue, and it is the venue that stamps `exchange_ts` from
@@ -255,12 +255,12 @@ The unique-ID rule above cuts one way on Kraken. v3 carries the venue's own inte
 a replay on resubscribe would otherwise arrive as a v3 surplus and read as v2
 dropping trades. The v2 side is **not**, and cannot be — `KRAKEN-<ms>-<hash>` repeats
 are *different* trades, so deduplicating them would delete real ones. Measured
-2026-08-26 over 2 h, BTC/USD: **9,093 v2 records carrying 3,923 distinct synthesised
-IDs**; a dedupe would have thrown away 57% of the symbol.
+2026-08-26 over 2 h, BTC/USD: **v2 records carrying far fewer distinct synthesised
+IDs than records** (counts in ADR-019's Outcome); a dedupe would have thrown away 57% of the symbol.
 
 So on the Kraken row, `v2` counts records, `v3` counts unique trades, and `dup-v2`
 reports **ID collisions** rather than repeat records. The rendered header says so.
-`dup-v3` there is a v3 replay detector: it read **0 across all 29,167 records** over
+`dup-v3` there is a v3 replay detector: it read **0 across every record** over
 that window, spanning two involuntary reconnects (`15:01:55Z`, `15:55:48Z`), which is
 the evidence that `"snapshot": false` on the `trade` subscription
 (`services/capture-rust/src/exchanges/kraken.rs:176`) does what it says.
@@ -304,16 +304,17 @@ Since the retirement, `config/instruments.yaml` carries Kraken's WS v2 spellings
 as the natives too (`BTC/USD`, `DOGE/USD`), so nothing aliases `XDG/USD`
 anywhere — the divergence recorded here is what that change was made to end.
 
-Observed on the 2-hour labelled window, 2026-08-26T14:15Z → 16:15Z:
+Observed on the 2-hour labelled window, 2026-08-26T14:15Z → 16:15Z (the counts are in
+ADR-019's Outcome; the shape only here):
 
 | symbol | v2 | v3 | Δ | dup-v2 | dup-v3 | only-v2 | only-v3 | px/qty/side mismatch | verdict |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---|
-| DOGE/USD | 0 | 1,322 | -1,322 | 0 | 0 | 0 | 1,322 | n/a | **FAIL** |
-| XDG/USD | 1,320 | 0 | +1,320 | 593 | 0 | 1,320 | 0 | n/a | **FAIL** |
+| DOGE/USD | 0 | `<a>` | -`<a>` | 0 | 0 | 0 | `<a>` | n/a | **FAIL** |
+| XDG/USD | `<b>` | 0 | +`<b>` | `<c>` | 0 | `<b>` | 0 | n/a | **FAIL** |
 
-The same ~1,321 Dogecoin trades under two canonical names. The 2-trade difference is
-v2's `14:54` reconnect, and `dup-v2 = 593` is the synthesised-ID collision on the v2
-side of it — neither is a second bug.
+The same Dogecoin trades under two canonical names. The difference between `<a>` and `<b>` is
+v2's `14:54` reconnect, and `dup-v2` (`<c>`) is the synthesised-ID collision on the v2
+side of it: neither is a second bug.
 
 ---
 
@@ -367,7 +368,7 @@ records — no Kafka, no registry, no running stack. Run with the repo's usual
 invocation:
 
 ```bash
-uv run --no-project --with pytest --with prefect pytest tests/test_parity.py -q
+uv run --no-project --with pytest==9.2.0 --with prefect==3.9.5 pytest tests/test_parity.py -q
 ```
 
 It is picked up by `make test-python` along with the rest of `tests/`.

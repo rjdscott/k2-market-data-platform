@@ -92,8 +92,8 @@ Decided as a hybrid, and the reasons are the trade-offs, not a preference:
 | Rebuild | gold only, from the lake: hours | gold + silver: days | n/a |
 | Venue-level questions | from the lake (or `iceberg()` from ClickHouse on demand) | in ClickHouse | in the lake |
 
-¹ 8.6 M trades and 1.5 M book rows on 2026-08-26 (`make lake-verify`, `raw == trades 8,630,658`,
-`raw == book 1,484,606`), ClickHouse compression assumed ~10:1 for trades and ~7:1 for the
+¹ The trade and book row counts of 2026-08-26 (`make lake-verify`'s `raw == trades` and `raw == book`
+lines, recorded in [plan 003](../plans/2026-08-26-v3-quant-research-platform/003-phase-d-lake-tier.md)), ClickHouse compression assumed ~10:1 for trades and ~7:1 for the
 80-float book rows. ClickHouse gold size is not yet in a benchmark file; measure it with
 `system.parts` and record it before quoting a ratio.
 

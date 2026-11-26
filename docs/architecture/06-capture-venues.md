@@ -155,7 +155,7 @@ Per venue series, all on `:8082/metrics` and prefixed `k2_capture_`: counters `g
 `last_message_ts_seconds{stream}`, `book_depth{symbol}`, `book_levels_total`; histogram
 `exchange_to_recv_seconds`. Every series carries the venue's own `exchange` label, so
 the scrape jobs set none ([11-observability.md](11-observability.md)). The 6.5 h window on
-2026-08-27 read 0 gaps and 0 checksum failures over 14.1 M Kraken frames
+2026-08-27 read 0 gaps and 0 checksum failures over every Kraken frame of the window
 ([benchmarks](../benchmarks/2026-08-27.md#ingestion--capture-tier)).
 
 ## Practices

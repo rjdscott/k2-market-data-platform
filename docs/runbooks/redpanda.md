@@ -320,7 +320,7 @@ the fault durations and the loss counts are not in it and must not be cited to i
 | 1 | Broker stopped (`docker stop`, 45 s), then started | producers past their mid-outage level **14 s** after the broker returned, with **no producer restart** | `t_recover_s` for `redpanda-stop.sh`, [`results/2026-08-26.tsv`](../../scripts/chaos/results/2026-08-26.tsv) |
 | 2 | Broker paused (`docker pause`, 388 s), then unpaused | producing again **0 s** after unpause, the first scrape already showed recovery | `t_recover_s` for `capture-queue-full.sh`, same file |
 | 3 | `rpk cluster health` after both | clean, on a single-node Raft cluster frozen for over six minutes | [`scripts/chaos/README.md`](../../scripts/chaos/README.md), *"The broker survives a six-minute pause"* |
-| 4 | Records lost during the outage | **7,821** (45 s stopped) and **231,744** (388 s paused), kraken alone. Public feeds do not replay; the windows are permanently absent | [`16-failure-modes.md`](../architecture/16-failure-modes.md), the *Broker down* row for 7,821, the *Producer queue full* row for 231,744. **Not in the TSV** |
+| 4 | Records lost during the outage | every record of both windows (45 s stopped, 388 s paused), kraken alone; the counts are in [ADR-019](../adr/ADR-019-rust-capture-tier.md). Public feeds do not replay; the windows are permanently absent | [`16-failure-modes.md`](../architecture/16-failure-modes.md), the *Broker down* and *Producer queue full* rows. **Not in the TSV** |
 | 5 | Time for `CaptureProduceErrors` to fire | **256 s** from the fault (`for: 5m` on a `[10m]` `increase`) | `t_fire_s` for `capture-queue-full.sh`, [`results/2026-08-26.tsv`](../../scripts/chaos/results/2026-08-26.tsv) |
 | 6 | Consumer-group recovery, the ClickHouse `k2-gold-*` groups | not yet verified, no script measures the consumer side |, |
 
@@ -429,8 +429,8 @@ PARTITION  LEADER  EPOCH  REPLICAS  LOG-START-OFFSET  HIGH-WATERMARK
 19         0       11     [0]       0                 0
 ```
 
-The high watermark on partition 10 was **frozen at 168,572**: the topic had had no producer
-since `2026-08-26T18:58:29Z`. The log-start offset of 61,743 was retention having already
+The high watermark on partition 10 was **frozen**: the topic had had no producer
+since `2026-08-26T18:58:29Z`. A log-start offset above zero was retention having already
 expired the head of the log (`retention.ms=604800000`, 7 d). The topic was deleted the
 next day with the rest of the v2 tier.
 

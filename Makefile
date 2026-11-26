@@ -37,7 +37,11 @@ test: test-python test-rust test-clickhouse test-trino test-dbt test-notebooks t
 # One recipe line per gate, not prerequisites: recipe lines run in order and
 # stop at the first failure even under `make -j`, where prerequisites would not
 # keep their order.
-gates:  ## Every gate before a merge, in order, stopping at the first failure: test, lake-verify, parity-ohlcv, parity-bars, check-alerts, check-docs (needs the LIVE stack)
+# The two static gates CI also runs go first: seconds, and no point testing a
+# tree that fails them.
+gates:  ## Every gate before a merge, in order, stopping at the first failure: lint, check-budget, test, lake-verify, parity-ohlcv, parity-bars, check-alerts, check-docs (needs the LIVE stack)
+	$(MAKE) lint
+	python3 scripts/check-budget.py
 	$(MAKE) test
 	$(MAKE) lake-verify
 	$(MAKE) parity-ohlcv
@@ -47,7 +51,7 @@ gates:  ## Every gate before a merge, in order, stopping at the first failure: t
 
 
 test-python:  ## Contract, parity, lake-offset and wire-format unit tests (needs uv)
-	uv run --no-project --with pytest --with pyyaml --with fastavro==1.12.2 --with duckdb==1.4.4 pytest tests -q
+	uv run --no-project --with pytest==9.2.0 --with pyyaml==6.0.4 --with fastavro==1.12.2 --with duckdb==1.4.4 pytest tests -q
 
 # Inside the Airflow image itself: it carries no pytest and the root suite has no
 # Airflow, so the DAG tests are stdlib unittest. The repo is mounted read-only,
@@ -82,10 +86,10 @@ test-trino:  ## Trino on a throwaway trinodb/trino, no stack: etc/ starts, catal
 test-dbt:  ## dbt/ on a throwaway trinodb/trino, no stack: sqlfluff, deps, parse, compile, the manifest check (layering, every mart's grain), then build with its unit tests on empty sources
 	bash scripts/dbt-test.sh
 
-test-rust:  ## Rust capture unit tests (runs in rust:1-bookworm; no local cargo needed)
+test-rust:  ## Rust capture unit tests (runs in rust:1.100.0-bookworm; no local cargo needed)
 	docker run --rm -v "$(CURDIR)":/repo -w /repo/services/capture-rust \
 	  -v k2-capture-cargo:/usr/local/cargo/registry \
-	  -v k2-capture-target:/repo/services/capture-rust/target rust:1-bookworm \
+	  -v k2-capture-target:/repo/services/capture-rust/target rust:1.100.0-bookworm \
 	  sh -c 'apt-get update -qq && apt-get install -y -qq cmake clang libclang-dev >/dev/null && cargo test --locked'
 
 # The committed replay fixtures are synthetic (NOTICE). This is the stronger
@@ -97,7 +101,7 @@ test-rust:  ## Rust capture unit tests (runs in rust:1-bookworm; no local cargo 
 record-fixtures:  ## Record real venue sessions into services/capture-rust/tests/recorded/ (git-ignored) and replay-test them
 	docker run --rm -v "$(CURDIR)":/repo -w /repo/services/capture-rust \
 	  -v k2-capture-cargo:/usr/local/cargo/registry \
-	  -v k2-capture-target:/repo/services/capture-rust/target rust:1-bookworm \
+	  -v k2-capture-target:/repo/services/capture-rust/target rust:1.100.0-bookworm \
 	  sh -c 'apt-get update -qq && apt-get install -y -qq cmake clang libclang-dev >/dev/null && mkdir -p tests/recorded && \
 	    rec() { cargo run -q --locked -- record --exchange $$1 --seconds $$2 --symbols $$3 \
 	      --instruments-file ../../config/instruments.yaml > tests/recorded/$$1-$$2s.jsonl; } && \
@@ -129,8 +133,8 @@ check-alerts:  ## promtool: syntax-check every rule file and run the capture + l
 	  -c 'promtool test rules /p/tests/*.test.yml /p/rules/tests/*_test.yml'
 
 # platform/k2gen is checked with the ruff and mypy pinned in its own lock, as CI's contracts job does.
-lint:  ## Ruff over the v3 lake, the Airflow DAGs, scripts/ Python and the tests; ruff and mypy (strict) over platform/k2gen
-	uv run --no-project --with ruff ruff check docker/lake docker/airflow scripts/airflow_shadow_check.py scripts/screenshots tests
+lint:  ## Ruff over the v3 lake, the Airflow DAGs, the gate scripts and other scripts/ Python, and the tests; ruff and mypy (strict) over platform/k2gen
+	uv run --no-project --with ruff==0.17.6 ruff check docker/lake docker/airflow scripts/airflow_shadow_check.py scripts/screenshots scripts/check_docs.py scripts/check-budget.py scripts/check-env.py scripts/make-synthetic-fixtures.py tests
 	cd platform/k2gen && uv run --locked -q ruff check . && uv run --locked -q mypy
 
 lake-verify:  ## Lake exit criteria against the LIVE stack: offsets gapless, every layer level with its parent, double-run adds 0
@@ -153,14 +157,18 @@ test-k2gen:  ## k2gen: contracts/ against ODCS v3, the K2 schema and lake.sql, p
 	cd platform/k2gen && uv run --locked -q pytest -q
 
 # CI runs this and fails on any diff or untracked file: generated files are never edited by hand.
-generate:  ## Validate contracts/, then rewrite docker/lake/ddl/generated/, docker/lake/generated/{retention.json,warehouses.txt}, docs/products/, and the per-domain Trino catalogs and rules.json under docker/trino/
+generate:  ## Validate contracts/, then rewrite docker/lake/ddl/generated/, docker/lake/generated/{retention.json,contract_schemas.json,warehouses.txt}, docs/products/, and the per-domain Trino catalogs and rules.json under docker/trino/
 	cd platform/k2gen && uv run --locked -q k2gen generate
 
 new-product:  ## Scaffold contracts/DOMAIN/NAME/: a descriptor and one contract with inline columns that validates (DOMAIN=x NAME=y)
 	cd platform/k2gen && uv run --locked -q k2gen new "$(DOMAIN)" "$(NAME)"
 
-notebooks-run:  ## Execute the five notebooks headless — the runnable check (needs the stack up)
-	cd notebooks && uv sync -q && for nb in 0*.ipynb; do uv run jupyter nbconvert --to notebook --execute --inplace --ExecutePreprocessor.timeout=600 $$nb || exit 1; done
+# Executed copies go to notebooks/.executed/ (git-ignored), never over the tracked
+# files: an executed notebook holds lake rows, and check-docs gate (i) fails a
+# committed one with outputs. The kernel still runs in notebooks/, so k2lake and
+# ../.env resolve as they do in JupyterLab.
+notebooks-run:  ## Execute the five notebooks headless into notebooks/.executed/ (git-ignored), the runnable check (needs the stack up)
+	cd notebooks && uv sync -q && for nb in 0*.ipynb; do uv run jupyter nbconvert --to notebook --execute --output-dir .executed --ExecutePreprocessor.timeout=600 $$nb || exit 1; done
 
 # Read-only against the LIVE stack: logs in, opens pages, runs one SELECT as
 # ClickHouse's read-only quant user (scripts/screenshots/capture.py). Secrets

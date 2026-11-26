@@ -19,6 +19,18 @@
 #   book_depth Optional per-instrument override of the L2 subscription depth.
 #              Absent = use the exchange default below.
 #
+# ── book_capture: the order-book switch (ADR-050) ───────────────────────────
+#
+# Required, one entry per venue, YAML `true` or `false` and never `on`/`off`
+# (PyYAML reads those as booleans, the capture's serde_yaml as strings, so the
+# lake and the capture would disagree; the capture refuses to start instead).
+# false: the capture does not subscribe to that venue's book channel and trades
+# carry on unchanged; Kraken keeps `instrument`, both Kraken and Coinbase keep
+# their heartbeats. A capture reads this once, at start, and exports what it
+# read as k2_capture_book_capture{exchange}; `make health` fails while the two
+# differ. Changing it is a recreate of that capture, one venue at a time
+# (docs/operations/README.md, "Pause or resume one venue's order book").
+#
 # ── Why the quote currency is kept as the exchange quotes it ────────────────
 #
 # BTC/USDT and BTC/USD are **different instruments**, not two spellings of one.
@@ -68,7 +80,9 @@
 # ── Consumers ───────────────────────────────────────────────────────────────
 #
 #   Rust      services/capture-rust (serde_yaml)
-#   Python    tests/test_contracts.py; Spark symbol mappers       [Phase D]
+#   Python    docker/lake/instruments.py (silver, gold, the book audit skip);
+#             tests/test_contracts.py, tests/test_bars.py
+#   Shell     scripts/health.sh (book_capture only, against the gauge)
 #
 # Bind-mount gotcha: this file is mounted file-level, which pins the inode.
 # After editing, `docker compose up -d --force-recreate --no-deps <service>`;
@@ -80,6 +94,12 @@
 # Last updated: 2026-08-26 (Kraken natives moved to the WS v2 spellings)
 
 version: 2
+
+# Order-book (L2) capture per venue, required. false: trades only (ADR-050).
+book_capture:
+  binance: true
+  kraken: true
+  coinbase: true
 
 instruments:
   binance:

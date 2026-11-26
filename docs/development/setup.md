@@ -1,20 +1,21 @@
 # Development Setup
 
 Getting the stack running locally, and the inner loops for changing Rust or Python
-code once it is.
+code once it is. Running it day to day (health, consoles, stopping, recreating one service,
+rolling out a change) is the [operator guide](../operations/README.md).
 
 ## Prerequisites
 
 | Tool | Needed for | Notes |
 |------|-----------|-------|
-| Docker Engine + Compose v2 | everything | A Docker engine with ≥ 38 GiB memory so every `deploy.resources.limits` can be honoured, the 37.812 GiB bootstrap peak included (39.312 GiB with the Prefect rollback's `--profile legacy`) (`docker info --format '{{.MemTotal}}'`, **Docker Desktop defaults far lower and silently clips every limit above the VM size**; Settings → Resources → Memory); measured steady-state usage is far lower (see [../operations/docker-resources.md](../operations/docker-resources.md)), so the stack runs on less, but limits then exceed the engine and ClickHouse's 8 GB cap is not real. Steady state declares 19.30 CPU / 35.312 GiB of limits across 19 long-running services and peaks at 21.30 CPU / 37.812 GiB across 24 while the five one-shot init containers run, under the 25 CPU / 48 GiB ceiling of [ADR-045](../adr/ADR-045-ceiling-25-cpu-48-gib.md) (v2 alone: 15.1 CPU / 21.875 GB). The engine requirement follows the declared sum, not the ceiling: 38 GiB today, 48 GiB if a later phase fills the ceiling |
+| Docker Engine + Compose v2 | everything | A Docker engine with ≥ 38 GiB memory so every `deploy.resources.limits` can be honoured, the 37.812 GiB bootstrap peak included (39.312 GiB with the Prefect rollback's `--profile legacy`) (`docker info --format '{{.MemTotal}}'`, **Docker Desktop defaults far lower and silently clips every limit above the VM size**; Settings → Resources → Memory); measured steady-state usage is far lower (see [../operations/docker-resources.md](../operations/docker-resources.md)), so the stack runs on less, but limits then exceed the engine and ClickHouse's 8 GB cap is not real. Steady state declares 19.30 CPU / 35.312 GiB of limits across 19 long-running services and peaks at 21.30 CPU / 37.812 GiB across 24 while the five one-shot init containers run, under the 25 CPU / 48 GiB ceiling of [ADR-045](../adr/ADR-045-ceiling-25-cpu-48-gib.md) (v2 alone: 15.1 CPU / 21.875 GB). The engine requirement follows the declared sum, not the ceiling: 38 GiB today, 48 GiB if a later phase fills the ceiling. On Docker Desktop the host has a requirement of its own: the VM grows to its whole memory setting, so host RAM must exceed that setting plus everything else the host runs ([sizing](../runbooks/docker-vm-oom-kill.md#2-size-the-vm-so-the-host-keeps-enough-memory)) |
 | [`uv`](https://docs.astral.sh/uv/) | the Python unit tests and ruff | Nothing else uses Python locally |
 | `jq`, `psql` | the diagnostic one-liners in the ops docs | optional |
 
 ## First run
 
 ```bash
-cp .env.example .env      # then replace every change-me-in-production value (openssl rand -hex 24)
+cp .env.example .env      # then replace every change-me-in-production value: the operator guide, section 1, has a command for it
 make up                   # refuses while one is left, or MINIO_ROOT_USER = MINIO_ROOT_PASSWORD
 make health
 ```
@@ -24,19 +25,21 @@ Two values in `.env` are host-specific, not secrets:
 - `K2_CAPTURE_CPUSET` / `K2_HEAVY_CPUSET` ship **empty**, which means no CPU pinning and
   starts anywhere. Uncomment the 15-core layout in `.env.example` only on a host that has
   those cores — a cpuset naming a core the host does not have fails the container at start
-  with `invalid argument`, six of them at once.
-- `K2_PREFECT_PORT` (default `4200`) is Prefect's host port. It feeds both the published
-  port and `PREFECT_UI_API_URL`, so moving it moves the UI's own API URL with it; set it
-  if something else on the host owns 4200.
+  with `invalid argument`, seven of them at once (the three captures, ClickHouse, Spark,
+  Trino and the `lake-ddl` one-shot).
+- `K2_AIRFLOW_PORT` (default `8090`) and `K2_TRINO_PORT` (default `8088`) are the Airflow
+  and Trino host ports. `K2_AIRFLOW_PORT` also feeds Airflow's own base URL, so moving it
+  moves the links its UI builds; set either if something else on the host owns the port.
+  (`K2_PREFECT_PORT`, default `4200`, matters only for the Prefect rollback behind the
+  `legacy` profile.)
 
-`make up` builds three images on the first run, the Rust `k2-capture` binary, the Prefect
-worker, and the Spark image (which bakes the Kafka and Avro jars, each pinned by sha256).
-Allow **several minutes**; subsequent starts are seconds. Services come up healthy in
-dependency order, Redpanda, then `redpanda-init` creates the topics, registers the nine v3
-Avro subjects and exits (9 live v3 topics · 108 partitions,
-`market.crypto.v3.{raw,trades,book}.<ex>`, plus the 6 frozen v2 topics · 160 partitions it
-still creates so the `k2` Kafka-engine queues have something to attach to), then the three
-`capture-*` containers.
+`make up` builds four images on the first run: the Rust `k2-capture` binary, `k2-airflow`,
+`k2-lake-metrics`, and the Spark image (which bakes the Kafka and Avro jars, each pinned by
+sha256). Allow **several minutes**; subsequent starts are seconds. Services come up healthy in
+dependency order: Redpanda, then `redpanda-init` creates the topics, registers the nine v3 Avro
+subjects and exits (9 topics of 12 partitions, 108 in all, `market.crypto.v3.{raw,trades,book}.<ex>`;
+the six v2 topics were deleted at the Phase E cutover on 2026-08-27 and are not recreated),
+then the three `capture-*` containers.
 
 Never commit `.env`. Everything reads its secrets from it; nothing in the repo hardcodes a
 password.
@@ -54,18 +57,11 @@ directory bind mount that changed in the last commit
 **A stack built before 2026-11-26 is refused, for now.** Its `.env` carries the MinIO pair
 the guard rejects (SECURITY.md), so `make up` and `make dev-up` stop at `check-env: FAIL`
 until that credential is replaced. Do not edit the pair in `.env` to get past it: each
-Lakekeeper warehouse keeps its own stored copy, and the lake stops writing. Meanwhile start
-or recreate services by name, which is what both targets would have run, and then check:
-
-```bash
-docker compose up -d --no-deps <service> [<service> ...]                  # what make up does, per service
-docker compose up -d --force-recreate --no-deps <holders of a changed mount>   # dev-up's step (d)
-make health                                                              # dev-up's step (e)
-```
-
-The trigger that ends this: the credential replacement in
-`docs/research/2026-11-26-storage-credentials-least-privilege.md` merged and rolled out,
-after which `make up` passes again.
+Lakekeeper warehouse keeps its own stored copy, and the lake stops writing. What to run
+instead, and the condition that ends it, are in the operator guide:
+[Read this first](../operations/README.md#read-this-first-the-state-of-this-host), and
+[section 6](../operations/README.md#6-restart-or-recreate-one-service) for recreating a
+service under the pause.
 
 ### Applying the ClickHouse schema
 
@@ -136,7 +132,7 @@ with `K2_GIT_SHA` stamped into `k2_capture_build_info`.
 There is no local Rust toolchain requirement, compile and test in a container:
 
 ```bash
-make test-rust      # cargo test --locked in rust:1-bookworm
+make test-rust      # cargo test --locked in rust:1.100.0-bookworm
 ```
 
 That target reinstalls `cmake`/`clang` on every run. For a tight loop, build the builder
@@ -153,8 +149,8 @@ Tests: `make test-rust`, see [testing.md](./testing.md).
 
 ## Python lake inner loop
 
-The lake scripts are bind-mounted into both the Spark and Prefect worker containers, so
-edits take effect without a rebuild.
+The lake scripts are bind-mounted into the Spark container (`docker/lake` at
+`/home/iceberg/lake`), so edits take effect at the next run without a rebuild.
 
 ```bash
 # Run one ingest directly, with logs in the foreground. No arguments needed:
@@ -169,20 +165,18 @@ docker exec k2-spark-iceberg python3 /home/iceberg/lake/ingest.py --stage bronze
 # Report what framing each topic is actually carrying, writing nothing
 docker exec k2-spark-iceberg python3 /home/iceberg/lake/ingest.py --probe
 
-# Trigger the scheduled flow through Prefect instead
-docker exec k2-prefect-server prefect deployment run 'lake-ingest/lake-ingest-5min'
+# Trigger the scheduled DAG through Airflow instead
+docker exec k2-airflow-scheduler airflow dags trigger lake_ingest
 
 # Unit tests (pure Python: no stack needed)
-uv run --no-project --with pytest --with pyyaml --with fastavro==1.12.2 --with duckdb==1.4.4 pytest tests -q
+uv run --no-project --with pytest==9.2.0 --with pyyaml==6.0.4 --with fastavro==1.12.2 --with duckdb==1.4.4 pytest tests -q
 ```
 
-An ingest takes an exclusive `flock`, so a hand-run that collides with the 5-minute cron
-exits non-zero rather than duplicating its work. After changing a flow's schedule or
-parameters, redeploy both:
-
-```bash
-docker exec k2-prefect-worker python /opt/prefect/lake-flows/deploy_lake.py
-```
+An ingest takes an exclusive `flock`, so a hand-run that collides with the 5-minute
+schedule exits 75 rather than duplicating its work, and the scheduled run that hit the lock
+is marked skipped. A schedule or parameter lives in `docker/airflow/dags/lake.py`; the
+dag-processor re-reads a changed DAG file within 30 s, with nothing to redeploy
+([operator guide, section 7](../operations/README.md#7-roll-out-a-merged-change)).
 
 ## Logs
 
@@ -190,15 +184,15 @@ docker exec k2-prefect-worker python /opt/prefect/lake-flows/deploy_lake.py
 |--------|-------|
 | Any container | `docker compose logs -f <service>` or `make logs` |
 | Capture | `docker logs -f k2-capture-binance`, `tracing` to stderr, filtered by `RUST_LOG`. No log files: nothing is bind-mounted out |
-| Lake flow runs | `docker logs k2-prefect-worker`, plus run history at `http://localhost:$K2_PREFECT_PORT` (default 4200) |
-| Spark job output | `docker logs k2-spark-iceberg`; the Application UI is on http://localhost:4040 while a job runs |
+| Lake job runs | the Airflow task logs: the UI at http://localhost:8090, or under `/opt/airflow/logs` in `k2-airflow-scheduler` |
+| Spark job detail | event logs in `/home/iceberg/spark-events` in `k2-spark-iceberg`. A running job's UI is port 4041 <!-- counts-ok: a port number, not a count --> inside the container, not published (`docker exec k2-spark-iceberg curl -s localhost:4041/api/v1/applications`); http://localhost:4040 is the always-on Thrift server's UI |
 | ClickHouse server | `docker logs k2-clickhouse` |
 
 ## Tearing down
 
 ```bash
-make down                      # stop, keep volumes and data
-docker compose down -v         # also delete volumes, you will re-apply the schema
+make down                      # stop and remove the containers, keep volumes and data
+docker compose down -v         # also DELETE the volumes: the lake, the hot tier, Redpanda, the catalog
 ```
 
 ## Related

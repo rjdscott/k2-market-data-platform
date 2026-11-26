@@ -264,7 +264,7 @@ ran into `<catalog>.dq.dbt_test_results`, the profile's own catalog, creating sc
 if absent: invocation id, run start, writer, the test's id and name, the model or source
 relation it tests (`tested`, for a source test its one dependency, for a unit test its model
 whether it ran or was skipped), dbt's status (pass, fail,
-warn, error, skipped), failures, execution time, and dbt's message cut at 1000 characters. An
+warn, error, skipped), failures, execution time, and dbt's message cut at 1000 <!-- counts-ok: a length limit in characters --> characters. An
 invocation that ran no test (`dbt run`, `dbt source freshness`) writes nothing. dbt runs
 `on-run-end` after the nodes whatever their result, so every test the invocation ran has its
 row, a failed one included, and so has every test it skipped behind a failure inside that same

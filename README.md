@@ -112,19 +112,19 @@ works, and the practices that enforce it.
 | [027](./docs/adr/ADR-027-book-snapshot-and-sequencing.md) | Top-20 snapshots at 1 Hz; per-venue sequencing and resync | Raw keeps the deltas; the product is what research joins against |
 | [008](./docs/adr/ADR-008-eliminate-prefect-orchestration.md) | Remove Prefect: reversed | A wrong call kept on the record with its outcome |
 
-All 41 ADRs: [`docs/adr/`](./docs/adr/README.md).
+All 42 ADRs: [`docs/adr/`](./docs/adr/README.md).
 
 ## Measured
 
 From [`docs/benchmarks/2026-08-27.md`](./docs/benchmarks/2026-08-27.md), a 6.5 h capture
-window; every row there carries the command that produced it.
+window; every row there carries the command that produced it. Counts of captured data stay
+in that dated snapshot and are not repeated here (NOTICE).
 
 | | Binance | Kraken | Coinbase |
 |---|---:|---:|---:|
-| Frames/s, window average | 187 | 606 | 130 |
 | Exchange to receive, p50 / p99 (ms) | 42 / 207 | 177 / 459 | 184 / see note |
 | Sequence gaps | 0 | 0 | 0 |
-| Checksum failures | n/a | 0 of 14.1 M | n/a |
+| Checksum failures | n/a | 0, every book frame verified | n/a |
 | Produce errors | 0 | 0 | 0 |
 
 Coinbase's p99 was the venue's on-subscribe trade snapshot, not transit; the capture now
@@ -132,10 +132,10 @@ excludes it from the histogram.
 
 | Operation | Result |
 |---|---|
-| Lake bronze rebuild from raw | 61.9 M rows in 520 s |
+| Lake bronze rebuild from raw | the whole archive, 3,326,927,766 B of raw frames into six tables, in 520 s |
 | Per-venue bronze vs raw archive | 0.59× |
 | Lake growth | about 9.8 GB/day |
-| ClickHouse pull of gold trades from the lake | 10.4 M rows in 4.4 s |
+| ClickHouse pull of gold trades from the lake | the whole lake table in 4.4 s |
 | Chaos: lake ingest killed / MinIO stopped / Lakekeeper stopped | 42 s / 38 s / 37 s |
 | Chaos: ClickHouse stopped 150 s | alert at 160 s, healthy 7 s after restart |
 | Chaos: corrupt feed record | isolated in 4 s |
@@ -146,11 +146,13 @@ Detail per failure: [failure modes](./docs/architecture/16-failure-modes.md).
 
 Requires a Docker engine with at least 38 GiB of memory so every declared limit is honoured,
 the 37.812 GiB bootstrap peak included ([setup](./docs/development/setup.md)); measured usage is
-far lower.
+far lower. On Docker Desktop the VM grows to its whole memory setting, so the host needs more
+RAM than that setting plus everything else it runs
+([sizing](./docs/runbooks/docker-vm-oom-kill.md#2-size-the-vm-so-the-host-keeps-enough-memory)).
 
 Two lines of `.env` are host-specific and are the whole first-run gotcha:
 `K2_CAPTURE_CPUSET` and `K2_HEAVY_CPUSET` ship empty (no CPU pinning, starts anywhere) —
-uncomment the 15-core layout in `.env.example` only on a host that has those cores, or six
+uncomment the 15-core layout in `.env.example` only on a host that has those cores, or seven
 containers fail at start with `invalid argument`. `K2_AIRFLOW_PORT` (default 8090, loopback
 only) is Airflow's host port, and it moves the UI's own base URL with it; `K2_DOCKER_GID` is
 the group that owns the Docker socket, 0 on Docker Desktop.
@@ -168,24 +170,22 @@ make health                     # every service healthy, a message on every venu
 docker exec k2-redpanda rpk topic consume market.crypto.v3.trades.binance --num 1
 ```
 
-Step by step, with the measured timeline: [fresh install](./docs/runbooks/fresh-install.md).
+Step by step, with a command that fills every secret: the
+[operator guide](./docs/operations/README.md), which also covers health, the consoles,
+stopping, restarting one service and rolling out a change. The measured timeline of a fresh
+install: [fresh install](./docs/runbooks/fresh-install.md).
 
 Every lake layer is populated within five minutes of a fresh clone (release check, 2026-08-27).
 To write the first query, start at the
 [data catalog](./docs/operations/data-catalog.md): every table's grain, time columns,
 symbol conventions and a runnable example.
 
-| Service | URL | First thing to look at |
-|---|---|---|
-| Grafana | http://localhost:3000 (`admin` / `$GRAFANA_PASSWORD`) | the capture and lake dashboards |
-| Redpanda Console | http://localhost:8080 | `market.crypto.v3.trades.binance`, values decoded as Avro |
-| Airflow | `http://localhost:$K2_AIRFLOW_PORT` (default 8090; `admin`, password: `docker exec k2-airflow-api-server cat /opt/airflow/simple_auth_manager_passwords.json.generated`) | DAGs: `lake_ingest`, `lake_maintenance`, `lake_rebuild`, `dbt_marts` |
-
-Every other URL, credential and port — ClickHouse, Lakekeeper, MinIO, Prometheus, Spark,
-the notebooks — is on one page:
-[quick reference](./docs/operations/quick-reference.md#urls-and-credentials).
+Grafana is on http://localhost:3000 and Airflow on http://localhost:8090. Every console, its
+URL, what it is for and which `.env` variable holds its login is one table:
+[consoles and endpoints](./docs/operations/README.md#4-consoles-and-endpoints).
 Every port listens on `127.0.0.1` only, which keeps other machines out but not other users
-of the host; [SECURITY.md](./SECURITY.md) says what is and is not protected.
+of the host; reach a console from elsewhere through an SSH tunnel, never an open port.
+[SECURITY.md](./SECURITY.md) says what is and is not protected.
 
 Research: `make notebooks` starts JupyterLab with DuckDB over the lake
 ([`notebooks/`](./notebooks/README.md)).
@@ -198,16 +198,16 @@ hand-kept version of this table read 60 / 229 / 9 against a reality of 68 / 287 
 | Suite | Run |
 |---|---|
 | Rust capture: 68 tests [^rust], 56 unit plus 12 replay over synthetic sessions; `make record-fixtures` replays real ones locally | `make test-rust` |
-| Python: 382 tests [^py] over contracts, wire format, offsets, decoders, book replay, parity | `make test-python` |
+| Python: 708 tests [^py] over contracts, wire format, offsets, decoders, book replay, parity, the gates themselves | `make test-python` |
 | ClickHouse schema: 10 assertions [^ch], including the v2 OHLCV regression | `make test-clickhouse` |
 | Notebook helpers: `k2lake.trades()` / `completeness()` / `bars()` on synthetic tables, no stack | `make test-notebooks` |
 | Trino: the real `docker/trino/etc` starts, catalog `lake` refuses every commit and table procedure, only a domain's writer changes its tables with SQL statements (table procedures are not fenced per user, ADR-044); 134 checks [^trino], no stack | `make test-trino` |
 | dbt: sqlfluff, compile, a manifest check (only staging reads a source; every mart tested unique on its contract grain), then a build on empty sources with 10 unit tests and 22 data tests [^dbt], every test's result recorded in its domain's own catalog, a failing one included, and shown in the governance view, each domain's snapshot maintenance, and a project with no marts still parsing; no stack | `make test-dbt` |
-| Prometheus rule unit tests (25 of 36 alerts) and 10 documentation gates | `bash scripts/check-docs.sh` |
+| Prometheus rule unit tests (25 of 36 alerts) and 11 documentation gates | `bash scripts/check-docs.sh` |
 | Live stack: per-layer parity, three-way OHLCV parity, event-bar parity, chaos | `make lake-verify`, `make parity-ohlcv`, `make parity-bars`, `make chaos` |
 
 [^rust]: `grep -rc '#\[test\]' services/capture-rust/src services/capture-rust/tests --include='*.rs' | awk -F: '{s+=$2} END {print s}'`
-[^py]: the last line `make test-python` prints, `382 passed` (2026-11-26)
+[^py]: the last line `make test-python` prints, `708 passed` (2026-11-26, branch fix/guardrail-gates after merging #229)
 [^ch]: the count `scripts/clickhouse-schema-test.sh` itself asserts (`[ "$n" -eq 10 ]`)
 [^trino]: `make test-trino | grep -c '^ok '` (2026-11-25, five domains)
 [^dbt]: `dbt build`'s own summary in `make test-dbt`: `Found 9 models, 1 operation, 22 data tests, 3 sources, ... 10 unit tests` (2026-11-25)
@@ -249,7 +249,7 @@ master are designed ([ADR-026](./docs/adr/ADR-026-four-layer-lake-and-gold-serve
 - [`docs/`](./docs/README.md): the map — which surface answers which kind of question
 - [`docs/operations/data-catalog.md`](./docs/operations/data-catalog.md): every table,
   its grain, its clocks, and which engine is authoritative. Start here to query the data
-- [`docs/operations/`](./docs/operations/README.md): running, inspecting and recovering the stack
+- [`docs/operations/`](./docs/operations/README.md): the operator guide, start to roll-out, then inspecting and recovering the stack
 - [`docs/architecture/`](./docs/architecture/README.md): the book, start at chapter 00
 - [`docs/adr/`](./docs/adr/README.md): why, one decision per file, never edited once accepted
 - [`docs/runbooks/`](./docs/runbooks/README.md): how, one per alert family, with measured recovery

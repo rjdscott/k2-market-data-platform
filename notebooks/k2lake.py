@@ -53,6 +53,17 @@ def lineage(metadata: dict) -> list:
     return out
 
 
+def tags(metadata: dict) -> dict:
+    """{tag name: snapshot id} for every tag in one loadTable `metadata`'s `refs`; branches are left out.
+
+    A tag is a named pointer to one snapshot that expiry keeps. The walk in `lineage()`
+    stops at the first parent expiry removed, so once the snapshots between a tagged pin
+    and main's head are gone the pin is off the walk but still in the table, and this is
+    how a reader still finds it (tests/parity/README.md).
+    """
+    return {name: r["snapshot-id"] for name, r in metadata.get("refs", {}).items() if r.get("type") == "tag"}
+
+
 def _get(url: str) -> dict:
     with urllib.request.urlopen(url, timeout=15) as r:  # noqa: S310 - the catalog's published port
         return json.load(r)
@@ -64,10 +75,15 @@ def _prefix() -> str:
     return _get(f"{LAKEKEEPER.rstrip('/')}/v1/config?warehouse={WAREHOUSE}")["defaults"]["prefix"]
 
 
+def table_metadata(table: str) -> dict:
+    """The metadata of `ns.table` (or `lake.ns.table`) from Lakekeeper's REST loadTable."""
+    ns, name = table.split(".")[-2:]
+    return _get(f"{LAKEKEEPER.rstrip('/')}/v1/{_prefix()}/namespaces/{ns}/tables/{name}")["metadata"]
+
+
 def main_lineage(table: str) -> list:
     """`lineage()` of `ns.table` (or `lake.ns.table`), from Lakekeeper's REST loadTable."""
-    ns, name = table.split(".")[-2:]
-    return lineage(_get(f"{LAKEKEEPER.rstrip('/')}/v1/{_prefix()}/namespaces/{ns}/tables/{name}")["metadata"])
+    return lineage(table_metadata(table))
 
 
 def _env() -> dict:
@@ -112,6 +128,15 @@ def pin(con: duckdb.DuckDBPyConnection, namespaces=PINNED_NAMESPACES) -> dict:
     re-running at that id gives the same answer while an ingest lands new rows
     beside it (ADR-029). Returns {table: snapshot_id} and prints it with the
     repo's commit, which is the provenance a shared result carries.
+
+    It asks for main's head and serves that or nothing. Expiry never removes the
+    head, so the parity gate's stale-pin case cannot arise here; the one way to
+    serve something else is a head the metadata does not list, which the walk
+    reads as an empty table. That raises: an error in a notebook's first cell
+    costs a re-run, while a view labelled empty over a table that is not empty
+    would put an unpinned number into a shared result. A table with no
+    snapshot at all has nothing to pin, so its view is held empty (`WHERE false`):
+    it serves what the table held at pin time, nothing, after the table's first commit too.
     """
     con.execute("CREATE SCHEMA IF NOT EXISTS pinned")
     tables = con.execute(
@@ -120,9 +145,15 @@ def pin(con: duckdb.DuckDBPyConnection, namespaces=PINNED_NAMESPACES) -> dict:
     ).fetchall()
     ids = {}
     for ns, table in tables:
-        on_main = main_lineage(f"{ns}.{table}")
-        if not on_main:  # an empty table has no snapshot; the view reads it unpinned, and says so
-            con.execute(f"CREATE OR REPLACE VIEW pinned.{ns}_{table} AS SELECT * FROM lake.{ns}.{table}")
+        meta = table_metadata(f"{ns}.{table}")
+        on_main = lineage(meta)
+        if not on_main and meta.get("current-snapshot-id") not in (None, -1):
+            raise RuntimeError(
+                f"{ns}.{table}: main points at snapshot {meta['current-snapshot-id']}, which the table's metadata "
+                f"does not list, so there is no snapshot to pin; nothing was served. Re-run pin(con) once the catalog answers consistently"
+            )
+        if not on_main:  # no snapshot to pin: held at what it held, nothing, even once rows land
+            con.execute(f"CREATE OR REPLACE VIEW pinned.{ns}_{table} AS SELECT * FROM lake.{ns}.{table} WHERE false")
             ids[f"{ns}.{table}"] = None
             continue
         con.execute(f"CREATE OR REPLACE VIEW pinned.{ns}_{table} AS SELECT * FROM lake.{ns}.{table} AT (VERSION => {on_main[0]})")
@@ -133,7 +164,7 @@ def pin(con: duckdb.DuckDBPyConnection, namespaces=PINNED_NAMESPACES) -> dict:
         sha = "unknown"
     print(f"pinned {len(ids)} tables at commit {sha}")
     for name, snap in ids.items():
-        print(f"  {name:<28} {snap if snap is not None else '(empty, unpinned)'}")
+        print(f"  {name:<28} {snap if snap is not None else '(empty when pinned, held empty)'}")
     return ids
 
 

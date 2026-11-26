@@ -16,11 +16,14 @@
    lake and Trino already use (`RESERVED`); and each mart's name against its
    place, `<domain catalog>.<product schema>.<table>` (ADR-044).
 3. Each contract against docker/lake/ddl/lake.sql: the table exists, and its
-   partitioning and sort order are the ones declared there. Every table outside
-   `audit` has exactly one contract, and an `audit` table may have one (a mart
-   that reads it needs it). A contract with inline columns is a table
+   partitioning and sort order are the ones declared there. Every table has
+   exactly one contract, `audit` tables included: the nightly contract_schema
+   audit (docker/lake/contract_schema.py) fails a table without one in any
+   namespace the contracts own. A contract with inline columns is a table
    lake.sql does not create, and its partitioning and sort name its own columns.
-   A latency service level names a column of its own table.
+   A latency service level names a column of its own table. A paused table
+   (ADR-050) names a real day and an ADR file that exists, and promises no
+   latency: nothing may promise freshness for a table nothing feeds.
 4. Three rules across products: a table another table reads keeps snapshots for
    at least the seven-day floor; a table is at least as restricted as anything
    it reads; and every input resolves to a declared output or a declared
@@ -30,6 +33,7 @@
 import argparse
 import json
 import sys
+from datetime import date
 from pathlib import Path
 from typing import Any
 
@@ -41,6 +45,7 @@ from k2gen import ddl
 ROOT = Path(__file__).resolve().parents[3]
 ODCS_SCHEMA = "odcs-json-schema-v3.2.0-20261117.json"
 LAKE_SQL = "docker/lake/ddl/lake.sql"
+ADR_DIR = "docs/adr"
 SUFFIX = ".odcs.yaml"
 # docker/lake/maintenance.py refuses --retain-days below 7: stage 2 resumes from
 # the parent snapshot id it last read, and expiring that snapshot breaks the next run.
@@ -161,6 +166,7 @@ def validate(root: Path = ROOT) -> list[str]:
         for sla in doc.get("slaProperties", []):
             if sla["property"] == "latency" and sla["element"] not in {f"{table}.{c}" for c in names}:
                 errors.append(f"{where}: latency element {sla['element']} is not a column of {table}")
+        errors += _paused_errors(root, where, doc, props.get("paused"))
         if inline:  # a new table: generate writes its DDL, lake.sql never holds it
             if table in lake:
                 errors.append(f"{where}: {table} is created by {LAKE_SQL}, so the contract references it, not inline columns")
@@ -174,7 +180,7 @@ def validate(root: Path = ROOT) -> list[str]:
             declared = list(getattr(lake[table], key))
             if props[key] != declared:
                 errors.append(f"{where}: {key} {props[key]}, but {LAKE_SQL} declares {declared}")
-    errors += [f"{LAKE_SQL}: {t} has no contract under contracts/" for t in lake if t not in home and not t.startswith("audit.")]
+    errors += [f"{LAKE_SQL}: {t} has no contract under contracts/" for t in lake if t not in home]
 
     # 4. across products.
     for pdir, product in products.items():
@@ -214,6 +220,26 @@ def validate(root: Path = ROOT) -> list[str]:
     return errors
 
 
+def adr_file(root: Path, adr: str) -> Path | None:
+    """`docs/adr/ADR-050-<title>.md` for `ADR-050`, or None if there is none."""
+    return next(iter(sorted((root / ADR_DIR).glob(f"{adr}-*.md"))), None)
+
+
+def _paused_errors(root: Path, where: str, doc: dict[str, Any], paused: dict[str, str] | None) -> list[str]:
+    if paused is None:
+        return []
+    errors = []
+    try:
+        date.fromisoformat(paused["since"])
+    except ValueError:
+        errors.append(f"{where}: paused since {paused['since']}, which is not a day")
+    if adr_file(root, paused["adr"]) is None:
+        errors.append(f"{where}: paused by {paused['adr']}, which has no file in {ADR_DIR}/")
+    if any(sla["property"] == "latency" for sla in doc.get("slaProperties", [])):
+        errors.append(f"{where}: a paused table promises no freshness, so it declares no latency service level")
+    return errors
+
+
 def main(argv: list[str] | None = None) -> int:
     from k2gen import generate  # here, not at the top: generate.py imports this module's constants
 
@@ -239,13 +265,13 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     if args.command == "generate":
         files = generate.generate(ROOT)
-        print(f"k2gen generate: {len(files)} files: {generate.RETENTION}, {generate.WAREHOUSES}, {generate.TRINO_RULES}, "
+        print(f"k2gen generate: {len(files)} files: {generate.RETENTION}, {generate.CONTRACT_SCHEMAS}, {generate.WAREHOUSES}, {generate.TRINO_RULES}, "
               f"{generate.DBT_SOURCES}, {generate.DBT_SELECTORS}, "
               f"the domain catalogs in {generate.CATALOGS} and {generate.TEST_CATALOGS}, and under {', '.join(generate.OWNED)}")
         return 0
     products = len(list((ROOT / "contracts").glob("*/*/product.yaml")))
     contracts = len(list((ROOT / "contracts").glob(f"*/*/*{SUFFIX}")))
-    print(f"k2gen validate: {products} products, {contracts} contracts, every lake table outside audit covered")
+    print(f"k2gen validate: {products} products, {contracts} contracts, every lake table covered")
     return 0
 
 

@@ -143,3 +143,63 @@ reaches `main` with `k2gen validate` green, which would mean the parser has fall
 - [ADR-028](ADR-028-non-goals-and-honest-limits.md) §11 (lifted here) and §12 (kept)
 - [ADR-033](ADR-033-data-mesh-four-domains.md), the domains these contracts live under
 - Open Data Contract Standard: <https://github.com/bitol-io/open-data-contract-standard>
+
+---
+
+## Outcome (2026-11-26, the live table is checked too)
+
+**What diverged.** The Decision made `k2gen validate` the enforcement: each contract checked
+against `lake.sql`, the DDL file, in CI. That proves the file and the contract agree, not that
+the lake does. Nothing compared a contract with the table the Iceberg catalog holds, so three
+states passed every check: a table altered by hand on the running stack; `lake.sql` applied
+only in part, such as a sort-order `ALTER` that never ran (`gold.bbo_1s` once shipped without
+its, `maintenance._rewrite`); and a contract merged whose DDL was never applied to the stack.
+
+**What was added.**
+
+- `k2gen generate` writes `docker/lake/generated/contract_schemas.json`: per table, the columns
+  in order with the Spark SQL type the contract states (from `lake.sql` for a table it creates,
+  from the inline columns otherwise), whether each is `NOT NULL`, the partitioning, the sort
+  order and the identifier fields (the columns `SET IDENTIFIER FIELDS` declares one row unique
+  on). It is committed and under the drift gate: CI runs `make generate` and fails on any
+  difference. The jobs read a generated file because `contracts/` is not mounted in the Spark
+  container.
+- A nightly audit, `contract_schema`, first in `maintenance.py`'s `AUDITS`, so it runs at
+  03:00 UTC under the writer lock with the others, after compaction, snapshot expiry and orphan
+  removal like every audit: it can block none of them, and the worst it does is make the run
+  exit 1 and fire `LakeAuditFailed`. Per contracted table it loads the live table
+  through the Spark session's Iceberg catalog and compares Iceberg's own JSON for the current
+  schema, the default partition spec and the default sort order, which is catalog metadata
+  only, no data file read, with that file. It files one row per table in `lake.audit.checks`:
+  `observed` is the number of differences, `detail` each one in a fixed form (missing column,
+  extra column, type differs, nullability differs, position differs, partitioning differs, sort
+  differs, identifier fields differ). Any failed row exits the run non-zero, which fires the
+  existing `LakeAuditFailed` alert. A table it cannot read is a `check raised` row (not passed,
+  `observed` -1), never a crashed run. The comparison is `docker/lake/contract_schema.py`, with
+  no Spark import, tested in `tests/test_lake_contract_schema.py`.
+- The rules. An extra live column fails: the contract is the interface. Column order is
+  compared, over the columns both sides have: Iceberg readers resolve a column by name or field
+  id, but a positional `INSERT` binds by position. A contracted table the catalog lacks fails. A
+  table with no contract fails in any namespace but a `scratch_` one, which is not read, so a
+  spike's scratch tables are no finding and a namespace nobody declared is. Not compared: column
+  docs, field ids, table properties, the format version. Live types are rendered in Spark SQL's spelling (`timestamptz` is `TIMESTAMP`,
+  `timestamp` is `TIMESTAMP_NTZ`, `decimal(28, 10)` is `DECIMAL(28,10)`), nested fields and
+  their `NOT NULL` included. k2gen had no Spark-to-Iceberg type mapping to reuse (its one
+  mapping, `_TRINO_TYPES`, turns Spark scalars into Trino types for dbt), so this direction is
+  the only one.
+- Measured read-only on 2026-11-26, by the same comparison run from the host over the
+  Lakekeeper REST catalog, which serves the JSON the Spark job reads
+  (`python3 docker/lake/contract_schema.py`): 26 of 26 contracted tables match their contracts,
+  and the two tables in the scratch namespace `scratch_p4` are not read.
+- `k2gen validate` no longer exempts `audit`: every table in `lake.sql` needs a contract, where
+  the Decision said every table outside `audit`. The nightly audit fails a table without one in
+  `audit` as in any other namespace, so a table CI let through would have failed every night.
+  `audit.checks` already had its contract.
+
+**Still true.** Enforcement is a report, not a refusal: CI fails a pull request, and the
+nightly audit finds a drifted table up to a day later, after rows were written to it. No writer
+compares a write with its contract.
+
+**Revisit when:** a `contract_schema` failure turns out to be a false positive (two spellings of
+one type the comparison does not equate); or a table drifted and was written to for more than a
+day before the audit found it, which would argue for a check before each commit.

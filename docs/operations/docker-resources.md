@@ -6,9 +6,14 @@ only. The ceiling is **25 CPU / 48 GiB at the bootstrap peak**
 ([ADR-045](../adr/ADR-045-ceiling-25-cpu-48-gib.md), which superseded the 20 CPU / 36 GiB of
 [ADR-034](../adr/ADR-034-airflow-3-replaces-prefect.md), which superseded the 16-core / 40 GB
 target of [ADR-010](../adr/ADR-010-resource-budget.md)), and `scripts/check-budget.py` fails CI
-over it. The host gives Docker 28 CPUs and 49.5 GiB; three cores and 1.5 GiB stay outside the
-ceiling for the operating system and the engine, which is enough only because measured use is
-far below the declared limits (ADR-045).
+over it. The Docker engine offers 28 CPUs and 49.5 GiB; inside that, three cores and 1.5 GiB
+stay outside the ceiling for the VM's own operating system and the engine, which is enough only
+because measured use is far below the declared limits (ADR-045). **The ceiling says nothing
+about the host.** On Docker Desktop the engine is a VM set to 51,712 MiB on a host with 62.6 GiB
+of usable RAM, and the VM grows to that whole setting within hours whatever the containers use,
+so the desktop and everything else on the host must fit in the remaining 12.1 GiB. On
+2026-11-25 they did not, and the host killed the VM: ADR-045's 2026-11-26 Outcome, and the
+sizing rule in [docker-vm-oom-kill.md](../runbooks/docker-vm-oom-kill.md#2-size-the-vm-so-the-host-keeps-enough-memory).
 
 **As built, steady state: 19.30 CPU / 35.312 GiB across 19 long-running services.**
 **One-shots: 2.00 CPU / 2.500 GiB across 5.** **Bootstrap peak: 21.30 CPU / 37.812 GiB
@@ -136,7 +141,8 @@ Airflow limits are the plan's estimates until ADR-034's measured figures replace
   so every limit above that was clipped, `docker stats` showed ClickHouse as
   `/ 7.648GiB` against its declared 8G. It is 49.5 GiB and 28 CPUs now
   (`docker info --format '{{.MemTotal}} {{.NCPU}}'` printed `53149339648 28` on
-  2026-11-26); `docs/development/setup.md` states the requirement.
+  2026-11-25, and `53149335552 28` after the VM's restart on 2026-11-26, the same 51,712 MiB
+  setting); `docs/development/setup.md` states the requirement.
 - **The three capture containers cost 0.75 CPU / 1 GiB combined**, 4% of CPU, 3% of RAM.
   That is half what the Kotlin handlers they replaced declared. RSS against these limits
   is **not yet measured** for the post-retirement stack ([ADR-010](../adr/ADR-010-resource-budget.md)

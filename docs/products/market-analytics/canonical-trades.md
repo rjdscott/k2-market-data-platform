@@ -9,6 +9,7 @@ One row per logical trade across every venue, the earliest delivery, in fixed po
 | Owner | `analytics-team` |
 | Kind | consumer-aligned |
 | Lifecycle | draft |
+| Status | running |
 | Descriptor | [`contracts/market-analytics/canonical-trades/product.yaml`](../../../contracts/market-analytics/canonical-trades/product.yaml) |
 
 ## Inputs and outputs
@@ -45,6 +46,7 @@ Canonical trades: the venue_replay = false rows of silver, one to one, keyed by 
 
 | | |
 |---|---|
+| Status | running |
 | Classification | internal |
 | Entitlement | realtime |
 | Retention | snapshots expire after 7 days; no row is deleted ([ADR-032](../../../docs/adr/ADR-032-odcs-contracts-and-k2gen.md)) |

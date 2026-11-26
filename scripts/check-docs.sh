@@ -55,15 +55,18 @@ fi
 rm -f "$out"
 
 # (b) forbidden words in published docs (audits may quote them)
+# The terms are salted SHA-256 hashes in scripts/check_docs.py, so the list is
+# not readable here; its docstring says how to add one. Commits before
+# 2026-11-26 carry the list in plain text on this line, and history is not
+# rewritten. A hit prints file:line, never the line. Any non-zero exit fails,
+# so a helper that crashes cannot pass the gate.
 out=$(mktemp)
 # shellcheck disable=SC2046  # word-splitting the file list is the point
-grep -niE "interview|optiver|hiring|feedback from" $(published_docs) 2>/dev/null \
-  | grep -v '^docs/audits/' > "$out" || true
-if [ -s "$out" ]; then
-  bad "(b) forbidden words found:"
-  sed 's/^/  /' "$out"
-else
+if python3 scripts/check_docs.py words $(published_docs | grep -v '^docs/audits/') > "$out"; then
   pass "(b) no forbidden words in published docs"
+else
+  bad "(b) forbidden words found (scripts/check_docs.py):"
+  sed 's/^/  /' "$out"
 fi
 rm -f "$out"
 
@@ -191,9 +194,17 @@ rm -f "$out"
 # uncommitted edits (`git diff <base>` reads the working tree) and untracked
 # files. CI checks out with fetch-depth 0 so the merge base exists there. The
 # character is built from its UTF-8 bytes so this file does not contain one.
+#
+# On a push to main the merge base is HEAD itself, so the diff was empty and a
+# commit pushed straight to main was never read. CI's push run sets
+# K2_DIFF_BASE to the commit main was at before the push (github.event.before)
+# and the diff starts there; one this clone does not have (a force push) fails
+# rather than checking nothing.
 emdash=$(printf '\342\200\224')
 exts=('*.md' '*.py' '*.sh' '*.sql' '*.yml' '*.yaml')
-if base=$(git merge-base origin/main HEAD 2>/dev/null); then
+if [ -n "${K2_DIFF_BASE:-}" ] && ! git cat-file -e "${K2_DIFF_BASE}^{commit}" 2>/dev/null; then
+  bad "(h) K2_DIFF_BASE $K2_DIFF_BASE is not a commit in this clone: nothing to diff the push against"
+elif base=${K2_DIFF_BASE:-$(git merge-base origin/main HEAD 2>/dev/null)}; [ -n "$base" ]; then
   out=$(mktemp)
   {
     git diff --unified=0 --no-color --no-ext-diff "$base" -- "${exts[@]}" | awk -v d="$emdash" '
@@ -214,29 +225,36 @@ else
   note "(h) origin/main not found (no remote, or a shallow clone): skipping the added-line em-dash gate"
 fi
 
-# (i) fixture and sample data is synthetic or declared
+# (i) data files are generated synthetic or declared; notebooks carry no output
 # The repository ships no real venue market data (README, "What this is, and
-# data terms"). A tracked data file under a fixtures/ or samples/ directory, or
-# named *sample*, is either named synthetic-* (scripts/make-synthetic-fixtures.py
-# writes those) or listed by path in NOTICE with its source and terms. Code
-# files (*.py and the like) are not data and are not checked.
-#
-# Screenshots are NOTICE's one named exception: pictures of a live run, under
-# docs/images/ and nowhere else. A raster image anywhere else is not covered by
-# it and fails here too.
+# data terms"). Every tracked file, wherever it is and whatever its name: a data
+# file (by extension, or by content: JSON lines, CSV, TSV, Parquet, Avro, pcap, a
+# compressed stream) is in tests/fixtures/SHA256SUMS at its hash (written by
+# scripts/make-synthetic-fixtures.py) or listed by exact path in NOTICE; a
+# synthetic-* file is in that manifest; a notebook has no outputs; a raster image
+# is under docs/images/ (NOTICE's one named exception). scripts/check_docs.py
+# holds the rules.
 out=$(mktemp)
-git ls-files | grep -iE '(^|/)(fixtures|samples)/|sample[^/]*$' \
-  | grep -iE '\.(json|jsonl|ndjson|csv|tsv|txt|parquet|avro|pcap|pcapng|bin|gz|zst|sha256)$' \
-  | while IFS= read -r f; do
-      case "$(basename "$f")" in synthetic-*) continue ;; esac
-      grep -qF "$f" NOTICE 2>/dev/null || echo "$f"
-    done > "$out" || true
-git ls-files | grep -iE '\.(png|jpe?g|gif|webp)$' | grep -v '^docs/images/' >> "$out" || true
-if [ -s "$out" ]; then
-  bad "(i) fixture/sample data neither named synthetic-* nor listed in NOTICE, or an image outside docs/images/:"
-  sed 's/^/  /' "$out"
+if python3 scripts/check_docs.py data > "$out"; then
+  pass "(i) data files generated or listed in NOTICE, notebooks without outputs, images only under docs/images/"
 else
-  pass "(i) fixture and sample data is synthetic or listed in NOTICE; images only under docs/images/"
+  bad "(i) undeclared data, an unlisted synthetic-* file, a notebook with outputs, or an image outside docs/images/:"
+  sed 's/^/  /' "$out"
+fi
+rm -f "$out"
+
+# (j) no count of captured market data in an editable Markdown file
+# ADR-029 and NOTICE: no numbers derived from venue data. Every tracked *.md
+# outside the immutable snapshots, code blocks included, fails on a count of
+# four or more digits (or 10.4 M, 236k) before trades, rows, records, frames and
+# the like; a platform figure carries `counts-ok: <reason>` on its line. The rule
+# and its exceptions are in scripts/check_docs.py, gate (j).
+out=$(mktemp)
+if python3 scripts/check_docs.py counts > "$out"; then
+  pass "(j) no captured-data counts in editable Markdown"
+else
+  bad "(j) counts of captured data in editable Markdown (use a ratio, a size, a duration or a pointer; or counts-ok: <reason>):"
+  sed 's/^/  /' "$out"
 fi
 rm -f "$out"
 
