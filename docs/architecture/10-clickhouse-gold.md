@@ -77,7 +77,7 @@ flowchart TB
   imbalance and microprice: [BBO and book features](02-market-data-concepts.md#bbo-and-book-features))
   are loaded from lake gold through the `iceberg()` table function, with the
   [Iceberg snapshot](03-data-engineering-concepts.md#iceberg-snapshots) they were read from
-  recorded in `src_snapshot_id`; 10.4 M trades in 4.4 s
+  recorded in `src_snapshot_id`; the whole lake `gold.trades` in 4.4 s
   ([runbook](../runbooks/clickhouse-rebuild-from-lake.md)). Never computed here. A re-pull
   is versioned on the lake's `computed_at`, not on that snapshot id, which is a random
   64-bit number and would keep an arbitrary row; `bbo_1s` is the exception, it has no

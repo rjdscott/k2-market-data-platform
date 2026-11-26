@@ -140,7 +140,7 @@ increase(k2_capture_produce_errors_total[10m]) > 0
 
 Fires after `for: 5m`. The counter is seeded at zero for all four `reason` values at
 startup, so the **first** produce error trips this, there is no rate floor, because a
-rate floor of `0.1/s` tolerates 8,640 permanently-lost records a day and this tier has
+rate floor of `0.1/s` tolerates 8,640 permanently-lost records a day and this tier has <!-- counts-ok: 0.1/s times 86,400 s, arithmetic not data -->
 no spill-to-disk.
 
 **Expected behaviour**, librdkafka retries internally and rides out a brief broker

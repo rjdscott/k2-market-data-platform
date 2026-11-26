@@ -28,19 +28,19 @@ the tier being down ([lake-recovery.md](./lake-recovery.md)).
 
 | # | Failure | MTTR target | Measured |
 |---|---------|-------------|----------|
-| 1 | `offset_continuity`, a hole in the archive | **investigation, not repair** | occurred 2026-08-26, one recorded hole, 1,168,954 records, netted out by the check since 2026-08-27; see §1 |
+| 1 | `offset_continuity`, a hole in the archive | **investigation, not repair** | occurred 2026-08-26, one recorded hole (its count is in [ADR-021](../adr/ADR-021-raw-first-archive-and-lineage.md)'s Outcome), netted out by the check since 2026-08-27; see §1 |
 | 2 | `duplicate_identifiers`, a row landed twice | < 60 min | not yet verified, Phase D burn-in |
 | 3 | `sequence_gaps`, venue sequence discontinuity | **investigation, not repair** | not yet verified, Phase D burn-in |
 | 4 | `venue_replay`, informational; **cannot fail** | n/a, read the rate, do not repair it | not yet verified, Phase D burn-in |
 | 5 | `unresolvable_schema_id`, filed by the ingest, not by the audit | < 60 min | not yet verified, Phase D burn-in |
-| 6 | `bronze_unparseable`, a venue frame did not parse as the declared shape | < 1 day (a schema change + a table rebuild) | pass verified 2026-08-27 (0 rows on all six tables after the 61.9 M-row rebuild); a failure not yet induced |
+| 6 | `bronze_unparseable`, a venue frame did not parse as the declared shape | < 1 day (a schema change + a table rebuild) | pass verified 2026-08-27 (0 rows on all six tables after the whole-archive rebuild); a failure not yet induced |
 | 7 | `bronze_schema_drift`, the venue sends a key the table does not declare | < 1 day (same) | pass and **fail** verified 2026-08-27: 23/23 audits green in 290 s; with `M`,`m` removed from `binance_trade`'s declared keys the check failed with `$.data: ['M', 'm']` |
 | 8 | `bronze_parity`, filed by the ingest: frames in ≠ rows out + control frames | < 60 min | not yet verified, Phase E |
 | 9 | `silver_parity`, silver rows ≠ trades in the bronze snapshot silver last read | < 60 min (rebuild the venue) | not yet verified, Phase E |
 | 10 | `silver_flags`, informational; **cannot fail** | n/a, read the rates | not yet verified, Phase E |
 | 11 | `gold_parity`, gold rows per venue ≠ silver first deliveries | < 60 min (rebuild gold) | not yet verified, Phase E |
 | 12 | `ohlcv_parity`, a stored 1m candle ≠ recomputed from gold.trades | < 60 min (rebuild gold) | not yet verified, Phase E |
-| 13 | `kraken_checksum`, a replayed Kraken book failed the venue's CRC32 | **investigation**, a missed or misapplied frame | **failed as designed** 2026-08-27: 386,962 of 40.2 M frames, all inside the 2026-08-26 chaos window; every other hour zero. See `docker/lake/README.md` § Books |
+| 13 | `kraken_checksum`, a replayed Kraken book failed the venue's CRC32 | **investigation**, a missed or misapplied frame | **failed as designed** 2026-08-27: every failing frame inside the 2026-08-26 chaos window; every other hour zero. See `docker/lake/README.md` § Books |
 | 14 | `bars_parity`, a stored bar ≠ recomputed from gold.trades | < 60 min (rebuild bars) | not yet verified |
 
 ---
@@ -161,20 +161,20 @@ SELECT check_name, scope, observed, run_ts, detail FROM lake.audit.checks
 WHERE check_name IN ('offset_gap', 'offset_continuity') ORDER BY scope, run_ts;
 ```
 
-Measured 2026-08-26: `market.crypto.v3.raw.kraken/0` carries an `offset_gap` of
-**1,168,954** and `offset_continuity` reported **1,168,954 missing** on the same partition
-the two records agreeing. Measured 2026-08-27, after the netting landed, the same
+Measured 2026-08-26: `market.crypto.v3.raw.kraken/0` carries an `offset_gap` and
+`offset_continuity` reported **the same count missing** on the same partition
+the two records agreeing (the count is in [ADR-021](../adr/ADR-021-raw-first-archive-and-lineage.md)'s Outcome). Measured 2026-08-27, after the netting landed, the same
 partition passes:
 
 ```text
 ok   offset_continuity  market.crypto.v3.raw.kraken/0
-     1 recorded gaps netted (1615463..2784416); 1168954 records missing, all
+     1 recorded gaps netted (<committed>..<log-start - 1>); <n> records missing, all
      acknowledged by an offset_gap row in lake.audit.checks, nothing else is
 ```
 
 `scripts/lake-verify.sh`'s `offsets gapless` line calls this same `audit_offset_continuity`,
 so it nets the same rows and prints the same detail, one definition, not two. Its first
-run on 2026-08-27 failed on exactly the acknowledged 1,168,954 before that was true.
+run on 2026-08-27 failed on exactly the acknowledged count before that was true.
 
 **If the gap is real and not yet recorded**, its deliverable is a record, not a repair:
 [lake-ingest-lag.md §3](./lake-ingest-lag.md#3-failondataloss-the-offsets-point-below-what-the-broker-holds)
@@ -206,20 +206,20 @@ the ones `docker/lake/maintenance.py` passes into `audit_duplicates`, which are 
 | `bronze.book_snapshots_l2` | `(exchange, symbol, conn_id, snapshot_ts_ns)` |
 
 **Both keys were settled by measurement, and the trade key is the most misread line on this
-page.** Over 287,184 trades captured on 2026-08-26, `(exchange, symbol, trade_id)` *alone*
-had **956 duplicated keys**, every one Coinbase, every one a pair of rows with identical
+page.** Over a 30-minute sample of trades captured on 2026-08-26 (its counts are in
+[ADR-024](../adr/ADR-024-unified-bronze-tables-in-the-lake.md)), `(exchange, symbol, trade_id)` *alone* had **duplicated keys**, every one Coinbase, every one a pair of rows with identical
 price, qty, side and `exchange_ts` under two different `conn_id`s. Coinbase replays recent
 `market_trades` on resubscribe, so a reconnect genuinely delivers the same trade twice and
 the append-only archive genuinely holds both frames. The book table went the other way for
 the same kind of reason: `conn_msg_seq` records which frame the book last folded in, so a
-quiet book gives two consecutive 1 Hz samples the same value, **484 duplicated
-`(exchange, symbol, conn_id, conn_msg_seq)` keys over 47,331 snapshots**, while the
-sampler's own clock, `snapshot_ts_ns`, had zero. Both numbers and their commands are in
+quiet book gives two consecutive 1 Hz samples the same value, **duplicated
+`(exchange, symbol, conn_id, conn_msg_seq)` keys over the same day's snapshots**, while the
+sampler's own clock, `snapshot_ts_ns`, had zero. Both measurements and their commands are in
 `docker/lake/ddl/lake.sql`.
 
 **`conn_id` turned out not to be enough.** The first day of the archive (2026-08-26) held
-**5,034 Coinbase `(exchange, symbol, trade_id, conn_id)` keys twice**, two distinct
-`market_trades` frames ~15 s apart on one connection (`src_offset` 9374 and 9772 on
+**Coinbase `(exchange, symbol, trade_id, conn_id)` keys twice** (counted in ADR-024), two distinct
+`market_trades` frames ~15 s apart on one connection (two `src_offset`s on
 `trades.coinbase/9` are one pair; identical price, qty, side and `exchange_ts`). The venue
 re-sends recent trades inside a live subscription, not only after a reconnect. So the key
 is now the **source lineage**: one archived record decodes into one row per trade id it
@@ -228,8 +228,8 @@ carries, and that is the only uniqueness the ingest can promise.
 **So venue replay of the same `(exchange, symbol, trade_id)`, across connections or within
 one, is EXPECTED, and it is not this check.** It is counted separately by `venue_replay` (§4), which reports it as a
 number and never fails. **One sample exists and no daily rate is extrapolated from it:**
-956 replayed trades in 287,184, over 30 minutes on 2026-08-26, all three venues
-([ADR-024](../adr/ADR-024-unified-bronze-tables-in-the-lake.md), repeated above
+30 minutes on 2026-08-26, all three venues (counts in
+[ADR-024](../adr/ADR-024-unified-bronze-tables-in-the-lake.md), repeated above
 `bronze.trades` in `docker/lake/ddl/lake.sql`). Reconnects are bursty, the replay follows
 resubscribes, not the clock, so scaling half an hour to a day would invent a number the
 sample cannot support. The Phase D burn-in produces the daily figure. Either way,
@@ -519,7 +519,7 @@ column too. Until the rebuild, `raw.messages` is the only place the key exists.
 `observed` = frames in − (rows written + control frames).
 
 **What it means**, every run prints one line per venue:
-`stage 2b: kraken: 61,412 frames = 61,240 decoded + 172 control (heartbeat=170, status=2)`.
+`stage 2b: kraken: <n> frames = <d> decoded + <c> control (heartbeat=<h>, status=<s>)`.
 When the sum does not match, a frame went missing between the raw read and the six writes,
 which should be impossible: the same `from_avro` output feeds both the routed writes and
 the control count. Treat it as a bug in `bronze.py`, re-run the decode for the venue
@@ -601,8 +601,8 @@ pattern of §1:
 
 ```sql
 INSERT INTO lake.audit.checks VALUES (
-  current_timestamp(), 'operator', 'checksum_failure_acknowledged', 'lake.silver.book_kraken', true, 386962,
-  'from 2026-08-26T16:00:00Z to 2026-08-26T18:00:00Z: capture-kill / queue-full / redpanda-stop chaos runs (scripts/chaos/results/2026-08-26.tsv); 31,464 Kraken records dropped on a full producer queue; every failure of the archive is in this window');
+  current_timestamp(), 'operator', 'checksum_failure_acknowledged', 'lake.silver.book_kraken', true, <n>,
+  'from 2026-08-26T16:00:00Z to 2026-08-26T18:00:00Z: capture-kill / queue-full / redpanda-stop chaos runs (scripts/chaos/results/2026-08-26.tsv); Kraken records dropped on a full producer queue; every failure of the archive is in this window');
 ```
 
 Filed 2026-08-27 for exactly that window, after the first books rebuild.

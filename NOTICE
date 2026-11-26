@@ -61,6 +61,13 @@ written stays in it. These files carry such values, as found by a sweep on
 single illustrative samples, kept for the record, not a data set and not
 offered as one. The values themselves are deliberately not repeated here.
 
+Every other document is editable and carries none: it states a ratio, a size
+in bytes, a duration, or a pointer to the platform table or dated snapshot that
+holds the figure. Gate (j) of scripts/check-docs.sh fails CI on a count of
+captured data in any tracked Markdown file outside the immutable directories;
+the rule, the directories it exempts and the opt-out for the platform's own
+figures are stated once, in scripts/check_docs.py, gate (j).
+
 Price or size values in a quoted record:
 
   docs/adr/ADR-020-avro-fixed-point-contracts.md          one trade record, price and quote volume

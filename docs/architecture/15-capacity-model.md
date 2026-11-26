@@ -54,8 +54,8 @@ guess. Section 8 says which command settles which row.
 > **Reading.** p50 is flat across all three venues (±5 ms) while message rate rose 15–80%
 > between the windows, the compaction window landed on a busier ten minutes of market, which
 > is the noise band this comparison lives in. Binance p99 moved 225 → 377 ms and Kraken
-> 658 → 683 ms on 1.8× and 1.4× the rate; the sample at 10 min holds ~140k–600k events per
-> venue, so those p99s are stable numbers, and a 150 ms p99 shift on a queue that is 1.8×
+> 658 → 683 ms on 1.8× and 1.4× the rate; the 10-minute sample is large enough on every
+> venue that those p99s are stable numbers, and a 150 ms p99 shift on a queue that is 1.8×
 > deeper is what the cgroup quota alone predicts. Produce errors 0 on every venue in both
 > windows. \* Coinbase's baseline p99 of 30 s is the histogram's top bucket: the venue's
 > `level2` snapshot frames carry `event_time`s well behind wall clock on subscribe, and one
@@ -298,10 +298,10 @@ anyway so that a deeper or faster book stays recoverable by replay.
 | ↳ measured 2026-08-27, after the first rebuild | **0.593 of raw.\*** (1,974,345,923 B against 3,326,927,766 B of `raw.*` frames in `raw.messages`, whole archive); by day 0.595 / 0.590 | The 0.60 held. Bytes/day cannot be scored yet: the archive's only full-ish day starts behind the `raw.kraken` eviction and the 2026-08-27 slice is 5.25 quiet hours (4.06 GB/day raw.\*, 2.40 GB/day per-venue, normalised) | [benchmarks/2026-08-27.md § Lake](../benchmarks/2026-08-27.md), B4–B5 |
 | `silver.trades_<venue>` ×3 (Phase E, predicted 2026-08-27 before the first silver rebuild) | **0.25 GB/day**, sum of three | The three bronze trade tables held 126.2 MB for ≈ 14.9 h (0.20 GB/day); silver stores the same trades exploded and typed, two DECIMAL(28,10) instead of strings, timestamps instead of text, four flag columns, a canonical symbol dictionary, call it 1.25× | `0.20 × 1.25` |
 | `gold.trades` (Phase E, predicted 2026-08-27 before the first gold rebuild) | **0.18 GB/day** | The non-replay rows of silver (≈ 97 %), fewer columns, two BIGINTs where silver has two DECIMAL(28,10)s: ~0.9× the silver trades size | `0.20 × 0.9` |
-| `gold.bars` | **< 0.01 GB/day** | 23 canonical symbols × 3 kinds × ~100 bars/day on the busiest venue, ~2,900 rows/day at ~120 B; measured 5,796 rows for 41 h of trades on 2026-08-28 (`make lake-rebuild LAYER=bars`, 41 s) | `23 × 3 × 100 × 120 B` |
-| `gold.ohlcv_*` ×4 | **< 0.01 GB/day** | 34 instruments × 1,440 minutes = 49 K rows/day for 1m, ~30 B each compressed; the coarser three are negligible | `34 × 1440 × 30 B` |
+| `gold.bars` | **< 0.01 GB/day** | 23 canonical symbols × 3 kinds × ~100 bars/day on the busiest venue, ~2,900 rows/day at ~120 B; rebuilt over 41 h of trades on 2026-08-28 in 41 s (`make lake-rebuild LAYER=bars`) <!-- counts-ok: rows/day is this estimate's own arithmetic --> | `23 × 3 × 100 × 120 B` |
+| `gold.ohlcv_*` ×4 | **< 0.01 GB/day** | 34 instruments × 1,440 minutes = 49 K rows/day for 1m, ~30 B each compressed; the coarser three are negligible <!-- counts-ok: arithmetic over the instrument list, not data --> | `34 × 1440 × 30 B` |
 | `silver.book_<venue>` ×3 (predicted 2026-08-27 before the first books rebuild) | **2.1 GB/day** | the three bronze book tables (kraken_book, binance_depth20, coinbase_level2) held 1.85 GB for ≈ 14.9 h (3.0 GB/day); typed decimals and structs compress a little better than the string pairs: ~0.7× | `3.0 × 0.7` |
-| `gold.book_top20` + `gold.bbo_1s` | **0.6 GB/day** | 34 instruments × 86,400 s = 2.9 M rows/day of 80 Int64 levels, so ~0.5 GB/day for the book and ~0.1 for the BBO. ClickHouse's feed-fed copy of the same shape is not yet in a benchmark file | `2.9 M × 165 B + 2.9 M × 40 B` |
+| `gold.book_top20` + `gold.bbo_1s` | **0.6 GB/day** | 34 instruments × 86,400 s = 2.9 M rows/day of 80 Int64 levels, so ~0.5 GB/day for the book and ~0.1 for the BBO. ClickHouse's feed-fed copy of the same shape is not yet in a benchmark file <!-- counts-ok: arithmetic over the instrument list, not data --> | `2.9 M × 165 B + 2.9 M × 40 B` |
 | **All lake tables** | **13.6 GB/day** | | sum, with bronze per venue, silver trades and books, gold; 6.89 without them |
 
 ### 4d. Retention → disk
@@ -317,8 +317,8 @@ anyway so that a deeper or faster book stays recoverable by replay.
 
 > **Note, 2026-08-26, the 48 h retention row was scored against the running stack and the
 > binding limit is not time, it is the per-partition byte cap, and it binds at 7 h.**
-> `market.crypto.v3.raw.kraken` partition 0 held **4,887,694 records** between its
-> `LOG-START-OFFSET` and `HIGH-WATERMARK`, whose Kafka timestamps are **25,227,274 ms
+> `market.crypto.v3.raw.kraken` partition 0 held the records between its
+> `LOG-START-OFFSET` and `HIGH-WATERMARK` (counted in [ADR-021](../adr/ADR-021-raw-first-archive-and-lineage.md)'s Outcome), whose Kafka timestamps are **25,227,274 ms
 > apart = 7.01 h** (193.9 records/s, 119.7 B/record on disk). Partition 6, which had just
 > begun evicting, measured 9.25 h. The predicted window for the same 512 MiB at this
 > page's own §4b rate, 5.25 GB/day on disk ÷ 12 partitions, is **29.4 h**, so the
@@ -326,11 +326,11 @@ anyway so that a deeper or faster book stays recoverable by replay.
 >
 > ```console
 > $ docker exec k2-redpanda rpk topic describe -p market.crypto.v3.raw.kraken
-> #   partition 0: LOG-START 2784417, HIGH-WATERMARK 7672111
+> #   partition 0: LOG-START <log-start>, HIGH-WATERMARK <high-watermark>
 > $ docker exec k2-redpanda rpk topic consume market.crypto.v3.raw.kraken -p 0 \
->     -o 2784417 -n 1 -f '%d\n'      # 1787755113319 = 2026-08-26T14:38:33Z
+>     -o <log-start> -n 1 -f '%d\n'      # 1787755113319 = 2026-08-26T14:38:33Z
 > $ docker exec k2-redpanda rpk topic consume market.crypto.v3.raw.kraken -p 0 \
->     -o 7672111 -n 1 -f '%d\n'      # 1787780340593 = 2026-08-26T21:39:00Z
+>     -o <high-watermark> -n 1 -f '%d\n'      # 1787780340593 = 2026-08-26T21:39:00Z
 > $ docker exec k2-redpanda rpk cluster logdirs describe | grep raw.kraken
 > #   partition 0: 584,956,363 B   partitions 2/5/8/11: ~0.6 MB each
 > ```
@@ -344,7 +344,7 @@ anyway so that a deeper or faster book stays recoverable by replay.
 > partitioning is a cap on the busiest key, not on the topic.
 >
 > The rows above are left as predicted, as this page's convention requires. What changed
-> is elsewhere: the ingest's per-run bound now defaults to 600,000 offsets per partition
+> is elsewhere: the ingest's per-run bound now defaults to 600,000 offsets per partition <!-- counts-ok: a configured per-run bound, not data -->
 > (200,000, ~3.6× the 2026-08-27 arrival rate, until 2026-11-25) so the lake drains faster than the cap evicts, and
 > `docker/redpanda/init.sh` records this measured window next to `RAW_RETENTION_BYTES`.
 > **512 MiB stands**, the bus is a buffer for the 5-minute ingest cadence, not the
@@ -352,7 +352,8 @@ anyway so that a deeper or faster book stays recoverable by replay.
 > [lake-ingest-lag.md §3](../runbooks/lake-ingest-lag.md): `k2_lake_ingest_backlog_offsets`
 > for any topic above one hour of that topic's arrival rate, two cycles running.
 >
-> It cost 1,168,954 records on 2026-08-26 to learn this, once, on partition 0, that
+> It cost the records evicted on 2026-08-26 (counted in [ADR-021](../adr/ADR-021-raw-first-archive-and-lineage.md)'s Outcome) to learn this,
+> once, on partition 0, that
 > incident and its repair are in the same runbook section.
 >
 > *2026-11-25:* raised to 2 GiB per partition after a second eviction; see `docker/redpanda/init.sh`.
@@ -378,7 +379,7 @@ anyway so that a deeper or faster book stays recoverable by replay.
 > hold.** `32 MiB ÷ 164.3 kB/s` gives kraken **204 s** before the first record is dropped.
 > The first chaos run
 > ([`scripts/chaos/results/2026-08-26.tsv`](../../scripts/chaos/results/2026-08-26.tsv))
-> measured the first drop at **102 s, −50 %**, with 231,744 records lost and **zero**
+> measured the first drop at **102 s, −50 %**, with records lost (counted in [ADR-019](../adr/ADR-019-rust-capture-tier.md)'s Outcome) and **zero**
 > carrying `reason="queue_full"`.
 >
 > **The arithmetic was not what was wrong.** `sink.rs` also set
@@ -462,9 +463,9 @@ Each resource, and the multiple of today's 1× rate at which it binds:
 | 2 | Redpanda disk at 48 h raw retention | **~5.8×**, if 200 GB is allocated to it | Time-based retention scales disk linearly with rate | `200 GB ÷ 34.6 GB` (§4d) |
 | 3 | `capture-coinbase` RSS | **~12.5×** on **book depth**, *not* on message rate | Only the book scales with depth: fixed cost is `(8+8+32+16)×1.2 + 25×1.2 = 106.8 MB`, book cost `27.1×1.2 = 32.5 MB`. A market-wide depth increase binds this; a trade-rate spike does not touch it. | `(512 − 106.8) ÷ 32.5` (§5) |
 | 4 | Total CPU budget headroom | **~19×** on capture usage alone | 1.40 cores of headroom ÷ 0.074 predicted usage, but this is headroom for *everything*, not just capture | `1.40 ÷ 0.074` (§3b, §6) |
-| 5 | Capture CPU (`capture-kraken`, the busiest) | **~32×** | G5 holds and the 0.25 CPU quota is the ceiling | `12,500 frames/s ÷ 389.5 frames/s` (§3) |
+| 5 | Capture CPU (`capture-kraken`, the busiest) | **~32×** | G5 holds and the 0.25 CPU quota is the ceiling | `12,500 frames/s ÷ 389.5 frames/s` (§3) <!-- counts-ok: 12,500 is the G5 capacity estimate, not data --> |
 | 6 | Redpanda broker CPU | **~113×** | ADR-010's "2 cores handles 100 K msg/s" | `100,000 ÷ 883.8 records/s` |
-| 7 | ClickHouse hot-tier ingest | **>100×** | 884 records/s against a store measured at 236 K rows/s on the v2 baseline. That path is deleted; the number is kept as the last measurement of what this ClickHouse absorbs, not as a live claim | [v2 baseline, cold tier throughput](../benchmarks/2026-02-19-v2-baseline.md) |
+| 7 | ClickHouse hot-tier ingest | **>100×** | 884 records/s against a store whose cold-tier throughput on the v2 baseline is over 100× that. That path is deleted; the number is kept as the last measurement of what this ClickHouse absorbs, not as a live claim | [v2 baseline, cold tier throughput](../benchmarks/2026-02-19-v2-baseline.md) |
 
 > **Rank 1, unit note, the ~26 days above is left as computed.** Its arithmetic subtracts
 > GB from GiB: 212 GiB is 227.6 GB, so on the same inputs it is `(227.6 − 34.6) ÷ 6.89` =

@@ -117,14 +117,15 @@ All 41 ADRs: [`docs/adr/`](./docs/adr/README.md).
 ## Measured
 
 From [`docs/benchmarks/2026-08-27.md`](./docs/benchmarks/2026-08-27.md), a 6.5 h capture
-window; every row there carries the command that produced it.
+window; every row there carries the command that produced it. Counts of captured data stay
+in that dated snapshot and are not repeated here (NOTICE).
 
 | | Binance | Kraken | Coinbase |
 |---|---:|---:|---:|
 | Frames/s, window average | 187 | 606 | 130 |
 | Exchange to receive, p50 / p99 (ms) | 42 / 207 | 177 / 459 | 184 / see note |
 | Sequence gaps | 0 | 0 | 0 |
-| Checksum failures | n/a | 0 of 14.1 M | n/a |
+| Checksum failures | n/a | 0, every book frame verified | n/a |
 | Produce errors | 0 | 0 | 0 |
 
 Coinbase's p99 was the venue's on-subscribe trade snapshot, not transit; the capture now
@@ -132,10 +133,10 @@ excludes it from the histogram.
 
 | Operation | Result |
 |---|---|
-| Lake bronze rebuild from raw | 61.9 M rows in 520 s |
+| Lake bronze rebuild from raw | the whole archive, six tables, in 520 s |
 | Per-venue bronze vs raw archive | 0.59× |
 | Lake growth | about 9.8 GB/day |
-| ClickHouse pull of gold trades from the lake | 10.4 M rows in 4.4 s |
+| ClickHouse pull of gold trades from the lake | the whole lake table in 4.4 s |
 | Chaos: lake ingest killed / MinIO stopped / Lakekeeper stopped | 42 s / 38 s / 37 s |
 | Chaos: ClickHouse stopped 150 s | alert at 160 s, healthy 7 s after restart |
 | Chaos: corrupt feed record | isolated in 4 s |
@@ -203,7 +204,7 @@ hand-kept version of this table read 60 / 229 / 9 against a reality of 68 / 287 
 | Notebook helpers: `k2lake.trades()` / `completeness()` / `bars()` on synthetic tables, no stack | `make test-notebooks` |
 | Trino: the real `docker/trino/etc` starts, catalog `lake` refuses every commit and table procedure, only a domain's writer changes its tables with SQL statements (table procedures are not fenced per user, ADR-044); 134 checks [^trino], no stack | `make test-trino` |
 | dbt: sqlfluff, compile, a manifest check (only staging reads a source; every mart tested unique on its contract grain), then a build on empty sources with 10 unit tests and 22 data tests [^dbt], every test's result recorded in its domain's own catalog, a failing one included, and shown in the governance view, each domain's snapshot maintenance, and a project with no marts still parsing; no stack | `make test-dbt` |
-| Prometheus rule unit tests (25 of 36 alerts) and 10 documentation gates | `bash scripts/check-docs.sh` |
+| Prometheus rule unit tests (25 of 36 alerts) and 11 documentation gates | `bash scripts/check-docs.sh` |
 | Live stack: per-layer parity, three-way OHLCV parity, event-bar parity, chaos | `make lake-verify`, `make parity-ohlcv`, `make parity-bars`, `make chaos` |
 
 [^rust]: `grep -rc '#\[test\]' services/capture-rust/src services/capture-rust/tests --include='*.rs' | awk -F: '{s+=$2} END {print s}'`

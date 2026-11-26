@@ -4,6 +4,7 @@
     python3 scripts/check_docs.py words FILE...   # gate (b): forbidden words
     python3 scripts/check_docs.py hash            # print the entry for a new forbidden term
     python3 scripts/check_docs.py data            # gate (i): data files, notebooks, images
+    python3 scripts/check_docs.py counts          # gate (j): captured-data counts in editable Markdown
 
 Each gate prints one line per problem and exits 1 on any, 0 on none; a crash
 exits with Python's own non-zero code, which check-docs.sh also counts as a
@@ -213,6 +214,48 @@ def tracked_files() -> dict[str, bytes]:
     return {p: (ROOT / p).read_bytes() for p in paths if (ROOT / p).is_file()}
 
 
+# ── gate (j): captured-data counts in editable Markdown ─────────────────────
+#
+# The rule (ADR-029, NOTICE): the repository ships no venue market data and no
+# numbers derived from it. A count of captured trades, rows, records, frames
+# and the like is such a number. Editable documents state a ratio, a size in
+# bytes, a duration, or a pointer to the platform table that holds the figure;
+# an example of a command's output uses invented values.
+#
+# The exceptions, and the only ones: the immutable snapshots below, which keep
+# what was true when they were written (CLAUDE.md, Immutability; NOTICE lists
+# the files among them that carry such counts). Every other tracked *.md is
+# checked, code blocks included, because a pasted log line is where most of
+# these were found.
+#
+# What it looks for is the high-risk shape only, not every number: four or more
+# digits (separators allowed), or a figure with a magnitude (10.4 M, 236k),
+# then at most one word, then one of UNITS. A count that is the platform's own
+# (tests, alerts, a configured bound) or invented carries `counts-ok: <reason>`
+# on its line, in an HTML comment outside code (`<!-- counts-ok: ... -->`).
+
+IMMUTABLE = ("docs/adr/", "docs/audits/", "docs/benchmarks/", "docs/research/", "docs/plans/", "legacy/")
+UNITS = ("trades", "rows", "records", "frames", "buckets", "snapshots", "messages", "updates", "events",
+         "offsets", "book-seconds")
+COUNT = re.compile(
+    r"(?<![\w.,])(?:\d{1,3}(?:,\d{3})+|\d{4,}|\d+(?:\.\d+)?\s?(?:[kKMB]|million|billion))"
+    r"\s+(?:[\w`-]+\s+)?(?:" + "|".join(UNITS) + r")\b", re.I)
+OPT_OUT = re.compile(r"counts-ok:\s*\S.{7,}")
+
+
+def count_problems(path: str, text: str) -> list[str]:
+    return [f"{path}:{n}: {m.group(0)}" for n, line in enumerate(text.splitlines(), 1)
+            if not OPT_OUT.search(line) for m in COUNT.finditer(line)]
+
+
+def counts(tracked: dict[str, bytes]) -> list[str]:
+    problems = []
+    for path, content in sorted(tracked.items()):
+        if path.endswith(".md") and not path.startswith(IMMUTABLE):
+            problems += count_problems(path, content.decode("utf-8", errors="replace"))
+    return problems
+
+
 def read_term() -> str:
     if sys.stdin.isatty():
         return getpass.getpass("term (not echoed): ")
@@ -228,6 +271,8 @@ def main(argv: list[str], terms=TERMS) -> int:
         problems = words(argv[1:], terms)
     elif argv[:1] == ["data"]:
         problems = data_problems(tracked_files(), (ROOT / "NOTICE").read_text())
+    elif argv[:1] == ["counts"]:
+        problems = counts(tracked_files())
     else:
         print(__doc__, file=sys.stderr)
         return 2

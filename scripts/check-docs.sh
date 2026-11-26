@@ -243,4 +243,19 @@ else
 fi
 rm -f "$out"
 
+# (j) no count of captured market data in an editable Markdown file
+# ADR-029 and NOTICE: no numbers derived from venue data. Every tracked *.md
+# outside the immutable snapshots, code blocks included, fails on a count of
+# four or more digits (or 10.4 M, 236k) before trades, rows, records, frames and
+# the like; a platform figure carries `counts-ok: <reason>` on its line. The rule
+# and its exceptions are in scripts/check_docs.py, gate (j).
+out=$(mktemp)
+if python3 scripts/check_docs.py counts > "$out"; then
+  pass "(j) no captured-data counts in editable Markdown"
+else
+  bad "(j) counts of captured data in editable Markdown (use a ratio, a size, a duration or a pointer; or counts-ok: <reason>):"
+  sed 's/^/  /' "$out"
+fi
+rm -f "$out"
+
 exit "$fail"

@@ -132,7 +132,7 @@ docker exec k2-spark-iceberg python3 /home/iceberg/lake/ingest.py \
 # Unset params keep the script's defaults. Run on the live stack 2026-11-25 with
 # '{"driver_memory": "2g", "max_offsets_per_partition": 1000000}': the run's `running:`
 # line carried --env=K2_LAKE_DRIVER_MEMORY=2g and --max-offsets-per-partition=1000000, and
-# it logged `stage 1: committing 273039 offsets` and ended success. The 500000 form below
+# it logged `stage 1: committing <n> offsets` and ended success. The 500000 form below
 # was not run.
 docker exec k2-airflow-scheduler airflow dags trigger lake_ingest \
   --conf '{"max_offsets_per_partition": 500000}'
@@ -149,11 +149,11 @@ schedule against a concurrency-1 deployment queues runs rather than parallelisin
 raising the concurrency is the one change that breaks the exactly-once argument. Raise the
 per-run bound instead, one bigger run, not two overlapping ones.
 
-**Measured, 2026-08-27**, draining a 41.5 M-record cold-start backlog at the default
-bound, `lake-ingest-5min` paused: 2,721,812 / 1,770,914 / 1,564,334 records committed in
-92 s / 57 s / 49 s, peak ingest driver RSS 1,243 MiB of a 4 GiB container. A run with
-nothing to do costs 5.7 s. `market.crypto.v3.raw.kraken` fell 23,175,551 → 22,193,385 over
-the three, about 347 k per run.
+**Measured, 2026-08-27**, draining the cold-start backlog at the default
+bound, `lake-ingest-5min` paused: three runs of 92 s / 57 s / 49 s (what each committed is
+in [ADR-022](../adr/ADR-022-exactly-once-via-snapshot-offsets.md)'s Outcome), peak ingest driver RSS 1,243 MiB of a 4 GiB container. A run with
+nothing to do costs 5.7 s. The `market.crypto.v3.raw.kraken` backlog fell on each of
+the three.
 
 ---
 
@@ -262,15 +262,15 @@ hit `DATA LOSS`, and none has occurred since the cutover.
 #    starts, so the numbers are the first lines of the failed task's log.
 docker exec k2-airflow-scheduler sh -c \
   "find /opt/airflow/logs -path '*dag_id=lake_ingest*' -name '*.log' | sort | tail -1 | xargs grep 'DATA LOSS'"
-#   stage 1: DATA LOSS market.crypto.v3.raw.kraken/0: committed 1615463,
-#            broker LOG-START 2784417, 1168954 records evicted   (2026-08-26, Prefect's log)
+#   stage 1: DATA LOSS market.crypto.v3.raw.kraken/0: committed <committed>,
+#            broker LOG-START <log-start>, <n> records evicted   (2026-08-26, Prefect's log; values here are placeholders)
 
 #    The broker's own view, for a second opinion and for the partitions that are
 #    close to it but not over yet.
 docker exec k2-redpanda rpk topic describe -p market.crypto.v3.raw.kraken
 #   PARTITION  LOG-START-OFFSET  HIGH-WATERMARK
-#   0          2784417           7746070          <- committed 1615463: gone
-#   6          62436             4729663          <- committed  152000: still safe
+#   0          <log-start>       <high-water>     <- committed below LOG-START: gone
+#   6          <log-start-6>     <high-water-6>   <- committed above LOG-START: still safe
 ```
 
 Run on the live stack 2026-11-25: the same pause printed `lake_ingest | False` (its old
@@ -288,13 +288,13 @@ docker exec k2-spark-iceberg pgrep -af 'lake/(ingest|maintenance|rebuild)\.py'  
 ```bash
 # 3. Accept the loss, explicitly, once. The flag is the whole decision.
 docker exec k2-spark-iceberg python3 /home/iceberg/lake/ingest.py --accept-data-loss
-#   stage 1: DATA LOSS market.crypto.v3.raw.kraken/0: committed 1615463,
-#            broker LOG-START 2784417, 1168954 records evicted
-#   stage 1: ACCEPTED DATA LOSS market.crypto.v3.raw.kraken/0: 1168954 records
-#            (1615463..2784416) recorded in lake.audit.checks as offset_gap,
-#            resuming at 2784417
-#   stage 1: committing 4286900 offsets
-#   stage 1: 4286900 rows -> lake.raw.messages (max kafka_ts 2026-08-26 21:49:03.378)
+#   stage 1: DATA LOSS market.crypto.v3.raw.kraken/0: committed <committed>,
+#            broker LOG-START <log-start>, <n> records evicted
+#   stage 1: ACCEPTED DATA LOSS market.crypto.v3.raw.kraken/0: <n> records
+#            (<committed>..<log-start - 1>) recorded in lake.audit.checks as offset_gap,
+#            resuming at <log-start>
+#   stage 1: committing <m> offsets
+#   stage 1: <m> rows -> lake.raw.messages (max kafka_ts 2026-08-26 21:49:03.378)
 ```
 
 **What that flag does, exactly.** For every partition whose committed offset is below
@@ -320,9 +320,9 @@ s = lake_session('k2-lake-audit-read')
 s.sql(f'SELECT run_ts, job, check_name, scope, observed, detail FROM {CATALOG}.audit.checks '
       f\"WHERE check_name = 'offset_gap' ORDER BY run_ts\").show(50, truncate=False)"
 #   2026-08-26 21:48:59.632824 | ingest | offset_gap | market.crypto.v3.raw.kraken/0
-#   | 1168954 | --accept-data-loss: ... committed 1615463, broker LOG-START 2784417,
-#     1168954 records evicted by Redpanda retention and permanently gone;
-#     resumed at 2784417 by run local-1787780940821
+#   | <n> | --accept-data-loss: ... committed <committed>, broker LOG-START <log-start>,
+#     <n> records evicted by Redpanda retention and permanently gone;
+#     resumed at <log-start> by run local-1787780940821
 ```
 
 Run on the live stack 2026-11-25: the unpause (cutover step 5) printed `lake_ingest | True`
@@ -360,9 +360,9 @@ keyboard is not visible solely in a terminal that has since been closed.
 **And the nightly audit will fail from here on, correctly.** `offset_continuity` groups
 `raw.messages` by (topic, partition) and reports `max - min + 1 - count`, which for a
 repaired partition is exactly the number of evicted records, forever, because the hole is
-permanent. Measured immediately after the repair above: partition 0 holds 352,000 rows
-spanning 1,463,463..2,984,416, i.e. **1,168,954 missing, the same number as the
-`offset_gap` row**. Reconcile the two before treating a `LakeAuditFailed` on
+permanent. Measured immediately after the repair above: partition 0's `max - min + 1 - count`
+came out at **the same number as the
+`offset_gap` row** (the count is in [ADR-021](../adr/ADR-021-raw-first-archive-and-lineage.md)'s Outcome). Reconcile the two before treating a `LakeAuditFailed` on
 `offset_continuity` as new: same scope, same count, means it is this hole and not another.
 
 ```sql
@@ -379,23 +379,24 @@ second is a capacity finding, not an incident: raise the disk slice or lower the
 count, **never** silently shorten retention, which `docker/redpanda/init.sh` says in as
 many words.
 
-**Measured, 2026-08-26, this happened, and the numbers above are its own.** The Phase D
-cold start drained `market.crypto.v3.raw.kraken` at 50,000 offsets per run while partition
-0 took 11,050 records/minute, and the 512 MiB-per-partition cap evicted the head of the
+**Measured, 2026-08-26, this happened, and the output above is its own, counts and offsets
+as placeholders.** The Phase D
+cold start drained `market.crypto.v3.raw.kraken` at 50,000 offsets per run while partition <!-- counts-ok: 50,000 is the configured per-run bound, not data -->
+0 received more than that per cycle (its rate is in ADR-021's Outcome), and the 512 MiB-per-partition cap evicted the head of the
 queue faster than the ingest read it. Every cron run failed at plan time from **21:36Z**:
 
 ```text
-stage 1: DATA LOSS market.crypto.v3.raw.kraken/0: committed 1615463,
-         broker LOG-START 2784417, 1168954 records evicted
-failOnDataLoss: 1 partition(s) are below broker retention and 1168954 records are
+stage 1: DATA LOSS market.crypto.v3.raw.kraken/0: committed <committed>,
+         broker LOG-START <log-start>, <n> records evicted
+failOnDataLoss: 1 partition(s) are below broker retention and <n> records are
 permanently gone. This is not retried into success, record the gap in
 lake.audit.checks and resume explicitly with --accept-data-loss:
 docs/runbooks/lake-ingest-lag.md §3.
 ```
 
-Repaired with `--accept-data-loss` at **21:48:59Z**, one partition, 1,168,954 records; the
+Repaired with `--accept-data-loss` at **21:48:59Z**, one partition; the
 schedule was paused 21:48:38Z and resumed 21:50:56Z, and the run itself took **77 s**
-(21:48:59 → 21:50:16Z) including 4,286,900 rows into `raw.messages` and the stage-2 decode.
+(21:48:59 → 21:50:16Z) including its rows into `raw.messages` and the stage-2 decode.
 **MTTR from detection to a green schedule: 12 minutes**, of which the repair was 77 s and
 the rest was reading. That is the number in the table above.
 
@@ -406,9 +407,9 @@ which is exactly what `k2_lake_ingest_backlog_offsets` exports:
 
 | Snapshot | `raw.kraken` backlog | Run |
 |---|---|---|
-| 21:50:06Z | 20,888,481 | the `--accept-data-loss` repair |
-| 21:56:58Z | 19,622,947 | first scheduled run after it, Completed in 66 s |
-| 22:01:04Z | 18,374,110 | second, Completed in 60 s |
+| 21:50:06Z | the starting point | the `--accept-data-loss` repair |
+| 21:56:58Z | lower | first scheduled run after it, Completed in 66 s |
+| 22:01:04Z | lower again | second, Completed in 60 s |
 
 Three things changed as a result, and none of them is a workaround.
 `offsets.evicted` compares the resume point against the broker's log start **before** the
@@ -426,22 +427,22 @@ holds **7.0 h** of records at the 512 MiB cap, not 48 ([capacity-model.md
 
 ```console
 $ docker exec k2-redpanda rpk topic describe -p market.crypto.v3.raw.kraken   # ✅ verified
-#   partition 0: LOG-START 2784417, HIGH-WATERMARK 7672111
+#   partition 0: LOG-START <log-start>, HIGH-WATERMARK <high-water>
 $ docker exec k2-redpanda rpk topic consume market.crypto.v3.raw.kraken -p 0 \
-    -o 2784417 -n 1 -f '%d\n'                                                # ✅ verified
+    -o <log-start> -n 1 -f '%d\n'                                                # ✅ verified
 1787755113319
 $ docker exec k2-redpanda rpk topic consume market.crypto.v3.raw.kraken -p 0 \
-    -o 7672111 -n 1 -f '%d\n'                                                # ✅ verified
+    -o <high-water> -n 1 -f '%d\n'                                             # ✅ verified
 1787780340593
-#   25,227,274 ms = 7.01 h across 4,887,694 records = 11,637 records/min
+#   25,227,274 ms = 7.01 h between the two (the record count: ADR-021, Outcome)
 ```
 
 **512 MiB stands. The bus is a buffer for the 5-minute ingest cadence; the lake is the
 archive.** Seven hours is ~84 ingest cycles of slack, and the fix for a lake that cannot
 keep up is a lake that keeps up. **Revisit the retention when
 `k2_lake_ingest_backlog_offsets` for any topic exceeds one hour of that topic's own
-arrival rate for two consecutive cycles**, for `raw.kraken` at 11,637 records/min on the
-hottest partition that is ~700 k on that partition, and the topic gauge sums twelve of
+arrival rate for two consecutive cycles**, for `raw.kraken` that is one hour of the
+hottest partition's arrival on that partition, and the topic gauge sums twelve of
 them. Two cycles, because one is a slow run and two is a trend. That is the trigger; below
 it, a rising backlog is §1, not a retention question.
 
@@ -592,20 +593,21 @@ concurrent appends duplicate without the lock and the second run exits 75 with i
 _Appended with their date as they happen; never overwritten. **Every §3 data-loss window is
 recorded here**, with its offsets and its wall-clock span._
 
-**2026-08-26, `market.crypto.v3.raw.kraken/0`, 1,168,954 records, ~1 h 40 m of the feed.**
+**2026-08-26, `market.crypto.v3.raw.kraken/0`, ~1 h 40 m of the feed** (the record count and
+both offsets are in [ADR-021](../adr/ADR-021-raw-first-archive-and-lineage.md)'s Outcome).
 The Phase D cold start ran with `--max-offsets-per-partition 50000` against a partition
-taking 11,050 records/minute, so the ingest fell behind the 512 MiB-per-partition cap and
-Redpanda evicted the head of the queue. Committed 1,615,463; broker LOG-START 2,784,417.
+receiving more than that per cycle, so the ingest fell behind the 512 MiB-per-partition cap and
+Redpanda evicted the head of the queue. The committed offset fell below the broker's LOG-START.
 **The lost window ends at 14:38:33Z**, the Kafka timestamp of the surviving log start
-(`rpk topic consume -p 0 -o 2784417 -n 1 -f '%d'` = 1787755113319). Where it *starts*
+(`rpk topic consume -p 0 -o <log-start> -n 1 -f '%d'` = 1787755113319). Where it *starts*
 cannot be read back, because reading it would mean reading a record that is gone: at the
-measured 11,637 records/min it is ~100 minutes earlier, **≈12:58Z**, and that estimate is
+measured arrival rate it is ~100 minutes earlier, **≈12:58Z**, and that estimate is
 the only version of that boundary there will ever be. Every scheduled run failed at plan
 time from 21:36Z. Repaired at 21:48:59Z with
 `ingest.py --accept-data-loss`; `lake.audit.checks` holds the `offset_gap` row, and
-`offset_continuity` reports the same 1,168,954 on that partition from now on. No other
-partition on any topic was below its log start, partition 6 was the next closest, at
-152,000 committed against a log start of 62,436.
+`offset_continuity` reports the same count on that partition from now on. No other
+partition on any topic was below its log start, partition 6 was the next closest, its
+committed offset still above its log start.
 
 Cause: the per-run bound was below the arrival rate, which was fixed at a default of
 200,000 (~3.6x measured; raised to 600,000 on 2026-11-25, §1). Not a retention change: 512 MiB stands, and the trigger for

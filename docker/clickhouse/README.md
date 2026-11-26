@@ -76,7 +76,7 @@ docker exec k2-clickhouse clickhouse-client --password "$CLICKHOUSE_PASSWORD" -q
 pair of MVs writes the rest, bytes included, to `gold.feed_errors`. Found the hard
 way on 2026-08-27, twice: a JSON frame a chaos script had produced onto
 `trades.kraken` stalled partition 0 permanently under the default mode (Kraken gold
-72,195 rows against 164,467 in the lake); then, with `kafka_skip_broken_messages`
+far short of the lake's row count); then, with `kafka_skip_broken_messages`
 set instead, a second chaos record with schema id 0 still stalled partition 10 , 
 that failure is a registry 404 while fetching the schema, which "skip broken
 messages" does not cover. Stream mode caught it in 10 s and left one row in
@@ -92,14 +92,14 @@ tables end there.
 
 | What | Value | Command |
 |---|---:|---|
-| `gold.trades` rows (deliveries = `FINAL`, merges done) | 10,419,176 · 2026-08-26 12:04:00 → 2026-08-27 05:15:21Z | `SELECT count(), (SELECT count() FROM gold.trades FINAL), min(exchange_ts), max(exchange_ts) FROM gold.trades` |
-| `gold.book_top20` rows | 2,008,914 | same shape |
+| `gold.trades` rows (deliveries = `FINAL`, merges done) | count not kept here · 2026-08-26 12:04:00 → 2026-08-27 05:15:21Z | `SELECT count(), (SELECT count() FROM gold.trades FINAL), min(exchange_ts), max(exchange_ts) FROM gold.trades` |
+| `gold.book_top20` rows | count not kept here | same shape |
 | on disk, compression | trades 278.34 MiB (4.63×), book_top20 329.87 MiB (4.65×) | `SELECT table, formatReadableSize(sum(bytes_on_disk)), round(sum(data_uncompressed_bytes)/sum(data_compressed_bytes),2) FROM system.parts WHERE database='gold' AND active GROUP BY table` |
-| **parity with the lake**, 2026-08-27 00:00–05:00Z by `exchange_ts`: binance / coinbase / kraken | **1,978,901 / 273,060 / 33,246, equal** to `count(DISTINCT symbol, trade_id)` over `lake.bronze.trades` on the same window (Coinbase's 12,805 venue replays in that window collapsed by `ReplacingMergeTree`) | `SELECT exchange, count() FROM gold.trades FINAL WHERE exchange_ts >= '2026-08-27 00:00:00' AND exchange_ts < '2026-08-27 05:00:00' GROUP BY exchange` vs the Spark query in the lake |
-| `gold.feed_errors` | 1 row: `trades.kraken` partition 10 offset 1895, schema id 0, the chaos record | `SELECT * FROM gold.feed_errors` |
-| `quant`: `ohlcv_live(bucket=60)`, BTC/USDT, last 6 h → 361 candles | 0.133 / 0.132 / 0.133 s | `clickhouse-client --user quant --time -q "SELECT count() FROM gold.ohlcv_live(bucket=60) WHERE canonical_symbol='BTC/USDT' AND window_start >= toDateTime64('2026-08-26 23:15:00', 6)"` |
-| `quant`: `ohlcv_live(bucket=3600)`, every symbol, whole table → 612 rows | 0.500 / 0.481 / 0.483 s | same, `bucket=3600`, no WHERE |
-| `quant`: `bbo_live`, BTC/USDT, last 75 min → 4,521 rows | 0.012 / 0.012 / 0.017 s | `SELECT count() FROM gold.bbo_live WHERE canonical_symbol='BTC/USDT' AND second >= '2026-08-27 04:00:00'` |
+| **parity with the lake**, 2026-08-27 00:00–05:00Z by `exchange_ts`: binance / coinbase / kraken | **equal, venue by venue,** to `count(DISTINCT symbol, trade_id)` over `lake.bronze.trades` on the same window (Coinbase's venue replays in that window collapsed by `ReplacingMergeTree`) | `SELECT exchange, count() FROM gold.trades FINAL WHERE exchange_ts >= '2026-08-27 00:00:00' AND exchange_ts < '2026-08-27 05:00:00' GROUP BY exchange` vs the Spark query in the lake |
+| `gold.feed_errors` | 1 row: `trades.kraken` partition 10, schema id 0, the chaos record | `SELECT * FROM gold.feed_errors` |
+| `quant`: `ohlcv_live(bucket=60)`, BTC/USDT, last 6 h | 0.133 / 0.132 / 0.133 s | `clickhouse-client --user quant --time -q "SELECT count() FROM gold.ohlcv_live(bucket=60) WHERE canonical_symbol='BTC/USDT' AND window_start >= toDateTime64('2026-08-26 23:15:00', 6)"` |
+| `quant`: `ohlcv_live(bucket=3600)`, every symbol, whole table | 0.500 / 0.481 / 0.483 s | same, `bucket=3600`, no WHERE |
+| `quant`: `bbo_live`, BTC/USDT, last 75 min | 0.012 / 0.012 / 0.017 s | `SELECT count() FROM gold.bbo_live WHERE canonical_symbol='BTC/USDT' AND second >= '2026-08-27 04:00:00'` |
 | `quant`: `count() FROM gold.trades FINAL` | 0.365 s | as written |
 
 ## Alerts

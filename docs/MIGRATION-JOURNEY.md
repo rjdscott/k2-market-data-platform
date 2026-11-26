@@ -43,9 +43,9 @@ timeline
 |---|---|---|---|---|
 | 1 | Infrastructure baseline | Compose skeleton, Redpanda + Console, Prometheus, Grafana, health checks | ✅ Done in 1 day against a 1-week estimate. 1.09 GB idle vs a 12.75 GB budget | [001](adr/ADR-001-replace-kafka-with-redpanda.md), [010](adr/ADR-010-resource-budget.md) |
 | 2 | Redpanda migration | Single-broker Redpanda v25.3.4, built-in schema registry, explicit topic init | ✅ Kafka + Confluent Schema Registry both deleted; startup 15–30 s → 2–5 s | [001](adr/ADR-001-replace-kafka-with-redpanda.md) |
-| 3 | ClickHouse foundation | Kafka-engine queues, bronze/silver/gold DDL, Kraken added as second exchange | ✅ 30k+ trades through all layers, 0 errors over 90 min | [003](adr/ADR-003-clickhouse-warm-storage.md), [009](adr/ADR-009-medallion-in-clickhouse.md), [011](adr/ADR-011-multi-exchange-bronze-architecture.md) |
+| 3 | ClickHouse foundation | Kafka-engine queues, bronze/silver/gold DDL, Kraken added as second exchange | ✅ live trades through all layers, 0 errors over 90 min | [003](adr/ADR-003-clickhouse-warm-storage.md), [009](adr/ADR-009-medallion-in-clickhouse.md), [011](adr/ADR-011-multi-exchange-bronze-architecture.md) |
 | 4 | Streaming pipeline | Bronze → Silver → Gold entirely as materialized views | ✅ **The planned Kotlin Silver Processor was never built**, MVs made it unnecessary, saving a service | [004](adr/ADR-004-eliminate-spark-streaming.md), [009](adr/ADR-009-medallion-in-clickhouse.md) |
-| 5 | Cold tier / Iceberg | 10 Iceberg tables, Spark offload with PostgreSQL watermarks, Prefect 3 deployments, daily compaction + audit | ✅ 3.78M rows in 16 s (236k rows/s), 12:1 zstd compression, 99.9%+ warm/cold consistency | [006](adr/ADR-006-spark-batch-only.md), [007](adr/ADR-007-iceberg-cold-storage.md), [013](adr/ADR-013-pragmatic-iceberg-version-strategy.md), [014](adr/ADR-014-spark-based-iceberg-offload.md), [017](adr/ADR-017-iceberg-maintenance-pipeline.md) |
+| 5 | Cold tier / Iceberg | 10 Iceberg tables, Spark offload with PostgreSQL watermarks, Prefect 3 deployments, daily compaction + audit | ✅ an offload run in 16 s (throughput in the [v2 baseline](benchmarks/2026-02-19-v2-baseline.md)), 12:1 zstd compression, 99.9%+ warm/cold consistency | [006](adr/ADR-006-spark-batch-only.md), [007](adr/ADR-007-iceberg-cold-storage.md), [013](adr/ADR-013-pragmatic-iceberg-version-strategy.md), [014](adr/ADR-014-spark-based-iceberg-offload.md), [017](adr/ADR-017-iceberg-maintenance-pipeline.md) |
 | 6 | Kotlin feed handlers | Ktor WebSocket clients, dual raw+Avro producers, shared instrument registry | ✅ Built early, during Phase 3, to unblock end-to-end validation. 0.034 CPU / 134 MiB measured for Binance | [002](adr/ADR-002-kotlin-feed-handlers.md) |
 | 7 | Integration hardening | Latency benchmark ✅, resource burn-in 🟡, failure-mode testing ✅, monitoring ✅, runbooks ✅ (8: failure-recovery, iceberg-offload-{failure,lag,performance,monitoring,watermark-recovery}, iceberg-scheduler-recovery, redpanda) | 🟡 4 of 5 steps complete; remaining: 24 h burn-in, 5×/10× load test, Alertmanager routing | [015](adr/ADR-015-clickhouse-lts-downgrade.md), [016](adr/ADR-016-add-coinbase-exchange.md) |
 | 8 | Query API |, | ⬜ Not started | [005](adr/ADR-005-kotlin-spring-boot-api.md) |
@@ -181,7 +181,7 @@ system rather than making the window smaller, and costs less code than the water
 module it replaces. The cheaper thing turned out to be the stronger one.
 
 The larger reversal is not about mechanism at all. Phase 5 asked how to copy ClickHouse
-into Iceberg and answered it well, 236k rows/s, 12:1 compression, 99.9% consistency, all
+into Iceberg and answered it well, 12:1 compression, 99.9% consistency, the v2 baseline's throughput, all
 still true. It did not ask whether the archive should be a copy of a serving database. It
 should not: the lake inherited ClickHouse's normalisation, its 7-day TTL and the two
 `Array`/`Map` columns the JDBC driver could not read, so nothing in it was reproducible
@@ -213,8 +213,8 @@ from that page's command.
 1. **A per-partition byte cap under keyed partitioning is a cap on the busiest key.**
    `raw.kraken` partition 0 held 558 MB while partitions 2/5/8/11 held ~600 kB; the 512 MiB
    cap evicted the hot partition after 7 h while the topic sat at 2.9 GB of a 6 GiB allowance.
-   The 48 h prediction divided by twelve and the traffic does not. It cost 1,168,954 records,
-   once, before the ingest bound was raised above the arrival rate and the loss was filed as
+   The 48 h prediction divided by twelve and the traffic does not. It cost the records it evicted
+   (counted in [ADR-021](adr/ADR-021-raw-first-archive-and-lineage.md)'s Outcome), once, before the ingest bound was raised above the arrival rate and the loss was filed as
    an `offset_gap` row the continuity audit nets out
    ([capacity-model.md](architecture/15-capacity-model.md), [lake-ingest-lag.md §3](runbooks/lake-ingest-lag.md)).
 
@@ -227,8 +227,8 @@ from that page's command.
 
 3. **The venue disproved the schema twice.** `bronze.trades` was declared unique on
    `(exchange, symbol, trade_id)`; a 30-minute sample showed Coinbase replaying trades after a
-   reconnect, so `conn_id` was added. The first full day showed 5,034 trades re-sent *inside
-   one connection*, 15 s apart, in two distinct frames. The only uniqueness an archive of
+   reconnect, so `conn_id` was added. The first full day showed trades re-sent *inside
+   one connection* (counted in [ADR-024](adr/ADR-024-unified-bronze-tables-in-the-lake.md)), 15 s apart, in two distinct frames. The only uniqueness an archive of
    frames can promise is lineage, which record produced this row, so that is the identifier
    now, and venue replay is a count the audit reports rather than a constraint it enforces
    ([ADR-024](adr/ADR-024-unified-bronze-tables-in-the-lake.md), [lake-audit-failed.md §2](runbooks/lake-audit-failed.md)).

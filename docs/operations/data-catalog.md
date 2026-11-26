@@ -598,15 +598,16 @@ FROM pinned.audit_checks ORDER BY run_ts DESC LIMIT 4
 
 ```
                           run_ts    job check_name                          scope  passed  observed
-2026-09-03 12:58:25.158640+00:00 ingest offset_gap market.crypto.v3.raw.binance/0   False     25784
-2026-09-03 12:58:25.158640+00:00 ingest offset_gap market.crypto.v3.raw.binance/2   False     14923
-2026-09-03 12:58:25.158640+00:00 ingest offset_gap market.crypto.v3.raw.binance/3   False     24479
-2026-09-03 12:58:25.158640+00:00 ingest offset_gap market.crypto.v3.raw.binance/4   False     10243
+2026-09-03 12:58:25.158640+00:00 ingest offset_gap market.crypto.v3.raw.binance/0   False      1000
+2026-09-03 12:58:25.158640+00:00 ingest offset_gap market.crypto.v3.raw.binance/2   False      2000
+2026-09-03 12:58:25.158640+00:00 ingest offset_gap market.crypto.v3.raw.binance/3   False      3000
+2026-09-03 12:58:25.158640+00:00 ingest offset_gap market.crypto.v3.raw.binance/4   False      4000
 ```
 
-`offset_gap` rows are written by `ingest.py` **before** the skip they license: these record
-25,784 Binance records that Redpanda evicted before the lake read them, on partition 0 of
-`market.crypto.v3.raw.binance`. The archive knows exactly what it is missing.
+`offset_gap` rows are written by `ingest.py` **before** the skip they license: each records,
+in `observed`, the Binance records Redpanda evicted from that partition of
+`market.crypto.v3.raw.binance` before the lake read them (the values above are invented).
+The archive knows exactly what it is missing.
 
 ## Related
 

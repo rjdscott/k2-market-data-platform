@@ -110,7 +110,7 @@ a gap, rather than a plausible-looking lie.
 queue is full, `sink.send` drops the record and returns `false`; the capture's own book is
 unharmed (it saw the frame), but `raw.messages` now has a hole, and the lake replays every
 book from `raw.messages`. Measured on 2026-08-26: after the `capture-queue-full` and
-`redpanda-stop` chaos runs, 386,962 Kraken frames failed the lake's replayed checksum, every
+`redpanda-stop` chaos runs, Kraken frames failed the lake's replayed checksum, every
 one downstream of a drop, and the failures ran to the end of each connection because
 nothing ever took a fresh snapshot (`docker/lake/README.md` § Books). `resync.rs` remembers
 the symbol of every dropped `book` / `l2_data` raw frame and, at the first 1 Hz tick after
@@ -179,12 +179,12 @@ archive. There is no Kafka sink on purpose: the raw topic is what the lake inges
 and a replayed frame produced there would be archived a second time.
 
 Measured 2026-08-28, one whole archived Kraken connection (`c8a130a5…`, 2026-08-26
-12:38–13:42Z, 863,186 frames, `scripts/replay-lake.sh`): 879,119 records in 16 s end to
+12:38–13:42Z, `scripts/replay-lake.sh`): replayed in 16 s end to
 end including the export and the `audit.checks` row, digest `56ad1df1…`. The earlier
-figure on this page (`1dfb9139…`, 5,891 frames → 6,030 records) was over a connection
+figure on this page (`1dfb9139…`) was over a connection
 the export now refuses: its `conn_msg_seq` is not contiguous, a counter artefact of the
 pre-burn-in Phase C build rather than loss (see `scripts/replay_export.py`). `--depth 25
---interval-ms 100` on that same input gave 1,140 snapshots at depth 25.
+--interval-ms 100` on that same input gave its snapshots at depth 25.
 
 `healthcheck` reads our own `/metrics` over loopback and looks at
 `k2_capture_last_message_ts_seconds`, the same number the staleness alert
@@ -477,7 +477,7 @@ fails if a committed file is not what the generator writes.
 
 | Fixture | Test | Frames | Size | Symbol | Session |
 |---------|------|--------|------|--------|---------|
-| `synthetic-kraken-20s.jsonl` | `tests/replay.rs` | 1185 | 313 KB | BTC/USD (20 s) | status, three acks, the `instrument` snapshot, a depth-25 book snapshot, 1156 book updates, 3 trades, a heartbeat a second |
+| `synthetic-kraken-20s.jsonl` | `tests/replay.rs` | 1185 | 313 KB | BTC/USD (20 s) | status, three acks, the `instrument` snapshot, a depth-25 book snapshot, 1156 book updates, 3 trades, a heartbeat a second <!-- counts-ok: the synthetic fixture's own frames, not venue data --> |
 | `synthetic-binance-10s.jsonl` | `tests/replay_binance.rs` | 539 (438 trade, 101 depth20) | 254 KB | BTCUSDT (10 s) | a depth20 frame every 100 ms, `lastUpdateId` strictly increasing |
 | `synthetic-coinbase-20s.jsonl` | `tests/replay_coinbase.rs` | 159 (`sequence_num` 0..158) | 127 KB | ATOM-USD (20 s) | full-depth `level2` snapshot, acks, `market_trades` history, heartbeats, 134 `l2_data` updates |
 | `synthetic-kraken-20s-checksum-fail.jsonl` | `tests/replay_failures.rs` | 1185 | 313 KB | BTC/USD (20 s) | the clean file with line 537's `book` `update` checksum rewritten to `1` |
@@ -494,7 +494,7 @@ cost, measured on these files:
 
 | Fixture | Actions | Snapshots (clean fixture) | What the rest of the session looks like |
 |---------|---------|---------------------------|------------------------------------------|
-| `synthetic-kraken-20s-checksum-fail` | 1 `Resubscribe` | 10 (19): 9 verified, then 1 marked `checksum_ok=false` | dark to the end of the file: the 635 `update` frames after the mismatch are ignored (empty book, nothing to fold into) and only the venue's `snapshot` would end it. All 1185 frames still archived |
+| `synthetic-kraken-20s-checksum-fail` | 1 `Resubscribe` | 10 (19): 9 verified, then 1 marked `checksum_ok=false` | dark to the end of the file: the 635 `update` frames after the mismatch are ignored (empty book, nothing to fold into) and only the venue's `snapshot` would end it. All 1185 frames still archived <!-- counts-ok: the synthetic fixture's own frames, not venue data --> |
 | `synthetic-coinbase-20s-seq-gap` | 1 `Reconnect` | 9 (19), all `seq` < 79 | dark for the remaining ~10 s: every book cleared, and an `l2_data` `update` with no snapshot behind it is dropped rather than believed |
 | `synthetic-binance-10s-regression` | 1 `Resubscribe` | 9 (10) | one sample lost, and that is the whole blast radius: the next `@depth20@100ms` frame is itself a complete top-20, so recovery needs no venue reply |
 
@@ -541,7 +541,8 @@ nothing translates a symbol anywhere in this crate.
   the queue. Blocking the frame loop instead of dropping would stop us reading
   the socket, and the venue would drop us, losing more than we were trying to
   save. **The timeout used to be 30 s**, which made the 32 MiB unreachable: the
-  2026-08-26 chaos run lost 231,744 kraken records with a first drop at 102 s and
+  2026-08-26 chaos run lost kraken records (counted in
+  [ADR-019](../../docs/adr/ADR-019-rust-capture-tier.md)'s Outcome) with a first drop at 102 s and
   *zero* of them `queue_full`
   ([`scripts/chaos/results/2026-08-26.tsv`](../../scripts/chaos/results/2026-08-26.tsv)).
   `// ponytail: spill-to-file when an outage costs data.`

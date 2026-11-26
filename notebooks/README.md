@@ -75,11 +75,11 @@ completeness(con, 'BTC/USD', 'kraken', '2026-09-03 12:00', '2026-09-03 13:00').s
 │ trades │ minutes_with_trades │ minutes_expected │ seq_gaps │ ids_never_received │ quote_coverage_pct │ checksum_failed │ audit_failures │
 │ int64  │        int64        │      int64       │  int64   │       int64        │       double       │      int64      │     int64      │
 ├────────┼─────────────────────┼──────────────────┼──────────┼────────────────────┼────────────────────┼─────────────────┼────────────────┤
-│   1923 │                  13 │               60 │        0 │                  0 │              100.0 │               0 │             31 │
+│   1000 │                  13 │               60 │        0 │                  0 │              100.0 │               0 │             31 │
 └────────┴─────────────────────┴──────────────────┴──────────┴────────────────────┴────────────────────┴─────────────────┴────────────────┘
 ```
 
-Read that as: 1923 trades over 13 of the hour's 60 minutes (Kraken BTC/USD is thin, and the
+Read that as (the trade count is invented here): trades in 13 of the hour's 60 minutes (Kraken BTC/USD is thin, and the
 capture only started at 12:46 in this window), no trade-id holes, every trade found a quote.
 `checksum_failed` is Kraken-only — Binance and Coinbase publish no book checksum, so it is
 `NULL` there, which means *not measurable*, never *clean*. `audit_failures` counts

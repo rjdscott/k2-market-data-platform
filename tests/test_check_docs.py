@@ -179,6 +179,39 @@ def test_the_tree_as_committed_passes():
     assert check_docs.data_problems(check_docs.tracked_files(), (ROOT / "NOTICE").read_text()) == []
 
 
+# ── gate (j): captured-data counts in editable Markdown ─────────────────────
+# Every figure below is invented.
+
+
+@pytest.mark.parametrize("line", [
+    "the whole archive (12,345,678 rows, six tables)", "stage 2b: venue: 1234567 frames = ...",
+    "the 12.3 M trades in gold", "456k rows a day", "the producer dropped 12,345 Venue records",
+    "1,111,111 lake book-seconds pulled", "| x | 1,234 rows |", "2222222 OFFSETS", "2.5 million events",
+])
+def test_the_high_risk_shapes_fail(line):
+    assert len(check_docs.count_problems("doc.md", "intro\n" + line)) == 1
+
+
+@pytest.mark.parametrize("line", [
+    "rebuilt in 520 s", "999 rows", "a 2,048 MiB heap", "on 2026-01-01 rows were", "v1.2.3 rows",
+    "port 18181", "0 records lost", "x1234 rows", "5.7 s",
+])
+def test_other_numbers_pass(line):
+    assert check_docs.count_problems("doc.md", line) == []
+
+
+def test_an_opt_out_needs_a_reason():
+    assert check_docs.count_problems("d.md", "1,000 rows <!-- counts-ok: synthetic test table -->") == []
+    assert check_docs.count_problems("d.md", "1,000 rows <!-- counts-ok: x -->") == ["d.md:1: 1,000 rows"]
+
+
+def test_only_editable_markdown_is_checked_code_blocks_included():
+    text = b"```\n1000000 records evicted\n```\n"
+    tracked = {"docs/runbooks/x.md": text, "docs/benchmarks/2001-01-01.md": text, "docs/adr/ADR-001-x.md": text,
+               "legacy/v1/README.md": text, "docs/runbooks/x.sql": text}
+    assert check_docs.counts(tracked) == ["docs/runbooks/x.md:2: 1000000 records"]
+
+
 # ── gate (h): em-dash on added lines, on a push to main too ─────────────────
 
 
