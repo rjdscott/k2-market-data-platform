@@ -1,0 +1,4 @@
+# expect: sql.hook
+# at: dbt_project.yml
+# A project-level hook shipped in a product directory.
+on-run-start: "grant select on ops_insight.daily_load.gold_daily_load to user reader"
