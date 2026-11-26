@@ -25,6 +25,10 @@ layouts and commands, without notice. `3.0.0` is reserved for the end of
 
 ### Fixed
 
+- `make test` and `make gates` no longer rebuild the image tag the running Airflow services
+  start from.
+- Spark event logs are compressed and deleted after two days; they grew without bound in
+  the Spark container.
 - The ingest no longer fails when a batch holds no frame for a venue, which a paused
   order book produces on every run.
 
