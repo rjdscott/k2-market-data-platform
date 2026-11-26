@@ -465,3 +465,12 @@ rows, the catalog fenced by network until it has authentication) is in ADR-061's
 "other products read at the marker" holds through `k2_input` and a lint, not through Trino. The
 narrowing was decided by the build's orchestrator under the owner's standing delegation and is flagged
 to the owner for confirmation.
+
+## Outcome (2026-11-26, the view shape gained a guard)
+
+The view shape stated in the Outcome above, `SELECT <contract columns> FROM <domain>.<fence>__base.<table>
+FOR VERSION AS OF 'audited'` and nothing else, gained a guard: a `WHERE EXISTS` over the base's `$refs`
+metadata table, so a read fails unless the base is an Iceberg table carrying the tag. Without it a builder
+could have replaced its base with a view that readers were served untested. The shape, the reason and the
+cost are in [ADR-061](ADR-061-readers-see-dbt-outputs-through-a-view-over-the-tested-tag.md)'s Outcome of
+this date; every other definer view stays forbidden.

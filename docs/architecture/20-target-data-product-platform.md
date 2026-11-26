@@ -2,9 +2,9 @@
 
 > **This chapter is the TARGET, not what runs today.** It describes the platform the owner decided on
 > 2026-11-26 UTC, recorded in ADR-056 ([`ADR-056-unified-data-product-platform.md`](../adr/ADR-056-unified-data-product-platform.md)). Chapters
-> 04 to 19 describe the system that runs today, and they stay true to it. Each phase of the plan moves
+> 04 to 19, 21 and 22 describe the system that runs today, and they stay true to it. Each phase of the plan moves
 > one piece from this chapter into those chapters, in the same pull request that makes the piece real.
-> Where this chapter and chapters 04 to 19 disagree, those chapters say what runs and this one says
+> Where this chapter and chapters 04 to 22 disagree, those chapters say what runs and this one says
 > where it is going.
 
 > **You will learn** what the platform is being rebuilt into, the rules it is built by, the twelve
@@ -68,7 +68,7 @@ registry after release 3.0 (the tag `v3.0.0`, the end of the plan).
 | Connector, landing | The code that reads one kind of source (a Kafka topic, a public API, an HTTPS or S3 file, an FTP or SFTP server); the verbatim copy of what it received, committed before any check, owned by its product |
 | Bronze, silver, gold, mart | Layers: the source's shape, typed; cleaned and keyed; at the business grain; shaped for one use. A product has only the layers it needs |
 | Snapshot, audit branch, write-audit-publish | An Iceberg table version; a named pointer to a snapshot that readers do not see; writing to the audit branch, checking it, then moving the branch readers see |
-| Tested-data marker | A named reference on each published table that the build moves to a new snapshot only after its tests pass. Readers read at the marker |
+| Tested-data marker | A named reference on each published table that the build moves to a new snapshot only after its tests pass. Readers read at the marker. As built: the Iceberg tag `audited`, read through a view (ADR-061) |
 | Run record, release | One governance row per run and outcome (release, inputs and their snapshots, outputs, counts, result); an immutable directory compiled from approved documents: rules, platform code, compose file, image digests |
 | Principal, role, grant, policy | Who calls, a person or a service; an access level a table offers; one principal given at most one role on one product, approved by its owner; what a role sees (a delay, a masked column, a row scope) |
 | Table catalog, product catalog | Lakekeeper, which records every table, schema and snapshot; a generated catalog site for people and k2-api's metadata routes for programs |
@@ -326,7 +326,10 @@ move the marker. Steps 13 and 14: a failed test rolls each failed table back; th
 the rows. Step 15: a failed bronze audit leaves bronze unmoved and the bytes kept. Step 16: every outcome writes a run
 record. A product built only from other products starts at step 8.
 
-How a reader catalog resolves a plain `SELECT` to the marker is settled by a small spike in the run spine phase. The
+How a reader resolves a plain `SELECT` to the marker was settled in the release and rules spine: a definer view per
+output, owned by the product's publisher, over its `audited` tag and guarded on the base's refs
+([ADR-061](../adr/ADR-061-readers-see-dbt-outputs-through-a-view-over-the-tested-tag.md), [chapter
+22](22-access-and-identity.md)). The
 landing never blocks ([ADR-047](../adr/ADR-047-ingest-batch-audit-after-publish.md) stays), because a topic keeps only
 48 hours or 2 GiB per partition ([chapter 07](07-wire-contracts.md)); a product that falls off the topic fails loudly
 until an operator records an accept-data-loss run. dbt runs in a one-shot container with an allow-listed environment;
@@ -376,14 +379,15 @@ flowchart TB
     RSTC["REST caller"]:::ext
     API["k2-api data routes: check the key, never decide"]:::run
     TR["Trino: the one enforcement point"]:::run
-    TBL[("Tables at the tested-data marker, through read-only reader catalogs")]:::store
+    TBL[("A view per output over the tested tag, through read-only reader catalogs")]:::store
   end
   subgraph DT["Design time"]
     PRN["Principals: people and services, each with an owner"]:::person
     GRT["Grants: one principal, one product, at most one role, owner-approved"]:::person
     POL["Roles a table offers, narrowed by named policies: delay, mask, rowScope"]:::person
     EXP["Access expectations, written by hand"]:::person
-    RUL[("Release: Trino rules, one group per product and role, k2-api key map")]:::gen
+    RUL[("Release: Trino rules, one group per product and role, k2-api principal list")]:::gen
+    SEC[("Local secrets under K2_SECRETS: password and key hashes, never in a release")]:::store
   end
   subgraph DPL["Before each deploy"]
     TST["Access test on a throwaway Trino and k2-api: any difference stops the deploy"]:::run
@@ -395,17 +399,21 @@ flowchart TB
   API -->|"the same rows as JSON"| RSTC
   PRN & GRT & POL -.->|"compiled by k2gen"| RUL
   RUL -.->|"rules and groups, re-read at each refresh"| TR
-  RUL -.->|"key hashes to principals"| API
+  RUL -.->|"principals it may act as"| API
+  SEC -.->|"password file"| TR
+  SEC -.->|"key hashes to principals"| API
   RUL -.->|"rules under test"| TST
   EXP -.->|"expected columns, masks, delays"| TST
 ```
 
 **Reading guide, section 4.6.** At **run time** a **SQL client** logs in to **Trino** with a password over TLS; a
 **REST caller** sends an API key to the **k2-api data routes**, which run the query on Trino as the key's principal.
-Trino alone applies the rules over the **tables**, read at the tested-data marker through read-only reader catalogs,
-and returns the same filtered, masked rows to both; k2-api hands them back as JSON. At **design time** **principals**,
+Trino alone applies the rules over the **tables**, each read through a publisher-owned view at its tested tag in a
+read-only reader catalog, and returns the same filtered, masked rows to both; k2-api hands them back as JSON. At **design time** **principals**,
 **grants** and **roles with their policies** compile into the **release's** Trino rules, one group per product and
-role, and k2-api's map from key hashes to principals; a person separately writes the **access expectations**. **Before
+role, and the list of principals k2-api may act as. Password and key hashes are generated on the host into the
+**local secrets** and never enter git or a release; Trino reads its password file and k2-api its key map from there.
+A person separately writes the **access expectations**. **Before
 each deploy** the **access test** runs the release's rules against the expectations through both endpoints; a
 difference stops the deploy.
 
@@ -414,8 +422,9 @@ columns as null, `rowScope` keeps rows whose column is in a list. One role per p
 overlapping; no matching rule means no access; a product built from others offers no role weaker than an input's.
 Expectations are not generated from the rules they test, and include probes that must fail, such as the metadata table
 `t$files`, whose column bounds a spike on 2026-11-26 showed would reveal hidden values. Nothing goes around Trino:
-notebooks query it as a named principal, Lakekeeper and MinIO are no longer published on the host, and each engine has
-its own storage key.
+notebooks query it as a named principal, Lakekeeper sits on a network of its own with a drift check and MinIO is no
+longer published on the host, and each engine has its own storage key. Phase 001 built the SQL half: [chapter
+22](22-access-and-identity.md).
 
 ### 4.7 Crypto as products
 
@@ -549,6 +558,11 @@ Otherwise it **drains** (pauses DAGs, lets tasks finish) only if Trino must rest
 then those of **Airflow, Spark, Prometheus and k2-api**, recreating only what changed and never a capture.
 **release-verify** asks each part its release: all R, and **R is live**; otherwise `make deploy` points everything
 back at the kept **R-1** by the same steps and exits non-zero.
+
+As built in the release and rules spine ([chapter 21](21-releases-and-deploy.md),
+[ADR-058](../adr/ADR-058-deploy-sealed-releases-by-pointer-swap.md)): the pointers move from inside the `tools`
+container, reader views narrow before the swap and widen after the new rules load, and the access test runs as part
+of `release-verify` after the swap, on a throwaway lake at release time.
 
 Today services bind-mount the working tree; one checkout emptied the DAG folder for 35 minutes on 2026-11-25
 (`CLAUDE.md`). In the target a run is pinned to its release, a release in use is never deleted, a rollback moves code,
@@ -741,21 +755,21 @@ landings are kept (needed by the Kraken phase).
 
 ### 6.1 By layer
 
-| Layer | Today, as chapters 04 to 19 describe it | Target, in this chapter | Moves in phase |
+| Layer | Today, as chapters 04 to 19, 21 and 22 describe it | Target, in this chapter | Moves in phase |
 |---|---|---|---|
 | Sources and landing | Kafka only: one job read every venue's topic into one shared raw archive until it retired in the first phase ([08](08-lake-ingest.md)) | a connector and a verbatim landing per product, five kinds (4.4) | files in the run spine; Kafka and public API in the Kraken phase; FTP, SFTP, S3 in remaining connector kinds |
 | Layers and storage | Spark stage code, one run for every venue and layer; warehouse `k2` by layer ([09](09-lake-layers.md)) | bronze by its connector, silver and gold as dbt models, only the layers that add a guarantee; a namespace per product (4.1, 4.4) | run spine; Kraken phase; widen crypto |
 | Marts and tested reads | dbt marts rebuilt whole every hour from lake gold; readers see each newest snapshot ([19](19-lakehouse-and-domain-warehouses.md)) | merged, tested, rolled back on failure; every reader at the marker (4.4) | run spine |
 | Security master | a hand-kept file, `config/instruments.yaml`, as type-2 dimensions, no asset level ([12](12-data-strategy.md)) | two levels from venue reference APIs, exceptions list, held rows (4.7) | Kraken phase; widen crypto |
 | Catalog | generated product pages in `docs/products/`, Lakekeeper ([18](18-data-mesh.md)) | catalog site, k2-api metadata routes, Lakekeeper, governance records (4.1) | first version in serving and teaching; complete in the catalog phase |
-| SQL serving and identity | writable domain catalogs; the user name is an unchecked header ([19](19-lakehouse-and-domain-warehouses.md)) | read-only reader catalogs, a writer per product, passwords over TLS (4.6) | release and rules spine |
+| SQL serving and identity | a read-only reader catalog and a build catalog per domain, passwords over TLS ([22](22-access-and-identity.md)) | read-only reader catalogs, a writer per product, passwords over TLS (4.6) | release and rules spine |
 | REST | none ([04](04-system-overview.md)) | k2-api data routes, the same answer as SQL (4.2) | a minimal route in the run spine; complete in the REST API phase |
-| Permissions | a writer per domain; no read policies; notebooks on the root key ([19](19-lakehouse-and-domain-warehouses.md)) | grants per product, named policies, hand-written expectations, scoped keys (4.6) | release and rules spine; run spine |
-| Deploy | services bind-mount the working tree (`docker-compose.yml`) | immutable releases, a pointer per service, automatic rollback (4.9) | release and rules spine |
+| Permissions | compiled default-deny rules, grants per product, named policies, hand-written expectations; every engine on the root key ([22](22-access-and-identity.md)) | grants per product, named policies, hand-written expectations, scoped keys (4.6) | release and rules spine; run spine |
+| Deploy | sealed releases, a pointer per service, automatic rollback ([21](21-releases-and-deploy.md)) | immutable releases, a pointer per service, automatic rollback (4.9) | release and rules spine |
 | Lifecycle | a field in `product.yaml` and `git log` ([18](18-data-mesh.md)) | four states, holds, history from release manifests (4.5) | spine phases; holds in the Kraken phase |
 | Metadata, lineage, usage | dbt test results, lake audits, the dbt manifest; no usage ([18](18-data-mesh.md)) | governance products, OpenLineage, usage events (4.12) | catalog phase |
 | Hot tier | ClickHouse gold, fed from the topics ([10](10-clickhouse-gold.md)) | paused behind a profile, volume kept (4.10) | clear the ground |
-| Alerts | rules as code in `docker/prometheus/rules/`, routed nowhere ([11](11-observability.md)) | delivered to a Slack channel through an incoming webhook kept as a local secret | controls, alerts and release engineering |
+| Alerts | rules as code in `docker/prometheus/rules/`, delivered to Slack by Alertmanager ([11](11-observability.md)) | delivered to a Slack channel through an incoming webhook kept as a local secret | controls, alerts and release engineering |
 | Backup | `scripts/backup-lake.sh`, whose four fixed tables retired in the first phase; it prints a SKIP naming the run spine | a set generated from the contracts, restore and rebuild, an early drill (4.9); the copy stays on this host until the release gate | run spine; first drill in the Kraken phase |
 | Infrastructure | compose files and hand-run setup | this host declared and checkable: one command shows drift, one converges | infrastructure as code |
 
