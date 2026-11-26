@@ -146,7 +146,9 @@ Detail per failure: [failure modes](./docs/architecture/16-failure-modes.md).
 
 Requires a Docker engine with at least 38 GiB of memory so every declared limit is honoured,
 the 37.812 GiB bootstrap peak included ([setup](./docs/development/setup.md)); measured usage is
-far lower.
+far lower. On Docker Desktop the VM grows to its whole memory setting, so the host needs more
+RAM than that setting plus everything else it runs
+([sizing](./docs/runbooks/docker-vm-oom-kill.md#2-size-the-vm-so-the-host-keeps-enough-memory)).
 
 Two lines of `.env` are host-specific and are the whole first-run gotcha:
 `K2_CAPTURE_CPUSET` and `K2_HEAVY_CPUSET` ship empty (no CPU pinning, starts anywhere) —
@@ -168,24 +170,22 @@ make health                     # every service healthy, a message on every venu
 docker exec k2-redpanda rpk topic consume market.crypto.v3.trades.binance --num 1
 ```
 
-Step by step, with the measured timeline: [fresh install](./docs/runbooks/fresh-install.md).
+Step by step, with a command that fills every secret: the
+[operator guide](./docs/operations/README.md), which also covers health, the consoles,
+stopping, restarting one service and rolling out a change. The measured timeline of a fresh
+install: [fresh install](./docs/runbooks/fresh-install.md).
 
 Every lake layer is populated within five minutes of a fresh clone (release check, 2026-08-27).
 To write the first query, start at the
 [data catalog](./docs/operations/data-catalog.md): every table's grain, time columns,
 symbol conventions and a runnable example.
 
-| Service | URL | First thing to look at |
-|---|---|---|
-| Grafana | http://localhost:3000 (`admin` / `$GRAFANA_PASSWORD`) | the capture and lake dashboards |
-| Redpanda Console | http://localhost:8080 | `market.crypto.v3.trades.binance`, values decoded as Avro |
-| Airflow | `http://localhost:$K2_AIRFLOW_PORT` (default 8090; `admin`, password: `docker exec k2-airflow-api-server cat /opt/airflow/simple_auth_manager_passwords.json.generated`) | DAGs: `lake_ingest`, `lake_maintenance`, `lake_rebuild`, `dbt_marts` |
-
-Every other URL, credential and port — ClickHouse, Lakekeeper, MinIO, Prometheus, Spark,
-the notebooks — is on one page:
-[quick reference](./docs/operations/quick-reference.md#urls-and-credentials).
+Grafana is on http://localhost:3000 and Airflow on http://localhost:8090. Every console, its
+URL, what it is for and which `.env` variable holds its login is one table:
+[consoles and endpoints](./docs/operations/README.md#4-consoles-and-endpoints).
 Every port listens on `127.0.0.1` only, which keeps other machines out but not other users
-of the host; [SECURITY.md](./SECURITY.md) says what is and is not protected.
+of the host; reach a console from elsewhere through an SSH tunnel, never an open port.
+[SECURITY.md](./SECURITY.md) says what is and is not protected.
 
 Research: `make notebooks` starts JupyterLab with DuckDB over the lake
 ([`notebooks/`](./notebooks/README.md)).
@@ -249,7 +249,7 @@ master are designed ([ADR-026](./docs/adr/ADR-026-four-layer-lake-and-gold-serve
 - [`docs/`](./docs/README.md): the map — which surface answers which kind of question
 - [`docs/operations/data-catalog.md`](./docs/operations/data-catalog.md): every table,
   its grain, its clocks, and which engine is authoritative. Start here to query the data
-- [`docs/operations/`](./docs/operations/README.md): running, inspecting and recovering the stack
+- [`docs/operations/`](./docs/operations/README.md): the operator guide, start to roll-out, then inspecting and recovering the stack
 - [`docs/architecture/`](./docs/architecture/README.md): the book, start at chapter 00
 - [`docs/adr/`](./docs/adr/README.md): why, one decision per file, never edited once accepted
 - [`docs/runbooks/`](./docs/runbooks/README.md): how, one per alert family, with measured recovery

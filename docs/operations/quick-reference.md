@@ -1,60 +1,32 @@
 # Quick Reference
 
-One page of the commands you actually use. Everything runs from the repo root against
-`docker-compose.yml`. Load secrets into your shell first:
+The per-component commands on one page. Starting, stopping, health, the consoles and their
+logins, recreating one service and rolling out a change are the
+[operator guide](./README.md); this page assumes the stack is up. Everything runs from the
+root of the live checkout with the secrets loaded:
 
 ```bash
-cp .env.example .env      # first time only, then fill in real values
 set -a && . ./.env && set +a
 ```
 
 ## Stack
 
 ```bash
-make up          # scripts/check-env.py, then docker compose up -d  (builds images on first run)
 make health      # is it up: every service healthy, every venue producing, lake still committing
-make down        # stop, keep volumes
-make ps          # service status
-make logs        # tail everything
-make test        # Python + Rust unit tests
-
-docker compose logs -f capture-binance          # one service
-docker compose up -d --build capture-binance    # rebuild after a Rust change
-docker compose up -d --force-recreate --no-deps capture-binance   # after editing instruments.yaml
-docker stats --no-stream                             # live CPU / RAM
+make ps          # service status (docker compose ps)
+make logs        # follow every service's output
+docker compose logs -f capture-binance               # one service
+docker stats --no-stream                             # live CPU / RAM per container
 ```
 
-On a stack built before 2026-11-26, `make up` and `make dev-up` refuse its MinIO pair
-(`check-env: FAIL`) until the credential replacement is merged and rolled out. Until then
-use `docker compose up -d --no-deps <service>`, and do not edit the pair in `.env`
-([setup.md](../development/setup.md#the-safe-bring-up-after-the-first-run)).
+`make up` and `make dev-up` refuse this host's stack until its MinIO credential is replaced;
+start or recreate services by name meanwhile, under the pause the operator guide describes
+([Read this first](./README.md#read-this-first-the-state-of-this-host),
+[section 6](./README.md#6-restart-or-recreate-one-service)). `make test` and `make gates` start
+throwaway containers of their own: not on a host short of memory while the stack runs.
 
-## URLs and credentials
-
-Every UI the platform has, and the one thing each is good for. This is the tools page;
-the README links here rather than repeating it. Every port below is published on
-`127.0.0.1` only, so `localhost` works and the host's LAN address does not: other machines
-are kept out, other users of this host are not ([SECURITY.md](../../SECURITY.md)).
-
-| URL | What it is for | Credential | First thing to look at |
-|-----|----------------|------------|------------------------|
-| http://localhost:3000 | Grafana, the dashboards | `admin` / `$GRAFANA_PASSWORD` | `k2-pipeline-overview`, then `k2-lake` |
-| http://localhost:8080 | Redpanda Console: topics, groups, live messages | none | `market.crypto.v3.trades.binance` — values decode as **Avro** off the schema registry at `8081` |
-| `http://localhost:$K2_PREFECT_PORT` (`.env`, default 4200) | Prefect: the lake schedules and their run history | none | Deployments → `lake-ingest-5min`, `lake-maintenance-daily`; Runs for the last state |
-| http://localhost:18181/ui/ | Lakekeeper: browse the Iceberg catalog | none (auth is off) | Warehouses → **`k2`** → namespaces `raw`, `bronze`, `silver`, `gold`, `audit` (the other warehouses, one per data domain, hold the marts). The warehouse is named `k2`; Spark and DuckDB address it through the *catalog* name `lake`, so a table the UI shows under `gold` is `lake.gold.trades` in a query |
-| `http://localhost:$K2_TRINO_PORT` (`.env`, default 8088; loopback only) | Trino: SQL over every lake table, catalog `lake` (read-only); each domain's marts in its own catalog | any user name, not authenticated (`X-Trino-User`) | [Query the lake with Trino](#query-the-lake-with-trino) |
-| http://localhost:9001 | MinIO console: the bytes under the lake | `$MINIO_ROOT_USER` / `$MINIO_ROOT_PASSWORD` | bucket **`k2-lake`** |
-| http://localhost:9090 | Prometheus: metrics and alert state | none | Alerts, then `time() - max(k2_lake_last_commit_ts_seconds)` |
-| http://localhost:8123 (`/play` for a query box) | ClickHouse: the gold hot tier | `default` / `$CLICKHOUSE_PASSWORD`; research reads `quant` / `$K2_QUANT_PASSWORD` (read-only, `gold` only) | `SELECT count() FROM gold.trades FINAL`. Native protocol from the host is `--port 9002` |
-| http://localhost:18080 | Spark master UI | none | mostly empty by design: the lake jobs run as **local** drivers and never register with the master. A running job's own UI is http://localhost:4040, and only while it runs |
-| http://localhost:8889 | JupyterLab, the K2 research notebooks — `make notebooks` | token printed by the command | [`notebooks/README.md`](../../notebooks/README.md) |
-
-Also listening, all on `127.0.0.1`: Redpanda Kafka API `9092` (internal listener) and
-`19092` (the one host tools use), Admin API `9644`, Schema Registry `8081`; ClickHouse native
-`9002`, Prometheus metrics `9363`; MinIO S3 API `9000`; PostgreSQL (Prefect + Lakekeeper) `15432`.
-Capture `/metrics` is on port **8082 inside the container only**, not published. There is
-no `/health` endpoint: liveness is the `k2-capture healthcheck` subcommand, because the
-image is distroless and has no curl.
+Every console and port, with what it is for and where its login comes from:
+[operator guide, section 4](./README.md#4-consoles-and-endpoints).
 
 ## Redpanda
 
@@ -134,18 +106,18 @@ docker logs --since 5m k2-capture-binance | grep -iE 'error|reconnect'
 docker inspect k2-capture-binance --format '{{range .Config.Env}}{{println .}}{{end}}' | grep K2_
 ```
 
-## Lake tier (Iceberg / Prefect)
+## Lake tier (Iceberg, scheduled by Airflow)
 
 ```bash
-# Deployed schedules
-docker exec k2-prefect-server prefect deployment ls
-docker exec k2-prefect-server prefect flow-run ls --limit 5
+# The DAGs and their state; the last runs of the ingest
+docker exec -e PYTHONWARNINGS=ignore k2-airflow-scheduler airflow dags list
+docker exec -e PYTHONWARNINGS=ignore k2-airflow-scheduler airflow dags list-runs lake_ingest | head -5
 
-# Trigger an ingest / a maintenance run now
-docker exec k2-prefect-server prefect deployment run 'lake-ingest/lake-ingest-5min'
-docker exec k2-prefect-server prefect deployment run 'lake-maintenance/lake-maintenance-daily'
+# Trigger an ingest now (it takes the DAG's only slot, so no scheduled run starts beside it)
+docker exec k2-airflow-scheduler airflow dags trigger lake_ingest
 
-# Or run either directly in the Spark container
+# Or run a job by hand in the Spark container, logs in the foreground. Each takes the lake's
+# writer lock, so a scheduled ingest that lands meanwhile is skipped (exit 75), not doubled.
 docker exec k2-spark-iceberg python3 /home/iceberg/lake/ingest.py
 docker exec k2-spark-iceberg python3 /home/iceberg/lake/maintenance.py --audit-only
 
@@ -236,7 +208,7 @@ docker exec k2-airflow-scheduler airflow dags trigger dbt_marts
 
 ## When something breaks
 
-Start at [../runbooks/failure-recovery.md](../runbooks/failure-recovery.md); the alert
-that fired names its own runbook in the annotation. Deeper query recipes are in
+Start at the [operator guide, section 9](./README.md#9-when-something-looks-wrong); the alert
+that fired names its own runbook in the annotation ([index](../runbooks/README.md)). Deeper query recipes are in
 [data-inspection.md](./data-inspection.md); dashboards and alert definitions in
 [observability.md](./observability.md).
