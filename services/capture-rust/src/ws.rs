@@ -50,6 +50,8 @@ pub fn now_ns() -> i64 {
 
 pub struct Feed {
     stream: Stream,
+    /// Receipt time of the newest Pong not yet taken by `take_pong`.
+    last_pong_ns: Option<i64>,
 }
 
 impl Feed {
@@ -60,14 +62,19 @@ impl Feed {
         let (stream, _response) = connect_async_with_config(url, Some(config), false)
             .await
             .with_context(|| format!("connecting to {url}"))?;
-        Ok(Self { stream })
+        Ok(Self {
+            stream,
+            last_pong_ns: None,
+        })
     }
 
     /// Next data frame, or `None` when the peer closed.
     ///
-    /// Ping/pong is handled inside tungstenite and deliberately not surfaced:
-    /// a pong is not something the exchange sent us about the market, so it is
-    /// not a frame the archive needs and it must not advance `conn_msg_seq`.
+    /// Control frames are not frames to the archive: tungstenite answers the
+    /// venue's pings itself, and a Pong, the venue's answer to [`Feed::ping`],
+    /// is kept only as a liveness event for [`Feed::take_pong`]. A pong is not
+    /// something the exchange sent us about the market, so it is never archived
+    /// and must not advance `conn_msg_seq`.
     pub async fn next_frame(&mut self) -> Result<Option<Frame>> {
         loop {
             let message = self.stream.next().await;
@@ -85,7 +92,11 @@ impl Feed {
                     payload: bytes.to_vec(),
                 })),
                 Some(Ok(Message::Close(_))) | None => Ok(None),
-                Some(Ok(_)) => continue, // ping, pong, raw frame
+                Some(Ok(Message::Pong(_))) => {
+                    self.last_pong_ns = Some(recv_ts_ns);
+                    continue;
+                }
+                Some(Ok(_)) => continue, // ping, raw frame
                 Some(Err(e)) => Err(e).context("reading a websocket frame"),
             };
         }
@@ -96,6 +107,20 @@ impl Feed {
             .send(Message::text(text.to_string()))
             .await
             .context("sending a websocket frame")
+    }
+
+    /// A WebSocket Ping, the protocol's own liveness probe: the peer must
+    /// answer with a Pong (RFC 6455 5.5.2). An empty payload; no market data.
+    pub async fn ping(&mut self) -> Result<()> {
+        self.stream
+            .send(Message::Ping(Default::default()))
+            .await
+            .context("sending a websocket ping")
+    }
+
+    /// When the newest Pong arrived, if one has since the last call.
+    pub fn take_pong(&mut self) -> Option<i64> {
+        self.last_pong_ns.take()
     }
 
     /// Best-effort close handshake. A failure here is not worth reporting: we

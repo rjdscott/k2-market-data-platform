@@ -55,8 +55,17 @@ const KRAKEN_STREAMS: &[&str] = &[
     "status",
     "control",
 ];
-const BINANCE_STREAMS: &[&str] = &["trade", "depth20"];
+/// `pong` is not a venue frame: it is the answer to the WebSocket Ping the
+/// Binance capture sends every `PING_EVERY` (see there), watched like a stream
+/// but never archived and never counted as a message.
+const BINANCE_STREAMS: &[&str] = &["trade", "depth20", "pong"];
 const COINBASE_STREAMS: &[&str] = &["l2_data", "market_trades", "heartbeats", "subscriptions"];
+/// Each venue's order-book stream, the one a capture neither subscribes to,
+/// seeds nor watches while its registry `book_capture` is false (ADR-050).
+/// Left watched, an unsubscribed book would pass its 60 s bound on every
+/// connection: the watchdog would reconnect every minute, losing trades each
+/// time, and the healthcheck would report the container unhealthy.
+const BOOK_STREAMS: &[&str] = &["book", "depth20", "l2_data"];
 /// Continuous streams, and how long each may go silent before the session
 /// watchdog recycles the socket. One table, because three things read it: the
 /// watchdog in `session`, the `healthcheck` subcommand, and (by hand)
@@ -82,6 +91,9 @@ const CONTINUOUS: &[(&str, Duration)] = &[
     ("l2_data", Duration::from_secs(60)),
     ("heartbeat", Duration::from_secs(60)),
     ("heartbeats", Duration::from_secs(60)),
+    // Binance's answer to our Ping (`PING_EVERY`): four pings fit in the bound,
+    // so one lost pong is not a reconnect, four in a row are.
+    ("pong", Duration::from_secs(60)),
     ("trade", Duration::from_secs(300)),
     ("market_trades", Duration::from_secs(300)),
 ];
@@ -112,12 +124,41 @@ fn is_book_stream(stream: &str) -> bool {
 
 /// Continuous streams for one venue - what the staleness gauge, the session
 /// watchdog and the healthcheck all agree to watch.
-fn continuous_streams_for(exchange: Exchange) -> Vec<&'static str> {
-    streams_for(exchange)
-        .iter()
-        .copied()
+fn continuous_streams_for(exchange: Exchange, book: bool) -> Vec<&'static str> {
+    streams_for(exchange, book)
+        .into_iter()
         .filter(|s| is_continuous(s))
         .collect()
+}
+
+/// The first continuous stream past its silence bound at `now`, and when it
+/// last delivered. Pure, so the watchdog's verdict is testable on a fake clock.
+fn silent_stream<'a>(
+    last_frame_ns: &std::collections::HashMap<&'a str, i64>,
+    now: i64,
+) -> Option<(&'a str, i64)> {
+    last_frame_ns
+        .iter()
+        .find(|(stream, ts)| {
+            stale_after(stream).is_some_and(|limit| now - **ts > limit.as_nanos() as i64)
+        })
+        .map(|(stream, ts)| (*stream, *ts))
+}
+
+/// How often the Binance capture sends a WebSocket Ping (ADR-050).
+///
+/// Binance has no heartbeat channel, so with `depth20` off its only watched
+/// stream would be `trade` at 300 s, and a half-open socket would lose up to
+/// five minutes of trades before the watchdog noticed. The protocol's own Ping
+/// is the probe: the venue must answer with a Pong, which `ws.rs` reports as a
+/// liveness event and `session` stamps as the `pong` stream, judged at 60 s.
+/// Sent with books on or off. Kraken and Coinbase get none: their 60 s
+/// heartbeats already are the probe.
+const PING_EVERY: Duration = Duration::from_secs(15);
+
+/// Is a Ping due on this tick? `last_ping_ns` starts at the connection's open.
+fn ping_due(exchange: Exchange, last_ping_ns: i64, now_ns: i64) -> bool {
+    exchange == Exchange::Binance && now_ns - last_ping_ns >= PING_EVERY.as_nanos() as i64
 }
 
 /// Binance closes a WebSocket 24 h after it opens, mid-frame, with no warning.
@@ -286,39 +327,59 @@ fn build_adapter(exchange: Exchange, instruments: Instruments) -> Adapter {
     }
 }
 
-fn streams_for(exchange: Exchange) -> &'static [&'static str] {
-    match exchange {
+/// The streams this capture seeds counters for: the venue's, minus its book
+/// stream while `book_capture` is false (ADR-050).
+fn streams_for(exchange: Exchange, book: bool) -> Vec<&'static str> {
+    let all = match exchange {
         Exchange::Kraken => KRAKEN_STREAMS,
         Exchange::Binance => BINANCE_STREAMS,
         Exchange::Coinbase => COINBASE_STREAMS,
-    }
+    };
+    all.iter()
+        .copied()
+        .filter(|s| book || !BOOK_STREAMS.contains(s))
+        .collect()
+}
+
+/// What `run` seeds at start: the streams, the symbols whose book it gauges
+/// and samples, and the symbols with a checksum counter. Only Kraken publishes
+/// a book checksum, so only Kraken gets `k2_capture_checksum_failures_total`
+/// series; with `book_capture` false no venue gets book series at all, exactly
+/// as Binance and Coinbase never get checksum counters (ADR-050).
+fn seeded(
+    exchange: Exchange,
+    book: bool,
+    symbols: Vec<String>,
+) -> (Vec<&'static str>, Vec<String>, Vec<String>) {
+    let book_symbols = if book { symbols } else { Vec::new() };
+    let checksummed = match exchange {
+        Exchange::Kraken => book_symbols.clone(),
+        Exchange::Binance | Exchange::Coinbase => Vec::new(),
+    };
+    (streams_for(exchange, book), book_symbols, checksummed)
 }
 
 async fn run(args: RunArgs) -> Result<()> {
     let exchange = args.exchange;
     let instruments = Instruments::load(&args.instruments_file, exchange)?;
+    let book = instruments.book_capture();
     tracing::info!(
         %exchange,
         instruments = instruments.len(),
+        book_capture = book,
         "loaded the instrument registry"
     );
 
     let mut adapter = build_adapter(exchange, instruments);
-    let symbols = adapter.symbols();
-    // Only Kraken publishes a book checksum, so only Kraken gets a
-    // `k2_capture_checksum_failures_total` series per symbol. Seeding 23 of them
-    // for Binance and Coinbase advertised a capability those venues do not have.
-    let checksummed: &[String] = match exchange {
-        Exchange::Kraken => &symbols,
-        Exchange::Binance | Exchange::Coinbase => &[],
-    };
-    let continuous = continuous_streams_for(exchange);
+    let (streams, book_symbols, checksummed) = seeded(exchange, book, adapter.symbols());
+    let continuous = continuous_streams_for(exchange, book);
     k2_metrics::install(
         args.metrics_port,
         exchange.as_str(),
-        streams_for(exchange),
-        &symbols,
-        checksummed,
+        &streams,
+        &book_symbols,
+        &checksummed,
+        book,
     )?;
 
     // Seed the staleness gauge for every continuous stream at process start.
@@ -364,7 +425,7 @@ async fn run(args: RunArgs) -> Result<()> {
             &url,
             &mut adapter,
             &sink,
-            &symbols,
+            &book_symbols,
             snapshot_interval,
             &mut shutdown,
             &mut backoff,
@@ -414,18 +475,21 @@ enum Session {
 ///
 /// Split out from `run` so the reconnect loop reads as "connect, capture until
 /// something ends it, back off, repeat" rather than as four levels of nesting.
+/// `book_symbols` are the books the 1 Hz sampler snapshots: every symbol, or
+/// none while the venue's `book_capture` is false.
 async fn session(
     url: &str,
     adapter: &mut Adapter,
     sink: &Sink,
-    symbols: &[String],
+    book_symbols: &[String],
     snapshot_interval: Duration,
     shutdown: &mut Shutdown,
     backoff: &mut Backoff,
 ) -> Result<Session> {
     let venue = adapter.exchange();
     let exchange = venue.as_str();
-    let continuous = continuous_streams_for(venue);
+    let book = adapter.book_capture();
+    let continuous = continuous_streams_for(venue, book);
     let mut feed = Feed::connect(url).await?;
     let opened_ns = now_ns();
     let conn_id = Uuid::new_v4().to_string();
@@ -448,6 +512,8 @@ async fn session(
     // Work queued inside the select and performed after it: the select holds a
     // mutable borrow of `feed` for as long as its branches are alive.
     let mut to_send: Vec<String> = Vec::new();
+    let mut ping = false;
+    let mut last_ping_ns = opened_ns;
     let mut resync = ResyncOnDrain::default();
 
     loop {
@@ -518,30 +584,47 @@ async fn session(
                     counter!("k2_capture_resyncs_total", "exchange" => exchange).increment(1);
                     to_send.extend(adapter.resubscribe_messages(&symbol));
                 }
-                for symbol in symbols {
-                    if let Some(snapshot) = adapter.snapshot(symbol, now) {
-                        sink.send(&OutRecord::Book(snapshot)).await;
+                // No snapshot record and no depth or level gauge for a book the
+                // venue was not asked for (ADR-050).
+                if book {
+                    for symbol in book_symbols {
+                        if let Some(snapshot) = adapter.snapshot(symbol, now) {
+                            sink.send(&OutRecord::Book(snapshot)).await;
+                        }
+                        if let Some(depth) = adapter.depth(symbol) {
+                            gauge!("k2_capture_book_depth",
+                                "exchange" => exchange, "symbol" => symbol.clone())
+                                .set(depth as f64);
+                        }
                     }
-                    if let Some(depth) = adapter.depth(symbol) {
-                        gauge!("k2_capture_book_depth",
-                            "exchange" => exchange, "symbol" => symbol.clone())
-                            .set(depth as f64);
-                    }
+                    gauge!("k2_capture_book_levels_total", "exchange" => exchange)
+                        .set(adapter.total_levels() as f64);
                 }
-                gauge!("k2_capture_book_levels_total", "exchange" => exchange)
-                    .set(adapter.total_levels() as f64);
+
+                // A Pong is the venue's answer to our Ping: a liveness event,
+                // not a frame, so it is stamped here and nowhere else.
+                if let Some(pong_ns) = feed.take_pong()
+                    && let Some(slot) = last_frame_ns.get_mut("pong")
+                {
+                    *slot = pong_ns;
+                    gauge!("k2_capture_last_message_ts_seconds",
+                        "exchange" => exchange, "stream" => "pong")
+                        .set(pong_ns as f64 / 1e9);
+                }
+                if ping_due(venue, last_ping_ns, now) {
+                    last_ping_ns = now;
+                    ping = true;
+                }
 
                 // A venue that stops sending without closing the socket looks
                 // healthy at the TCP layer forever, and a dead subscription is
                 // exactly what a whole-socket timer cannot see. The bound is per
                 // stream (`CONTINUOUS`): a book that stops for a minute is dead,
                 // a trade channel that stops for a minute is a quiet market.
-                if let Some((stream, since)) = last_frame_ns.iter().find(|(stream, ts)| {
-                    stale_after(stream).is_some_and(|limit| now - **ts > limit.as_nanos() as i64)
-                }) {
+                if let Some((stream, since)) = silent_stream(&last_frame_ns, now) {
                     tracing::warn!(
                         stream,
-                        silent_s = (now - *since) / 1_000_000_000,
+                        silent_s = (now - since) / 1_000_000_000,
                         limit_s = stale_after(stream).map(|l| l.as_secs()),
                         "a continuous stream passed its silence bound, reconnecting"
                     );
@@ -569,6 +652,9 @@ async fn session(
 
         for message in to_send.drain(..) {
             feed.send(&message).await?;
+        }
+        if std::mem::take(&mut ping) {
+            feed.ping().await?;
         }
     }
 }
@@ -838,11 +924,13 @@ k2_capture_messages_total{exchange=\"kraken\",stream=\"book\"} 12
     #[test]
     fn every_watched_stream_has_a_silence_bound() {
         for venue in [Exchange::Kraken, Exchange::Binance, Exchange::Coinbase] {
-            for stream in continuous_streams_for(venue) {
-                assert!(
-                    stale_after(stream).is_some(),
-                    "{venue} watches {stream} with no silence bound"
-                );
+            for book in [true, false] {
+                for stream in continuous_streams_for(venue, book) {
+                    assert!(
+                        stale_after(stream).is_some(),
+                        "{venue} watches {stream} with no silence bound"
+                    );
+                }
             }
         }
         for quiet in ["trade", "market_trades"] {
@@ -852,10 +940,165 @@ k2_capture_messages_total{exchange=\"kraken\",stream=\"book\"} 12
                 "{quiet} is a market state when silent, not a fault"
             );
         }
-        for busy in ["book", "depth20", "l2_data", "heartbeat", "heartbeats"] {
+        for busy in [
+            "book",
+            "depth20",
+            "l2_data",
+            "heartbeat",
+            "heartbeats",
+            "pong",
+        ] {
             assert_eq!(stale_after(busy), Some(Duration::from_secs(60)), "{busy}");
         }
         assert_eq!(stale_after("instrument"), None, "a reference channel");
+    }
+
+    const VENUES: [Exchange; 3] = [Exchange::Kraken, Exchange::Binance, Exchange::Coinbase];
+
+    /// ADR-050: with books off a venue watches and seeds no book stream, loses
+    /// exactly its book stream and nothing else, and still watches something
+    /// with a 60 s bound - Binance only through its `pong`.
+    #[test]
+    fn books_off_drops_exactly_the_book_stream_and_keeps_a_60_s_probe() {
+        for (venue, book_stream, probe) in [
+            (Exchange::Binance, "depth20", "pong"),
+            (Exchange::Kraken, "book", "heartbeat"),
+            (Exchange::Coinbase, "l2_data", "heartbeats"),
+        ] {
+            let on = streams_for(venue, true);
+            let off = streams_for(venue, false);
+            let dropped: Vec<&str> = on.iter().copied().filter(|s| !off.contains(s)).collect();
+            assert_eq!(dropped, vec![book_stream], "{venue}");
+            assert!(
+                off.iter().all(|s| on.contains(s)),
+                "{venue} gained a stream"
+            );
+            for stream in continuous_streams_for(venue, false) {
+                assert!(!BOOK_STREAMS.contains(&stream), "{venue} watches {stream}");
+            }
+            assert!(
+                continuous_streams_for(venue, false).contains(&probe),
+                "{venue}"
+            );
+            assert_eq!(stale_after(probe), Some(Duration::from_secs(60)), "{venue}");
+        }
+        // The Binance probe is watched with books on as well: the image with
+        // books on is the gate for the ping (ADR-050 section 8).
+        assert!(continuous_streams_for(Exchange::Binance, true).contains(&"pong"));
+        for venue in [Exchange::Kraken, Exchange::Coinbase] {
+            for book in [true, false] {
+                assert!(
+                    !continuous_streams_for(venue, book).contains(&"pong"),
+                    "{venue}"
+                );
+            }
+        }
+    }
+
+    /// What `run` seeds, rendered through the same exporter code: books off
+    /// creates no depth gauge, no checksum or ignored-update counter and no
+    /// book stream counter, and `k2_capture_book_capture` says what was read.
+    #[test]
+    fn books_off_seeds_no_book_series_and_reports_the_switch() {
+        use metrics_exporter_prometheus::PrometheusBuilder;
+        let symbols = vec!["BTC/USD".to_string(), "ETH/USD".to_string()];
+        for venue in VENUES {
+            for book in [true, false] {
+                let recorder = PrometheusBuilder::new().build_recorder();
+                let handle = recorder.handle();
+                let (streams, book_symbols, checksummed) = seeded(venue, book, symbols.clone());
+                metrics::with_local_recorder(&recorder, || {
+                    k2_metrics::seed(venue.as_str(), &streams, &book_symbols, &checksummed, book);
+                });
+                let rendered = handle.render();
+                let gauge = format!(
+                    "k2_capture_book_capture{{exchange=\"{venue}\"}} {}",
+                    u8::from(book)
+                );
+                assert!(
+                    rendered.lines().any(|l| l == gauge),
+                    "{venue} {book}: {rendered}"
+                );
+                let book_series = [
+                    "k2_capture_book_depth{".to_string(),
+                    "k2_capture_checksum_failures_total{".to_string(),
+                    "k2_capture_book_updates_ignored_total{".to_string(),
+                ]
+                .into_iter()
+                .chain(BOOK_STREAMS.iter().map(|s| format!("stream=\"{s}\"")));
+                for series in book_series {
+                    let found = rendered.contains(&series);
+                    if !book {
+                        assert!(!found, "{venue} off seeds {series}:\n{rendered}");
+                    }
+                }
+                if book {
+                    assert!(rendered.contains("k2_capture_book_depth{"), "{venue}");
+                    assert_eq!(
+                        rendered.contains("k2_capture_checksum_failures_total{"),
+                        venue == Exchange::Kraken,
+                        "{venue}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// The Binance Ping, on a fake clock: due every 15 s from the connection's
+    /// open, never on Kraken or Coinbase.
+    #[test]
+    fn binance_pings_every_15_s_and_no_other_venue_does() {
+        let s = 1_000_000_000i64;
+        let opened = 7 * s;
+        let mut last = opened;
+        let mut sent = Vec::new();
+        for tick in 1..=61 {
+            let now = opened + tick * s;
+            if ping_due(Exchange::Binance, last, now) {
+                last = now;
+                sent.push(tick);
+            }
+        }
+        assert_eq!(sent, vec![15, 30, 45, 60]);
+        for venue in [Exchange::Kraken, Exchange::Coinbase] {
+            assert!(!ping_due(venue, 0, 3600 * s), "{venue}");
+        }
+    }
+
+    /// What happens when pongs stop, on the same fake clock and through the
+    /// watchdog's own verdict: one missed pong is not a reconnect; 60 s with
+    /// none is, on the first tick past the bound, even while trades still flow.
+    #[test]
+    fn a_pong_silent_for_60_s_ends_the_session_and_one_missed_pong_does_not() {
+        let s = 1_000_000_000i64;
+        let opened = 0;
+        let mut last_frame: std::collections::HashMap<&str, i64> =
+            continuous_streams_for(Exchange::Binance, false)
+                .into_iter()
+                .map(|stream| (stream, opened))
+                .collect();
+        // Pongs answer the pings at 15 and 30 s; the one for 45 s is lost and
+        // so is every one after it. Trades keep arriving every second.
+        let answered = |tick: i64| tick == 15 || tick == 30;
+        let mut ended = None;
+        let mut last_ping = opened;
+        for tick in 1..=200 {
+            let now = opened + tick * s;
+            last_frame.insert("trade", now);
+            if ping_due(Exchange::Binance, last_ping, now) {
+                last_ping = now;
+                if answered(tick) {
+                    last_frame.insert("pong", now + s / 10);
+                }
+            }
+            if let Some((stream, since)) = silent_stream(&last_frame, now) {
+                ended = Some((tick, stream, since));
+                break;
+            }
+        }
+        // Last pong at 30.1 s; 60 s later is 90.1 s, so the tick at 91 s ends
+        // it. The ping at 45 s alone going unanswered did nothing.
+        assert_eq!(ended, Some((91, "pong", 30 * s + s / 10)));
     }
 
     #[test]

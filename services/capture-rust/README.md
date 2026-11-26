@@ -201,8 +201,9 @@ gauge is a failure too, not a pass. `--max-age-seconds` overrides every bound
 with one number, for a one-off `docker exec`; compose passes nothing.
 
 The bounds: 60 s for `book`, `depth20`, `l2_data`, `heartbeat` and `heartbeats`,
-which run at 1 Hz or better on all three venues whatever the market is doing;
-300 s for `trade` and `market_trades`, where silence can be a thin instrument.
+which run at 1 Hz or better on all three venues whatever the market is doing, and
+for Binance's `pong` (below); 300 s for `trade` and `market_trades`, where silence
+can be a thin instrument.
 Kraken `trade`'s longest measured gap was 20.4 s over a 3 h window. The same
 table is what the session watchdog recycles the socket on, and what
 `CaptureFeedStale` is written against.
@@ -246,6 +247,47 @@ deliberately: one-shot acknowledgements (Kraken `status`/`control`, Coinbase
 `instrument`, a reference channel measured at 0.0017 frames/s over a 10-minute
 sample on 2026-08-26 against a 60 s threshold, while every continuous stream on
 all three venues ran at 1.0/s or more.
+
+---
+
+## The order-book switch (ADR-050)
+
+`config/instruments.yaml` carries `book_capture`, a required `true` or `false` per
+venue. `config.rs` refuses to start on a missing section, a missing or unknown
+venue, or a value that is not a YAML 1.2 boolean (`on`, `yes` and `1` included:
+PyYAML reads the first two as booleans, serde_yaml as strings). The capture reads
+it once, at start, and exports it:
+
+| | `true` | `false` |
+|---|---|---|
+| Binance subscribes to | `<sym>@trade`, `<sym>@depth20@100ms` | `<sym>@trade` |
+| Kraken subscribes to | `instrument`, `book` depth 25, `trade` | `instrument`, `trade` (heartbeats arrive unasked) |
+| Coinbase subscribes to | `level2`, `market_trades`, `heartbeats` | `market_trades`, `heartbeats` |
+| Watched (watchdog, healthcheck, `CaptureFeedStale`) | every continuous stream | the same minus the book stream |
+| Seeded | book depth gauge per symbol; Kraken checksum and ignored-update counters | none of those, and no counters for the book stream |
+| 1 Hz sampler | book snapshots, depth and level gauges | nothing |
+| `k2_capture_book_capture{exchange}` | 1 | 0 |
+
+The gauge is what the process is doing, as opposed to what the file says now:
+`make health` step (4) fails while it differs from the host file or from the copy
+`spark-iceberg` mounts. `CaptureBookDepthDegraded` and `CaptureChecksumFailure` are
+conditioned on it; `CaptureSequenceGaps` and `CaptureResyncStorm` are not, because
+Coinbase's connection-wide gaps are trade-path signals too.
+
+**What never reads the switch:** `handle_frame`, `replay` and `record.rs`. Every
+archived book frame decodes and replays to the same bytes whichever way it is set;
+`tests/book_switch.rs` replays every committed fixture both ways against its golden
+hash, which is what keeps the paused book code tested.
+
+**Binance's ping.** Binance has no heartbeat channel, so with `depth20` off its only
+watched stream would be `trade` at 300 s. `session` sends a WebSocket Ping every
+15 s (`PING_EVERY`, from the 1 Hz ticker) on Binance only, books on or off;
+`ws.rs` keeps the Pong as a liveness event (never archived, never a
+`conn_msg_seq`), stamped as the `pong` stream with a 60 s bound. One lost pong is
+not a reconnect; 60 s with none ends the session as involuntary on the next tick,
+and if pongs never come back `CaptureFeedStale` fires on `stream="pong"` and the
+reconnect counter climbs once a minute. Kraken and Coinbase get no ping: their
+heartbeats are the probe.
 
 ---
 
