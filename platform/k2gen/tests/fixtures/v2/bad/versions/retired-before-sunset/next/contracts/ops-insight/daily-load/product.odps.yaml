@@ -1,0 +1,40 @@
+apiVersion: v1.1.0
+kind: DataProduct
+id: ops-insight.daily-load
+name: daily-load
+version: 1.1.1
+status: retired
+domain: ops-insight
+type: consumerAligned
+description:
+  purpose: Synthetic readings per station per day, from the sensor domain's tested readings.
+team:
+  name: insight-team
+inputPorts:
+  - name: silver_readings
+    version: 1.0.0
+    contractId: sensor-net.station-readings.silver_readings
+    customProperties:
+      - property: required
+        value: true
+      - property: maxLagMinutes
+        value: 120
+outputPorts:
+  - name: gold_daily_load
+    version: 1.0.0
+    contractId: ops-insight.daily-load.gold_daily_load
+    inputContracts:
+      - id: sensor-net.station-readings.silver_readings
+        version: 1.0.0
+customProperties:
+  - property: lifecycleChange
+    value:
+      since: "2026-12-01"
+      reason: Its readers moved to the successor.
+      decision: ADR-056
+  - property: schedule
+    value:
+      cron: "30 1 * * *"
+  - property: terms
+    value:
+      redistribution: forbidden

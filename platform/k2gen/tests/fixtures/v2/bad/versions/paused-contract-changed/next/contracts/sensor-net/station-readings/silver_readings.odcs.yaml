@@ -1,0 +1,76 @@
+apiVersion: v3.2.0
+kind: DataContract
+id: sensor-net.station-readings.silver_readings
+name: silver_readings
+version: 1.1.0
+domain: sensor-net
+description:
+  purpose: One row per station and reading time, the value as a decimal.
+team:
+  name: sensor-team
+schema:
+  - id: silver_readings
+    name: silver_readings
+    physicalName: station_readings.silver_readings
+    physicalType: table
+    properties:
+      - name: station_id
+        physicalType: varchar
+        required: true
+        primaryKey: true
+        primaryKeyPosition: 1
+        description: The made-up station's code.
+      - name: read_at
+        physicalType: timestamp(6) with time zone
+        required: true
+        primaryKey: true
+        primaryKeyPosition: 2
+        description: When the station took the reading.
+        customProperties:
+          - property: time
+            value: event
+      - name: value
+        physicalType: decimal(12,3)
+        required: true
+        description: The reading.
+        customProperties:
+          - property: unit
+            value: degree Celsius
+      - name: region
+        physicalType: varchar
+        description: The station's region.
+      - name: operator_note
+        physicalType: varchar
+        description: Free text the made-up operator attached.
+      - name: quality_flag
+        physicalType: varchar
+        description: A made-up flag the feed may add.
+roles:
+  - role: full_reader
+    access: read
+  - role: delayed_reader
+    access: read
+slaProperties:
+  - property: latency
+    value: 90
+    unit: min
+    element: silver_readings.read_at
+customProperties:
+  - property: layer
+    value: silver
+  - property: build
+    value: dbt
+  - property: backup
+    value: rebuild
+  - property: retention
+    value: 7
+  - property: partitioning
+    value: [day(read_at)]
+  - property: sort
+    value: [station_id]
+  - property: policies
+    value:
+      delayed_reader:
+        delay: {column: read_at, minutes: 20}
+        mask: [operator_note]
+        rowScope: {column: region, values: [north, south]}
