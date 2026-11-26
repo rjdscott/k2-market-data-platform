@@ -1,0 +1,8 @@
+roles:
+  full_reader:
+    description: Every row and column the table offers.
+  delayed_reader:
+    description: Rows only once older than the table's delay, masked columns as null, in the table's row scope.
+    requires: [delay]
+  public_reader:
+    description: What may leave the platform under the product's terms.

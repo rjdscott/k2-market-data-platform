@@ -1,0 +1,8 @@
+# A hand-written example of compiled/lake/backup-set.json (contracts/schema/backup-set.schema.json).
+tag: v3.0.0-alpha.3-rc.1
+entries:
+  - {kind: landing, bucket: k2-landing, prefix: sensor-net/station-readings/}
+  - {kind: table, table: k2.station_readings.bronze_readings, mode: rebuild, ref: main}
+  - {kind: table, table: sensor_net.station_readings__base.silver_readings, mode: rebuild, ref: audited}
+  - {kind: lakekeeper-db}
+  - {kind: releases}

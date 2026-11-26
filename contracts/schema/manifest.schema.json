@@ -1,0 +1,87 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://k2.invalid/schema/manifest.schema.json",
+  "title": "manifest.json of a release (A1)",
+  "description": "Frozen in phase 001. Written by k2gen release at <root>/<release>/manifest.json, last, before the tree is sealed read-only and renamed into place. A release id is <tag>-<sha12>, sha12 the first 12 hex of the sha256 of the canonical JSON of {files, images} (k2gen.model.release_id), so two compiles of one document set and one image set give one id. Secrets are named by environment variable only and never compiled.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "release", "tag", "commit", "builtAt", "k2gen", "previous", "setSha256", "products", "files", "images", "needs"],
+  "properties": {
+    "schema": {"description": "This format's version; a change a reader must know about raises it.", "const": 1},
+    "release": {"$ref": "#/$defs/releaseId"},
+    "tag": {"$ref": "#/$defs/tag"},
+    "commit": {"description": "The commit the tag names.", "$ref": "#/$defs/sha1"},
+    "builtAt": {"description": "When the compile ran, UTC. Not part of the id.", "$ref": "#/$defs/utc"},
+    "k2gen": {"description": "The compiler's version, platform/k2gen/pyproject.toml.", "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"},
+    "previous": {"description": "The release the needs were computed against; null for the first.", "oneOf": [{"$ref": "#/$defs/releaseId"}, {"type": "null"}]},
+    "setSha256": {"description": "The document set's hash, provenance.json's setSha256: names the approved set this release compiles.", "$ref": "#/$defs/sha256"},
+    "products": {
+      "description": "Every product in the release, sorted by id.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "version", "status", "sha256"],
+        "properties": {
+          "id": {"description": "<domain>.<product>.", "type": "string", "pattern": "^[a-z][a-z0-9]*(-[a-z0-9]+)*\\.[a-z][a-z0-9]*(-[a-z0-9]+)*$"},
+          "version": {"description": "The product file's version.", "type": "string", "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$"},
+          "status": {"description": "Its lifecycle state in this release: the state history is the sequence of deployed manifests (ADR-055 part 4).", "enum": ["active", "paused", "deprecated", "retired"]},
+          "sha256": {"description": "k2gen.model.set_sha256 over the product's own documents (contracts/<domain>/<product>/).", "$ref": "#/$defs/sha256"}
+        }
+      }
+    },
+    "files": {
+      "description": "Every file of the release but manifest.json itself, path relative to the release directory, to its sha256.",
+      "type": "object",
+      "minProperties": 1,
+      "propertyNames": {"$ref": "#/$defs/relpath"},
+      "additionalProperties": {"$ref": "#/$defs/sha256"}
+    },
+    "images": {"$ref": "#/$defs/images"},
+    "needs": {
+      "description": "What deploying this release over previous requires (ARCHITECTURE-V2 4.9).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["recreate", "trinoRestart", "dagShapeChange", "ddl"],
+      "properties": {
+        "recreate": {
+          "description": "Compose services whose inputs changed, recreated with --no-deps. Never a capture, Redpanda, MinIO, Postgres or Lakekeeper (A1).",
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/service", "not": {"anyOf": [{"enum": ["redpanda", "minio", "prefect-db", "lakekeeper"]}, {"pattern": "^capture-"}]}}
+        },
+        "trinoRestart": {"description": "A catalog changed, so Trino restarts and the product DAGs drain first.", "type": "boolean"},
+        "dagShapeChange": {"description": "A DAG gained or lost a task, so the DAGs drain first.", "type": "boolean"},
+        "ddl": {"description": "Tables the additive DDL creates or widens, <warehouse>.<namespace>.<table>.", "type": "array", "uniqueItems": true, "items": {"type": "string", "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"}}
+      }
+    },
+    "secrets": {
+      "description": "Optional: files under ${K2_SECRETS} the release expects, path relative to it, to the sha256 of the file. Never the content, and not part of the id (the orchestrator's ruling on Q4).",
+      "type": "object",
+      "propertyNames": {"$ref": "#/$defs/relpath"},
+      "additionalProperties": {"$ref": "#/$defs/sha256"}
+    }
+  },
+  "$defs": {
+    "sha256": {"description": "64 lower-case hex digits.", "type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "sha1": {"description": "A git commit, 40 lower-case hex digits.", "type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "utc": {"description": "An RFC 3339 time in UTC, Z suffix.", "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?Z$"},
+    "tag": {"description": "A release tag: v<major>.<minor>.<patch> with an optional pre-release part, v3.0.0-alpha.3-rc.1.", "type": "string", "pattern": "^v[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?$"},
+    "releaseId": {"description": "<tag>-<sha12>.", "type": "string", "pattern": "^v[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?-[0-9a-f]{12}$"},
+    "relpath": {"description": "A relative path with / separators, no empty, . or .. segment.", "type": "string", "pattern": "^(?!.*(^|/)\\.\\.?(/|$))[A-Za-z0-9._$-]+(/[A-Za-z0-9._$-]+)*$"},
+    "service": {"description": "A compose service name.", "type": "string", "pattern": "^[a-z][a-z0-9-]*$"},
+    "images": {
+      "description": "Compose service to the image it runs: a registry image by digest, repo@sha256:<64 hex>, or a local build tagged <name>:<image id 12> at build and checked against docker inspect .Image. Also the shape of the --images input of k2gen release.",
+      "type": "object",
+      "minProperties": 1,
+      "propertyNames": {"$ref": "#/$defs/service"},
+      "additionalProperties": {
+        "type": "string",
+        "anyOf": [
+          {"pattern": "^[a-z0-9][a-z0-9._:/-]*@sha256:[0-9a-f]{64}$"},
+          {"pattern": "^(k2-airflow|k2-capture|k2-spark-iceberg|tools|fetch|dbt-runner|k2-api):[0-9a-f]{12}$"}
+        ]
+      }
+    }
+  }
+}

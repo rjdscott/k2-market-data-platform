@@ -1,0 +1,29 @@
+# The v2 fixture set's access expectations: every view and role with a policy, every base
+# table and every denied layer has a row (A9's coverage rule), plus the tested-data rows.
+expectations:
+  - principal: p.analyst-full
+    table: sensor_net.station_readings.silver_readings
+    via: [sql]
+    visible: [station_id, read_at, value, region, operator_note]
+  - principal: p.analyst-delayed
+    table: sensor_net.station_readings.silver_readings
+    via: [sql]
+    visible: [station_id, read_at, value, region, operator_note]
+    masked: [operator_note]
+    minRowAgeMinutes: 20
+    mustNotAppear: "region NOT IN ('north', 'south')"
+  - principal: svc.load-dashboard
+    table: ops_insight.daily_load.gold_daily_load
+    via: [sql]
+    visible: [load_date, station_id, readings, mean_value]
+  - {principal: p.analyst-full, table: sensor_net.station_readings__base.silver_readings, denied: true}
+  - {principal: svc.load-dashboard, table: ops_insight.daily_load__base.gold_daily_load, denied: true}
+  - {principal: p.analyst-full, table: lake.station_readings.bronze_readings, denied: true}
+  - {principal: p.analyst-full, table: lake.station_readings.landing_files, denied: true}
+  - {principal: p.analyst-full, sql: "SELECT * FROM sensor_net.station_readings.silver_readings FOR VERSION AS OF 1", expect: error}
+  - {principal: p.analyst-full, sql: "SHOW STATS FOR sensor_net.station_readings.silver_readings", expect: noBounds}
+  - {principal: p.analyst-full, sql: "SET SESSION sensor_net.statistics_enabled = true", expect: denied}
+  - {principal: dbt_station_readings, sql: "CREATE OR REPLACE VIEW sensor_net_build.station_readings.silver_readings AS SELECT 1 x", expect: denied}
+  - {probe: {from: k2-net, target: "lakekeeper:8181"}, expect: refused}
+  - {probe: {from: host, target: "127.0.0.1:18181"}, expect: refused}
+  - {drift: catalog, expect: clean}

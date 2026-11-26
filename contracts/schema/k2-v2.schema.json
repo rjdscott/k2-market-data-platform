@@ -1,0 +1,696 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://k2.invalid/schema/k2-v2.schema.json",
+  "title": "K2 v2 profile: product files, table contracts and the access documents",
+  "description": "Frozen in phase 001 (platform/k2gen/INTERFACES.md); changed only through the orchestrator. Each definition is applied on its own, by k2gen.model.schema_errors: product to every contracts/<domain>/<product>/product.odps.yaml after the vendored ODPS v1.1.0 schema; contract to every <table>.odcs.yaml after the vendored ODCS v3.2.0 schema; grants to every grants.yaml; domains, roles and principals to the shared files. K2's custom properties sit in the standards' own customProperties lists, one {property, value} item each; an unknown property name fails. No definition has a field for a credential or a hash of one: those live in git-ignored files under ${K2_SECRETS} (ADR-055, the orchestrator's ruling on Q4).",
+  "$defs": {
+    "slug": {
+      "description": "A domain, product or team name: lower case, words joined by single hyphens. No double or trailing hyphen, so its fence never holds `__` (A5).",
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9]*(-[a-z0-9]+)*$"
+    },
+    "identifier": {
+      "description": "A table, column, port or role name as Trino and dbt spell it unquoted.",
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]*$"
+    },
+    "semver": {
+      "description": "Semantic Versioning 2.0.0, major.minor.patch, no pre-release part.",
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$"
+    },
+    "day": {
+      "description": "A UTC day, YYYY-MM-DD, quoted in YAML: unquoted, YAML reads a date, not a string.",
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+    },
+    "adr": {
+      "description": "An ADR number, ADR-NNN; its file is docs/adr/ADR-NNN-*.md.",
+      "type": "string",
+      "pattern": "^ADR-[0-9]{3}$"
+    },
+    "text": {
+      "description": "Free text for a person to read; never empty.",
+      "type": "string",
+      "minLength": 1
+    },
+    "productId": {
+      "description": "A product's stable id, <domain>.<product>, stable across stores (ARCHITECTURE-V2 4.3).",
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9]*(-[a-z0-9]+)*\\.[a-z][a-z0-9]*(-[a-z0-9]+)*$"
+    },
+    "contractId": {
+      "description": "A table contract's stable id, <domain>.<product>.<table>: what ports and relationships name.",
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9]*(-[a-z0-9]+)*\\.[a-z][a-z0-9]*(-[a-z0-9]+)*\\.[a-z][a-z0-9_]*$"
+    },
+    "principalId": {
+      "description": "A principal: p.<pseudonym> for a person, svc.<name> for a service, dbt_<fence> for a product's builder and pub_<fence> for its publisher (A8, A10).",
+      "type": "string",
+      "pattern": "^((p|svc)\\.[a-z0-9]+(-[a-z0-9]+)*|(dbt|pub)_[a-z][a-z0-9]*(_[a-z0-9]+)*)$"
+    },
+    "envName": {
+      "description": "The name of an environment variable that holds a secret at run time. The secret itself is never in a document or a release.",
+      "type": "string",
+      "pattern": "^[A-Z][A-Z0-9_]*$"
+    },
+    "host": {
+      "description": "A DNS host name, lower case, no scheme, no port.",
+      "type": "string",
+      "pattern": "^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$"
+    },
+    "cron": {
+      "description": "A five-field cron expression in UTC, as Airflow reads it.",
+      "type": "string",
+      "pattern": "^\\S+( \\S+){4}$"
+    },
+    "fileFormat": {
+      "description": "The format of the bytes a file or API connector lands, which its parser reads.",
+      "enum": ["csv", "json", "jsonl", "xml"]
+    },
+    "parser": {
+      "description": "A registered parser: the module domains/<domain>/parsers/<name>.py of the product's own domain, exposing parse(data: bytes) -> list[dict] and one function per declared audit (A4).",
+      "$ref": "#/$defs/identifier"
+    },
+
+    "domains": {
+      "description": "contracts/domains.yaml: the data mesh domains (ADR-033). Unchanged from k2.schema.json, which step S23 deletes.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["domains"],
+      "properties": {
+        "domains": {
+          "description": "Domain name to its owner, kind and description.",
+          "type": "object",
+          "minProperties": 1,
+          "propertyNames": {"$ref": "#/$defs/slug", "not": {"pattern": "-build$"}},
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["owner", "kind", "description"],
+            "properties": {
+              "owner": {"description": "The owning team; .github/CODEOWNERS names it for contracts/<domain>/.", "$ref": "#/$defs/slug"},
+              "kind": {"description": "Whether the domain's products face a source or a consumer.", "enum": ["source-aligned", "consumer-aligned"]},
+              "description": {"description": "What the domain's data is.", "$ref": "#/$defs/text"}
+            }
+          }
+        }
+      }
+    },
+
+    "product": {
+      "description": "K2's profile of an ODPS v1.1.0 product file (product.odps.yaml), applied after the vendored ODPS schema: the optional fields K2 requires, the values it allows, and its custom properties. One product, one directory contracts/<domain>/<name>/, one lifecycle state (ADR-055).",
+      "type": "object",
+      "required": ["apiVersion", "kind", "id", "name", "version", "status", "domain", "type", "description", "team", "outputPorts"],
+      "properties": {
+        "apiVersion": {"description": "The ODPS version K2 reads.", "const": "v1.1.0"},
+        "kind": {"description": "ODPS's one kind.", "const": "DataProduct"},
+        "id": {"description": "<domain>.<name>.", "$ref": "#/$defs/productId"},
+        "name": {"description": "The product's name, unique on the platform; its fence (hyphens as underscores) names its namespaces, builder, publisher and DAG (A5, A8). Reserved names: see k2gen.model.RESERVED_PRODUCT_NAMES.", "$ref": "#/$defs/slug"},
+        "version": {"description": "The product's version; a dropped, retyped, renamed or re-keyed column of any table is a new major (S06).", "$ref": "#/$defs/semver"},
+        "status": {"description": "The product's one lifecycle state (ADR-055 part 4). `paused` is K2's declared deviation from the standard's examples.", "enum": ["active", "paused", "deprecated", "retired"]},
+        "domain": {"description": "A domain declared in contracts/domains.yaml; the directory the product lives in.", "$ref": "#/$defs/slug"},
+        "type": {"description": "ODPS's architectural type.", "enum": ["sourceAligned", "aggregate", "consumerAligned"]},
+        "description": {
+          "description": "The catalog page's text.",
+          "type": "object",
+          "required": ["purpose"],
+          "properties": {
+            "purpose": {"description": "What the product is for.", "$ref": "#/$defs/text"},
+            "limitations": {"description": "What it does not promise.", "$ref": "#/$defs/text"},
+            "usage": {"description": "How to read it.", "$ref": "#/$defs/text"}
+          }
+        },
+        "team": {
+          "description": "The owning team.",
+          "type": "object",
+          "required": ["name"],
+          "properties": {"name": {"description": "Equal to the domain's owner in contracts/domains.yaml (S05).", "$ref": "#/$defs/slug"}}
+        },
+        "inputPorts": {
+          "description": "Every table of another product this product reads; its builder may read nothing else (ARCHITECTURE-V2 4.6).",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["name", "version", "contractId"],
+            "properties": {
+              "name": {"description": "The port's name: the input table's name.", "$ref": "#/$defs/identifier"},
+              "version": {"description": "The input contract's version this product was written against.", "$ref": "#/$defs/semver"},
+              "contractId": {"description": "The input table's contract id.", "$ref": "#/$defs/contractId"},
+              "customProperties": {"description": "K2's input port properties.", "type": "array", "items": {"$ref": "#/$defs/inputPortProperty"}}
+            }
+          }
+        },
+        "outputPorts": {
+          "description": "Every table the product publishes, one port per table contract beside the product file.",
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": ["name", "version", "contractId"],
+            "properties": {
+              "name": {"description": "The port's name: the table's name.", "$ref": "#/$defs/identifier"},
+              "version": {"description": "The table contract's version.", "$ref": "#/$defs/semver"},
+              "contractId": {"description": "The table's contract id, <domain>.<product>.<table> of this product.", "$ref": "#/$defs/contractId"},
+              "inputContracts": {
+                "description": "The input ports that feed this table: product-level lineage.",
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": ["id", "version"],
+                  "properties": {
+                    "id": {"description": "An input port's contract id.", "$ref": "#/$defs/contractId"},
+                    "version": {"description": "That input's contract version.", "$ref": "#/$defs/semver"}
+                  }
+                }
+              },
+              "customProperties": {"description": "K2's output port properties.", "type": "array", "items": {"$ref": "#/$defs/outputPortProperty"}}
+            }
+          }
+        },
+        "customProperties": {"description": "K2's product properties; each at most once (S05).", "type": "array", "items": {"$ref": "#/$defs/productProperty"}}
+      },
+      "allOf": [
+        {
+          "description": "Every state but active records why it changed (ADR-055 part 4).",
+          "if": {"required": ["status"], "properties": {"status": {"not": {"const": "active"}}}},
+          "then": {
+            "required": ["customProperties"],
+            "properties": {"customProperties": {"contains": {"required": ["property"], "properties": {"property": {"const": "lifecycleChange"}}}}}
+          }
+        },
+        {
+          "description": "A deprecated product names its sunset day and its successor.",
+          "if": {"required": ["status"], "properties": {"status": {"const": "deprecated"}}},
+          "then": {
+            "properties": {"customProperties": {"contains": {"required": ["property", "value"], "properties": {"property": {"const": "lifecycleChange"}, "value": {"required": ["sunset", "successor"]}}}}}
+          }
+        }
+      ]
+    },
+    "productProperty": {
+      "description": "One K2 custom property of a product file.",
+      "type": "object",
+      "required": ["property", "value"],
+      "properties": {"property": {"description": "The property's name.", "enum": ["connector", "schedule", "terms", "lifecycleChange", "examples"]}},
+      "allOf": [
+        {"if": {"properties": {"property": {"const": "connector"}}}, "then": {"properties": {"value": {"$ref": "#/$defs/connector"}}}},
+        {"if": {"properties": {"property": {"const": "schedule"}}}, "then": {"properties": {"value": {"$ref": "#/$defs/schedule"}}}},
+        {"if": {"properties": {"property": {"const": "terms"}}}, "then": {"properties": {"value": {"$ref": "#/$defs/terms"}}}},
+        {"if": {"properties": {"property": {"const": "lifecycleChange"}}}, "then": {"properties": {"value": {"$ref": "#/$defs/lifecycleChange"}}}},
+        {"if": {"properties": {"property": {"const": "examples"}}}, "then": {"properties": {"value": {"$ref": "#/$defs/examples"}}}}
+      ]
+    },
+    "schedule": {
+      "description": "When the product's DAG runs.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["cron"],
+      "properties": {
+        "cron": {"description": "The DAG's schedule.", "$ref": "#/$defs/cron"},
+        "timeoutMinutes": {"description": "A run's timeout; set from the product's first measured runs.", "type": "integer", "minimum": 1}
+      }
+    },
+    "terms": {
+      "description": "The source's licence terms, recorded before any grant to a principal outside the owning team (ADR-055 part 5).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["redistribution"],
+      "properties": {
+        "redistribution": {"description": "Whether the data may be passed on beyond the platform's readers.", "enum": ["allowed", "forbidden"]},
+        "attribution": {"description": "The credit line the terms require, shown on the catalog page.", "$ref": "#/$defs/text"}
+      }
+    },
+    "lifecycleChange": {
+      "description": "Why the product is in a state other than active.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["since", "reason", "decision"],
+      "properties": {
+        "since": {"description": "The day the state took effect.", "$ref": "#/$defs/day"},
+        "reason": {"description": "Why, in a sentence.", "$ref": "#/$defs/text"},
+        "decision": {"description": "The ADR that decided it.", "$ref": "#/$defs/adr"},
+        "successor": {"description": "The product that replaces a deprecated one.", "$ref": "#/$defs/productId"},
+        "sunset": {"description": "The day a deprecated product may retire, at the earliest.", "$ref": "#/$defs/day"},
+        "resume": {"description": "For a paused product: where its connector starts again.", "$ref": "#/$defs/text"}
+      }
+    },
+    "examples": {
+      "description": "Example queries for the catalog page.",
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["description", "sql"],
+        "properties": {
+          "description": {"description": "What the query answers.", "$ref": "#/$defs/text"},
+          "sql": {"description": "The query, against reader names only.", "$ref": "#/$defs/text"}
+        }
+      }
+    },
+    "inputPortProperty": {
+      "description": "One K2 custom property of an input port.",
+      "type": "object",
+      "required": ["property", "value"],
+      "properties": {"property": {"description": "The property's name.", "enum": ["required", "maxLagMinutes"]}},
+      "allOf": [
+        {"if": {"properties": {"property": {"const": "required"}}}, "then": {"properties": {"value": {"description": "A required input that was never audited stops the build (wrapper exit 4); an optional one makes the product partial.", "type": "boolean"}}}},
+        {"if": {"properties": {"property": {"const": "maxLagMinutes"}}}, "then": {"properties": {"value": {"description": "How far behind the input may be before this product is shown partial; null for no bound.", "type": ["integer", "null"], "minimum": 0}}}}
+      ]
+    },
+    "outputPortProperty": {
+      "description": "One K2 custom property of an output port.",
+      "type": "object",
+      "required": ["property", "value"],
+      "properties": {"property": {"description": "The property's name.", "enum": ["serves"]}},
+      "allOf": [
+        {"if": {"properties": {"property": {"const": "serves"}}}, "then": {"properties": {"value": {"$ref": "#/$defs/serves"}}}}
+      ]
+    },
+    "serves": {
+      "description": "A serving copy of the output outside the lake, such as the paused ClickHouse hot tier (ADR-057).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["engine", "profile", "status"],
+      "properties": {
+        "engine": {"description": "The serving engine.", "enum": ["clickhouse"]},
+        "profile": {"description": "The compose profile that runs it.", "$ref": "#/$defs/slug"},
+        "status": {"description": "Whether the copy is served now.", "enum": ["active", "paused"]}
+      }
+    },
+
+    "connector": {
+      "description": "A source-aligned product's one connector (ADR-036), compiled into its pipeline.json. Secrets are named by environment variable only.",
+      "type": "object",
+      "required": ["kind"],
+      "properties": {"kind": {"description": "The connector kind.", "enum": ["kafka", "public-api", "https-file", "s3-file", "sftp", "ftp"]}},
+      "allOf": [
+        {"if": {"properties": {"kind": {"const": "kafka"}}}, "then": {"$ref": "#/$defs/kafkaConnector"}},
+        {"if": {"properties": {"kind": {"const": "public-api"}}}, "then": {"$ref": "#/$defs/publicApiConnector"}},
+        {"if": {"properties": {"kind": {"const": "https-file"}}}, "then": {"$ref": "#/$defs/httpsFileConnector"}},
+        {"if": {"properties": {"kind": {"const": "s3-file"}}}, "then": {"$ref": "#/$defs/s3FileConnector"}},
+        {"if": {"properties": {"kind": {"const": "sftp"}}}, "then": {"$ref": "#/$defs/sftpConnector"}},
+        {"if": {"properties": {"kind": {"const": "ftp"}}}, "then": {"$ref": "#/$defs/ftpConnector"}}
+      ]
+    },
+    "kafkaConnector": {
+      "description": "Reads the product's own topic at its own position; lands the records its filter keeps in lake.<fence>.landing, end offsets in the same commit (ADR-022). Built in phase 004.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "brokers", "registry", "topic", "envelope", "payload", "startFrom", "maxOffsetsPerPartition"],
+      "properties": {
+        "kind": {"description": "kafka.", "const": "kafka"},
+        "brokers": {"description": "Bootstrap servers, host:port, comma separated.", "type": "string", "pattern": "^[a-z0-9.-]+:[0-9]+(,[a-z0-9.-]+:[0-9]+)*$"},
+        "registry": {"description": "The schema registry's URL.", "type": "string", "pattern": "^https?://[a-z0-9.-]+(:[0-9]+)?/?$"},
+        "topic": {"description": "The topic the product reads.", "type": "string", "pattern": "^[A-Za-z0-9._-]+$"},
+        "envelope": {
+          "description": "How each record is framed.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["format", "contract"],
+          "properties": {
+            "format": {"description": "The framing.", "enum": ["avro-confluent"]},
+            "contract": {"description": "The contract that declares the envelope's schema.", "$ref": "#/$defs/contractId"}
+          }
+        },
+        "filter": {
+          "description": "Keep only records whose envelope field holds one of the values; the rest are counted, never landed.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["field", "in"],
+          "properties": {
+            "field": {"description": "An envelope field.", "$ref": "#/$defs/identifier"},
+            "in": {"description": "The values kept.", "type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "minLength": 1}}
+          }
+        },
+        "payload": {"description": "The format of the envelope's payload.", "enum": ["json"]},
+        "startFrom": {"description": "Where a first run starts.", "enum": ["earliest-retained"]},
+        "maxOffsetsPerPartition": {"description": "The most records one run reads per partition.", "type": "integer", "minimum": 1}
+      }
+    },
+    "publicApiConnector": {
+      "description": "Fetches a public JSON API in the fetch container; lands one object per changed response, named by its sha256. Built in phase 004.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "url", "allowHosts", "pagination", "minIntervalS", "records", "parser"],
+      "properties": {
+        "kind": {"description": "public-api.", "const": "public-api"},
+        "url": {"description": "The first page's URL, https only.", "type": "string", "pattern": "^https://"},
+        "allowHosts": {"description": "The only hosts the fetch may connect to, redirects included (ADR-036 part 3).", "type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/host"}},
+        "params": {"description": "Query parameters added to every request.", "type": "object", "additionalProperties": {"type": "string"}},
+        "pagination": {"description": "How the next page is found.", "enum": ["none", "next-link", "page"]},
+        "maxPages": {"description": "The most pages one run fetches; required unless pagination is none.", "type": "integer", "minimum": 1},
+        "minIntervalS": {"description": "The least time between two requests, in seconds.", "type": "integer", "minimum": 0},
+        "records": {"description": "The response field that holds the records.", "type": "string", "minLength": 1},
+        "recordKey": {"description": "The field that names each record, where records is a map.", "type": "string", "minLength": 1},
+        "volatileFields": {"description": "Fields ignored when deciding whether a response changed.", "type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1}},
+        "authHeaderEnv": {"description": "The environment variable holding an Authorization header value, if the API needs one.", "$ref": "#/$defs/envName"},
+        "parser": {"$ref": "#/$defs/parser"}
+      },
+      "if": {"properties": {"pagination": {"enum": ["next-link", "page"]}}},
+      "then": {"required": ["maxPages"]}
+    },
+    "httpsFileConnector": {
+      "description": "Fetches one file over https in the fetch container; lands it at s3://k2-landing/<domain>/<product>/<YYYY-MM-DD>/<sha256>.<ext> (A5). Built in phase 002.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "url", "allowHosts", "format", "parser"],
+      "properties": {
+        "kind": {"description": "https-file.", "const": "https-file"},
+        "url": {"description": "The file's URL, https only; may hold {{ds}}, the run's date.", "type": "string", "pattern": "^https://"},
+        "allowHosts": {"description": "The only hosts the fetch may connect to, redirects included (ADR-036 part 3).", "type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/host"}},
+        "format": {"$ref": "#/$defs/fileFormat"},
+        "parser": {"$ref": "#/$defs/parser"},
+        "calendar": {"description": "The contract id of a calendars table: the days the source publishes.", "$ref": "#/$defs/contractId"},
+        "maxBytes": {"description": "A lower size cap than the fetch container's 64 MiB.", "type": "integer", "minimum": 1, "maximum": 67108864}
+      }
+    },
+    "s3FileConnector": {
+      "description": "Reads one object from an S3-compatible store in the fetch container; lands it as https-file does. Built after the demo tag.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "endpoint", "bucket", "key", "credentialsEnv", "format", "parser"],
+      "properties": {
+        "kind": {"description": "s3-file.", "const": "s3-file"},
+        "endpoint": {"description": "The store's URL, https only.", "type": "string", "pattern": "^https://"},
+        "bucket": {"description": "The bucket.", "type": "string", "pattern": "^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$"},
+        "key": {"description": "The object key; may hold {{ds}}.", "type": "string", "minLength": 1},
+        "credentialsEnv": {"description": "The environment variable prefix holding the access key pair.", "$ref": "#/$defs/envName"},
+        "format": {"$ref": "#/$defs/fileFormat"},
+        "parser": {"$ref": "#/$defs/parser"},
+        "calendar": {"description": "The contract id of a calendars table: the days the source publishes.", "$ref": "#/$defs/contractId"}
+      }
+    },
+    "sftpConnector": {
+      "description": "Reads one file over SFTP in the fetch container, trusting only the declared host key. Built after the demo tag.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "host", "path", "user", "keyFileEnv", "hostKey", "format", "parser"],
+      "properties": {
+        "kind": {"description": "sftp.", "const": "sftp"},
+        "host": {"description": "The server.", "$ref": "#/$defs/host"},
+        "path": {"description": "The file's path; may hold {{ds}}.", "type": "string", "pattern": "^/"},
+        "user": {"description": "The login name; not a secret.", "type": "string", "minLength": 1},
+        "keyFileEnv": {"description": "The environment variable naming the private key file.", "$ref": "#/$defs/envName"},
+        "hostKey": {"description": "The server's public host key, as known_hosts spells it.", "type": "string", "pattern": "^(ssh-ed25519|ecdsa-sha2-nistp256|ssh-rsa) [A-Za-z0-9+/=.]+$"},
+        "format": {"$ref": "#/$defs/fileFormat"},
+        "parser": {"$ref": "#/$defs/parser"},
+        "calendar": {"description": "The contract id of a calendars table: the days the source publishes.", "$ref": "#/$defs/contractId"}
+      }
+    },
+    "ftpConnector": {
+      "description": "Reads one file over FTP in the fetch container; plain FTP only for anonymous public data. Built after the demo tag.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "host", "path", "tls", "format", "parser"],
+      "properties": {
+        "kind": {"description": "ftp.", "const": "ftp"},
+        "host": {"description": "The server.", "$ref": "#/$defs/host"},
+        "path": {"description": "The file's path; may hold {{ds}}.", "type": "string", "pattern": "^/"},
+        "tls": {"description": "required: FTP over TLS; none: plain FTP, anonymous only.", "enum": ["required", "none"]},
+        "credentialsEnv": {"description": "The environment variable prefix holding a login; absent for anonymous.", "$ref": "#/$defs/envName"},
+        "format": {"$ref": "#/$defs/fileFormat"},
+        "parser": {"$ref": "#/$defs/parser"},
+        "calendar": {"description": "The contract id of a calendars table: the days the source publishes.", "$ref": "#/$defs/contractId"}
+      },
+      "if": {"properties": {"tls": {"const": "none"}}},
+      "then": {"not": {"required": ["credentialsEnv"]}}
+    },
+
+    "contract": {
+      "description": "K2's profile of an ODCS v3.2.0 table contract (<table>.odcs.yaml), applied after the vendored ODCS schema. Columns are inline and are the table's definition of record.",
+      "type": "object",
+      "required": ["apiVersion", "kind", "id", "name", "version", "domain", "description", "team", "schema", "customProperties"],
+      "properties": {
+        "apiVersion": {"description": "The ODCS version K2 reads.", "const": "v3.2.0"},
+        "kind": {"description": "ODCS's one kind.", "const": "DataContract"},
+        "id": {"description": "<domain>.<product>.<table>.", "$ref": "#/$defs/contractId"},
+        "name": {"description": "The table's name; the file is <name>.odcs.yaml.", "$ref": "#/$defs/identifier"},
+        "version": {"description": "The table contract's version.", "$ref": "#/$defs/semver"},
+        "domain": {"description": "The product's domain.", "$ref": "#/$defs/slug"},
+        "description": {
+          "description": "The table's text.",
+          "type": "object",
+          "required": ["purpose"],
+          "properties": {"purpose": {"description": "What one row is, and what the table is for.", "$ref": "#/$defs/text"}}
+        },
+        "team": {
+          "description": "The owning team, as an object (ODCS v3.1.0 and later).",
+          "type": "object",
+          "required": ["name"],
+          "properties": {"name": {"description": "The product's team.", "$ref": "#/$defs/slug"}}
+        },
+        "schema": {
+          "description": "Exactly one object: the table.",
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 1,
+          "items": {"$ref": "#/$defs/table"}
+        },
+        "roles": {
+          "description": "The roles the table offers, each declared in contracts/access/roles.yaml (S07). No role offered means only the owner and the platform read it.",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["role", "access"],
+            "properties": {
+              "role": {"description": "A declared role.", "$ref": "#/$defs/identifier"},
+              "access": {"description": "Readers only read.", "const": "read"},
+              "firstLevelApprovers": {"description": "Who approves a grant of the role, if not the owning team.", "type": "string", "minLength": 1}
+            }
+          }
+        },
+        "slaProperties": {
+          "description": "Only targets a check enforces. latency: how old the newest value of element, <table>.<column>, may be; it becomes an alert.",
+          "type": "array",
+          "items": {
+            "if": {"properties": {"property": {"const": "latency"}}},
+            "then": {
+              "required": ["element", "unit"],
+              "properties": {"value": {"type": "integer", "minimum": 1}, "unit": {"enum": ["min", "h", "d"]}}
+            }
+          }
+        },
+        "customProperties": {
+          "description": "K2's table properties; each at most once (S05).",
+          "type": "array",
+          "items": {"$ref": "#/$defs/contractProperty"},
+          "allOf": [
+            {"contains": {"required": ["property"], "properties": {"property": {"const": "layer"}}}},
+            {"contains": {"required": ["property"], "properties": {"property": {"const": "build"}}}},
+            {"contains": {"required": ["property"], "properties": {"property": {"const": "backup"}}}}
+          ]
+        }
+      }
+    },
+    "table": {
+      "description": "The table: ODCS schema[0].",
+      "type": "object",
+      "required": ["id", "name", "physicalName", "physicalType", "properties"],
+      "properties": {
+        "id": {"description": "The table's name: fully qualified references use it (#/schema/<id>/properties/<column>).", "$ref": "#/$defs/identifier"},
+        "name": {"description": "The table's name.", "$ref": "#/$defs/identifier"},
+        "physicalName": {"description": "<product fence>.<table>: the namespace and table without a catalog. A dbt or code output's reader name is <domain fence>.<product fence>.<table>; a connector table's is lake.<product fence>.<table> (A5, A8).", "type": "string", "pattern": "^[a-z][a-z0-9]*(_[a-z0-9]+)*\\.[a-z][a-z0-9_]*$"},
+        "physicalType": {"description": "Always an Iceberg table; readers see dbt and code outputs through a generated view (ADR-061).", "const": "table"},
+        "properties": {"description": "The columns, in order.", "type": "array", "minItems": 1, "items": {"$ref": "#/$defs/column"}},
+        "quality": {
+          "description": "Checks beyond the generated key and nullability tests.",
+          "type": "array",
+          "items": {
+            "if": {"required": ["type"], "properties": {"type": {"const": "custom"}}},
+            "then": {"properties": {"engine": {"description": "dbt: a dbt test; k2-connector: a connector audit, a parser function.", "enum": ["dbt", "k2-connector"]}}}
+          }
+        }
+      }
+    },
+    "column": {
+      "description": "One column: an ODCS schema property.",
+      "type": "object",
+      "required": ["name", "physicalType"],
+      "properties": {
+        "name": {"description": "The column's name.", "$ref": "#/$defs/identifier"},
+        "physicalType": {"description": "The Trino type as Trino spells it: varchar, bigint, decimal(20,10), timestamp(6) with time zone.", "type": "string", "pattern": "^[a-z][a-z0-9_ (),]*$"},
+        "relationships": {
+          "description": "Keys of another product's table this column refers to.",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["to"],
+            "properties": {
+              "type": {"description": "Only foreign keys.", "const": "foreignKey"},
+              "to": {"description": "ODCS's fully qualified form: <domain>/<product>/<table>.odcs.yaml#/schema/<table>/properties/<column>.", "type": "string", "pattern": "^[a-z][a-z0-9-]*/[a-z][a-z0-9-]*/[a-z][a-z0-9_]*\\.odcs\\.yaml#/schema/[a-z][a-z0-9_]*/properties/[a-z][a-z0-9_]*$"},
+              "customProperties": {"description": "K2's relationship properties.", "type": "array", "items": {"$ref": "#/$defs/relationshipProperty"}}
+            }
+          }
+        },
+        "customProperties": {"description": "K2's column properties.", "type": "array", "items": {"$ref": "#/$defs/columnProperty"}}
+      }
+    },
+    "columnProperty": {
+      "description": "One K2 custom property of a column; ODCS 3.2.0 has no unit or time-meaning field.",
+      "type": "object",
+      "required": ["property", "value"],
+      "properties": {"property": {"description": "The property's name.", "enum": ["unit", "time"]}},
+      "allOf": [
+        {"if": {"properties": {"property": {"const": "unit"}}}, "then": {"properties": {"value": {"description": "A unit or an ISO 4217 currency code.", "$ref": "#/$defs/text"}}}},
+        {"if": {"properties": {"property": {"const": "time"}}}, "then": {"properties": {"value": {"description": "What the timestamp means: when it happened, when it was published, when it is valid, when it was known.", "enum": ["event", "publication", "valid", "known"]}}}}
+      ]
+    },
+    "relationshipProperty": {
+      "description": "One K2 custom property of a relationship.",
+      "type": "object",
+      "required": ["property", "value"],
+      "properties": {"property": {"description": "The property's name.", "enum": ["asOf"]}},
+      "allOf": [
+        {"if": {"properties": {"property": {"const": "asOf"}}}, "then": {"properties": {"value": {"description": "When the target keeps history: join on its valid time or its knowledge time.", "enum": ["valid", "known"]}}}}
+      ]
+    },
+    "contractProperty": {
+      "description": "One K2 custom property of a table contract.",
+      "type": "object",
+      "required": ["property", "value"],
+      "properties": {"property": {"description": "The property's name.", "enum": ["layer", "build", "backup", "retention", "partitioning", "sort", "policies"]}},
+      "allOf": [
+        {"if": {"properties": {"property": {"const": "layer"}}}, "then": {"properties": {"value": {"description": "The layer the table is (ADR-055 part 2). A landing is not authored: its names follow from the connector (A5).", "enum": ["bronze", "silver", "gold", "mart"]}}}},
+        {"if": {"properties": {"property": {"const": "build"}}}, "then": {"properties": {"value": {"$ref": "#/$defs/build"}}}},
+        {"if": {"properties": {"property": {"const": "backup"}}}, "then": {"properties": {"value": {"description": "restore: copied and registered back; rebuild: rebuilt from its inputs (ARCHITECTURE-V2 4.9).", "enum": ["restore", "rebuild"]}}}},
+        {"if": {"properties": {"property": {"const": "retention"}}}, "then": {"properties": {"value": {"description": "Snapshot expiry in days, never deletion of rows; at least the 7-day floor when another table reads it (S05).", "type": "integer", "minimum": 1}}}},
+        {"if": {"properties": {"property": {"const": "partitioning"}}}, "then": {"properties": {"value": {"description": "Iceberg partition fields in order, as Trino spells them.", "type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/partitionField"}}}}},
+        {"if": {"properties": {"property": {"const": "sort"}}}, "then": {"properties": {"value": {"description": "The write sort order, in order.", "type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/sortField"}}}}},
+        {"if": {"properties": {"property": {"const": "policies"}}}, "then": {"properties": {"value": {"$ref": "#/$defs/policies"}}}}
+      ]
+    },
+    "build": {
+      "description": "What writes the table, from a closed set (ADR-055 part 2).",
+      "oneOf": [
+        {"description": "connector: the product's connector, into warehouse k2; dbt: a model in the product's directory, on Trino; platform: platform code, a table readers see directly (the run records).", "enum": ["connector", "dbt", "platform"]},
+        {
+          "description": "A registered code transform on Spark.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["code"],
+          "properties": {"code": {"description": "<name>@<major>, the transform under domains/<domain>/.", "type": "string", "pattern": "^[a-z][a-z0-9_]*@[0-9]+$"}}
+        }
+      ]
+    },
+    "partitionField": {
+      "description": "A column, or a Trino Iceberg partition transform of one: year, month, day, hour, bucket(col, n), truncate(col, n).",
+      "type": "string",
+      "pattern": "^([a-z][a-z0-9_]*|(year|month|day|hour)\\([a-z][a-z0-9_]*\\)|(bucket|truncate)\\([a-z][a-z0-9_]*, ?[1-9][0-9]*\\))$"
+    },
+    "sortField": {
+      "description": "A column, optionally ASC or DESC and NULLS FIRST or LAST.",
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]*( (ASC|DESC))?( NULLS (FIRST|LAST))?$"
+    },
+    "policies": {
+      "description": "Per offered role, what its readers see (ADR-055 part 5). Each becomes a Trino rule on the view's exact name, never view SQL (ADR-061 condition 2). A role with no entry sees every row and column.",
+      "type": "object",
+      "minProperties": 1,
+      "propertyNames": {"$ref": "#/$defs/identifier"},
+      "additionalProperties": {"$ref": "#/$defs/rolePolicy"}
+    },
+    "rolePolicy": {
+      "description": "The three named policies; never a free-form filter.",
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {
+        "delay": {
+          "description": "Only rows whose column is older than minutes: column < current_timestamp - INTERVAL 'minutes' MINUTE.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["column", "minutes"],
+          "properties": {
+            "column": {"description": "A timestamp column of the table.", "$ref": "#/$defs/identifier"},
+            "minutes": {"description": "The delay.", "type": "integer", "minimum": 1}
+          }
+        },
+        "mask": {"description": "Columns read as typed nulls.", "type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/identifier"}},
+        "rowScope": {
+          "description": "Only rows whose column holds one of the values: column IN (values).",
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["column", "values"],
+          "properties": {
+            "column": {"description": "A column of the table.", "$ref": "#/$defs/identifier"},
+            "values": {"description": "The values kept.", "type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": ["string", "integer"]}}
+          }
+        }
+      }
+    },
+
+    "grants": {
+      "description": "contracts/<domain>/<product>/grants.yaml: who holds which role on this product. At most one role per principal per product (DECISIONS-FINAL O1a, S07); approved by the product's code owners.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["grants"],
+      "properties": {
+        "grants": {
+          "description": "The grants, in any order.",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["principal", "role"],
+            "properties": {
+              "principal": {"description": "A principal declared in contracts/access/principals.yaml.", "$ref": "#/$defs/principalId"},
+              "role": {"description": "A role declared in contracts/access/roles.yaml and offered by the product's tables.", "$ref": "#/$defs/identifier"}
+            }
+          }
+        }
+      }
+    },
+    "roles": {
+      "description": "contracts/access/roles.yaml: the roles a table may offer (A10).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["roles"],
+      "properties": {
+        "roles": {
+          "description": "Role name to its meaning.",
+          "type": "object",
+          "minProperties": 1,
+          "propertyNames": {"$ref": "#/$defs/identifier"},
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["description"],
+            "properties": {
+              "description": {"description": "What a holder of the role sees.", "$ref": "#/$defs/text"},
+              "requires": {"description": "Policies every table offering the role must set for it (S07).", "type": "array", "uniqueItems": true, "items": {"enum": ["delay", "mask", "rowScope"]}}
+            }
+          }
+        }
+      }
+    },
+    "principals": {
+      "description": "contracts/access/principals.yaml: everyone who may call Trino or the REST API, people under pseudonymous ids. No field holds a credential or a hash of one (the orchestrator's ruling on Q4): password and key hashes live in git-ignored files under ${K2_SECRETS}.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["principals"],
+      "properties": {
+        "principals": {
+          "description": "The principals, in any order; ids unique (S07).",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "kind", "owner"],
+            "properties": {
+              "id": {"$ref": "#/$defs/principalId"},
+              "kind": {"description": "A person (p.*) or a service (svc.*, dbt_*, pub_*).", "enum": ["person", "service"]},
+              "owner": {"description": "The team answerable for the principal.", "$ref": "#/$defs/slug"},
+              "description": {"description": "What the principal is for.", "$ref": "#/$defs/text"}
+            },
+            "allOf": [
+              {"if": {"properties": {"kind": {"const": "person"}}}, "then": {"properties": {"id": {"pattern": "^p\\."}}}},
+              {"if": {"properties": {"kind": {"const": "service"}}}, "then": {"properties": {"id": {"pattern": "^(svc\\.|dbt_|pub_)"}}}}
+            ]
+          }
+        }
+      }
+    }
+  }
+}

@@ -6,6 +6,7 @@ requires-python = ">=3.12,<3.14"
 dependencies = [
     "jsonschema==4.26.0",
     "pyyaml==6.0.4",
+    "referencing==0.37.0",  # already jsonschema's; k2gen.model resolves refs between its schemas with it
 ]
 
 [project.scripts]

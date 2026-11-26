@@ -1,0 +1,49 @@
+# A hand-written example of compiled/catalog/products/ops-insight.daily-load.json
+# (contracts/schema/catalog-product.schema.json) for the good set: reader names only.
+id: ops-insight.daily-load
+name: daily-load
+domain: ops-insight
+version: 1.0.0
+status: active
+type: consumerAligned
+owner: insight-team
+purpose: Synthetic readings per station per day, from the sensor domain's tested readings.
+terms:
+  redistribution: forbidden
+inputs:
+  - contractId: sensor-net.station-readings.silver_readings
+    relation: sensor_net.station_readings.silver_readings
+    required: true
+    maxLagMinutes: 120
+outputs:
+  - contractId: ops-insight.daily-load.gold_daily_load
+    relation: ops_insight.daily_load.gold_daily_load
+    layer: gold
+    version: 1.0.0
+    purpose: One row per day and station, the count and mean of its readings.
+    columns:
+      - {name: load_date, type: date, required: true, primaryKey: true, description: The UTC day of the readings., time: event}
+      - name: station_id
+        type: varchar
+        required: true
+        primaryKey: true
+        description: The made-up station's code.
+        references:
+          - {relation: sensor_net.station_readings.silver_readings, column: station_id}
+      - {name: readings, type: bigint, required: true, primaryKey: false, description: How many readings the station took that day.}
+      - {name: mean_value, type: "decimal(12,3)", required: false, primaryKey: false, description: The mean reading., unit: degree Celsius}
+    roles:
+      - {role: full_reader, inWords: every row and column}
+    readers:
+      - {principal: svc.load-dashboard, role: full_reader}
+    dbtDocs: dbt-docs/#!/model/model.k2.gold_daily_load
+joinKeys:
+  - from: {relation: ops_insight.daily_load.gold_daily_load, column: station_id}
+    to: {relation: sensor_net.station_readings.silver_readings, column: station_id}
+lineage:
+  nodes:
+    - {id: sensor-net.station-readings.silver_readings, product: sensor-net.station-readings, relation: sensor_net.station_readings.silver_readings}
+    - {id: ops-insight.daily-load.gold_daily_load, product: ops-insight.daily-load, relation: ops_insight.daily_load.gold_daily_load}
+  edges:
+    - {from: sensor-net.station-readings.silver_readings, to: ops-insight.daily-load.gold_daily_load}
+tag: v3.0.0-alpha.3-rc.1

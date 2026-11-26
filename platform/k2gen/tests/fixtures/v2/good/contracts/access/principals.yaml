@@ -1,0 +1,38 @@
+# Principals of the v2 fixture set. No credential and no hash of one: those live under
+# ${K2_SECRETS}, never in git.
+principals:
+  - id: p.analyst-full
+    kind: person
+    owner: insight-team
+    description: A made-up analyst who reads every column.
+  - id: p.analyst-delayed
+    kind: person
+    owner: insight-team
+  - id: svc.load-dashboard
+    kind: service
+    owner: insight-team
+    description: A made-up dashboard over the daily load.
+  - id: svc.runs
+    kind: service
+    owner: platform-team
+  - id: svc.catalog
+    kind: service
+    owner: platform-team
+  - id: svc.platform
+    kind: service
+    owner: platform-team
+  - id: svc.api
+    kind: service
+    owner: platform-team
+  - id: dbt_station_readings
+    kind: service
+    owner: sensor-team
+  - id: pub_station_readings
+    kind: service
+    owner: sensor-team
+  - id: dbt_daily_load
+    kind: service
+    owner: insight-team
+  - id: pub_daily_load
+    kind: service
+    owner: insight-team

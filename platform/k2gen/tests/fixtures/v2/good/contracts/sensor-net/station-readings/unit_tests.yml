@@ -1,0 +1,10 @@
+unit_tests:
+  - name: silver_readings_types_the_value
+    model: silver_readings
+    given:
+      - input: source('station_readings', 'bronze_readings')
+        rows:
+          - {station_id: s-1, read_at: "2026-01-01 00:00:00", value_text: "1.5", region: north, operator_note: synthetic, source_file_sha256: aa}
+    expect:
+      rows:
+        - {station_id: s-1, read_at: "2026-01-01 00:00:00", value: 1.5, region: north, operator_note: synthetic}

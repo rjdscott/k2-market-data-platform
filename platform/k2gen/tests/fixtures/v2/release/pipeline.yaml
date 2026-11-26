@@ -1,0 +1,40 @@
+# A hand-written example of compiled/products/sensor-net.station-readings/pipeline.json
+# (contracts/schema/pipeline.schema.json) for the good set.
+product: sensor-net.station-readings
+fence: station_readings
+domain: sensor-net
+status: active
+dagId: station_readings
+schedule:
+  cron: "15 * * * *"
+  timeoutMinutes: 10
+connector:
+  kind: https-file
+  url: "https://data.example.org/readings/{{ds}}.csv"
+  allowHosts: [data.example.org]
+  format: csv
+  parser: station_csv
+landing:
+  bucket: k2-landing
+  prefix: sensor-net/station-readings/
+  log: lake.station_readings.landing_files
+bronze:
+  - table: lake.station_readings.bronze_readings
+    key: [station_id, read_at, source_file_sha256]
+    values: [value_text, region, operator_note]
+    decimal: []
+    patterns: {station_id: "^s-[0-9]+$"}
+    audits: [value_parses]
+    lineage: source_file_sha256
+    branch: audit
+    checks: lake.station_readings.audit_checks
+build:
+  engine: dbt
+  selector: station_readings
+  writer: dbt_station_readings
+  publisher: pub_station_readings
+  outputs: [sensor_net_build.station_readings__base.silver_readings]
+inputs: []
+maintain:
+  cron: "40 4 * * *"
+  retainDays: 7

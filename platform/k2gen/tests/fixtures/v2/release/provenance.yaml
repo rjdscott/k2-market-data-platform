@@ -1,0 +1,17 @@
+# A hand-written example of provenance.json (contracts/schema/provenance.schema.json).
+# The tagger is a made-up identity; every hash is made up.
+source: git
+tag: v3.0.0-alpha.3-rc.1
+commit: 0123456789abcdef0123456789abcdef01234567
+tagger: Example Owner <owner@example.org>
+taggedAt: "2026-11-26T00:00:00Z"
+setSha256: 6ee0eb490ff832101cf82a3d387c35f29e4230be786978f7acf9e811febf6723
+documents:
+  - path: contracts/domains.yaml
+    sha256: 7e6e9877fff0dbcc576df15fd6e6de65a95d6dce6ced8fc47c4cf9dba3484195
+    lastCommit: 0123456789abcdef0123456789abcdef01234567
+    pr: 1
+  - path: tests/access/expectations.yaml
+    sha256: dd0c2c70261f62045ff1b8d639a29b945c4bf822d852f96f1d68ee9e05f3bbbc
+    lastCommit: 0123456789abcdef0123456789abcdef01234567
+    pr: null

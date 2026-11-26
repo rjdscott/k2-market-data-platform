@@ -1,4 +1,4 @@
-"""k2gen: the data product contracts under contracts/, checked (ADR-032).
+"""k2gen: the data product contracts under contracts/, checked (ADR-032), and the v2 spine.
 
     uv run --project platform/k2gen k2gen validate
     uv run --project platform/k2gen k2gen generate
@@ -226,9 +226,13 @@ def _paused_errors(root: Path, where: str, doc: dict[str, Any], paused: dict[str
     return errors
 
 
-def main(argv: list[str] | None = None) -> int:
-    from k2gen import generate  # here, not at the top: generate.py imports this module's constants
+def _optional_dir(value: str) -> Path | None:
+    return None if value == "none" else Path(value)
 
+
+def parser() -> argparse.ArgumentParser:
+    """Every subcommand. validate, generate and new are the old format's, deleted in S23;
+    docset, check, release and diff are the v2 spine's (platform/k2gen/INTERFACES.md)."""
     parser = argparse.ArgumentParser(prog="k2gen", description="Data product contracts for the K2 lake (ADR-032).")
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("validate", help="check every descriptor and contract under contracts/")
@@ -236,8 +240,49 @@ def main(argv: list[str] | None = None) -> int:
     new = sub.add_parser("new", help="scaffold contracts/<domain>/<name>/: a descriptor and one contract")
     new.add_argument("domain")
     new.add_argument("name")
-    args = parser.parse_args(argv)
+    docset = sub.add_parser("docset", help="extract a release tag's document set and its provenance.json (A2)")
+    docset.add_argument("--tag", required=True, help="an annotated release tag")
+    docset.add_argument("--out", required=True, type=Path, help="an empty directory to write the set to")
+    docset.add_argument("--repo", type=Path, default=ROOT, help="the git repository (default: this checkout)")
+    check = sub.add_parser("check", help="run the checks library on a document set; exit 1 on any error (A3)")
+    check.add_argument("--set", required=True, type=Path, dest="set_dir", help="a document set directory")
+    check.add_argument("--previous", required=True, type=_optional_dir, help="the previous release's document set, or none")
+    release = sub.add_parser("release", help="compile a document set into a sealed release; print its id (A1, A3)")
+    release.add_argument("--set", required=True, type=Path, dest="set_dir", help="a document set directory")
+    release.add_argument("--previous", required=True, type=_optional_dir, help="the previous release directory, or none")
+    release.add_argument("--images", required=True, type=Path, help="a JSON file of compose service to image ref")
+    release.add_argument("--out", required=True, type=Path, help="the releases root")
+    diff = sub.add_parser("diff", help="print the file-level and storage-plan difference of two releases, as Markdown")
+    diff.add_argument("old", type=Path)
+    diff.add_argument("new", type=Path)
+    return parser
 
+
+def _spine(args: argparse.Namespace) -> int:
+    from k2gen import checks, diff, docset, release
+
+    if args.command == "docset":
+        docset.write(docset.load(args.tag, args.repo), args.out)
+        return 0
+    if args.command == "check":
+        previous = docset.read(args.previous) if args.previous else None
+        findings = checks.run(docset.read(args.set_dir), previous)
+        for f in findings:
+            print(f"{f.severity} {f.code} {f.path}: {f.message}", file=sys.stderr)
+        return 1 if any(f.severity == "error" for f in findings) else 0
+    if args.command == "release":
+        print(release.release(args.set_dir, args.previous, args.images, args.out))
+        return 0
+    print(diff.diff(args.old, args.new))
+    return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    from k2gen import generate  # here, not at the top: generate.py imports this module's constants
+
+    args = parser().parse_args(argv)
+    if args.command in ("docset", "check", "release", "diff"):
+        return _spine(args)
     if args.command == "new":
         for path in generate.scaffold(ROOT, args.domain, args.name):
             print(f"k2gen new: wrote {path.relative_to(ROOT)}")
