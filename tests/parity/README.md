@@ -87,3 +87,39 @@ fails until it is gone.
 
 The bars parity (`scripts/parity_bars.py`) has no known gaps: its three sides all read the
 lake, so a loss in ClickHouse cannot reach it.
+
+## Keeping the pinned snapshots alive
+
+A pin names snapshots by id. The nightly maintenance expires snapshots older than seven days
+(it keeps the newest ten), and an expired snapshot cannot be read: the gate would then fail
+with a missing snapshot, not with a difference. An Iceberg *tag* is a named pointer to one
+snapshot; expiry keeps every snapshot a tag points at, and the data files that snapshot needs.
+
+So each pinned snapshot carries a tag, `parity_<day>`, kept for 180 days:
+
+| Table | Tag | Pin field |
+|---|---|---|
+| `lake.gold.ohlcv_1m` | `parity_2026_11_25` | `ohlcv_1m_snapshot` |
+| `lake.silver.trades_binance`, `_coinbase`, `_kraken` | `parity_2026_11_25` | `silver_snapshots` |
+| `lake.gold.bars` | `parity_2026_11_25` | `bars.bars_snapshot` |
+| `lake.gold.trades` | `parity_2026_11_25` | `bars.trades_snapshot` |
+| `lake.gold.trades` | `parity_2026_11_25_dbt` | the snapshot the `--dbt` side prints as `FOR VERSION AS OF` |
+
+Created on 2026-11-26 in one Spark session in `k2-spark-iceberg`, one statement per row:
+
+```sql
+ALTER TABLE lake.gold.ohlcv_1m CREATE TAG `parity_2026_11_25` AS OF VERSION <snapshot id> RETAIN 180 DAYS;
+```
+
+Check them (the lake is read-only through Trino, so this is safe at any time):
+
+```bash
+docker exec k2-trino trino --execute 'SELECT name, type, snapshot_id FROM lake.gold."trades$refs" ORDER BY 1'
+#   "main","BRANCH",...
+#   "parity_2026_11_25","TAG","2055991547363439727"
+#   "parity_2026_11_25_dbt","TAG","6911535457573800498"
+```
+
+After a re-pin: tag the new snapshots the same way, then drop the old tags
+(`ALTER TABLE <table> DROP TAG parity_<old day>`), or their files stay for the 180 days. A tag
+is not a branch: nothing is written through it, and readers that follow `main` never see it.
