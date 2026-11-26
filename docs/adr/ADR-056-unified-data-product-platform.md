@@ -26,7 +26,8 @@ states which version of the reference data it used. Readers only ever see data t
 tests, and a change reaches the running system only as a sealed, versioned release that can be
 rolled back. The costs: no live crypto data from the old pipeline's retirement until the Kraken
 trades phase lands, a few seconds before newly built data is visible, and more services to run.
-Nothing is left to decide; the open details are decided in the phases that need them.
+Two details are still open (how long landed data is kept, and how much foreign-exchange content ships
+beyond rates and crosses); each is decided in the phase that needs it.
 
 ---
 
