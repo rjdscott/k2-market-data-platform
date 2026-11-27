@@ -19,6 +19,7 @@ from typing import Any
 
 import pytest
 import yaml
+from test_checks_connectors import FEED_ID, LIST_ID, kinds
 
 from k2gen import model, release
 from k2gen.emit import pipeline
@@ -165,17 +166,59 @@ def test_bronze_follows_the_contract() -> None:
     assert bronze["key"] == ["station_id", "read_at"] and bronze["values"] == ["value_text", "region", "operator_note"]
 
 
-def test_a_kafka_connector_lands_a_table_and_has_no_fetch_task() -> None:
-    m = loaded(good())
-    kafka = model.Connector("kafka", {"brokers": "redpanda:9092", "registry": "http://redpanda:8081", "topic": "example.readings",
-                                      "envelope": {"format": "avro-confluent", "contract": "sensor-net.station-readings.bronze_readings"},
-                                      "payload": "json", "startFrom": "earliest-retained", "maxOffsetsPerPartition": 1000})
-    emitted = pipeline.emit(replaced(m, STATION_ID, connector=kafka))
-    doc = json.loads(emitted[model.pipeline_path(STATION_ID)])
-    assert doc["landing"] == {"table": model.lake_relation("station-readings", model.KAFKA_LANDING)}
+def test_a_kafka_product_compiles_to_what_kafka_py_reads() -> None:
+    """I-1's pipeline: the connector as declared, the landing table, one bronze table staged by
+    offset whose values leave out the landing batch's lineage columns, and no fetch task."""
+    emitted = pipeline.emit(loaded(kinds()))
+    doc = json.loads(emitted[model.pipeline_path(FEED_ID)])
+    assert doc["connector"] == {"kind": "kafka", "brokers": "redpanda:9092", "registry": "http://redpanda:8081",
+                                "topic": "example.station.frames",
+                                "envelope": {"format": "avro-confluent", "contract": "sensor-net.station-feed.bronze_frames"},
+                                "filter": {"field": "stream", "in": ["reading"]}, "payload": "json",
+                                "startFrom": "earliest-retained", "maxOffsetsPerPartition": 1000}
+    assert doc["landing"] == {"table": "lake.station_feed.landing"}
+    assert doc["bronze"] == [{"table": "lake.station_feed.bronze_frames", "key": ["kafka_partition", "kafka_offset"],
+                              "values": ["kafka_timestamp", "record_key", "record_value"], "decimal": [], "patterns": {},
+                              "audits": [], "branch": model.AUDIT_BRANCH, "checks": "lake.station_feed.audit_checks"}]
+    landing = [c.name for c in model.PLATFORM_TABLES[model.KAFKA_LANDING].columns]
+    assert [*doc["bronze"][0]["key"], *doc["bronze"][0]["values"], *pipeline.KAFKA_LINEAGE] == landing
     assert model.schema_errors("pipeline", doc) == []
     dags = {d["product"]: d["tasks"] for d in json.loads(emitted[model.DAGS])["dags"]}
-    assert dags[STATION_ID] == ["resolve", "load", "audit", "publish", "build", "expire", "record", "maintain"]
+    assert dags[FEED_ID] == ["resolve", "load", "audit", "publish", "record", "maintain"]
+
+
+def test_the_pipeline_schema_refuses_a_kafka_pipeline_over_a_file_bronze() -> None:
+    """The enforcing rule for kind kafka: a fetch kind's bronze, or its landing, under a kafka
+    connector fails the release's schema check on pipeline.json."""
+    m = loaded(good())
+    kafka = product(loaded(kinds()), FEED_ID).connector
+    doc = json.loads(pipeline.emit(replaced(m, STATION_ID, connector=kafka))[model.pipeline_path(STATION_ID)])
+    errors = model.schema_errors("pipeline", doc)
+    assert [e for e in errors if "$.bronze[0].key" in e] and [e for e in errors if "$.bronze[0].values" in e], errors
+    doc["bronze"] = json.loads(pipeline.emit(loaded(kinds()))[model.pipeline_path(FEED_ID)])["bronze"]
+    assert model.schema_errors("pipeline", doc) == []
+    doc["landing"] = {"bucket": model.LANDING_BUCKET, "prefix": "sensor-net/station-readings/", "log": "lake.station_readings.landing_files"}
+    assert model.schema_errors("pipeline", doc)
+    doc["landing"] = {"table": "lake.station_readings.landing"}
+    doc["bronze"] = doc["bronze"] * 2
+    assert [e for e in model.schema_errors("pipeline", doc) if "$.bronze" in e]
+
+
+def test_a_public_api_product_compiles_to_what_fetch_py_reads() -> None:
+    """The connector as declared, pagination none, a file kind's landing and bronze, and the fetch
+    one-shot on k2-egress as the file kind has it."""
+    emitted = pipeline.emit(loaded(kinds()))
+    doc = json.loads(emitted[model.pipeline_path(LIST_ID)])
+    assert doc["connector"] == {"kind": "public-api", "url": "https://api.example.org/stations", "allowHosts": ["api.example.org"],
+                                "params": {"region": "all"}, "pagination": "none", "minIntervalS": 1, "records": "result",
+                                "recordKey": "code", "volatileFields": ["generated_at"], "parser": "station_list_json"}
+    assert doc["landing"] == {"bucket": model.LANDING_BUCKET, "prefix": "sensor-net/station-list/", "log": "lake.station_list.landing_files"}
+    (bronze,) = doc["bronze"]
+    assert bronze["key"] == ["code", model.LINEAGE_COLUMN] and bronze["values"] == ["station_name"]
+    assert bronze["audits"] == ["code_present"] and model.schema_errors("pipeline", doc) == []
+    dags = {d["product"]: d["tasks"] for d in json.loads(emitted[model.DAGS])["dags"]}
+    assert dags[LIST_ID] == ["resolve", "fetch", "load", "audit", "publish", "record", "maintain"]
+    assert json.loads(emitted[model.ONESHOTS])["oneshots"]["fetch"]["networks"] == ["k2-egress"]
 
 
 def test_an_unresolved_input_or_a_code_build_is_refused() -> None:

@@ -336,14 +336,14 @@
       ]
     },
     "kafkaConnector": {
-      "description": "Reads the product's own topic at its own position; lands the records its filter keeps in lake.<fence>.landing, end offsets in the same commit (ADR-022). Built in phase 004.",
+      "description": "Reads the product's own topic at its own position; lands every record of the planned range byte for byte, control frames included, in lake.<fence>.landing, end offsets in the same commit (ADR-022); bronze is staged from the landing by offset, the filter applied there (I-1). Built in phase 004.",
       "type": "object",
       "additionalProperties": false,
       "required": ["kind", "brokers", "registry", "topic", "envelope", "payload", "startFrom", "maxOffsetsPerPartition"],
       "properties": {
         "kind": {"description": "kafka.", "const": "kafka"},
-        "brokers": {"description": "Bootstrap servers, host:port, comma separated.", "type": "string", "pattern": "^[a-z0-9.-]+:[0-9]+(,[a-z0-9.-]+:[0-9]+)*$"},
-        "registry": {"description": "The schema registry's URL.", "type": "string", "pattern": "^https?://[a-z0-9.-]+(:[0-9]+)?/?$"},
+        "brokers": {"description": "Bootstrap servers, host:port, comma separated: each host a service of the stack's compose file on the load's network (k2gen check connectors.host-outside-stack); never a credential.", "type": "string", "pattern": "^[a-z0-9.-]+:[0-9]+(,[a-z0-9.-]+:[0-9]+)*$"},
+        "registry": {"description": "The schema registry's URL, no userinfo: its host a service of the stack's compose file on the load's network (connectors.host-outside-stack).", "type": "string", "pattern": "^https?://[a-z0-9.-]+(:[0-9]+)?/?$"},
         "topic": {"description": "The topic the product reads.", "type": "string", "pattern": "^[A-Za-z0-9._-]+$"},
         "envelope": {
           "description": "How each record is framed.",
@@ -352,11 +352,11 @@
           "required": ["format", "contract"],
           "properties": {
             "format": {"description": "The framing.", "enum": ["avro-confluent"]},
-            "contract": {"description": "The contract that declares the envelope's schema.", "$ref": "#/$defs/contractId"}
+            "contract": {"description": "The contract that declares the envelope's schema; a contract of the set (connectors.envelope-unresolved).", "$ref": "#/$defs/contractId"}
           }
         },
         "filter": {
-          "description": "Keep only records whose envelope field holds one of the values; the rest are counted, never landed.",
+          "description": "Bronze staging keeps only records whose envelope field holds one of the values and counts the rest per partition in the bronze commit's summary (k2.kafka-skipped); the landing holds every record whatever the filter, so staged plus skipped equals the landing range read (I-1).",
           "type": "object",
           "additionalProperties": false,
           "required": ["field", "in"],
@@ -378,9 +378,9 @@
       "properties": {
         "kind": {"description": "public-api.", "const": "public-api"},
         "url": {"description": "The first page's URL, https only; may hold {{ds}}, no other macro.", "allOf": [{"$ref": "#/$defs/template"}, {"pattern": "^https://"}]},
-        "allowHosts": {"description": "The only hosts the fetch may connect to, redirects included (ADR-036 part 3).", "type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/host"}},
+        "allowHosts": {"description": "The only hosts the fetch may connect to, redirects included (ADR-036 part 3), each matched exactly as written; the url's host among them (connectors.url-host-not-allowed).", "type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/host"}},
         "params": {"description": "Query parameters added to every request; a value may hold {{ds}}, no other macro.", "type": "object", "additionalProperties": {"$ref": "#/$defs/template"}},
-        "pagination": {"description": "How the next page is found.", "enum": ["none", "next-link", "page"]},
+        "pagination": {"description": "How the next page is found. Only none compiles (k2gen check connectors.pagination-unsupported): fetch.py runs next-link (the Link header) and page (page=1, 2, ...), but no field here yet says where a next link sits in a body or names the page parameter and its start.", "enum": ["none", "next-link", "page"]},
         "maxPages": {"description": "The most pages one run fetches; required unless pagination is none.", "type": "integer", "minimum": 1},
         "minIntervalS": {"description": "The least time between two requests, in seconds.", "type": "integer", "minimum": 0},
         "records": {"description": "The response field that holds the records.", "$ref": "#/$defs/plain"},
@@ -400,7 +400,7 @@
       "properties": {
         "kind": {"description": "https-file.", "const": "https-file"},
         "url": {"description": "The file's URL, https only; may hold {{ds}}, the run's date, and no other macro.", "allOf": [{"$ref": "#/$defs/template"}, {"pattern": "^https://"}]},
-        "allowHosts": {"description": "The only hosts the fetch may connect to, redirects included (ADR-036 part 3).", "type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/host"}},
+        "allowHosts": {"description": "The only hosts the fetch may connect to, redirects included (ADR-036 part 3), each matched exactly as written; the url's host among them (connectors.url-host-not-allowed).", "type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/host"}},
         "format": {"$ref": "#/$defs/fileFormat"},
         "parser": {"$ref": "#/$defs/parser"},
         "calendar": {"description": "The contract id of a calendars table: the days the source publishes.", "$ref": "#/$defs/contractId"},

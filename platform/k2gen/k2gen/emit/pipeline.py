@@ -18,6 +18,10 @@ What the phase 002 DAG factory reads, and nothing it decides at run time:
   (docs/development/phase-001-interfaces.md); dags.schema.json has no field for them.
 - Expire's `older_than => TIMESTAMP '1970-01-01 00:00:00'` and retention are run-time contracts
   (the same page, compiled/lake/retention.json): the pipeline carries only maintain's cron.
+- A kafka connector (I-1, docs/development/phase-001-interfaces.md) lands lake.<fence>.landing and
+  stages its one bronze table from it, keyed (kafka_partition, kafka_offset), its values the
+  record's timestamp, key and value, no fetch task. A public-api connector runs the fetch one-shot
+  on k2-egress as a file kind does, pagination none only (k2gen check connectors.*).
 - A one-shot kind with no image in --images is left out with a line on stderr: phase 001 builds
   only tools; fetch and dbt-runner arrive in phase 002.
 """
@@ -72,6 +76,10 @@ ONESHOT_KINDS: dict[str, dict[str, Any]] = {
     # fetch on k2-egress alone (2026-11-27): a parser reaches the internet and nothing of the stack
     "fetch": {"cpus": "0.5", "memory": "512M", "networks": ["k2-egress"], "env": ["K2_RELEASE"], "secrets": []},
 }
+# A kafka bronze row's lineage to its landing batch (I-1): landing columns, never source values.
+# connectors.kafka-bronze-shape holds the bronze table to the landing's nine columns, and
+# pipeline.schema.json the compiled key and values, so a kafka bronze compiles as kafka.py stages it.
+KAFKA_LINEAGE = ("batch_id", "landed_at", "run_id", "release_id")
 MAINTAIN_FIRST_HOUR, MAINTAIN_HOURS = 2, 4  # every maintain cron falls in 02:00 to 05:59 UTC
 
 
@@ -90,10 +98,11 @@ def _json(doc: Any) -> str:
 
 def _bronze(p: Product, t: Table) -> dict[str, Any]:
     key = sorted((c for c in t.columns if c.primary_key), key=lambda c: c.primary_key_position or 0)
+    lineage = KAFKA_LINEAGE if p.connector and p.connector.kind == "kafka" else (LINEAGE_COLUMN,)
     return {
         "table": lake_relation(p.name, t.name),
         "key": [c.name for c in key],
-        "values": [c.name for c in t.columns if not c.primary_key and c.name != LINEAGE_COLUMN],
+        "values": [c.name for c in t.columns if not c.primary_key and c.name not in lineage],
         "decimal": [c.name for c in t.columns if c.physical_type.startswith("decimal(")],
         "patterns": {c.name: c.pattern for c in t.columns if c.pattern},
         "audits": [q.implementation for q in t.quality if q.type == "custom" and q.engine == "k2-connector"],

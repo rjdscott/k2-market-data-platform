@@ -94,6 +94,28 @@
     }
   },
   "dependentRequired": {"connector": ["landing"], "landing": ["connector"]},
+  "allOf": [
+    {
+      "description": "A kafka product (I-1): the landing is the table, and its one bronze table holds the landing's columns as kafka.py stages them, keyed by offset, the lineage columns (batch_id, landed_at, run_id, release_id) neither key nor values. Any other connector lands objects and their log.",
+      "if": {"required": ["connector"], "properties": {"connector": {"required": ["kind"], "properties": {"kind": {"const": "kafka"}}}}},
+      "then": {
+        "required": ["bronze"],
+        "properties": {
+          "landing": {"required": ["table"]},
+          "bronze": {"minItems": 1, "maxItems": 1, "items": {
+            "required": ["decimal", "patterns"],
+            "properties": {
+              "key": {"const": ["kafka_partition", "kafka_offset"]},
+              "values": {"const": ["kafka_timestamp", "record_key", "record_value"]},
+              "decimal": {"const": []},
+              "patterns": {"const": {}}
+            }
+          }}
+        }
+      },
+      "else": {"properties": {"landing": {"required": ["bucket", "prefix", "log"]}}}
+    }
+  ],
   "$defs": {
     "fence": {"description": "A name with hyphens as underscores.", "type": "string", "pattern": "^[a-z][a-z0-9]*(_[a-z0-9]+)*$"},
     "column": {"description": "A column or function name.", "type": "string", "pattern": "^[a-z][a-z0-9_]*$"}

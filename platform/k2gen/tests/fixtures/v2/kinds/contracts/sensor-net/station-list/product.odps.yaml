@@ -1,0 +1,42 @@
+apiVersion: v1.1.0
+kind: DataProduct
+id: sensor-net.station-list
+name: station-list
+version: 1.0.0
+status: active
+domain: sensor-net
+type: sourceAligned
+description:
+  purpose: The synthetic station list, one row per station of a made-up JSON API's one page.
+  limitations: Synthetic; no real station.
+team:
+  name: sensor-team
+tags: [synthetic]
+support:
+  - channel: sensor-team-requests
+    url: "mailto:sensor-team@example.org"
+    tool: email
+    scope: issues
+    description: Questions and access requests, answered by the made-up sensor team.
+outputPorts:
+  - name: bronze_stations
+    version: 1.0.0
+    contractId: sensor-net.station-list.bronze_stations
+customProperties:
+  - property: connector
+    value:
+      kind: public-api
+      url: "https://api.example.org/stations"
+      allowHosts: [api.example.org]
+      params:
+        region: all
+      pagination: none
+      minIntervalS: 1
+      records: result
+      recordKey: code
+      volatileFields: [generated_at]
+      parser: station_list_json
+  - property: schedule
+    value:
+      cron: "0 * * * *"
+      timeoutMinutes: 10
