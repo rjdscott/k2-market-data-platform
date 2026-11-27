@@ -1,0 +1,70 @@
+# Kraken's trade frames as the capture sent them: the Kafka connector reads the raw Kraken topic
+# every five minutes, lands every record of the planned offset range byte for byte in
+# lake.kraken_trades.landing (control frames included, end offsets in the same commit, ADR-022),
+# then stages the trade frames into bronze_trade by offset, after its audit (I-1,
+# docs/development/phase-001-interfaces.md). The typed silver_trade and the held
+# silver_trade_unresolved (plan 004) come in later versions of this product.
+apiVersion: v1.1.0
+kind: DataProduct
+id: market-capture.kraken-trades
+name: kraken-trades
+version: 1.0.0
+status: active
+domain: market-capture
+type: sourceAligned
+description:
+  purpose: >-
+    Every trade frame Kraken's WebSocket v2 trade channel sent the capture, one bronze row per
+    Kafka record, the record's bytes exactly as read: the venue's trades, landed before anything
+    interprets them, so any later decoding is repairable from the landing.
+  limitations: >-
+    Bronze holds the Confluent-framed RawMessage undecoded (record_value): no typed trade columns
+    yet. Only frames the capture received are here; a capture outage is a hole in time, not in
+    offsets, and the offset checks cannot see it. The venue's terms of reuse are not yet recorded
+    here: the owner confirms them before any grant outside the owning team (k2gen check refuses
+    such a grant while no terms are recorded).
+  usage: >-
+    Owner-only. Read lake.kraken_trades.bronze_trade by (kafka_partition, kafka_offset), its key
+    and its lineage to the landing and the topic.
+team:
+  name: capture-team
+outputPorts:
+  - name: bronze_trade
+    version: 1.0.0
+    contractId: market-capture.kraken-trades.bronze_trade
+customProperties:
+  - property: connector
+    value:
+      kind: kafka
+      brokers: "redpanda:9092"
+      registry: "http://redpanda:8081"
+      topic: market.crypto.v3.raw.kraken
+      envelope:
+        format: avro-confluent
+        # ponytail: names bronze_trade, whose record_value is the RawMessage as framed, as the
+        # k2gen fixture station-feed does. I-1 names a raw_message contract, which waits on a build
+        # kind for a contract with no lake table (k2-v2.schema.json build has none but serving).
+        contract: market-capture.kraken-trades.bronze_trade
+      filter:
+        field: stream
+        in: [trade]
+      payload: json
+      startFrom: earliest-retained
+      # An engineering bound, not a measurement. Assumed: the busiest partition of the topic's 12
+      # (keyed by symbol, so one partition can carry several) stays under 100 records a second,
+      # trade and control frames, book capture off (ADR-050). A normal five-minute run then reads
+      # at most 300 s x 100 = 30,000 per partition, a fifth of this bound; a backlog falls by at
+      # least 150,000 - 30,000 = 120,000 per partition per run, so a one-hour stall (360,000)
+      # clears in 3 runs. One run reads at most 12 x 150,000 = 1,800,000 records, twice (count,
+      # then write). The first live runs confirm or move it: load's backlog per partition must be
+      # 0 after a normal run, and the read time stays inside the timeout (W0-12, the soak's
+      # benchmark).
+      maxOffsetsPerPartition: 150000
+  - property: schedule
+    value:
+      # Every five minutes, one run at a time (the factory's max_active_runs=1). The timeout is
+      # two periods, an engineering bound until the first measured runs set it: a run draining a
+      # backlog may hold the next slot, never a third. A run killed by it lands nothing twice: the
+      # next plans from the newest connector snapshot (ADR-022).
+      cron: "*/5 * * * *"
+      timeoutMinutes: 10

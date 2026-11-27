@@ -30,7 +30,8 @@
       "name": "k2",
       "namespaces": [
         "currency_master",
-        "ecb_fx_rates"
+        "ecb_fx_rates",
+        "kraken_trades"
       ],
       "remoteSigningEnabled": false
     },
