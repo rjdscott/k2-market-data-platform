@@ -54,6 +54,10 @@ ENV PATH=/opt/k2/dbt-venv/bin:$PATH \
     HOME=/tmp \
     DBT_SEND_ANONYMOUS_USAGE_STATS=false
 
+# /site: the k2-site volume's mount point for `k2-dbt docs`, mode 1777 as in the tools and k2-api
+# images, so whichever image mounts the empty volume first gives its root the same mode.
+RUN mkdir -m 1777 /site
+
 # Non-root. The operator runs it as the host user (--user) to read the password files; this uid
 # is for any other run, and every file here is world-readable for either.
 USER 10003:10003

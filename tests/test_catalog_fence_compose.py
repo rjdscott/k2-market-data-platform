@@ -479,13 +479,13 @@ def site_problems(doc: dict, dockerfiles: dict[str, str]) -> list[str]:
     if "k2-site" not in (doc.get("volumes") or {}):
         out.append("no volume k2-site")
     modes = {path: MODE.findall(text) for path, text in dockerfiles.items()}
-    if sorted(m for found in modes.values() for m, _ in found) != ["1777", "1777"]:
-        out.append(f"the site's mount points are not each made once, mode 1777, in the tools and k2-api images: {modes}"
+    if sorted(m for found in modes.values() for m, _ in found) != ["1777"] * len(dockerfiles):
+        out.append(f"the site's mount points are not each made once, mode 1777, in each image that mounts it: {modes}"
                    " (the first image to mount the empty volume sets its root)")
     return out
 
 
-SITE_DOCKERFILES = {f: (ROOT / f).read_text() for f in ("docker/tools/Dockerfile", "services/k2-api/Dockerfile")}
+SITE_DOCKERFILES = {f: (ROOT / f).read_text() for f in ("docker/tools/Dockerfile", "services/k2-api/Dockerfile", "docker/dbt-runner/Dockerfile")}
 
 
 def test_the_site_volume_is_written_by_the_generators_and_read_only_in_k2_api():
