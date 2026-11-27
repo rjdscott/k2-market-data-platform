@@ -192,7 +192,9 @@ def test_a_breach_of_the_fence_fails(mutate, says):
 # ---- storage keys (W1-3): every engine on its own MinIO user, the root pair in lake-init alone -------
 
 ENGINES = sorted(p.stem.upper() for p in (ROOT / "docker/lake/minio/policies").glob("*.json"))  # init-lake.sh's list
-HOLDS = {"lake-init": set(ENGINES), "trino": {"TRINO"}, "spark-iceberg": {"SPARK", "MAINTENANCE"}, "tools": {"TOOLS", "BACKUP"}}
+# tools holds none: nothing it runs reads a storage key (scripts/backup-lake.sh passes BACKUP to its own
+# `docker run -e`, and a step that needs one passes it by name for that run alone).
+HOLDS = {"lake-init": set(ENGINES), "trino": {"TRINO"}, "spark-iceberg": {"SPARK", "MAINTENANCE"}}
 ROOT_PAIR = {"minio", "lake-init"}  # MinIO itself; lake-init makes the users and the warehouses
 # Spark's pair under the AWS SDK's names, in spark-iceberg alone: scripts/deploy.py's spark-sql DDL sets no key.
 SDK = {"AWS_ACCESS_KEY_ID": "K2_SPARK_S3_ACCESS_KEY", "AWS_SECRET_ACCESS_KEY": "K2_SPARK_S3_SECRET_KEY"}
@@ -234,7 +236,7 @@ def storage_problems(doc: dict) -> list[str]:
 def test_every_engine_holds_its_own_storage_pair_and_only_lake_init_the_root():
     assert ENGINES == ["BACKUP", "MAINTENANCE", "SPARK", "TOOLS", "TRINO"]
     assert storage_problems(COMPOSE) == []
-    for n in ("fetch", "dbt-runner", "k2-api", "prometheus", "grafana", "airflow-scheduler", "airflow-dag-processor",
+    for n in ("fetch", "dbt-runner", "k2-api", "tools", "prometheus", "grafana", "airflow-scheduler", "airflow-dag-processor",
               "airflow-api-server", "airflow-migrate"):
         assert not [k for k in env_items(COMPOSE["services"][n]) if "S3_" in k or k.startswith(("AWS_", "MINIO_"))], n
 
@@ -251,8 +253,10 @@ def env_set(svc, key, value):
     (env_set("spark-iceberg", "K2_TRINO_S3_ACCESS_KEY", "${K2_TRINO_S3_ACCESS_KEY:?x}"), "not its own"),
     (env_set("spark-iceberg", "AWS_SECRET_ACCESS_KEY", "${K2_MAINTENANCE_S3_SECRET_KEY:?x}"), "not Spark's own pair"),
     (env_set("tools", "K2_SPARK_S3_SECRET_KEY", "${K2_SPARK_S3_SECRET_KEY:?x}"), "not its own"),
-    (env_set("tools", "K2_TOOLS_S3_SECRET_KEY", "${K2_BACKUP_S3_SECRET_KEY:?x}"), "required, never a default or another"),
-    (lambda d: d["services"]["tools"]["environment"].pop("K2_BACKUP_S3_ACCESS_KEY"), "lacks its own pair"),
+    (env_set("tools", "K2_TOOLS_S3_SECRET_KEY", "${K2_TOOLS_S3_SECRET_KEY:?x}"), "tools names storage keys not its own"),
+    (env_set("tools", "K2_BACKUP_S3_ACCESS_KEY", "${K2_BACKUP_S3_ACCESS_KEY:?x}"), "tools names storage keys not its own"),
+    (env_set("spark-iceberg", "K2_SPARK_S3_SECRET_KEY", "${K2_MAINTENANCE_S3_SECRET_KEY:?x}"), "required, never a default or another"),
+    (lambda d: d["services"]["trino"]["environment"].pop("K2_TRINO_S3_ACCESS_KEY"), "lacks its own pair"),
     (env_set("airflow-scheduler", "K2_MAINTENANCE_S3_ACCESS_KEY", "${K2_MAINTENANCE_S3_ACCESS_KEY:?x}"), "not its own"),
     (env_set("airflow-scheduler", "AWS_ACCESS_KEY_ID", "${K2_SPARK_S3_ACCESS_KEY:?x}"), "not Spark's own pair"),
     (env_set("prometheus", "PASS", "${K2_TOOLS_S3_SECRET_KEY}"), "reads another engine's key"),
