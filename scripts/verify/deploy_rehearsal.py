@@ -82,7 +82,7 @@ RESULTS: list[tuple[str, bool, str]] = []
 CODE = ("platform/k2gen/k2gen", "platform/k2gen/pyproject.toml", "platform/k2gen/uv.lock", "platform/runs",
         "contracts", "dbt", "docker/tools", "scripts/deploy.py", "scripts/principal-secret.py",
         "scripts/tls.sh", "scripts/check-env.py", "scripts/backup-lake.sh", "scripts/lib", "scripts/access_verify.py", "scripts/verify", "tests/access", "mk",
-        "docker/lake", "scripts/engine-keys.py", ".env.example", "docker/spark")  # lake-init's script and policies; make engine-keys and the placeholders it replaces; Spark's image
+        "docker/lake", "scripts/engine-keys.py", ".env.example", "docker/spark", "services/k2-api")  # lake-init's script and policies; make engine-keys and the placeholders it replaces; Spark's image; k2-api's, which a lake builds when a row runs via REST
 
 COMPOSE = """\
 # The rehearsal's compose file, release-shaped (scripts/verify/deploy_rehearsal.py): what S22 makes live.
