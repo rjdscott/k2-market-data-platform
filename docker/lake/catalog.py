@@ -159,5 +159,9 @@ def fetch_schema(schema_id: int, registry: str | None = None) -> str:
         # registry has never held. Raising it as its own type is what let the
         # old decode stage skip that id and record it, instead of dying on
         # every cycle for as long as the record stayed in its never-expired
-        # archive.
+        # archive. Any other status (a 5xx, a 401) says nothing about the id:
+        # it is raised as it is and fails the task before anything is staged,
+        # never staged as frames nobody could decode (review finding D3).
+        if exc.code != 404:
+            raise
         raise UnresolvableSchema(f"schema id {schema_id}: {exc}") from exc

@@ -7,13 +7,16 @@ predicate run in DuckDB, so the SQL Spark runs is the SQL tested. The shells ove
 throwaway-lake proof. Values are synthetic.
 """
 
+import io
 import json
+import urllib.error
 from pathlib import Path
 
 import connector as C
 import duckdb
 import kafka as K
 import pytest
+from conftest import import_lake_module
 from test_lake_connector import model  # k2gen's names, executed from model.py
 
 import offsets as O
@@ -159,9 +162,26 @@ class Lake:
         head = self.refs_[table].get("main")
         return head, [(s, self.snaps[s]["summary"]) for s in self.lineage(head)]
 
-    def land(self, table, frames, values, props):
+    def land(self, table, frames, values, props, parent):
+        """As SparkLanding.land: K.LAND set to `parent` (no main: an empty root, as Iceberg makes
+        one), then the commit on whatever K.LAND's head is then, as Iceberg retries an append.
+        `during_write` runs once between the two: another load at once."""
         rows = [{**{dst: f[src] for dst, src in K.LANDING_SOURCE}, **values} for f in frames]
-        self.refs_[table]["main"] = self._commit(table, self.refs_[table].get("main"), rows, props)
+        self.refs_[table][K.LAND] = parent if parent is not None else self._commit(table, None, [], {})
+        hook, self.during_write = getattr(self, "during_write", None), None
+        if hook:
+            hook()
+        self.refs_[table][K.LAND] = head = self._commit(table, self.refs_[table][K.LAND], rows, props)
+        return head
+
+    def parents(self, table):
+        return {s: (x["parent"], x["summary"].get("k2.batch-id")) for s, x in self.snaps.items() if x["table"] == table}
+
+    def catalog(self, table):
+        return Catalog(self)
+
+    def refresh(self, table):
+        pass
 
     def maintain(self, table, summary=None):
         """A compaction or expiry snapshot: the same rows, no k2 properties."""
@@ -228,6 +248,13 @@ class Lake:
                 if r["kafka_partition"] in ranges
                 and ranges[r["kafka_partition"]][0] <= r["kafka_offset"] < ranges[r["kafka_partition"]][1]]
 
+    def firsts(self, table, snapshot, partitions):
+        found = {}
+        for r in self.snaps[snapshot]["rows"]:
+            if r["kafka_partition"] in partitions:
+                found[r["kafka_partition"]] = min(found.get(r["kafka_partition"], r["kafka_offset"]), r["kafka_offset"])
+        return found
+
     def offset_counts(self, table, snapshot, ranges):
         found = {}
         for r in self._in(snapshot, ranges):
@@ -237,7 +264,7 @@ class Lake:
     def unparsed(self, landing, src, table, snapshot, ranges, keep):
         """As SparkLanding.unparsed: bronze's frames, their bytes read again from the landing at `src`."""
         assert landing == LANDING
-        staged = {(r["kafka_partition"], r["kafka_offset"]) for r in self._in(snapshot, ranges)}
+        staged = {(r["kafka_partition"], r["kafka_offset"]): r for r in self._in(snapshot, ranges)}
         rows = sorted((r for r in self._in(src, ranges) if (r["kafka_partition"], r["kafka_offset"]) in staged),
                       key=lambda r: (r["kafka_partition"], r["kafka_offset"]))
         envelopes = [envelope(r["record_value"]) for r in rows]
@@ -245,13 +272,45 @@ class Lake:
         for r, e, kept in zip(rows, envelopes, duck_keep(keep, envelopes)):
             sid = decode(r["record_value"])[0]
             problem = ", and ".join(K.problems(WRITERS[sid], ENVELOPE_COLUMNS)) or None if e is not None else None
-            if e is None or not kept or problem:
-                bad.append((r["kafka_partition"], r["kafka_offset"], sid, sid in WRITERS, e is not None, problem))
+            row = staged[(r["kafka_partition"], r["kafka_offset"])]
+            want = {n: e.get(n) if K.compatible(WRITERS[sid].get(n), t) else None
+                    for n, t in ENVELOPE_COLUMNS.items()} if e is not None else {}
+            differs = ", ".join(n for n in want if row[n] != want[n]) or None
+            if e is None or not kept or problem or differs:
+                bad.append((r["kafka_partition"], r["kafka_offset"], sid, sid in WRITERS, e is not None, problem, differs))
         return len(bad), bad[:K.LISTED]
 
     def append(self, table, records, props):  # audit_checks
         assert table == PIPELINE["bronze"][0]["checks"] and props["k2.job"] == K.JOB_CONNECTOR
         self.checks.extend(records)
+
+    def checks_of(self, checks, table, batch, snapshot):  # as connector.SparkLake
+        assert checks == PIPELINE["bronze"][0]["checks"]
+        return [(r["check_name"], r["passed"], r["checked_at"]) for r in self.checks
+                if r["table_name"] == table and r["batch_id"] == batch and r["snapshot_id"] == snapshot]
+
+
+class Catalog:
+    """The catalog's table commit over the fake's refs, as tests/test_lake_connector.py's REST fake
+    has it: the set-snapshot-ref updates applied only if every assert-ref-snapshot-id holds (null:
+    no such ref), else 409. `lake.during_commit` runs once before the check: another load at once."""
+
+    def __init__(self, lake):
+        self.lake = lake
+
+    def commit(self, table, change):
+        hook, self.lake.during_commit = getattr(self.lake, "during_commit", None), None
+        if hook:
+            hook()
+        refs = self.lake.refs_[table]
+        if any(refs.get(r["ref"]) != r["snapshot-id"] for r in change["requirements"]):
+            return 409, {"error": {"message": "Requirement failed", "code": 409}}
+        for u in change["updates"]:
+            refs[u["ref-name"]] = u["snapshot-id"]
+        return 200, {"metadata": {"refs": {r: {"snapshot-id": s} for r, s in refs.items()}}}
+
+    def refs(self, table):
+        return dict(self.lake.refs_[table])
 
 
 def offsets_of(rows):
@@ -421,6 +480,34 @@ def test_two_gaps_in_one_partition_are_both_carried_and_adjacent_ones_merge():
         TOPIC: {0: [(2, 7)], 1: [(0, 2)]}}  # one that starts where the last ended is one gap
 
 
+@pytest.mark.parametrize("first", [True, False])
+@pytest.mark.parametrize("when", ["write", "commit"])
+def test_of_two_loads_at_once_one_lands_and_the_other_lands_nothing(capsys, when, first):
+    """The other load runs start to end inside this one: during its branch write (Iceberg rebases
+    this write on the other's), or between that write and its catalog commit (main moved)."""
+    topic, lake = Topic(partitions=1), Lake()
+    topic.produce(0, "trade")
+    if not first:  # else the race is the landing's first commit, on no main
+        K.land(ctx(1), topic, lake)
+    topic.produce(0, "trade", "trade")
+    winner = []
+    setattr(lake, f"during_{when}", lambda: winner.append(K.land(ctx(3), topic, lake)[0]))
+    code, result = K.land(ctx(2), topic, lake)
+    assert winner == [C.EXIT_OK] and code == C.EXIT_REFUSED and "nothing landed" in capsys.readouterr().err
+    assert offsets_of(lake.rows(LANDING)) == [(0, 0), (0, 1), (0, 2)]  # each offset once: the winner's
+    assert newest_summary(lake, LANDING)["k2.batch-id"] == run_id(3)
+    topic.produce(0, "trade")
+    assert K.land(ctx(4), topic, lake)[1]["landed"] == 1  # the next plans from the winner's offsets
+    assert offsets_of(lake.rows(LANDING)) == [(0, 0), (0, 1), (0, 2), (0, 3)]
+
+
+def test_a_landing_commit_written_on_main_as_planned_lands_and_one_written_elsewhere_does_not():
+    parents = {5: (4, "a"), 4: (None, "b"), 9: (None, None), 10: (9, "c"), 11: (10, "d")}
+    assert K.landed_on(parents, 5, 4) and not K.landed_on(parents, 5, 3)
+    assert K.landed_on(parents, 10, None) and K.landed_on(parents, 4, None)  # no main: an empty root, or none
+    assert not K.landed_on(parents, 11, None)  # on another load's commit
+
+
 def test_a_paused_product_lands_nothing():
     topic, lake = Topic(), Lake()
     topic.produce(0, "trade")
@@ -484,8 +571,9 @@ def test_two_landed_ranges_one_staged_the_second_stages_alone():
 
 def test_a_failed_bronze_blocks_bronze_never_the_landing():
     topic, lake = Topic(partitions=1), Lake()
-    topic.produce(0, "trade", "trade")
-    K.load(ctx(1), topic, lake)  # its audit fails: the batch waits on `audit`, unpublished
+    topic.produce(0, "trade", None)
+    K.load(ctx(1), topic, lake)
+    assert K.audit(ctx(1), None, lake)[0] == C.EXIT_FAILED  # the unframed frame: the batch waits on `audit`
     topic.produce(0, "trade", "trade")
     code, result = K.load(ctx(2), topic, lake)
     assert code == C.EXIT_REFUSED and result["landed"] == 2
@@ -498,6 +586,67 @@ def test_a_failed_bronze_blocks_bronze_never_the_landing():
     assert offsets_of(lake.rows(BRONZE, "audit")) == [(0, 0), (0, 1), (0, 2), (0, 3)]
 
 
+@pytest.mark.parametrize("published_before", [False, True])
+def test_a_run_killed_between_stage_and_audit_is_restaged_by_the_next_run(published_before):
+    """No main yet is the live first run: a backlog past the run's timeout."""
+    topic, lake = Topic(partitions=1), Lake()
+    if published_before:
+        topic.produce(0, "trade")
+        K.load(ctx(1), topic, lake)
+        K.audit(ctx(1), None, lake)
+        lake.publish()
+    topic.produce(0, "trade", "heartbeat")
+    K.load(ctx(2), topic, lake)  # its run killed here: staged, never audited
+    topic.produce(0, "trade")
+    code, result = K.load(ctx(3), topic, lake)
+    assert code == C.EXIT_OK and result["landed"] == 1 and result["rows"] == 2
+    assert lake.batch_of(BRONZE, lake.refs_[BRONZE]["audit"]) == run_id(3)
+    assert audited(lake, 3)[0] == C.EXIT_OK
+    lake.publish()
+    assert offsets_of(lake.rows(BRONZE)) == ([(0, 0), (0, 1), (0, 3)] if published_before else [(0, 0), (0, 2)])
+
+
+def test_a_batch_audited_and_passed_but_never_published_is_restaged_by_the_next_run():
+    topic, lake = Topic(partitions=1), Lake()
+    topic.produce(0, "trade")
+    K.load(ctx(1), topic, lake)
+    assert audited(lake, 1)[0] == C.EXIT_OK  # its publish killed
+    topic.produce(0, "trade")
+    code, result = K.load(ctx(2), topic, lake)
+    assert code == C.EXIT_OK and result["rows"] == 2 and audited(lake, 2)[0] == C.EXIT_OK
+    lake.publish()
+    assert offsets_of(lake.rows(BRONZE)) == [(0, 0), (0, 1)]
+
+
+@pytest.mark.parametrize("published_before", [False, True])
+def test_a_batch_that_failed_its_audit_is_never_reset_and_the_refusal_names_its_checks_and_the_clearing(
+        capsys, published_before):
+    topic, lake = Topic(partitions=1), Lake()
+    if published_before:
+        topic.produce(0, "trade")
+        K.load(ctx(1), topic, lake)
+        K.audit(ctx(1), None, lake)
+        lake.publish()
+    topic.produce(0, None)
+    K.load(ctx(2), topic, lake)
+    K.audit(ctx(2), None, lake)
+    refs = lake.refs(BRONZE)
+    topic.produce(0, "trade")
+    code, result = K.load(ctx(3), topic, lake)
+    assert code == C.EXIT_REFUSED and result["landed"] == 1 and lake.refs(BRONZE) == refs
+    err = capsys.readouterr().err
+    clear = (f"REPLACE BRANCH audit AS OF VERSION {refs['main']}" if published_before else "DROP BRANCH audit")
+    assert f"holds batch {run_id(2)}" in err and "failed ['parses']" in err and f"ALTER TABLE {BRONZE} {clear}" in err
+
+
+def test_a_head_on_audit_no_kafka_stage_wrote_is_never_reset():
+    topic, lake = Topic(partitions=1), Lake()
+    lake.refs_[BRONZE]["audit"] = lake._commit(BRONZE, None, [], {"k2.batch-id": "an operator's"})
+    topic.produce(0, "trade")
+    assert K.load(ctx(1), topic, lake)[0] == C.EXIT_REFUSED and lake.rows(BRONZE, "audit") == []
+    assert K.restageable([], {"k2.job": K.JOB_CONNECTOR}) == (False, "no Kafka stage wrote it")
+
+
 def test_a_retry_of_a_staged_batch_stages_nothing_twice():
     topic, lake = Topic(partitions=1), Lake()
     topic.produce(0, "trade")
@@ -508,8 +657,62 @@ def test_a_retry_of_a_staged_batch_stages_nothing_twice():
 
 def test_bronze_past_the_landing_is_refused():
     with pytest.raises(C.Refused, match=r"partitions \[1\]"):
-        K.stage_ranges({TOPIC: {0: 3, 1: 9}}, {TOPIC: {0: 5, 1: 4}})
-    assert K.stage_ranges({TOPIC: {0: 3}}, {TOPIC: {0: 5, 1: 4}}) == {0: (3, 5), 1: (0, 4)}
+        K.stage_ranges({TOPIC: {0: 3, 1: 9}}, {TOPIC: {0: 5, 1: 4}}, {})
+    assert K.stage_ranges({TOPIC: {0: 3}}, {TOPIC: {0: 5, 1: 4}}, {1: 0}) == {0: (3, 5), 1: (0, 4)}
+
+
+def test_a_partition_bronze_never_staged_starts_at_the_landings_first_offset_never_0():
+    assert K.stage_ranges({TOPIC: {0: 3}}, {TOPIC: {0: 5, 1: 9, 2: 7}}, {1: 6}) == {0: (3, 5), 1: (6, 9)}
+    assert K.stage_ranges({}, {TOPIC: {0: 5}}, {0: 2}) == {0: (2, 5)}  # 2 holds no landing row: nothing
+
+
+def trimmed(partitions, produced, log_start):
+    """A topic whose every partition holds `produced` records, those below `log_start` evicted."""
+    topic = Topic(partitions)
+    for p in range(partitions):
+        topic.produce(p, *["trade", "heartbeat"] * (produced // 2))
+        topic.evict(p, log_start)
+    return topic
+
+
+def test_a_topic_trimmed_before_the_first_run_lands_audits_and_publishes_from_its_log_start():
+    topic, lake = trimmed(2, 8, 5), Lake()
+    code, result = K.load(ctx(1), topic, lake)
+    assert code == C.EXIT_OK and result["starts"] == {TOPIC: {0: 5, 1: 5}} and result["landed"] == 6
+    assert offsets_of(lake.rows(BRONZE, "audit")) == [(0, 6), (1, 6)]  # the trades, from the log start
+    code, checks = audited(lake, 1)
+    assert code == C.EXIT_OK and checks["accounting"] == (True, "2 staged + 4 skipped = 6 landed over 2 partitions")
+    lake.publish()
+    topic.produce(0, "trade")
+    K.load(ctx(2), topic, lake)  # the next resumes at the through-offsets, as every later run
+    assert audited(lake, 2)[0] == C.EXIT_OK and offsets_of(lake.rows(BRONZE, "audit")) == [(0, 6), (0, 8), (1, 6)]
+
+
+def test_a_partition_added_later_with_its_log_start_above_0_stages_from_it():
+    topic, lake = Topic(partitions=1), Lake()
+    topic.produce(0, "trade")
+    K.load(ctx(1), topic, lake)
+    K.audit(ctx(1), None, lake)
+    lake.publish()
+    topic.records[1], topic.log_start[1] = {}, 0  # partition 1 added, and trimmed before any run read it
+    topic.produce(1, *["trade"] * 6)
+    topic.evict(1, 4)
+    K.load(ctx(2), topic, lake)
+    code, checks = audited(lake, 2)
+    assert code == C.EXIT_OK and checks["accounting"] == (True, "2 staged + 0 skipped = 2 landed over 1 partitions")
+    assert offsets_of(lake.rows(BRONZE, "audit")) == [(0, 0), (1, 4), (1, 5)]
+
+
+def test_an_accept_data_loss_run_that_is_bronzes_first_stage_plans_from_the_landings_first_offset():
+    topic, lake = trimmed(1, 4, 2), Lake()  # log start 2
+    K.land(ctx(1, accept=True), topic, lake)  # the first run, the flag a no-op on it; killed before its stage
+    topic.produce(0, "trade", "trade", "trade")
+    topic.evict(0, 6)  # 4 and 5 gone before they landed
+    code, result = K.load(ctx(2, accept=True), topic, lake)
+    assert code == C.EXIT_OK and result["offsetGaps"][0]["committed"] == 4
+    code, checks = audited(lake, 2)
+    assert code == C.EXIT_OK and checks["accounting"] == (True, "2 staged + 1 skipped = 3 landed over 1 partitions")
+    assert offsets_of(lake.rows(BRONZE, "audit")) == [(0, 2), (0, 6)]
 
 
 def test_the_stage_refuses_a_row_neither_kept_nor_skipped_or_outside_its_range():
@@ -646,6 +849,54 @@ def test_a_writer_schema_lacking_or_retyping_a_bronze_column_fails_parses_naming
         f"column symbol takes; {TOPIC}/0 offset 2: its writer schema 3 has field symbol as bigint, which bronze's "
         "column symbol (string) does not take"))
     assert checks["accounting"][0] and checks["keys_unique"][0]
+
+
+def test_a_frame_bronze_staged_null_that_decodes_now_fails_parses_never_a_silent_null(monkeypatch):
+    """The registry answered 404 for id 1 at the stage (restored since): every envelope column
+    staged null. The audit's own decode reads it, so only bronze's staged values can fail it."""
+    topic, lake = Topic(partitions=1), Lake()
+    topic.produce(0, frame("trade", symbol="A/B"), frame("trade", sid=4, symbol="C/D"))
+    with monkeypatch.context() as m:
+        m.delitem(WRITERS, 1)
+        K.load(ctx(1), topic, lake)
+    assert [(r["stream"], r["symbol"]) for r in lake.rows(BRONZE, "audit")] == [(None, None), ("trade", "C/D")]
+    code, checks = audited(lake, 1)
+    assert code == C.EXIT_FAILED and checks["parses"] == (
+        False, f"1 of 2 frames do not parse: {TOPIC}/0 offset 0: bronze staged stream, symbol other than it decodes to")
+
+
+def test_only_a_404_is_an_unresolvable_schema_and_any_other_registry_error_fails_the_task(monkeypatch):
+    catalog = import_lake_module("catalog")
+    raw = json.dumps({"type": "record", "name": K.ENVELOPE, "fields": []})
+
+    def urlopen(url, timeout):
+        sid = int(url.rsplit("/", 1)[1])
+        if sid == 1:
+            return io.BytesIO(json.dumps({"schema": raw}).encode())
+        raise urllib.error.HTTPError(url, 404 if sid == 7 else 503, "synthetic", {}, None)
+
+    monkeypatch.setattr(catalog.urllib.request, "urlopen", urlopen)
+    with pytest.raises(catalog.UnresolvableSchema):
+        catalog.fetch_schema(7, "http://registry")
+    with pytest.raises(urllib.error.HTTPError, match="503"):
+        catalog.fetch_schema(5, "http://registry")
+
+    class Frames:  # what envelopes reads of a DataFrame: its distinct schema ids
+        def __init__(self, ids):
+            self.ids = ids
+
+        def select(self, *_):
+            return self
+
+        where = distinct = select
+
+        def collect(self):
+            return [(i,) for i in self.ids]
+
+    lake = K.SparkLanding(None, "http://registry")
+    assert lake.envelopes(Frames([1, 7])) == {1: raw}  # 7 is no schema: its frames fail parses
+    with pytest.raises(urllib.error.HTTPError):  # 5 is unknown: the task fails before the stage writes
+        lake.envelopes(Frames([1, 5]))
 
 
 def test_a_field_reads_as_its_column_when_equal_or_an_avro_promotion():

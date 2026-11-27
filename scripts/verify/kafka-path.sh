@@ -35,6 +35,12 @@
 #  10 bronze carries the decoded envelope (I-1, 2026-11-28): its columns the contract's, every row
 #     stream = trade, schema_id the registered id, payload the seeded line's bytes byte for byte,
 #     symbol as the adapter's rule has it; the corrupt frame staged with every envelope column null
+#  11 a run killed between stage and audit (k10: its load alone, as the run's timeout leaves it) is
+#     healed by the next scheduled run (k11) with no operator action: k10's batch never audited,
+#     k11 restages its range with the new one, audits and publishes; every trade once, no hole
+#  12 a batch that failed its audit (k9's) is never reset: the next load (k12) exits 2 naming the
+#     failed check and the statement that clears it, audit and main unmoved
+#  (9 and 10 compare k9 with k11, the run before the corrupt frame)
 # group b
 #   1 a start below the log start (records deleted by `rpk topic trim-prefix` past the committed end
 #     offsets, on every partition that has them) fails loudly naming each partition; nothing lands
@@ -43,6 +49,9 @@
 #   3 the audit's accounting passes with the gap excluded, and publish moves main
 #   4 after one further clean run the newest landing commit still carries the gap (cumulative)
 #   5 bronze main still carries the decoded envelope as seeded (a's claim 10's rule)
+#   6 the topic trimmed BEFORE the product's first run (b1; every partition of two records or more
+#     halfway): b1 lands from each log start, every offset once, and its audit and publish pass
+#     (claims 1 to 5 build on that lake: the landing starts at those log starts, not at 0)
 # group c (W0-4c), each maintain pass maintain.py exactly as the factory's task runs it; the
 # thresholds met by seeding small files (COMPACT_MIN_FILES has no override): `kafka_path_probe.py
 # cycles`, 50 runs of three trade frames in one Spark application, kafka.py's own tasks
@@ -64,7 +73,7 @@ set -uo pipefail
 # shellcheck source=scripts/lib/run-path-lib.sh
 . "$(dirname "$0")/../lib/run-path-lib.sh"
 GROUP=${2:-a}
-case $GROUP in a) N=10 ;; b) N=5 ;; c) N=6 ;; *) echo "kafka-path: no group $GROUP (a, b or c)" >&2; exit 2 ;; esac
+case $GROUP in a) N=12 ;; b) N=6 ;; c) N=6 ;; *) echo "kafka-path: no group $GROUP (a, b or c)" >&2; exit 2 ;; esac
 rp_start kafka-path "${1:-}" "$N"
 FX=platform/k2gen/tests/fixtures/kafka-fixture
 KF=market-capture.kafka-fixture DAG=kafka_fixture
@@ -149,7 +158,21 @@ fi
 if [ "$GROUP" = b ]; then
   TOPIC=$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["connector"]["topic"])' \
     "$STATE/releases/$ID/compiled/products/$KF/pipeline.json")
-  seed "$FULL"; run b1; facts b1
+  trim() {  # trim <json {partition: new log start}>
+    python3 -c 'import json, sys; [print(p, o) for p, o in json.load(open(sys.argv[1])).items()]' "$1" |
+      while read -r p o; do docker exec "$P-redpanda" rpk topic trim-prefix "$TOPIC" -p "$p" -o "$o" --no-confirm >> "$RP/trim.log" 2>&1; done
+    echo "$P: trimmed $(cat "$1") (partition: new log start)"
+  }
+  seed "$FULL"
+  # every partition with two records or more trimmed halfway BEFORE the product's first run: its log start above 0
+  docker exec "$P-redpanda" rpk topic describe "$TOPIC" -p > "$RP/describe0.txt"
+  python3 - "$RP/describe0.txt" > "$RP/trims0.json" <<'PY0'
+import json, sys
+hw = {x.split()[0]: int(x.split()[-1]) for x in open(sys.argv[1]) if x.split() and x.split()[0].isdigit()}
+print(json.dumps({p: h // 2 for p, h in hw.items() if h >= 2}))
+PY0
+  trim "$RP/trims0.json"
+  run b1; facts b1
   seed "$FULL"
   # every partition with records past b1's end offsets trimmed halfway into them: a hole after the resume point
   docker exec "$P-redpanda" rpk topic describe "$TOPIC" -p > "$RP/describe.txt"
@@ -160,13 +183,11 @@ f = json.load(open(sys.argv[1]))
 hw = {x.split()[0]: int(x.split()[-1]) for x in open(sys.argv[2]) if x.split() and x.split()[0].isdigit()}
 print(json.dumps({p: ends.get(p, 0) + (h - ends.get(p, 0)) // 2 for p, h in hw.items() if h - ends.get(p, 0) >= 2}))
 PY2
-  python3 -c 'import json, sys; [print(p, o) for p, o in json.load(open(sys.argv[1])).items()]' "$RP/trims.json" |
-    while read -r p o; do docker exec "$P-redpanda" rpk topic trim-prefix "$TOPIC" -p "$p" -o "$o" --no-confirm >> "$RP/trim.log" 2>&1; done
-  echo "$P: trimmed $(cat "$RP/trims.json") (partition: new log start)"
+  trim "$RP/trims.json"
   ktask b3 load; facts b3
   ktask b4 load --accept-data-loss; ktask b4 audit; ktask b4 publish; facts b4
   seed "$FULL"; run b5; facts b5
-  timings; claims below accepted gap-audit carried envelope-b
+  timings; claims below accepted gap-audit carried envelope-b first-trimmed
   finish
 fi
 
@@ -178,9 +199,12 @@ seed "$FULL"; run k5; facts k5
 seed "$FULL"; kkill before k6; facts k6                        # 5
 run k7; facts k7
 seed "$FULL"; kkill after k8; TRY=2 ktask k8 load; ktask k8 audit; ktask k8 publish; facts k8   # 6, 7
+seed "$FULL"; ktask k10 load; facts k10                        # 11: its run ended after the stage
+seed "$FULL"; run k11; facts k11
 docker exec -i "$SPARK" python3 - corrupt "/k2/releases/$ID" "$KF" < "$PROBE" > "$RP/corrupt.log" 2>&1 \
   || echo "$P: the corrupt frame was not produced: $(tail -2 "$RP/corrupt.log")"
 run k9; facts k9                                               # 9
+ktask k12 load; facts k12                                      # 12
 
-timings; claims land publish idle kill-after kill-before retry key empty corrupt envelope
+timings; claims land publish idle kill-after kill-before retry key empty corrupt envelope heal blocked
 finish

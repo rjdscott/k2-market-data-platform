@@ -466,14 +466,15 @@ def staged_on(parents: dict, head: int, batch: str):
     return head
 
 
-def publish_change(table: str, main, head: int) -> dict:
+def publish_change(table: str, main, head: int, branch: str = AUDIT) -> dict:
     """The one commit that publishes: `main` set to `head`, required to be `main` still (null: no
-    main yet) and `audit` to be `head` still, as Iceberg REST's assert-ref-snapshot-id checks them
-    in the catalog at the commit. The same requirements as the dbt wrapper's tag commit."""
+    main yet) and `branch` to be `head` still, as Iceberg REST's assert-ref-snapshot-id checks them
+    in the catalog at the commit. The same requirements as the dbt wrapper's tag commit; a Kafka
+    landing commit is made main's head by it too, from its branch (kafka.LAND)."""
     _, ns, name_ = table.split(".")
     return {"identifier": {"namespace": [ns], "name": name_},
             "requirements": [{"type": "assert-ref-snapshot-id", "ref": "main", "snapshot-id": main},
-                             {"type": "assert-ref-snapshot-id", "ref": AUDIT, "snapshot-id": snapshot_id(head)}],
+                             {"type": "assert-ref-snapshot-id", "ref": branch, "snapshot-id": snapshot_id(head)}],
             "updates": [{"action": "set-snapshot-ref", "ref-name": "main", "type": "branch",
                          "snapshot-id": snapshot_id(head)}]}
 
@@ -737,11 +738,19 @@ class SparkLake:
     def columns(self, table: str) -> list[str]:
         return [f.name for f in self.spark.table(rel(table)).schema.fields]
 
-    def create_branch(self, table: str) -> None:
-        self.spark.sql(f"ALTER TABLE {rel(table)} CREATE BRANCH IF NOT EXISTS {name(AUDIT)}")
+    def create_branch(self, table: str, branch: str = AUDIT) -> None:
+        self.spark.sql(f"ALTER TABLE {rel(table)} CREATE BRANCH IF NOT EXISTS {name(branch)}")
 
-    def reset_branch(self, table: str, snapshot: int) -> None:
-        self.spark.sql(f"ALTER TABLE {rel(table)} REPLACE BRANCH {name(AUDIT)} AS OF VERSION {snapshot_id(snapshot)}")
+    def reset_branch(self, table: str, snapshot, branch: str = AUDIT) -> None:
+        """`branch` set to `snapshot`, made if missing; None, a table with no main (a Kafka product's
+        first batch restaged, or its first landing commit), drops it and makes it again, empty
+        (Iceberg makes an empty snapshot for a branch of a table with none), as the first stage of
+        the table did."""
+        if snapshot is None:
+            self.spark.sql(f"ALTER TABLE {rel(table)} DROP BRANCH IF EXISTS {name(branch)}")
+            return self.create_branch(table, branch)
+        self.spark.sql(f"ALTER TABLE {rel(table)} CREATE OR REPLACE BRANCH {name(branch)} "
+                       f"AS OF VERSION {snapshot_id(snapshot)}")
 
     def append_rows(self, table: str, lines: list[str], sha: str, props: dict,
                     fetched_at: datetime | None = None) -> None:

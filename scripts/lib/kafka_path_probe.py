@@ -440,7 +440,7 @@ def claim(name: str, rp: Path) -> bool:
                    f"advance; partitions {quiet} had no new records (start = end, failOnDataLoss true) and read nothing",
                    [f"k3 {c[2]}: {c[4]}" for c in f["checks"] if c[0] == "kafka_fixture/k3"])
     if name == "corrupt":  # 9
-        f8, f = load_json(rp, "facts-k8.json"), load_json(rp, "facts-k9.json")
+        f8, f = load_json(rp, "facts-k11.json"), load_json(rp, "facts-k9.json")  # k11: the run before the corrupt frame
         ends8, ends = topic_ends(f8), topic_ends(f)
         [(topic, parts)] = ends.items()
         moved = [(p, o - 1) for p, o in parts.items() if o != ends8[topic][p]]
@@ -455,7 +455,7 @@ def claim(name: str, rp: Path) -> bool:
         return say(9, "a corrupt Avro body is counted as not parsing and fails the batch naming partition and offset", bad,
                    f"parses FAIL: {parses[-1][4] if parses else '?'}; audit exit 3, publish exit 3, main not moved")
     if name == "envelope":  # a 10
-        f8, f = load_json(rp, "facts-k8.json"), load_json(rp, "facts-k9.json")
+        f8, f = load_json(rp, "facts-k11.json"), load_json(rp, "facts-k9.json")  # k11: the run before the corrupt frame
         bad, info = envelope_problems(f8)
         bad += [] if f8["bronze"]["rows"]["main"] else ["bronze main holds no rows"]
         ends8, ends = topic_ends(f8), topic_ends(f)
@@ -469,6 +469,39 @@ def claim(name: str, rp: Path) -> bool:
                    f"{len(f8['bronze']['rows']['main'])} rows of bronze main as the seeded lines; the corrupt frame "
                    f"staged with schema id {corrupt[0][2] if corrupt else '?'} and every envelope column null, failing "
                    "parses (claim 9), never a value", info)
+    if name == "heal":  # a 11
+        f8, f10, f = load_json(rp, "facts-k8.json"), load_json(rp, "facts-k10.json"), load_json(rp, "facts-k11.json")
+        r10, r, bad = result(rp, "k10.load"), result(rp, "k11.load"), []
+        pending = f10["bronze"]["refs"].get("audit")
+        if rc(rp, "k10.load") != "0" or not r10.get("rows") or pending == f10["bronze"]["refs"].get("main") \
+                or f10["bronze"]["refs"].get("main") != f8["bronze"]["refs"].get("main"):
+            bad.append(f"k10 load exit {rc(rp, 'k10.load')}, staged {r10.get('rows')}, refs {f10['bronze']['refs']}")
+        if any(c[0] == "kafka_fixture/k10" for c in f["checks"]):
+            bad.append("k10's batch has audit_checks rows")
+        if any(rc(rp, f"k11.{t}") != "0" for t in ("load", "audit", "publish")) \
+                or "never audited" not in (rp / "k11.load.out").read_text():
+            bad.append(f"k11 exits {[rc(rp, f'k11.{t}') for t in ('load', 'audit', 'publish')]}: "
+                       f"{(rp / 'k11.load.err').read_text().strip()[-300:]}")
+        if r.get("rows", 0) <= r10.get("rows", 0) or r.get("snapshotBefore") != pending:
+            bad.append(f"k11 staged {r.get('rows')} over audit {r.get('snapshotBefore')}, k10 {r10.get('rows')} at {pending}")
+        bad += every_frame_once(f) + bronze_is_trades(f) + through_is_landing(f)
+        return say(11, "a run killed between stage and audit is healed by the next scheduled run, no operator action", bad,
+                   f"k10 staged {r10.get('rows')} on audit {pending} and was never audited; k11 found it, discarded it and "
+                   f"staged {r.get('rows')} from main's through-offsets (k10's range and its own), audited and published: "
+                   "every trade once, no hole, through-offsets = landing end offsets = the topic's",
+                   [x for x in (rp / "k11.load.out").read_text().splitlines() if "never audited" in x])
+    if name == "blocked":  # a 12
+        f9, f, err = load_json(rp, "facts-k9.json"), load_json(rp, "facts-k12.json"), (rp / "k12.load.err").read_text()
+        main = f9["bronze"]["refs"].get("main")
+        bad = [] if rc(rp, "k12.load") == "2" else [f"k12 load exit {rc(rp, 'k12.load')}"]
+        for want in ("holds batch kafka_fixture/k9", "failed [", "'parses'", f"REPLACE BRANCH audit AS OF VERSION {main}"):
+            if want not in err:
+                bad.append(f"the refusal does not say {want!r}: {err.strip()[-300:]}")
+        if f["bronze"]["refs"] != f9["bronze"]["refs"]:
+            bad.append(f"bronze refs {f9['bronze']['refs']} -> {f['bronze']['refs']}")
+        return say(12, "a batch that failed its audit is never reset: the next load refuses, naming it and its clearing",
+                   bad, f"k12 load exit 2, audit and main unmoved: "
+                   f"{next((x for x in err.splitlines() if 'load refused' in x), '')[:400]}")
     if name == "envelope-b":  # b 5
         f = load_json(rp, "facts-b5.json")
         bad, info = envelope_problems(f)
@@ -493,7 +526,7 @@ def claim(name: str, rp: Path) -> bool:
                    f"c3's publish then moved main {pub.get('snapshotBefore')} -> {pub.get('snapshotAfter')}. Without the "
                    "skip, main would move to a replace snapshot under the waiting batch: publish requires main to be the "
                    "snapshot the batch was staged on (connector.publish, staged_on), so it would be refused, exit 2, and "
-                   "every later stage refused behind it until an operator resets audit")
+                   "the audited batch discarded and staged again by the next run (kafka.restageable)")
     if name == "compact":  # c2
         f0, f, r, bad, info = load_json(rp, "facts-c3p.json"), load_json(rp, "facts-c4.json"), result(rp, "c4.compact"), [], []
         if rc(rp, "c4.compact") != "0":
@@ -596,12 +629,12 @@ def claim(name: str, rp: Path) -> bool:
             bad.append(f"load exit {rc(rp, 'b4.load')}, k2.kafka-gaps {newest.get('k2.kafka-gaps')}, want {want}")
         if gaps != sorted((int(p), ends[int(p)], o, o - ends[int(p)]) for p, o in trims.items()):
             bad.append(f"load's offsetGaps {gaps}")
-        seen = {}
+        seen, first = {}, {int(p): o for p, o in f1["topic"]["earliest"][topic].items()}  # b1's: claim 6's trim
         for p, o in f["landing"]["main"]:
             seen.setdefault(p, []).append(o)
         for p, end in topic_ends(f)[topic].items():
             lo = trims.get(str(p))
-            want_offsets = list(range(ends.get(p, 0))) + list(range(lo if lo is not None else ends.get(p, 0), end))
+            want_offsets = list(range(first.get(p, 0), ends.get(p, 0))) + list(range(lo if lo is not None else ends.get(p, 0), end))
             if sorted(seen.get(p, [])) != want_offsets:
                 bad.append(f"partition {p}: landing {len(seen.get(p, []))} offsets, want {len(want_offsets)}")
         if offsets_of(newest) != topic_ends(f):
@@ -634,6 +667,25 @@ def claim(name: str, rp: Path) -> bool:
         return say(4, "after one further clean run the newest landing commit still carries the gap", bad,
                    f"b5 landed {result(rp, 'b5.load').get('landed')} in landing commit {after[0]}, which carries "
                    f"k2.kafka-gaps {gaps}, as b4's did; its audit and publish exit 0")
+    if name == "first-trimmed":  # b6
+        f, trims, r = load_json(rp, "facts-b1.json"), load_json(rp, "trims0.json"), result(rp, "b1.load")
+        [(topic, earliest)] = f["topic"]["earliest"].items()
+        bad = [] if trims else ["nothing was trimmed before the first run"]
+        if any(earliest.get(p) != o for p, o in trims.items()):
+            bad.append(f"log starts {earliest}, trimmed to {trims}")
+        if any(rc(rp, f"b1.{t}") != "0" for t in ("load", "audit", "publish")):
+            bad.append(f"b1 exits {[rc(rp, f'b1.{t}') for t in ('load', 'audit', 'publish')]}: "
+                       f"{(rp / 'b1.audit.out').read_text().strip()[-300:]}")
+        if {int(p): o for p, o in (r.get("starts") or {}).get(topic, {}).items()} != {int(p): o for p, o in earliest.items()}:
+            bad.append(f"b1 started at {r.get('starts')}, the log starts {earliest}")
+        bad += every_frame_once(f) + bronze_is_trades(f) + through_is_landing(f)
+        rows = [c for c in f["checks"] if c[0] == "kafka_fixture/b1"]
+        if sorted((c[2], c[3]) for c in rows) != [("accounting", True), ("keys_unique", True), ("parses", True)]:
+            bad.append(f"audit_checks {[(c[2], c[3], c[4]) for c in rows]}")
+        acc = next((c[4] for c in rows if c[2] == "accounting"), "")
+        return say(6, "a topic trimmed before the product's first run loads, audits and publishes cleanly", bad,
+                   f"log starts {earliest}; b1 landed {r.get('landed')} from them, staged {r.get('rows')}, accounting: "
+                   f"{acc}; publish moved main; every offset from each log start once, bronze main = the trades")
     raise SystemExit(f"kafka_path_probe.py: no claim {name}")
 
 
