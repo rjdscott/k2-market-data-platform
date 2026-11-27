@@ -64,7 +64,7 @@ The system as built, for readers who want the detail rather than the argument.
 | [architecture/06-capture-venues.md](architecture/06-capture-venues.md) | How a capture process works, the per-venue dialects, and what a fourth exchange costs |
 | [architecture/01-what-k2-is.md](architecture/01-what-k2-is.md) | What this platform is for, the workloads it is deliberately wrong for, and the six rules the design is held to |
 | [operations/](operations/README.md) | Running the stack: the [operator guide](operations/README.md) (start, health, consoles, stop, recreate one service, roll out a change, logs), [quick reference](operations/quick-reference.md), [Docker budget](operations/docker-resources.md), [observability](operations/observability.md), [dashboards and consoles](operations/dashboards.md), [latency budgets](operations/latency-budgets.md), [adding an exchange](operations/adding-new-exchanges.md), [cost model](operations/cost-model.md) |
-| [development/](development/) | [setup.md](development/setup.md) and [testing.md](development/testing.md), prerequisites, and how to run the Rust and Python suites; [golden-path.md](development/golden-path.md), adding a data product |
+| [development/](development/) | [setup.md](development/setup.md) and [testing.md](development/testing.md), prerequisites, and how to run the Rust and Python suites; [spine-e2e.md](development/spine-e2e.md), the release and rules spine end to end at every merge point; [golden-path.md](development/golden-path.md), adding a data product |
 
 ## Migration journey
 

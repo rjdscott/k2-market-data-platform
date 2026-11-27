@@ -194,6 +194,8 @@ admitted and the previous one refused, each container's image id against the man
 check, then the hand-written access suite and the catalog drift check (chapter 22). It runs at the end
 of every deploy and on demand.
 
+Before a release is deployed, `make spine-e2e` proves the compile, the rules and the deploy chain together on throwaway containers ([how and when](../development/spine-e2e.md)).
+
 A rollback is not a second mechanism: it is a deploy of the previous good release from the failed one,
 through the same steps, recorded as `rollback-<step>`, images included. `make rollback` runs it on
 purpose. The rehearsal (`make deploy-rehearsal`, a throwaway compose project, 2026-11-27) measured it:
