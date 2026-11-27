@@ -5,9 +5,15 @@ is on k2-catalog alone, and k2-catalog holds exactly the services in
 tests/access/catalog-fence-allow.txt (the list scripts/verify/catalog-fence.sh checks the running
 stack against). Loopback binding of every published port is scripts/check-budget.py's check, not
 repeated here. Each mutation below breaks the fence one way in the loaded document and must fail.
+
+The two run one-shots are held the same way, as the Airflow one-shot operator runs them
+(docker/airflow/dags/oneshot.py): fetch on k2-net alone with no storage key and no secret (A8);
+dbt-runner with exactly the wrapper's seven environment names and its four files
+(phase-001-interfaces.md, "The dbt wrapper"); both read-only, without capabilities or the socket.
 """
 
 import copy
+import re
 from pathlib import Path
 
 import pytest
@@ -67,6 +73,85 @@ def problems(doc: dict) -> list[str]:
 
 def test_the_compose_file_keeps_the_fence():
     assert problems(COMPOSE) == []
+
+
+# The wrapper's environment, as the frozen run-time contract words it (k2gen's ONESHOT_KINDS is held
+# to the same sentence by platform/k2gen/tests/test_emit_pipeline.py).
+WRAPPER_ENV = set(re.search(r"Its environment is exactly `([A-Z0-9_ ]+)`", (ROOT / "docs/development/phase-001-interfaces.md")
+                            .read_text().replace("\n  ", " "))[1].split())
+WRAPPER_FILES = {"/run/k2-secrets/builder.password", "/run/k2-secrets/publisher.password",
+                 "/run/k2-secrets/runs.password", "/run/k2-secrets/tls/ca.pem"}
+VAR = re.compile(r"\$\{(?:[^${}]|\$\{[^}]*\})*\}")  # ${X}, or ${X:-<default>} whose default may hold ${Y} and a colon
+
+
+def env_names(svc: dict) -> set[str]:
+    env = svc.get("environment") or {}
+    return set(env) if isinstance(env, dict) else {str(e).split("=", 1)[0] for e in env}
+
+
+def secret_targets(svc: dict) -> set[str]:
+    """The container side of every mount whose source is under ${K2_SECRETS}, short or long syntax."""
+    return {v["target"] if isinstance(v, dict) else VAR.sub("", str(v)).split(":")[1]
+            for v in svc.get("volumes") or [] if "k2-secrets" in str(v.get("source") if isinstance(v, dict) else v)}
+
+
+def oneshot_problems(doc: dict) -> list[str]:
+    services, out = doc["services"], []
+    fetch, dbt = services["fetch"], services["dbt-runner"]
+    if fetch.get("networks") != ["k2-net"]:
+        out.append(f"fetch is on {fetch.get('networks')}: k2-net only (A8)")
+    if s3 := sorted(e for e in env_names(fetch) if "S3_" in e):
+        out.append(f"fetch has storage key names {s3}")
+    if any("k2-secrets" in str(v) for v in fetch.get("volumes") or []):
+        out.append("fetch mounts a secret")
+    if env_names(dbt) != WRAPPER_ENV:
+        out.append(f"dbt-runner's environment is not the wrapper's: extra {sorted(env_names(dbt) - WRAPPER_ENV)}, "
+                   f"missing {sorted(WRAPPER_ENV - env_names(dbt))}")
+    if secret_targets(dbt) != WRAPPER_FILES:
+        out.append(f"dbt-runner's secret files are {sorted(secret_targets(dbt))}, not {sorted(WRAPPER_FILES)}")
+    for n, s in (("fetch", fetch), ("dbt-runner", dbt)):
+        if any("docker.sock" in str(v) for v in s.get("volumes") or []):
+            out.append(f"{n} mounts the Docker socket")
+        if not (s.get("read_only") is True and s.get("cap_drop") == ["ALL"]
+                and "no-new-privileges:true" in (s.get("security_opt") or [])):
+            out.append(f"{n} is not read-only without capabilities and new privileges")
+    return out
+
+
+def test_the_run_one_shots_are_declared_as_the_operator_runs_them():
+    assert len(WRAPPER_ENV) == 7 and oneshot_problems(COMPOSE) == []
+
+
+def svc_set(svc, key, value):
+    return lambda d: d["services"][svc].__setitem__(key, value)
+
+
+@pytest.mark.parametrize("mutate,says", [
+    (svc_set("fetch", "networks", ["k2-net", "k2-catalog"]), "fetch is on"),
+    (svc_set("fetch", "environment", {"K2_RELEASE": None, "K2_SPARK_S3_ACCESS_KEY": "x"}), "storage key names"),
+    (svc_set("fetch", "environment", ["K2_RELEASE", "K2_TRINO_S3_SECRET_KEY=x"]), "storage key names"),
+    (lambda d: d["services"]["fetch"]["volumes"].append("${K2_SECRETS}/tls/ca.pem:/run/k2-secrets/tls/ca.pem:ro"),
+     "fetch mounts a secret"),
+    (lambda d: d["services"]["dbt-runner"]["environment"].__setitem__("AIRFLOW_HOME", "/x"), "extra ['AIRFLOW_HOME']"),
+    (lambda d: d["services"]["dbt-runner"]["environment"].__setitem__("K2_TRINO_S3_ACCESS_KEY", "x"), "extra"),
+    (lambda d: d["services"]["dbt-runner"]["environment"].pop("K2_PUB_USER"), "missing ['K2_PUB_USER']"),
+    (lambda d: d["services"]["dbt-runner"]["volumes"].pop(), "secret files are"),
+    (lambda d: d["services"]["dbt-runner"]["volumes"].append(
+        "${K2_SECRETS:-${HOME}/k2-secrets}/principals/svc.platform.password:/run/k2-secrets/platform.password:ro"),
+     "secret files are"),
+    (lambda d: d["services"]["fetch"]["volumes"].append("/var/run/docker.sock:/var/run/docker.sock"),
+     "fetch mounts the Docker socket"),
+    (lambda d: d["services"]["dbt-runner"]["volumes"].append({"type": "bind", "source": "/var/run/docker.sock",
+                                                              "target": "/var/run/docker.sock"}),
+     "dbt-runner mounts the Docker socket"),
+    (lambda d: d["services"]["fetch"].pop("read_only"), "fetch is not read-only"),
+    (svc_set("dbt-runner", "cap_drop", ["NET_RAW"]), "dbt-runner is not read-only"),
+])
+def test_a_one_shot_off_its_contract_fails(mutate, says):
+    doc = copy.deepcopy(COMPOSE)
+    mutate(doc)
+    found = oneshot_problems(doc)
+    assert any(says in p for p in found), found
 
 
 def ports(svc, *p):

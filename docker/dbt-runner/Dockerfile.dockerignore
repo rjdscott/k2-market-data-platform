@@ -1,0 +1,9 @@
+# The build context is the repository root; the image needs only these (docker/dbt-runner/Dockerfile).
+*
+!dbt/pyproject.toml
+!dbt/uv.lock
+!dbt/profiles.yml
+!docker/dbt-runner
+docker/dbt-runner/Dockerfile*
+docker/dbt-runner/**/test_*
+**/__pycache__
