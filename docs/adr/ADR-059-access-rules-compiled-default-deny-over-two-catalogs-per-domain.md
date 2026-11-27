@@ -251,3 +251,25 @@ to probe.
 (rerun `c1.branch-ddl`); (7) a product is licensed to a principal outside the owner's team, whose delayed or
 scoped data must then be physically separate; (8) a product needs another product's bronze as an input
 and must offer a role.
+
+## Outcome (2026-11-27, after the independent review of the phase and the live cutover)
+
+Part 7 went live on 2026-11-27: Lakekeeper is on `k2-catalog` alone with no host port, and
+`scripts/verify/catalog-fence.sh` (`make catalog-fence`, and every `release-verify`) checks the running
+stack: Lakekeeper publishes no port, sits on that network only, and the network holds only the services
+listed in `tests/access/catalog-fence-allow.txt`; a test holds `docker-compose.yml` to the same list on
+every pull request. Until this review nothing ran the fence's probes at all.
+
+The fence is narrower than part 7 reads. A network fence stops a service that can only open connections.
+It does not stop a service that holds the Docker socket, because whoever holds the socket can start a
+container on any network, `k2-catalog` included, and read any container's environment. Two services hold
+it: `airflow-scheduler`, by design (from phase 002 it starts the fetch, load and dbt one-shots), and
+`cadvisor`, a third-party image, to name containers in its metrics. Both are therefore inside the
+catalog's trust boundary, whatever network they are on. What limits this today: Airflow runs only DAGs
+generated from a release and no product code (parsers run in `fetch`, models in `dbt-runner`, neither with
+the socket), and both images are pinned by digest.
+
+**Revisit when**, besides the triggers above: (9) the hardening sprint after phase 005 puts `cadvisor`
+behind a socket proxy that allows only read calls, or replaces it; (10) any service that runs code a
+product supplies would need the socket; (11) Lakekeeper gains authentication the engines can use, which
+makes the fence a second line instead of the only one.
