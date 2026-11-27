@@ -27,8 +27,21 @@ COPY dbt/macros /opt/k2/dbt/macros
 RUN UV_PROJECT_ENVIRONMENT=/opt/k2/venv UV_PYTHON=/usr/local/bin/python3.12 UV_PYTHON_DOWNLOADS=never \
       uv sync --locked --no-dev --no-cache --project /opt/k2/platform/k2gen \
     && /opt/k2/venv/bin/k2gen --help >/dev/null
+# The trino client, for the catalog site's facts (the release's platform/catalog-site/k2site.py, run
+# here after each deploy as svc.catalog): 0.340.0 and its dependencies at the versions
+# services/k2-api/uv.lock locks for it, each named, --no-deps so nothing unnamed comes in, and
+# `uv pip check` fails the build if the set is incomplete. None of them is one of k2gen's.
+RUN UV_PYTHON_DOWNLOADS=never uv pip install --python=/opt/k2/venv/bin/python --no-cache --no-deps --only-binary=:all: \
+      trino==0.340.0 requests==2.34.2 urllib3==2.8.0 certifi==2026.11.20 charset-normalizer==3.5.3 idna==3.20 \
+      lz4==4.4.5 orjson==3.13.0 zstandard==0.25.0 python-dateutil==4.0.0 tzdata==2026.6 pytz==2026.6 tzlocal==5.4.5 \
+    && uv pip check --python=/opt/k2/venv/bin/python \
+    && /opt/k2/venv/bin/python -c "import trino, requests; assert trino.__version__ == '0.340.0'"
 COPY docker/tools/k2tools.py /opt/k2/bin/k2tools
-RUN chmod 0755 /opt/k2/bin/k2tools
+# /site: the k2-site volume's mount point, mode 1777 as k2-api's /srv/k2-site, so the volume's root
+# is the same whichever image mounts it first, empty (docker copies the mount point's mode in).
+# Deploy runs this image as the host user, whose uid no image knows: 1777 lets it write, and the
+# sticky bit keeps one writer from renaming another's entry. The volume holds public pages only.
+RUN chmod 0755 /opt/k2/bin/k2tools && mkdir -m 1777 /site
 
 # The repository is mounted read-only by another uid when a release is compiled: git refuses a
 # tree it does not own unless told it is safe. Nothing here writes to git.

@@ -13,6 +13,11 @@ decide what it sees. It never writes, accepts SQL, reads storage or Lakekeeper, 
 | `k2api/keys.py` | `Authorization: Bearer <key>` to a principal through `/run/k2-secrets/api/keys.json` |
 | `k2api/db.py` | the one Trino client: svc.api's login, the caller as session user, values bound |
 
+`/catalog/` and `/dbt-docs/` are files, not API routes (so not in `openapi.yaml`): the trees that
+`k2site.py` and `k2-dbt docs` publish as `<name>/current` on the `k2-site` volume, mounted read-only
+at `/srv/k2-site`. Each answer is 503 `not generated yet` before the first tree, carries
+`Cache-Control: no-cache`, `nosniff` and a CSP of its own, and never follows a link out of the tree.
+
 ```bash
 cd services/k2-api && uv run --locked pytest -q && uv run --locked ruff check .   # or: make test-api
 ```

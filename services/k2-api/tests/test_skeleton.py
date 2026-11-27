@@ -7,6 +7,7 @@ from pathlib import Path
 import yaml
 from conftest import RELEASE_ID
 from fastapi.testclient import TestClient
+from starlette.routing import Mount
 
 from k2api import app as api
 
@@ -67,7 +68,10 @@ def test_the_served_document_is_the_frozen_file_and_says_3_1_0(client: TestClien
 
 def test_the_app_serves_exactly_the_frozen_routes_each_by_get() -> None:
     frozen = yaml.safe_load(FROZEN.read_text())["paths"]
-    served = {route.path: route.methods for route in api.app.routes}
+    # /catalog/ and /dbt-docs/ are generated sites served as files (W3-11), not API routes, so the
+    # frozen document holds neither; they are exactly these two mounts and nothing else is one.
+    assert {r.path for r in api.app.routes if isinstance(r, Mount)} == {"/catalog", "/dbt-docs"}
+    served = {route.path: route.methods for route in api.app.routes if not isinstance(route, Mount)}
     assert set(served) == set(frozen)
     assert all(methods == {"GET"} for methods in served.values())
     assert all(set(ops) <= {"get", "parameters"} for ops in frozen.values())
