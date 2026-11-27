@@ -134,8 +134,15 @@ assert A[0] == "compose", A
 files = [A[i + 1] for i, a in enumerate(A) if a == "-f"]
 pinned = json.loads(open(files[1]).read())["services"]
 rest = A[A.index(files[1]) + 1:]
+if rest[0] in ("--profile", "rm", "up"):
+    log("compose", *rest)  # the exact command, for the tests that assert it
+while rest[0] == "--profile":
+    rest = rest[2:]
 if rest[0] == "config":
     sys.exit(0)
+if rest[0] == "rm":
+    S["containers"] = [c for c in S["containers"] if c["service"] != rest[-1]]
+    save(); sys.exit(0)
 if rest[0] == "run":
     argv = rest[rest.index("k2tools") + 1:]
     if argv[0] in ("swap", "pointers"):
@@ -804,6 +811,83 @@ sys.exit(f"fake docker: no answer for {A}")
         monkeypatch.setattr(deploy, "run", lambda *a, **k: subprocess.CompletedProcess(a, 0, json.dumps(recorded[:1]), ""))
         with pytest.raises(deploy.Refused, match="no registry digest"):
             deploy.held_ref("sha256:" + "e" * 64, image, image)
+
+    # --- review R1 of phases 002+003: a running service the target puts behind a profile -----
+
+    # v3.0.0-alpha.3.2's three stubs as its compose declared them (the CI checkout fetches no tag to
+    # `git show`), beside this branch's own three stanzas, read from docker-compose.yml.
+    A32_STUBS = yaml.safe_load("""
+    k2-api:
+      profiles: [api]
+      image: alpine:3.20
+      command: [echo, "SKIP k2-api: built in phase 003"]
+      networks: [k2-net]
+      volumes: [{type: bind, source: "${K2_RELEASES:-${HOME}/k2-releases}", target: /k2/releases, read_only: true}]
+      deploy: {resources: {limits: {cpus: '0.5', memory: 512M}}}
+      restart: "no"
+    fetch:
+      profiles: [fetch]
+      image: alpine:3.20
+      command: [echo, "SKIP fetch: built in phase 002"]
+      networks: [k2-net]
+      deploy: {resources: {limits: {cpus: '0.5', memory: 512M}}}
+      restart: "no"
+    dbt-runner:
+      profiles: [build]
+      image: alpine:3.20
+      command: [echo, "SKIP dbt-runner: built in phase 002"]
+      networks: [k2-catalog]
+      deploy: {replicas: 2, resources: {limits: {cpus: '0.5', memory: 768M}}}
+      restart: "no"
+    """)
+    BUILT = {s: f"{s}:{c * 12}" for s, c in (("k2-api", "1"), ("fetch", "2"), ("dbt-runner", "3"))}  # local builds
+
+    def real_pair(world: World) -> tuple[Any, Any]:
+        """(alpha.3.2 live, its three stubs not running; this branch's release): the stanzas as each tag has them."""
+        now = yaml.safe_load((ROOT / "docker-compose.yml").read_text())["services"]
+        old, new = compose_doc(), compose_doc()
+        old["services"] |= A32_STUBS
+        new["services"] |= {s: now[s] for s in A32_STUBS}
+        r_old = world.release(compose=old, images={s: A for s in A32_STUBS})
+        r_new = world.release(compose=new, images=BUILT)
+        world.live(r_old)
+        s = world.read()
+        s["containers"] = [c for c in s["containers"] if c["service"] not in A32_STUBS]  # a profiled stub never runs
+        s["images"] |= {ref: "sha256:" + ref[-12:] + "0" * 52 for ref in BUILT.values()}
+        world.write(s)
+        for f in ("api/keys.json", "principals/svc.api.password", "principals/svc.catalog.password",
+                  "principals/svc.runs.password", "alertmanager/slack-webhook-url"):
+            (world.secrets / f).parent.mkdir(parents=True, exist_ok=True)
+            (world.secrets / f).write_text("fixture\n")
+        return r_old, r_new
+
+    def composed(world: World) -> list[list[str]]:
+        return [e[1:] for e in world.timeline() if e[0] == "compose"]
+
+    def test_k2_api_starts_on_the_way_in_and_is_removed_on_a_rollback_to_its_stub(world: World) -> None:
+        r_old, r_new = real_pair(world)
+        p = deploy.make_plan(world.ctx, r_new, [r_old])
+        assert "k2-api" in p.recreate and p.remove == [] and not {"fetch", "dbt-runner"} & {*p.recreate, *p.oneshots}
+        assert world.deploy(r_new) == 0
+        assert ["up", "-d", "--no-deps", "--no-build", "--pull", "never", "k2-api"] in composed(world)
+        assert world.image_of("k2-api") == "sha256:" + "1" * 12 + "0" * 52
+        back = deploy.make_plan(world.ctx, r_old, [r_new])
+        assert back.remove == ["k2-api"] and "k2-api" not in {*back.recreate, *back.oneshots}, back
+        world.log.unlink()
+        with deploy.lock(world.root):
+            assert deploy.rollback(world.ctx) == 0  # was exit 3: verify found the branch's k2-api on alpha.3.2
+        assert composed(world) == [["--profile", "api", "rm", "--stop", "--force", "k2-api"]], composed(world)
+        assert "k2-api" not in {c["service"] for c in world.read()["containers"]}
+        steps = [(r["step"], r["outcome"]) for r in records(world)]
+        assert steps.index(("rollback-swap", "ok")) < steps.index(("rollback-remove-k2-api", "ok")) < steps.index(("rollback-recreate", "ok"))
+        assert steps[-1] == ("rollback-done", "ok") and os.readlink(world.root / "pointers/k2-api") == f"../{r_old.id}"
+
+    def test_a_running_service_profiled_in_both_is_recreated_not_removed(world: World) -> None:
+        r1 = world.release(compose=compose_doc(), images={"clickhouse": A})
+        world.live(r1)  # clickhouse runs: someone started hot-gold on purpose
+        r2 = world.release(compose=compose_doc(), images={"clickhouse": B})
+        p = deploy.make_plan(world.ctx, r2, [r1])
+        assert p.remove == [] and "clickhouse" in p.recreate
 
     # --- the drain (W1-6, ADR-058) ------------------------------------------------------
 

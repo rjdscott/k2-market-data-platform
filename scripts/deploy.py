@@ -402,6 +402,7 @@ class Plan:
     views: list[View]
     skipped: list[str]
     create: list[tuple[str, str, str]] = field(default_factory=list)  # (table, engine, DDL) still to create
+    remove: list[str] = field(default_factory=list)  # running, and moved out of the default set by the target
 
 
 def files_of(rel: Release) -> dict[str, bytes]:
@@ -448,7 +449,12 @@ def make_plan(ctx: Ctx, target: Release, sources: list[Release | None]) -> Plan:
         views |= {r: v for r, v in target_views.items() if r not in before or before[r].columns != v.columns
                   or s.manifest.files.get(model.view_sql_path(r)) != target.manifest.files.get(model.view_sql_path(r))}
     running = {c["Config"]["Labels"].get("com.docker.compose.service") for c in containers(ctx) if c["State"]["Running"]}
-    order, oneshots, skipped = [], [], []
+    # In a source's default set, behind a profile in the target (k2-api, rolling back to a release where it
+    # was a profiled stub): the running container is the source's, which the target never starts, so it
+    # is removed at recreate. A service profiled in both that runs was started on purpose (hot-gold):
+    # recreated in place, as before.
+    defaults = {s for src in sources if src for s, spec in services(src).items() if not spec.get("profiles")}
+    order, oneshots, skipped, remove = [], [], [], []
     retired = {model.fence(x.id.split(".")[1]) for x in target.manifest.products if x.status == "retired"}
     for r in sorted(r for r in views if r.split(".")[1] in retired):
         skipped.append(f"view {r}: its product is retired, so its rules are gone and no reader reaches it; "
@@ -460,6 +466,8 @@ def make_plan(ctx: Ctx, target: Release, sources: list[Release | None]) -> Plan:
             skipped.append(f"{name}: not in the release's compose")
         elif name == "tools":
             skipped.append("tools: a one-shot this deploy runs itself, from the release")
+        elif spec.get("profiles") and name in running and name in defaults:
+            remove.append(name)
         elif spec.get("profiles") and name not in running:
             skipped.append(f"{name}: profile {','.join(spec['profiles'])}, not running; its next start uses the release")
         elif str(spec.get("restart", "no")) == "no":
@@ -472,7 +480,7 @@ def make_plan(ctx: Ctx, target: Release, sources: list[Release | None]) -> Plan:
     # at a cutover), then the rules' reader, which verify waits on, then the rest.
     order.sort(key=lambda s: (s not in ctx.allow_stateful, s != "trino"))
     return Plan(target, sources, order, oneshots, trino_restart, sorted(ddl),
-                [views[r] for r in sorted(views)], skipped)
+                [views[r] for r in sorted(views)], skipped, remove=remove)
 
 
 def show(ctx: Ctx, p: Plan, frm: str | None) -> None:
@@ -481,6 +489,8 @@ def show(ctx: Ctx, p: Plan, frm: str | None) -> None:
         + (f" (also undoing attempts {', '.join(s.id for s in p.sources[1:] if s)})" if len(p.sources) > 1 else ""))
     say(f"  recreate, one at a time: {', '.join(p.recreate) or 'nothing'}")
     say(f"  one-shots run: {', '.join(p.oneshots) or 'none'}")
+    if p.remove:
+        say(f"  stopped and removed, out of the release's default set: {', '.join(p.remove)}")
     say(f"  Trino restart: {'yes' if p.trino_restart else 'no'}; DDL: {', '.join(p.ddl) or 'none'}")
     say(f"  views to re-sync: {', '.join(v.relation for v in p.views) or 'none'}")
     for line in p.skipped:
@@ -1287,6 +1297,12 @@ def converge(ctx: Ctx, p: Plan, frm: str | None, prefix: str = "", trino_down: b
         return out
 
     step(ctx, t, frm, prefix + "swap", svc, swap)
+    target_svc = services(t)
+    for s in p.remove:  # one record per service, its name in the step's: verify then expects none of it
+        profiles = [a for x in target_svc[s]["profiles"] for a in ("--profile", x)]  # so compose resolves it
+        step(ctx, t, frm, prefix + f"remove-{s}", svc, lambda s=s, profiles=profiles: run(
+            *compose(ctx, t, *profiles, "rm", "--stop", "--force", s), env=compose_env(ctx)) and
+            [f"{s} stopped and removed: behind profile {','.join(target_svc[s]['profiles'])} in {t.id}"])
 
     def recreate() -> list[str]:
         out = []
