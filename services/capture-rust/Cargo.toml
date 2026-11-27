@@ -22,7 +22,7 @@ futures-util = { version = "0.3", default-features = false, features = ["sink"] 
 # Kafka. Feature set is S6's verified line: `libz` links dynamically and
 # distroless/cc has no libz.so.1, `zstd` is not in librdkafka's defaults, and
 # `cmake-build` alone fails because `default = ["libz","tokio"]`.
-rdkafka = { version = "0.39", default-features = false, features = ["cmake-build", "libz-static", "zstd", "tokio"] }
+rdkafka = { version = "0.40", default-features = false, features = ["cmake-build", "libz-static", "zstd", "tokio"] }
 
 # Confluent framing (magic byte + schema id) is library work, not ours - S3.
 # `easy` is what gates EasyAvroEncoder; `avro` alone compiles and hides it.
