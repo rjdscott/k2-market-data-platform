@@ -1,19 +1,22 @@
 """docker/lake/connector.py and docker/lake/expire.py: the Spark connector's land, load, audit
 and publish tasks and the expire task, their pure cores and their flows over fakes.
 
-No Spark and no network: `Store` fakes the landing bucket's conditional PUT, `FakeLake` the few
-Iceberg facts the flows read (refs, ancestry, a snapshot's batch, the platform tables) and
-records every check's SQL. The shells over Spark and S3 are proven on a throwaway lake by
-scripts/verify/connector-wap.sh (W1-12). Values are synthetic.
+No Spark and no network beyond loopback: `Store` fakes the landing bucket's conditional PUT,
+`FakeLake` the few Iceberg facts the flows read (refs, ancestry, a snapshot's batch, the platform
+tables) and records every check's SQL, and the `catalog` fixture serves Lakekeeper's REST API on a
+loopback port, checking each commit's requirements against the fake's refs. The shells over Spark,
+S3 and the catalog run on a throwaway lake in scripts/verify/run-path.sh. Values are synthetic.
 """
 
 import ast
 import copy
 import hashlib
+import http.server
 import importlib.util
 import json
 import os
 import re
+import threading
 import types
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -83,27 +86,35 @@ class FakeLake:
     platform tables as lists; every check's SQL recorded with its arguments."""
 
     def __init__(self):
-        self.next_id, self.history = 100, []  # history: main's ancestry
-        self.refs_, self.batch, self.rows = {}, {}, {}
+        self.next_id = 100
+        self.refs_, self.batch, self.rows, self.parent = {}, {}, {}, {}
         self.tables = {LOG: [], CHECKS: []}
         self.sql, self.answers, self.calls = [], {}, []
 
-    def _commit(self, parent_rows, new_rows, batch):
+    def _commit(self, parent_rows, new_rows, batch, parent=None):
         self.next_id += 1
         self.rows[self.next_id] = parent_rows + new_rows
-        self.batch[self.next_id] = batch
+        self.batch[self.next_id], self.parent[self.next_id] = batch, parent
         return self.next_id
 
     def publish_main(self, rows, batch):  # a published batch, as a test's starting state
-        sid = self._commit(self.rows.get(self.refs_.get("main"), []), rows, batch)
-        self.refs_["main"] = self.refs_["audit"] = sid
-        self.history.append(sid)
+        main = self.refs_.get("main")
+        self.refs_["main"] = self.refs_["audit"] = self._commit(self.rows.get(main, []), rows, batch, main)
 
     def refs(self, table):
         return dict(self.refs_)
 
     def published(self, table, snapshot):
-        return snapshot in self.history
+        s = self.refs_.get("main")
+        while s is not None and s != snapshot:
+            s = self.parent[s]
+        return s is not None
+
+    def parents(self, table):
+        return {s: (self.parent[s], self.batch[s]) for s in self.batch}
+
+    def catalog(self, table):
+        return C.Catalog(self.catalog_uri, "k2")
 
     def batch_of(self, table, snapshot):
         return self.batch.get(snapshot)
@@ -127,7 +138,8 @@ class FakeLake:
 
     def append_rows(self, table, lines, sha, props):
         rows = [{**json.loads(line), model.LINEAGE_COLUMN: sha} for line in lines]
-        self.refs_["audit"] = self._commit(self.rows.get(self.refs_.get("audit"), []), rows, props["k2.batch-id"])
+        audit = self.refs_.get("audit")
+        self.refs_["audit"] = self._commit(self.rows.get(audit, []), rows, props["k2.batch-id"], audit)
 
     def columns(self, table):
         return [*ROWS[0], model.LINEAGE_COLUMN]
@@ -147,10 +159,73 @@ class FakeLake:
         return [(r["check_name"], r["passed"], r["checked_at"]) for r in self.tables[checks]
                 if r["table_name"] == table and r["batch_id"] == batch and r["snapshot_id"] == snapshot]
 
-    def fast_forward(self, table):
-        self.calls.append(("fast_forward", self.refs_["audit"]))
-        self.refs_["main"] = self.refs_["audit"]
-        self.history.append(self.refs_["main"])
+
+PREFIX = "0d6a1c2e-5b7f-4c1a-9e3d-2f8b6a4c0e11"  # a warehouse id, as Lakekeeper's config gives it
+TABLE_PATH = f"/catalog/v1/{PREFIX}/namespaces/station_readings/tables/bronze_readings"
+
+
+@pytest.fixture
+def catalog(monkeypatch):
+    """Lakekeeper's REST API on a loopback port: the warehouse's config, a table's metadata (its
+    refs, from `state.lake`) and the table commit, which applies its set-snapshot-ref updates only
+    if every assert-ref-snapshot-id holds (a null one: no such ref), else 409, as the Iceberg REST
+    spec says. `before_commit` moves a ref between the task's read and the commit; `force` makes
+    the catalog answer 409 with that message."""
+    for var in ("http_proxy", "HTTP_PROXY"):
+        monkeypatch.delenv(var, raising=False)
+    state = types.SimpleNamespace(lake=None, requests=[], before_commit=None, force=None)
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def log_message(self, *args):
+            pass
+
+        def send(self, status, doc):
+            body = json.dumps(doc).encode()
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def metadata(self):
+            return {"metadata": {"refs": {r: {"snapshot-id": s, "type": "branch"}
+                                          for r, s in state.lake.refs_.items() if s is not None}}}
+
+        def do_GET(self):
+            state.requests.append(("GET", self.path, None))
+            if self.path == "/catalog/v1/config?warehouse=k2":
+                return self.send(200, {"defaults": {}, "overrides": {"prefix": PREFIX}})
+            return self.send(200, self.metadata()) if self.path == TABLE_PATH else self.send(404, {})
+
+        def do_POST(self):
+            body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            state.requests.append(("POST", self.path, body))
+            if self.path != TABLE_PATH:
+                return self.send(404, {})
+            if state.before_commit:
+                state.before_commit()
+            refs = state.lake.refs_
+            failed = [r for r in body["requirements"]
+                      if r["type"] != "assert-ref-snapshot-id" or refs.get(r["ref"]) != r["snapshot-id"]]
+            if state.force or failed:
+                return self.send(409, {"error": {"message": state.force or f"Requirement failed: {failed}",
+                                                 "type": "CommitFailedException", "code": 409}})
+            for u in body["updates"]:
+                assert (u["action"], u["type"]) == ("set-snapshot-ref", "branch")
+                refs[u["ref-name"]] = u["snapshot-id"]
+            self.send(200, self.metadata())
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    state.uri = f"http://127.0.0.1:{server.server_address[1]}/catalog"
+    yield state
+    server.shutdown()
+    server.server_close()
+
+
+def commits(catalog):
+    """`(path, body)` of every commit the catalog was sent."""
+    return [(path, body) for method, path, body in catalog.requests if method == "POST"]
 
 
 @pytest.fixture
@@ -262,13 +337,17 @@ def test_a_relation_is_validated_and_quoted():
             C.rel(bad)
 
 
-def test_arguments_are_plain_names(pipeline, spool):
+def test_arguments_are_plain_names_and_a_bad_one_exits_1_not_refused(pipeline, spool):
     for argv in (["load", "--release", "../x", "--product", PRODUCT, "--run-id", RUN],
                  ["load", "--release", RELEASE, "--product", "../x", "--run-id", RUN],
                  ["load", "--release", RELEASE, "--product", PRODUCT, "--run-id", "station_readings/../x"],
-                 ["load", "--release", RELEASE, "--product", PRODUCT, "--run-id", "other_dag/r1"]):
-        with pytest.raises(SystemExit):
+                 ["load", "--release", RELEASE, "--product", PRODUCT, "--run-id", "other_dag/r1"],
+                 ["load", "--release", RELEASE, "--product", PRODUCT],  # argparse's own: a missing argument
+                 ["land", "--release", RELEASE, "--product", PRODUCT, "--run-id", RUN],
+                 ["audit", "--release", RELEASE, "--product", PRODUCT, "--run-id", RUN, "--accept-data-loss"]):
+        with pytest.raises(SystemExit) as e:
             C.parse_args(argv, lambda product: pipeline)
+        assert e.value.code == C.EXIT_ERROR, argv  # 2 is refused, which the DAG does not retry (MED 28)
 
 
 # --- W1-10: load onto `audit`, and the batch's audits ----------------------------------------
@@ -550,42 +629,109 @@ def test_a_check_value_is_bound_never_spliced(pipeline):
     assert "OR ('1'" not in text and args["pattern"] == "^(?:x') OR ('1'='1)$"
 
 
-# --- W1-11: publish by fast-forward, and expire ----------------------------------------------
+# --- W1-11, W1-4: publish by one catalog commit requiring both refs, and expire ----------------
 
 
-def passed_batch(pipeline, spool):
+def passed_batch(pipeline, spool, catalog):
     spool()
     pipeline["bronze"][0]["audits"] = []
     store, lake = Store(), FakeLake()
+    catalog.lake, lake.catalog_uri = lake, catalog.uri
     lake.publish_main([], OTHER)
     C.load(ctx(pipeline), store, lake)
     assert C.audit(ctx(pipeline), store, lake)[0] == C.EXIT_OK
     return store, lake
 
 
-def test_publish_fast_forwards_main_when_every_check_passed(pipeline, spool):
-    store, lake = passed_batch(pipeline, spool)
-    head = lake.refs_["audit"]
+def test_publish_is_one_commit_requiring_main_and_audit_as_read(pipeline, spool, catalog):
+    store, lake = passed_batch(pipeline, spool, catalog)
+    main, head = lake.refs_["main"], lake.refs_["audit"]
+    assert lake.parent[head] == main
     code, result = C.publish(ctx(pipeline), store, lake)
-    assert code == C.EXIT_OK and lake.calls[-1] == ("fast_forward", head) and lake.refs_["main"] == head
-    assert (result["snapshotAfter"], result["table"]) == (head, TABLE)
+    assert code == C.EXIT_OK and lake.refs_["main"] == head
+    assert commits(catalog) == [(TABLE_PATH, {
+        "identifier": {"namespace": ["station_readings"], "name": "bronze_readings"},
+        "requirements": [{"type": "assert-ref-snapshot-id", "ref": "main", "snapshot-id": main},
+                         {"type": "assert-ref-snapshot-id", "ref": "audit", "snapshot-id": head}],
+        "updates": [{"action": "set-snapshot-ref", "ref-name": "main", "type": "branch", "snapshot-id": head}]})]
+    assert (result["snapshotBefore"], result["snapshotAfter"], result["table"]) == (main, head, TABLE)
     assert C.publish(ctx(pipeline), store, lake)[0] == C.EXIT_OK  # a retry: nothing left to move
-    assert [c for c in lake.calls if c[0] == "fast_forward"] == [("fast_forward", head)]
+    assert len(commits(catalog)) == 1
 
 
-def test_publish_refuses_a_batch_with_a_failed_check(pipeline, spool):
-    store, lake = passed_batch(pipeline, spool)
+def test_the_first_publish_of_a_table_requires_it_to_have_no_main(pipeline, spool, catalog):
+    spool()
+    pipeline["bronze"][0]["audits"] = []
+    store, lake = Store(), FakeLake()
+    catalog.lake, lake.catalog_uri = lake, catalog.uri
+    base = lake._commit([], [], None)  # the branch's own snapshot on a table with no main
+    lake.refs_["audit"] = lake._commit([], [{**ROWS[0], model.LINEAGE_COLUMN: SHA}], RUN, base)
+    assert C.audit(ctx(pipeline), store, lake)[0] == C.EXIT_OK
+    assert C.publish(ctx(pipeline), store, lake)[0] == C.EXIT_OK and lake.refs_["main"] == lake.refs_["audit"]
+    [(_, body)] = commits(catalog)
+    assert body["requirements"][0] == {"type": "assert-ref-snapshot-id", "ref": "main", "snapshot-id": None}
+
+
+def test_publish_refuses_when_main_moved_since_staging(pipeline, spool, catalog, capsys):
+    store, lake = passed_batch(pipeline, spool, catalog)
+    head = lake.refs_["audit"]
+    lake.refs_["main"] = moved = lake._commit([], [], "maintenance", lake.refs_["main"])  # a compaction on main
+    assert C.publish(ctx(pipeline), store, lake)[0] == C.EXIT_REFUSED
+    assert commits(catalog) == [] and lake.refs_ == {"main": moved, "audit": head}
+    assert "main moved since staging" in capsys.readouterr().err
+
+
+def test_publish_refuses_an_audit_head_that_does_not_descend_from_main(pipeline, spool, catalog, capsys):
+    store, lake = passed_batch(pipeline, spool, catalog)
+    main = lake.refs_["main"]
+    elsewhere = lake._commit([], [], "elsewhere")  # another lineage, which main never held
+    lake.refs_["audit"] = lake._commit([], [{**ROWS[0], model.LINEAGE_COLUMN: SHA}], RUN, elsewhere)
+    assert C.audit(ctx(pipeline), store, lake)[0] == C.EXIT_OK  # the batch's own checks pass at the new head
+    assert C.publish(ctx(pipeline), store, lake)[0] == C.EXIT_REFUSED
+    assert commits(catalog) == [] and lake.refs_["main"] == main
+    assert "no fast-forward" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("ref", ["main", "audit"])
+def test_a_ref_moved_between_the_read_and_the_commit_publishes_nothing_and_is_named(pipeline, spool, catalog,
+                                                                                      capsys, ref):
+    store, lake = passed_batch(pipeline, spool, catalog)
+    main, head = lake.refs_["main"], lake.refs_["audit"]
+    later = lake._commit([], [], "a concurrent writer", lake.refs_[ref])
+    catalog.before_commit = lambda: lake.refs_.update({ref: later})
+    code, result = C.publish(ctx(pipeline), store, lake)
+    assert code == C.EXIT_REFUSED and result["snapshotAfter"] == main and len(commits(catalog)) == 1
+    assert lake.refs_ == {"main": main, "audit": head, ref: later}  # the commit changed nothing
+    err = capsys.readouterr().err
+    assert "HTTP 409" in err and f"{ref} (read {main if ref == 'main' else head}, now {later})" in err
+    assert ("audit (read" in err) == (ref == "audit") and ("main (read" in err) == (ref == "main")
+
+
+def test_a_409_with_neither_ref_moved_is_a_clear_failure_a_retry_decides(pipeline, spool, catalog, capsys):
+    store, lake = passed_batch(pipeline, spool, catalog)
+    main = lake.refs_["main"]
+    catalog.force = "Requirement failed: a concurrent commit"
+    assert C.publish(ctx(pipeline), store, lake)[0] == C.EXIT_ERROR and lake.refs_["main"] == main
+    err = capsys.readouterr().err
+    assert "HTTP 409" in err and "a concurrent commit" in err and "read back unmoved" in err and "nothing published" in err
+    catalog.force = None
+    assert C.publish(ctx(pipeline), store, lake)[0] == C.EXIT_OK  # the retry the DAG makes of exit 1
+
+
+def test_publish_refuses_a_batch_with_a_failed_check(pipeline, spool, catalog):
+    store, lake = passed_batch(pipeline, spool, catalog)
     main = lake.refs_["main"]
     lake.tables[CHECKS][2]["passed"] = False
     assert C.publish(ctx(pipeline), store, lake)[0] == C.EXIT_FAILED
-    assert lake.refs_["main"] == main and not any(c[0] == "fast_forward" for c in lake.calls)
+    assert lake.refs_["main"] == main and commits(catalog) == []
 
 
-def test_publish_refuses_a_branch_that_moved_after_its_audit(pipeline, spool):
-    store, lake = passed_batch(pipeline, spool)
-    lake.refs_["audit"] = lake._commit(staged(lake), [{"station_id": "s-2"}], RUN)  # written after the audit
+def test_publish_refuses_a_branch_that_moved_after_its_audit(pipeline, spool, catalog):
+    store, lake = passed_batch(pipeline, spool, catalog)
+    head = lake.refs_["audit"]
+    lake.refs_["audit"] = lake._commit(staged(lake), [{"station_id": "s-2"}], RUN, head)  # written after the audit
     assert C.publish(ctx(pipeline), store, lake)[0] == C.EXIT_FAILED
-    assert not any(c[0] == "fast_forward" for c in lake.calls)
+    assert commits(catalog) == []
 
 
 def test_publish_refuses_a_parse_failed_batch(pipeline, spool):
@@ -596,15 +742,16 @@ def test_publish_refuses_a_parse_failed_batch(pipeline, spool):
     assert C.publish(ctx(pipeline), store, lake)[0] == C.EXIT_FAILED
 
 
-def test_publish_of_bytes_already_published_moves_nothing(pipeline, spool):
+def test_publish_of_bytes_already_published_moves_nothing(pipeline, spool, catalog):
     spool()
     pipeline["bronze"][0]["audits"] = []
     store, lake = Store(), FakeLake()
+    catalog.lake, lake.catalog_uri = lake, catalog.uri
     lake.publish_main([{**ROWS[0], model.LINEAGE_COLUMN: SHA}], OTHER)
     C.load(ctx(pipeline), store, lake)
     assert C.audit(ctx(pipeline), store, lake)[0] == C.EXIT_OK
     assert C.publish(ctx(pipeline), store, lake)[0] == C.EXIT_OK
-    assert not any(c[0] == "fast_forward" for c in lake.calls)
+    assert catalog.requests == []
 
 
 def test_the_newest_audit_of_the_snapshot_decides():
@@ -615,14 +762,6 @@ def test_the_newest_audit_of_the_snapshot_decides():
                                        ("parses", True, new), ("row_count", False, new)], names)
     assert "lacks" in C.unaudited([("parses", True, new)], names)
     assert "no audit" in C.unaudited([], names)
-
-
-def test_the_fast_forward_names_only_validated_identifiers():
-    assert C.fast_forward_sql(TABLE) == (
-        "CALL `lake`.`system`.`fast_forward`(table => 'station_readings.bronze_readings', "
-        "branch => 'main', to => 'audit')")
-    with pytest.raises(ValueError):
-        C.fast_forward_sql("lake.x.y') --")
 
 
 def test_a_string_literal_is_one_token():

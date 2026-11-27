@@ -30,19 +30,26 @@ audit    checks the batch at `audit`'s head, scoped to its rows (source_file_sha
          pattern, values_unchanged (no published key with other values), and each declared
          parser audit as fetch recorded it in audits.json (product code runs in the fetch
          container, never here; no entry fails closed); one audit_checks row each, at that snapshot.
-publish  fast-forwards `main` to `audit` (Iceberg's fast_forward, which refuses anything else),
-         only if the batch's newest audit at `audit`'s current head passed every check; a batch
-         that staged nothing (the same bytes again) moves nothing.
+publish  sets `main` to `audit`'s head, only if the batch's newest audit at that head passed every
+         check and `main` is the snapshot the batch was staged on (a fast-forward, nothing
+         else), in one commit to the catalog's REST API that requires `main` to be that
+         snapshot and `audit` that head still; a ref moved by anyone in between fails the
+         commit and nothing is published. A batch that staged nothing (the same bytes again)
+         moves nothing.
 
-Exits: 0 done (audit: every check passed); 1 a task error; 2 refused (a spool file that is a link at
-any level, not a regular file, or has a second link; a sha256 or size mismatch, other bytes under the
-key, `audit` holding another unpublished batch); 3 the batch failed its audit
+Exits: 0 done (audit: every check passed); 1 a task error, a bad argument among them (publish: a
+catalog conflict with neither ref moved, which a retry decides); 2 refused (a
+spool file that is a link at any level, not a regular file, or has a second link; a sha256 or size
+mismatch, other bytes under the key, `audit` holding another unpublished batch; publish: `main` moved
+since staging, or `main` or `audit` moved before its commit); 3 the batch failed its audit
 (publish: its audit at `audit`'s head is missing or failed, main not moved).
 The last line on stdout is the task's result as JSON, {"exit": <n>, ...}, for the DAG's record
 task, which writes the run record (this task writes none).
 
 The landing key is the Spark key, K2_SPARK_S3_ACCESS_KEY and K2_SPARK_S3_SECRET_KEY (A8): get and
-put on the landing bucket, no delete. Nothing here prints a key.
+put on the landing bucket, no delete. Nothing here prints a key. The publish commit goes to
+Lakekeeper at K2_LAKE_CATALOG_URI, as spark_conf.py reads it, with no credential: the catalog has no
+authentication and answers on k2-catalog alone (ADR-059 part 7).
 """
 
 from __future__ import annotations
@@ -384,30 +391,68 @@ def unaudited(found: list, expected: list[str]) -> str | None:
     return None
 
 
+def staged_on(parents: dict, head: int, batch: str):
+    """The snapshot `batch` was staged on top of: `head`'s newest ancestor that is not the batch's
+    own commit. `parents` is `{snapshot: (parent, k2.batch-id)}` over the table's snapshots."""
+    while head in parents and parents[head][1] == batch:
+        head = parents[head][0]
+    return head
+
+
+def publish_change(table: str, main, head: int) -> dict:
+    """The one commit that publishes: `main` set to `head`, required to be `main` still (null: no
+    main yet) and `audit` to be `head` still, as Iceberg REST's assert-ref-snapshot-id checks them
+    in the catalog at the commit. The same requirements as the dbt wrapper's tag commit."""
+    _, ns, name_ = table.split(".")
+    return {"identifier": {"namespace": [ns], "name": name_},
+            "requirements": [{"type": "assert-ref-snapshot-id", "ref": "main", "snapshot-id": main},
+                             {"type": "assert-ref-snapshot-id", "ref": AUDIT, "snapshot-id": snapshot_id(head)}],
+            "updates": [{"action": "set-snapshot-ref", "ref-name": "main", "type": "branch",
+                         "snapshot-id": snapshot_id(head)}]}
+
+
 def publish(run: Run, store, lake) -> tuple[int, dict]:
-    """Fast-forwards `main` to `audit`'s head, only when the batch's newest audit at that very
-    head passed every check; a branch written after its audit is not published unaudited."""
+    """Sets `main` to `audit`'s head, only when the batch's newest audit at that very head passed
+    every check and `main` is the snapshot the batch was staged on, by one catalog commit that
+    requires both refs to be what was read here: a write to `audit` after its audit, or a move of
+    `main`, before the commit or during it, publishes nothing (CHANGELOG alpha.4, F8)."""
     bronze = run.bronze
     table = bronze["table"]
     refs = lake.refs(table)
-    head = refs.get(AUDIT, refs.get("main"))
-    result = {"table": table, "snapshotBefore": refs.get("main"), "snapshotAfter": refs.get("main")}
+    main, head = refs.get("main"), refs.get(AUDIT, refs.get("main"))
+    result = {"table": table, "snapshotBefore": main, "snapshotAfter": main}
     why = unaudited(lake.checks_of(bronze["checks"], table, run.run_id, head), check_names(bronze))
     if why:
-        print(f"publish refused at {AUDIT} snapshot {head}: {why}; main {refs.get('main')} not moved", file=sys.stderr)
+        print(f"publish refused at {AUDIT} snapshot {head}: {why}; main {main} not moved", file=sys.stderr)
         return EXIT_FAILED, result
     pending = pending_batch(lake, table, refs)
     if pending is None:
-        print(f"publish: batch {run.run_id} staged nothing unpublished; main {refs.get('main')} stays")
+        print(f"publish: batch {run.run_id} staged nothing unpublished; main {main} stays")
         return EXIT_OK, result
     if pending != run.run_id:
         print(f"publish refused: {AUDIT} holds batch {pending}, not this one", file=sys.stderr)
         return EXIT_REFUSED, result
-    lake.fast_forward(table)  # Iceberg refuses one that is not a fast-forward
-    after = lake.refs(table).get("main")
-    if after != head:
-        raise RuntimeError(f"main is {after} after the fast-forward, not {AUDIT}'s {head}")
-    print(f"publish: main {refs.get('main')} -> {after}, batch {run.run_id}")
+    base = staged_on(lake.parents(table), head, run.run_id)
+    if main is not None and main != base:  # no main yet: the first publish of the table
+        print(f"publish refused: main is {main}, not {base}, the snapshot batch {run.run_id} was staged on, so "
+              f"moving main to {AUDIT}'s {head} is no fast-forward (main moved since staging, or {AUDIT} does not "
+              "descend from it); nothing published", file=sys.stderr)
+        return EXIT_REFUSED, result
+    catalog = lake.catalog(table)
+    status, doc = catalog.commit(table, publish_change(table, main, head))
+    if status == 409:  # the commit failed: the catalog changed nothing
+        found = catalog.refs(table)
+        moved = [f"{ref} (read {want}, now {found.get(ref)})" for ref, want in (("main", main), (AUDIT, head))
+                 if found.get(ref) != want]
+        why = (f"{', '.join(moved)} moved since this task read it" if moved else
+               f"main and {AUDIT} read back unmoved, so another commit to the table raced this one; a retry decides")
+        print(f"publish refused: the catalog answered HTTP 409, {(doc.get('error') or {}).get('message')!r}: "
+              f"{why}; nothing published", file=sys.stderr)
+        return (EXIT_REFUSED if moved else EXIT_ERROR), result
+    after = (((doc.get("metadata") or {}).get("refs") or {}).get("main") or {}).get("snapshot-id")
+    if status != 200 or after != head:
+        raise RuntimeError(f"the publish commit answered HTTP {status} with main at {after}, not {AUDIT}'s {head}")
+    print(f"publish: main {main} -> {after}, batch {run.run_id}")
     return EXIT_OK, {**result, "snapshotAfter": after}
 
 
@@ -424,12 +469,6 @@ def procedure_table(relation: str) -> tuple[str, str]:
     rel(relation)
     catalog, ns, table = relation.split(".")
     return name(catalog), string_literal(f"{ns}.{table}")
-
-
-def fast_forward_sql(table: str) -> str:
-    catalog, ident = procedure_table(table)
-    return (f"CALL {catalog}.`system`.`fast_forward`(table => {ident}, branch => {string_literal('main')}, "
-            f"to => {string_literal(AUDIT)})")
 
 
 def parser_audits(declared: list[str], found: dict) -> list[tuple[str, bool, str]]:
@@ -532,6 +571,50 @@ class Landing:
             return response.read()
 
 
+class Catalog:
+    """One warehouse of the lake's Iceberg REST catalog, Lakekeeper, by the standard library. No
+    credential: it has no authentication and answers on k2-catalog alone (ADR-059 part 7)."""
+
+    def __init__(self, uri: str, warehouse: str):
+        uri = uri.rstrip("/")
+        status, config = self._call("GET", f"{uri}/v1/config?warehouse={urllib.parse.quote(warehouse)}")
+        if status != 200:
+            raise RuntimeError(f"the catalog's config of warehouse {warehouse}: HTTP {status}")
+        prefix = {**config.get("defaults", {}), **config.get("overrides", {})}["prefix"]  # overrides win (the spec)
+        self.base = f"{uri}/v1/{prefix}"
+
+    @staticmethod
+    def _call(method: str, url: str, body: dict | None = None) -> tuple[int, dict]:
+        """`(status, JSON body)`, an error status included: a 409 is an answer, not an exception."""
+        request = urllib.request.Request(url, None if body is None else json.dumps(body).encode(), method=method,
+                                         headers={"Content-Type": "application/json"})
+        try:
+            with urllib.request.urlopen(request, timeout=60) as r:  # noqa: S310 - the configured catalog
+                raw = r.read()
+                return r.status, json.loads(raw) if raw else {}
+        except urllib.error.HTTPError as e:
+            try:
+                return e.code, json.loads(e.read() or b"{}")
+            except ValueError:
+                return e.code, {}
+
+    def _path(self, table: str) -> str:
+        _, ns, name_ = table.split(".")
+        return f"{self.base}/namespaces/{urllib.parse.quote(ns)}/tables/{urllib.parse.quote(name_)}"
+
+    def commit(self, table: str, change: dict) -> tuple[int, dict]:
+        """Iceberg REST's table commit (POST, requirements and updates): 200 with the new metadata,
+        409 when a requirement fails."""
+        return self._call("POST", self._path(table), change)
+
+    def refs(self, table: str) -> dict:
+        """`{ref: snapshot id}` as the catalog holds them now (no engine's cached copy)."""
+        status, doc = self._call("GET", self._path(table))
+        if status != 200:
+            raise RuntimeError(f"the catalog's {table}: HTTP {status}")
+        return {r: v["snapshot-id"] for r, v in ((doc.get("metadata") or {}).get("refs") or {}).items()}
+
+
 class SparkLake:
     """The lake facts the flows read and the commits they make, each one statement over
     identifiers from rel() and values bound as parameters (Spark 3.5 named markers)."""
@@ -605,13 +688,29 @@ class SparkLake:
         return self._sql(f"SELECT `check_name`, `passed`, `checked_at` FROM {rel(checks)} WHERE `table_name` = :t "
                          "AND `batch_id` = :b AND `snapshot_id` <=> :s", t=table, b=batch, s=snapshot)
 
-    def fast_forward(self, table: str) -> None:
-        self.spark.sql(fast_forward_sql(table))
+    def parents(self, table: str) -> dict:
+        """`{snapshot: (parent, k2.batch-id)}` over the table's snapshots, for staged_on."""
+        return {s: (p, b) for s, p, b in self._sql(
+            f"SELECT `snapshot_id`, `parent_id`, `summary`['k2.batch-id'] FROM {rel(table)}.`snapshots`")}
+
+    @staticmethod
+    def catalog(table: str) -> Catalog:
+        """The REST catalog of the table's warehouse, at the URI Spark's catalog uses."""
+        from spark_conf import CATALOG_URI, warehouse_of
+
+        return Catalog(CATALOG_URI, warehouse_of(table.split(".")[0]))
+
+
+class Arguments(argparse.ArgumentParser):
+    def error(self, message: str):
+        """A bad argument is a task error, exit 1: argparse's 2 would read as refused, which the DAG
+        does not retry (audit 2026-11-27, MED 28)."""
+        self.print_usage(sys.stderr)
+        self.exit(EXIT_ERROR, f"{self.prog}: error: {message}\n")
 
 
 def parse_args(argv: list[str] | None, read_pipeline) -> tuple[str, Run]:
-    ap = argparse.ArgumentParser(prog="connector.py", description=__doc__,
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = Arguments(prog="connector.py", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("task", choices=sorted(TASKS))
     ap.add_argument("--release", default=os.environ.get("K2_RELEASE"))
     ap.add_argument("--product", required=True)
