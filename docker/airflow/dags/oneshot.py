@@ -10,8 +10,9 @@ Outcome of 2026-11-27). What keeps that tolerable is that it runs no product cod
 the standard library and Airflow (docker/airflow/tests/test_oneshot.py holds it to that), and
 refuses anything off the release's shape before it starts a container.
 
-Every run, whatever the kind: `--rm`, `--pull never` (images arrive with the deploy, never at run
-time), a read-only root with a small `/tmp`, every capability dropped, no new privileges, at most
+Every run, whatever the kind: `--rm`, labels `com.k2.oneshot=<kind>` and `com.k2.project=<project>`
+(scripts/verify/catalog-fence.sh admits the stack's own one-shots by them), `--pull never` (images
+arrive with the deploy, never at run time), a read-only root with a small `/tmp`, every capability dropped, no new privileges, at most
 256 processes; never
 `--privileged`, never the socket, never a mount the release does not list. Environment values go
 by name only (`-e NAME`): docker copies each from its own environment, so no value is in argv or
@@ -93,6 +94,12 @@ def load_oneshots(release_path: str) -> dict:
 def container_name(kind: str, dag_id: str, try_number: int) -> str:
     """`k2-<kind>-<dagId>-<try>` in Docker's name charset: the same for a retry or a kill to find."""
     return re.sub(r"[^a-zA-Z0-9_.-]", "-", f"k2-{kind}-{dag_id}-{try_number}")
+
+
+def labels(kind: str, project: str) -> list[str]:
+    """What the catalog fence knows a one-shot by (scripts/verify/catalog-fence.sh): compose labels
+    only a compose service has, so a container this operator starts carries its own kind and project."""
+    return ["--label", f"com.k2.oneshot={kind}", "--label", f"com.k2.project={project}"]
 
 
 def password_mount(principal: str) -> str:
@@ -192,7 +199,7 @@ class OneShotOperator(BaseOperator):
         if not re.fullmatch(r"[a-z0-9][a-z0-9_-]*", project):
             raise AirflowFailException("K2_COMPOSE_PROJECT must name the compose project in the scheduler's environment")
 
-        argv = ["docker", "run", "--rm", "--name", name, "--pull", "never",
+        argv = ["docker", "run", "--rm", "--name", name, *labels(self.kind, project), "--pull", "never",
                 "--read-only", "--tmpfs", TMPFS, "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
                 "--pids-limit", PIDS]
         if spec["secrets"]:  # the files are mode 600, owned by the host user
@@ -214,7 +221,8 @@ class OneShotOperator(BaseOperator):
                 raise AirflowFailException(f"{self.kind}: refused dag id {dag_id!r}: its spool directory must be one plain name")
             volume = f"{project}_k2-spool"
             argv += ["--mount", f"type=volume,source={volume},target=/spool/{dag_id},volume-subpath={dag_id}"]
-            before.append(["docker", "run", *SPOOL_HELPER, "--mount", f"type=volume,source={volume},target=/spool",
+            before.append(["docker", "run", *SPOOL_HELPER, *labels("fetch-spool", project),
+                           "--mount", f"type=volume,source={volume},target=/spool",
                            spec["image"], "mkdir", "-p", f"/spool/{dag_id}"])
         return [*argv, spec["image"], *self.command], {**os.environ, **{e: values[e] for e in spec["env"]}}, before
 
