@@ -21,7 +21,10 @@ The edges, for the full task list (any entry's list is a subset, in this order):
     resolve >> fetch >> load >> audit >> publish >> build >> expire >> record
     resolve >> maintain >> record
 
-expire and record are teardowns with no setup: they run once everything upstream is done, whatever
+Every task is all_success but three. build is none_failed: an unchanged fetch (exit 10) skips load,
+audit and publish and build still runs, so a build fixed by a deploy, or an input that moved, is
+built without new bytes (the build is idempotent: one build per run); a failed or refused data task
+before it leaves build upstream_failed. expire and record are teardowns with no setup: they run once everything upstream is done, whatever
 its state (all_done), and a teardown does not decide the run's state, so a failed build or audit
 still fails the run while record succeeds after it. A record that cannot write fails as a task
 (AirflowTaskFailed), loudly, but does not repaint the run.
@@ -44,7 +47,7 @@ import subprocess
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from airflow.sdk import DAG, BaseOperator
+from airflow.sdk import DAG, BaseOperator, TriggerRule
 from airflow.sdk.exceptions import AirflowException, AirflowFailException, AirflowSkipException
 from croniter import croniter  # Airflow's own cron dependency
 from oneshot import RELEASE, RELEASES_MOUNT, OneShotOperator
@@ -295,8 +298,12 @@ def make_dag(release: Path, e: dict) -> DAG:
         ops = {"resolve": Resolve(task_id="resolve")}
         for t in tasks:
             if t in ("fetch", "build"):
+                # build: no retry (its failures are deterministic), and none_failed, so it runs after
+                # an unchanged fetch's skips; none_failed_min_one_success would skip it there, its
+                # one direct upstream being skipped publish.
                 ops[t] = PinnedOneShot(task_id=t, kind="fetch" if t == "fetch" else "dbt-runner", product=product,
-                                       pool=POOLS[t], **({"retries": 0} if t == "build" else {}))
+                                       pool=POOLS[t], **({"retries": 0, "trigger_rule": TriggerRule.NONE_FAILED}
+                                                         if t == "build" else {}))
             elif t in POOLS:
                 ops[t] = SparkTask(task_id=t, product=product, pool=POOLS[t])
         ops["record"] = Record(task_id="record", product=product)
