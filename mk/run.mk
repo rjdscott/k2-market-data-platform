@@ -17,3 +17,7 @@ test-connectors:  ## The fetch container's address guard and run contract (docke
 .PHONY: test-api
 test-api:  ## k2-api's tests and ruff from its own lock (services/k2-api/), with no network and no Trino: a fake stands at the one Trino client
 	cd services/k2-api && uv run --locked -q pytest -q && uv run --locked -q ruff check .
+
+.PHONY: test-platform
+test-platform:  ## The run-records client and the catalog site generator (platform/runs, platform/catalog-site): fakes only, no stack
+	uv run --no-project --with pytest==9.2.0 --with trino==0.340.0 pytest platform/runs platform/catalog-site -q
