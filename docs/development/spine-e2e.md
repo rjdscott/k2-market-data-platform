@@ -44,19 +44,31 @@ Every later stage reads that one release. Nothing is committed or tagged in your
 | `access-verify` | a throwaway lake, prefix `spine-e2e-av` | every row of [`tests/access/expectations.yaml`](../../tests/access/expectations.yaml) holds on that release | a role sees what it should not, or cannot see what it should |
 | `test-access` | a throwaway lake, prefix `access-test` | the proofs behind that suite ([`tests/access/prove.sh`](../../tests/access/prove.sh)): a loosened rule fails exactly its row, the drift and marker checks catch their plants, a rules-only release takes effect without a restart, each principal lands in its resource group, and a builder that replaces its base with a view of constants is caught | the verifier itself can no longer fail when it should, which is worse than a failing row |
 | `rules` | one throwaway lake, prefix `spine-e2e` | in order, [`trino_rules_test.py`](../../scripts/trino_rules_test.py) `suite` and `negative`, [`trino_rules_c1_test.py`](../../scripts/trino_rules_c1_test.py) (a builder tampering with its base), `control` (destructive, so after C1), then [`identity.sh --throwaway`](../../scripts/verify/identity.sh) (HTTPS, passwords, certificates, rotations) | a rule, a mask, the fence or the login path is wrong on Trino 484 |
+| `run` | one throwaway lake, prefix `run-path`, with one long-lived Spark container on compose's Spark image and the `dbt-runner` image built from the tree ([`run-path.sh`](../../scripts/verify/run-path.sh)) | one product's run path, each task the release's own code in the shape the DAG factory gives it: calendars built through the dbt wrapper; ECB's synthetic good file landed, audited and published to bronze; ECB built on calendars' tested snapshot and read through the reader view, its rates exact; the same bytes again landing and staging nothing; the corrupt file failing its audit and a third file refused behind it until the operator resets `audit` to `main`; a failing build restored, its snapshots expired by id, maintenance clean; every build's run records under its release | the named claim broke; the stage stops there, since each later claim builds on the lake the one before left |
 | `rehearsal` | compose project `k2-rehearsal` ([`deploy_rehearsal.py`](../../scripts/verify/deploy_rehearsal.py)), with a Spark service built from the tag, so deploy's `ddl` step runs its real Spark path | by default `make deploy-rehearsal FAST=1`, for merge points: a first deploy that fails verification then succeeds, a planted view the drift check names, a rules-only release that restarts nothing, and kills after `swap` and `recreate` only, the skipped sections named in its summary. With `FULL=1`, before a tag, the whole chain: also one image changed, a forced mismatch that restores the previous release, `make rollback`, a dropped masked column polled every 50 ms, a kill after each of the deploy's steps then a rerun, two deploys at once, the backup-set refusal | a deploy claim of ADR-058 does not hold |
+
+The `run` stage does not run the fetch itself: a local fixture server would sit on a private
+address, which the fetch must refuse, so `make test-connectors` proves the fetch, and the stage
+writes each spool entry as the fetch leaves it after its download (the raw file and `fetch.json`
+with its sha256), then runs the fetch's own parse, which runs the release's parser and its
+audits. It needs real local images, never the manifest's placeholders: Spark's image as the
+compose file pins it, and `dbt-runner` built from the tree. The same machinery
+(`scripts/lib/run-path-lib.sh`) runs plan 002's `fx-idempotent.sh`, `fx-bad-file.sh`,
+`dbt-failing-test.sh` and `trino-stop-mid-build.sh`, each on a lake of its own.
 
 Times, each from one recorded run, 2026-11-27, `make spine-e2e`: the fast rehearsal 416 s, then
 605 to 615 s after Spark joined the rehearsal's stack; a full run 1085 s. The first recorded run,
 before the fast rehearsal existed, printed `PASS rules 261s`, `PASS rehearsal 1347s` and a total
-of `1609 s`. No file in the repository records the other stages' times, so none is given. Memory: each throwaway lake refuses to start under 6 GiB
-available (`MIN_GIB` in `throwaway-lake.sh`), and the rehearsal under 10 GiB
-(`deploy_rehearsal.py`).
+of `1609 s`. The `run` stage, from one recorded run of 2026-11-27: `run-path: 7 PASS, 0 FAIL in
+232 s`, and inside `ONLY="run" make spine-e2e` the same day `PASS run 227s`. No file in the
+repository records the other stages' times, so none is given. Memory: each throwaway lake refuses
+to start under 6 GiB available (`MIN_GIB` in `throwaway-lake.sh`), and the `run` stage and the
+rehearsal under 10 GiB (`run-path-lib.sh`, `deploy_rehearsal.py`).
 
 ## How to use it
 
 ```bash
-make spine-e2e                      # all five stages, the fast rehearsal: after every merge into a phase branch
+make spine-e2e                      # all six stages, the fast rehearsal: after every merge into a phase branch
 FULL=1 make spine-e2e               # the whole rehearsal: before every tag
 ONLY="rules" make spine-e2e         # one stage again (several: ONLY="rules rehearsal")
 KEEP=1 make spine-e2e               # keep the logs
@@ -78,12 +90,13 @@ If a run is killed (a closed terminal, `kill -9`), the cleanup trap does not run
 it left:
 
 ```bash
-bash scripts/lib/throwaway-lake.sh down spine-e2e        # also spine-e2e-av and access-test
+bash scripts/lib/throwaway-lake.sh down spine-e2e        # also spine-e2e-av, access-test and run-path
+docker rmi dbt-runner:run-path                            # the run stage's image
 docker compose -p k2-rehearsal down -v                    # the rehearsal's project
 docker ps -a --filter name=k2-rehearsal --filter name=spine-e2e   # what is still there
 ```
 
-then delete the stale `k2-spine-e2e.*` and `s19-rehearsal-*` directories under `$HOME`.
+then delete the stale `k2-spine-e2e.*`, `.k2-run-path.*` and `s19-rehearsal-*` directories under `$HOME`.
 
 ## When to run it
 
@@ -105,7 +118,7 @@ The test pyramid of this repository as it is:
 ```mermaid
 flowchart TB
   A["After a deploy, on the live stack<br/>make release-verify, make health"]
-  B["At merge points and before a tag<br/>make spine-e2e: throwaway containers, five stages"]
+  B["At merge points and before a tag<br/>make spine-e2e: throwaway containers, six stages"]
   C["Per pull request, in CI<br/>validation runner, rules suite, access-verify,<br/>dbt trees, pytest, compose, docs"]
   D["Per step, by the author<br/>the unit gates of what the step touches"]
   D --> C --> B --> A
@@ -161,7 +174,8 @@ more:
 - It takes about 18 minutes (a full run, 1085 s on 2026-11-27), and the rehearsal is most of it.
 - Nothing runs it automatically: a person or the build orchestrator types it.
 - It does not cover a fresh install from an empty host (that is the
-  `/release-check` skill's fresh-clone gate), and it deploys nothing real: images are placeholders.
+  `/release-check` skill's fresh-clone gate), and it deploys nothing real: the release's images are
+  placeholders (the `run` stage runs the local images it builds or the compose file pins instead).
 
 Revisit when: the rehearsal alone passes 30 minutes (split or trim it), a second engineer joins
 (a required pre-merge check, then), or a nightly runner exists on the host (run it there
