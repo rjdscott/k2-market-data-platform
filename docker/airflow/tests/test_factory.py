@@ -521,7 +521,7 @@ def setUpModule():
                            "startFrom": "earliest-retained", "maxOffsetsPerPartition": 1000},
              "landing": {"table": f"lake.{KDAG}.landing"},
              "bronze": [{**station["bronze"][0], "table": f"lake.{KDAG}.bronze_trade", "key": ["kafka_partition", "kafka_offset"],
-                         "values": ["kafka_timestamp", "record_key", "record_value"], "patterns": {}, "audits": [],
+                         "values": ["kafka_timestamp", "schema_id", "exchange", "stream", "symbol", "recv_ts_ns", "conn_id", "conn_msg_seq", "payload"], "patterns": {}, "audits": [],
                          "checks": f"lake.{KDAG}.audit_checks"}]}
     api = {**station, "product": API, "dagId": ADAG, "fence": ADAG, "build": {**build, "selector": ADAG},
            "connector": {"kind": "public-api", "url": "https://api.example.org/pairs", "allowHosts": ["api.example.org"],

@@ -75,8 +75,8 @@ customProperties:
       topic: market.crypto.v3.raw.kraken
       envelope:
         format: avro-confluent
-        # ponytail: names bronze_trade, whose record_value is the RawMessage as framed, as the
-        # k2gen fixture station-feed does. I-1 names a raw_message contract, which waits on a build
+        # ponytail: names bronze_trade, which carries the RawMessage's fields as Spark decodes them at
+        # staging, as the k2gen fixture station-feed does. I-1 names a raw_message contract, which waits on a build
         # kind for a contract with no lake table (k2-v2.schema.json build has none but serving).
         contract: market-capture.kraken-trades.bronze_trade
       filter:
