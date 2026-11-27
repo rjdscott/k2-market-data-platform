@@ -59,10 +59,15 @@ done
 # passed there: Prometheus stayed Exited (255) after the 2026-11-25 VM restart and
 # only step (3) noticed, as a missing metric. Long-running is every service compose
 # defines without restart "no" (the one-shots exit by design). Fails closed: a
-# compose file it cannot read is a FAIL, not a pass.
+# compose file it cannot read is a FAIL, not a pass. The services are the LIVE release's, its own
+# compose through the pointer (ADR-058), when a releases root has one: after a rollback the checkout's
+# compose can name a service that release does not have (k2-api, rolling back to alpha.3.2).
 if [ -n "$ps_out" ]; then
   running=$(docker compose ps --services --status running 2>/dev/null || true)
-  missing=$(docker compose config --format json 2>/dev/null | RUNNING="$running" python3 -c '
+  live_compose=${K2_RELEASES:-$HOME/k2-releases}/pointers/trino/compose/docker-compose.yml
+  defined=(docker compose config --format json)
+  [ -L "${live_compose%/compose/*}" ] && defined=(docker compose --project-directory . -f "$live_compose" config --format json)
+  missing=$("${defined[@]}" 2>/dev/null | RUNNING="$running" python3 -c '
 import json, os, sys
 svc = json.load(sys.stdin)["services"]
 up = set(os.environ["RUNNING"].split())

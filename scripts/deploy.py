@@ -58,7 +58,9 @@ first failure:
    views-widen   each view up to the new contract's columns the tag holds
    verify        every pointer (in the VM and in each container that mounts the root), the files under
                  it, each image digest and health check, every default-profile service running, the
-                 drift check in tools, the live access suite (S20) and the catalog fence's probes
+                 drift check in tools (what a release attempted since the live one created, its ddl being
+                 additive and never undone, is LEFT, not drift: left_by), the live access suite (S20) and
+                 the catalog fence's probes
                  (scripts/verify/catalog-fence.sh); `make release-verify` adds S13's identity.sh
 10 done          the other canaries' lines removed; the release is the good one
    site          the release's catalog site and dbt docs into the k2-site volume k2-api serves; a failure is
@@ -286,6 +288,25 @@ def standing(records: list[dict[str, Any]]) -> tuple[list[str], list[str]]:
             if rid and rid not in since:
                 since.append(rid)
     return goods, since
+
+
+def left_by(records: list[dict[str, Any]], live: str) -> list[str]:
+    """The releases whose ddl may be in the catalog although `live` declares none of it: each one the log
+    first names after `live` first appears in it, and that got past its drain (the ddl step comes next,
+    and is additive: nothing undoes it, ADR-058). After a rollback, or a deploy back to an older release,
+    the drift check reports what they declare as LEFT, not drift (catalog_drift.py --left-by). A release
+    older than `live` never counts: a forward deploy that does not declare what an older one left (a
+    product it drops) is drift, to drop (make drop) or to declare, as before. The deploy's verify and
+    `make release-verify` both ask here."""
+    first: dict[str, int] = {}
+    for i, r in enumerate(records):
+        first.setdefault(r["release"], i)
+    start, out = first.get(live, len(records)), []
+    for r in records[start:]:
+        moved = r["step"] not in UNCHANGING or (r["step"] in ("drain", "allow-running") and r["outcome"] == "ok")
+        if moved and first[r["release"]] > start and r["release"] not in out:
+            out.append(r["release"])
+    return out
 
 
 def open_release(ctx: Ctx, rid: str) -> Release:
@@ -1349,11 +1370,17 @@ def drift(ctx: Ctx, target: Release) -> dict[str, Any]:
     verify_dir(ctx)
     cmd = compose(ctx, target, "run", "--rm", "--no-deps", "--pull", "never", "--user", f"{os.getuid()}:{os.getgid()}",
                   "-v", f"{script}:/opt/k2/verify/catalog_drift.py:ro", "tools", "python3", "/opt/k2/verify/catalog_drift.py",
-                  "--release", f"{model.RELEASES_MOUNT}/{target.id}", "--out", result)
+                  "--release", f"{model.RELEASES_MOUNT}/{target.id}", *(a for r in left_dirs(ctx, target) for a in ("--left-by", r)),
+                  "--out", result)
     done = run(*cmd, env=compose_env(ctx), check=False)
     found = ctx.root / "verify" / f"{target.id}.drift.json"
     doc: dict[str, Any] = json.loads(found.read_text()) if found.exists() and done.returncode in (0, 1) else {}
     return {"exit": done.returncode, "doc": doc, "text": tail(done, 12)}
+
+
+def left_dirs(ctx: Ctx, rel: Release) -> list[str]:
+    """left_by() of the log, as directories the tools one-shot sees (a release no longer kept is skipped)."""
+    return [f"{model.RELEASES_MOUNT}/{r}" for r in left_by(history(ctx.root), rel.id) if (ctx.root / r).is_dir()]
 
 
 def access_live(ctx: Ctx, rel: Release, out: Path) -> subprocess.CompletedProcess[str]:
@@ -1367,6 +1394,7 @@ def access_live(ctx: Ctx, rel: Release, out: Path) -> subprocess.CompletedProces
     verify_dir(ctx)
     cmd = compose(ctx, rel, "run", "--rm", "--no-deps", "--pull", "never", "--user", f"{os.getuid()}:{os.getgid()}",
                   "-e", "K2_TRINO_HOST=trino", "-e", "K2_TRINO_PORT=8443", "-e", f"{model.SECRETS_ENV}=/run/k2-secrets",
+                  "-e", f"{drift_lib.LEFT_ENV}={','.join(left_dirs(ctx, rel))}",  # its drift row: what drift() is given
                   *(a for n in names if os.environ.get(n) for a in ("-e", n)),
                   "-v", f"{ctx.home / 'scripts'}:/opt/k2/scripts:ro",
                   "-v", f"{ctx.secrets / 'principals'}:/run/k2-secrets/principals:ro",
@@ -1391,7 +1419,9 @@ def s20_checks(ctx: Ctx, target: Release) -> tuple[list[str], list[str]]:
     pending = [str(x) for x in d["doc"].get("pending", [])]
     if d["exit"] == 0:
         lines.append(f"catalog drift check clean ({len(d['doc'].get('differences', []))} differences, "
-                     f"pending {pending or 'none'}, {len(d['doc'].get('skipped', []))} skipped)")
+                     f"pending {pending or 'none'}, {len(d['doc'].get('skipped', []))} skipped, "
+                     f"{len(d['doc'].get('left', []))} left by a release since)")
+        lines += [str(x) for x in d["doc"].get("left", [])]
     else:
         wrong.append(f"catalog drift check exit {d['exit']}: {d['text']}")
     if pending:

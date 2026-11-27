@@ -18,7 +18,7 @@ deploy:  ## RELEASE=<release id or tag> [PLAN=1] [ALLOW_STATEFUL=<svc>,...] [ALL
 	@$(DEPLOY) deploy "$$RELEASE" $$(test "$$PLAN" = 1 && echo --plan) $${ALLOW_STATEFUL:+--allow-stateful "$$ALLOW_STATEFUL"}
 
 .PHONY: release-verify
-release-verify:  ## Ask every part which release it runs: pointers in the VM and each container, files, the canary, image digests, health, then the access suite and the catalog drift check (S20)
+release-verify:  ## Ask every part which release it runs: pointers in the VM and each container, files, the canary, image digests, health, then the access suite and the catalog drift check (S20), where what a release attempted since the live one created is LEFT, not drift
 	@$(DEPLOY) verify
 
 .PHONY: rollback
