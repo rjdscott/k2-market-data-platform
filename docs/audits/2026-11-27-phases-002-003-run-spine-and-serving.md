@@ -390,3 +390,38 @@ data` exit 0; the relative-link check of `scripts/check-docs.sh` (a) on both fil
 ## Resolutions
 
 Appended after the audit; the findings above stand as written.
+
+- **CRITICAL 1. Resolved in `b6f32cc`**: `SECURITY.md` and `README.md` now say the allow-list guards the
+  download, not the parser, which runs afterwards in the same container with ordinary sockets on
+  `k2-egress` and can reach the internet, but no network of the stack; the glossary's two entries and
+  chapter 20 said the same of the container and are corrected. ADR-036's Outcome already said it.
+- **HIGH 2. Resolved in `15574f4`**: the pin gate knows `--pids-limit` and `--network-alias` take a value;
+  `python3 scripts/check-budget.py` prints PASS at `4b73b29`. No case was added to
+  `tests/test_check_budget.py`.
+- **HIGH 3. Resolved in `5ce3cba`**: the drain asks `airflow tasks states-for-dag-run`, and pauses and
+  unpauses with `-y`; the test's fake answers the corrected argv.
+- **HIGH 6. Resolved in `dc7ec1a`**: the connector opens each spool file one level at a time from `/spool`
+  with `O_NOFOLLOW` (the DAG and run directories included) and requires a regular file with one link;
+  a link at any level, a hard link, a FIFO (opened without blocking) or another kind is refused, exit 2,
+  nothing landed, the message naming the entry. `tests/test_lake_connector.py` plants each in real files.
+  fetch's `write_new` already ends at one link; `maintain.py` and `expire.py` read no spool.
+- **HIGH 7. Resolved in `ca1b8dc`**: `dbt-wrapper.sh` exits 0 only when its claims step exited 0
+  (`PIPESTATUS`) and printed its last line `claims: every claim run, 0 FAIL`; `tests/test_verify_exit.py`
+  runs the script's own tail with a stub that prints two PASS lines and crashes. `storage-keys.sh`'s
+  Spark claims and tools steps dropped their exits the same way and now add a FAIL on one.
+- **HIGH 8. Resolved in `42e011e`**: `make lake-init [RECREATE="<service> ..."]` runs lake-init on the live
+  release with deploy's own invocation, then recreates the named services through the release;
+  ADR-054, `scripts/engine-keys.py` (its help and its last line, the holders derived from compose) and
+  `first-cutover-to-releases.md` give the order: rotate, `make lake-init RECREATE=...` (`trino` for
+  trino, `spark-iceberg` for spark and maintenance, none for backup and tools).
+- **HIGH 9. Resolved in `ecffd20`**: ADR-062 and lab 3 say only the wrapper is meant to move the tag,
+  that Lakekeeper does not enforce it, and that the network fence and the commit's compare-and-set
+  requirements protect it.
+- **HIGH 10. Resolved in `5c3325c`**: the onboarding runbook says live runs the canary's, the platform's
+  and the storage-key rows, the product's own rows SKIP there and ran at release time in deploy's
+  preflight; the verify-access runbook's rollback step says the same.
+- **MED 13. Resolved in part in `b3ad3fc`**: `SECURITY.md` names `prefect-db`'s `127.0.0.1:15432` as the
+  path to Lakekeeper's and Airflow's databases without Trino, guarded by loopback and the shared
+  superuser password; `CHANGELOG.md:153-154` is unchanged.
+- **MED 31. Stated in `4b73b29`, not fixed**: `CHANGELOG.md` 3.0.0-alpha.4 has a "Known and open" heading
+  naming F8, deploy Q3 and access Q4 and Q5, each with its file.
