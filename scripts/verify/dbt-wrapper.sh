@@ -330,7 +330,7 @@ sys.exit(k2_dbt.main(sys.argv[1:]))
 PY
 export K2_TRINO_HOST=trino K2_TRINO_INTERNAL_PORT=8443 K2_TRINO_USER=dbt_access_canary K2_PUB_USER=pub_access_canary \
   K2_RUNS_USER=svc.runs K2_CATALOG_URI=http://lakekeeper:8181/catalog
-oneshot() {  # oneshot <release id> <run> [docker run flags ...] -- <command ...>
+oneshot() {  # oneshot <release id> <run> [extra flags for the container ...] -- <command ...>
   local id=$1 run=$2; shift 2
   local flags=(); while [ "$1" != -- ]; do flags+=("$1"); shift; done; shift
   K2_RELEASE=$id timeout 900 docker run --rm "${flags[@]}" --name "$P-dbt-$run" --label "k2.throwaway=$P" --network "$P-net" --pull never \

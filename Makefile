@@ -45,7 +45,7 @@ logs:  ## Tail all service logs
 ps:  ## Show service status
 	docker compose ps
 
-test: test-python test-rust test-clickhouse test-trino test-dbt test-notebooks test-k2gen test-airflow  ## Run all unit tests
+test: test-python test-rust test-clickhouse test-trino test-dbt test-notebooks test-k2gen test-airflow test-connectors test-api  ## Run all unit tests
 
 # One recipe line per gate, not prerequisites: recipe lines run in order and
 # stop at the first failure even under `make -j`, where prerequisites would not
