@@ -24,6 +24,12 @@ Not covered: deploying or rolling back a release (step S19's `make deploy`, `mak
 > published until phase 002). `make access-verify LIVE=1` no longer exits 2 on the stack; the live
 > suite's rows beyond that SKIP have not run, so the sections below remain the throwaway lakes' outputs.
 > Granting or revoking a role: [grant-and-revoke-access.md](./grant-and-revoke-access.md).
+>
+> **Phases 002 and 003 changed section 2.** `make access-verify LIVE=1` runs in a tools one-shot now,
+> the expectations gained storage-key rows (21, one per engine key and target) and rows held again
+> through k2-api (`via: [sql, rest]`), and the file has 112 rows at this commit. Section 2 is written from
+> `scripts/deploy.py` (`access_live`), `mk/access.mk` and `scripts/access_verify.py`; its live run is
+> not yet: first run after the deploy of this release.
 
 | # | Task | MTTR target | Measured |
 |---|------|-------------|----------|
@@ -84,9 +90,21 @@ on it passed every proof in 1 min 49 s.
 
 **Detection**, manual only, as in section 1.
 
-**Expected behaviour**, the target reads the release Trino runs (`$K2_RELEASES/pointers/trino`)
-and logs in to `https://${K2_TRINO_HOST:-localhost}:${K2_TRINO_PORT:-8443}` with
-`${K2_SECRETS}/tls/ca.pem`. Each principal uses its own `${K2_SECRETS}/principals/<id>.password`.
+**Expected behaviour**, the target checks `.env`'s mode (`scripts/check-env.py --mode-only`, exit 2 if
+it is open to others), reads the release Trino runs (`$K2_RELEASES/pointers/trino`) and runs the suite
+in a one-shot of that release's tools image (`scripts/deploy.py access-live`), because MinIO and
+Lakekeeper have no host port and a storage-key row must reach MinIO: the container is on `k2-net` and
+`k2-catalog`, runs as you, logs in to `https://trino:8443` with `${K2_SECRETS}/tls/ca.pem`, and mounts
+read-only only the checkout's `scripts/`, `${K2_SECRETS}/principals/`, the CA and each
+`${K2_SECRETS}/api/*.key` file. Each principal uses its own `${K2_SECRETS}/principals/<id>.password`.
+The ten storage-key names (`K2_SPARK_S3_*`, `K2_TRINO_S3_*`, `K2_MAINTENANCE_S3_*`, `K2_BACKUP_S3_*`,
+`K2_TOOLS_S3_*`) reach it by name from your environment, so load `.env` first; a storage-key row whose
+pair is unset fails. Each such row signs one operation with one engine's key and expects MinIO to allow
+or refuse it (Spark writes `k2-lake/warehouse/k2`, never a domain warehouse); a probe it puts is
+deleted, by its own key or else by the maintenance key. A row with `rest` in its `via` is held again
+through k2-api at `http://k2-api:8095` with that principal's key from `${K2_SECRETS}/api/<principal>.key`:
+a denial must be 403 and nothing else. Today's two REST rows are `p.analyst-a`'s on the ECB product,
+which name a real product, so on live they SKIP like any such row.
 No row impersonates anyone. Only rows whose principal's password the platform holds run: the
 services (`svc.*`, `dbt_*`, `pub_*`) and the access canary's readers. They run only when the
 row names nothing but the canary, so a loosened rule can damage nothing real. Every other row
@@ -113,6 +131,11 @@ product is refused `TO_FILE=1`, and their rows SKIP here.
 ```bash
 for p in p.canary-full p.canary-delayed p.canary-scoped; do make -s password PRINCIPAL=$p TO_FILE=1; done
 ```
+
+A REST row whose principal has no key file fails on a lake and SKIPs on live with the fix in its reason,
+`no ${K2_SECRETS}/api/<principal>.key: (umask 077; make api-key PRINCIPAL=<principal> >
+${K2_SECRETS}/api/<principal>.key) runs it` (`scripts/access_verify.py`); the key is printed once, so the
+file is the only copy.
 
 **Measured**, the rows not yet run on the stack (live, `make release-verify` reports the suite as a SKIP, 2026-11-27). On a throwaway lake with `${K2_SECRETS}` laid out from
 its passwords: exit 0, the planted-view row (51) and the drift row (63) skipped and nothing else.
@@ -302,4 +325,6 @@ restored one answered after 5.0 to 5.1 s (n=5 each, Trino's refresh period 5 s, 
 ---
 
 **Last verified:** 2026-11-26 against `eed362d`, on throwaway lakes; on the live stack, 2026-11-27,
-only `make release-verify` (exit 0, the live access suite a SKIP).
+only `make release-verify` (exit 0, the live access suite a SKIP). Section 2 as phases 002 and 003 left
+it (the tools one-shot, the storage-key and REST rows, the key files): not yet: first run after the deploy
+of this release.
