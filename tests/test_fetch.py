@@ -176,7 +176,7 @@ def release(tmp_path, parser=PARSER, **connector):
             **connector}
     pipeline.write_text(json.dumps({"product": "fx-test.rates", "fence": "rates", "domain": "fx-test",
                                     "dagId": "rates", "connector": spec}))
-    module = root / "documents" / "domains" / "fx-test" / "parsers" / "rates.py"
+    module = root / "platform" / "domains" / "fx-test" / "parsers" / "rates.py"
     module.parent.mkdir(parents=True, exist_ok=True)
     module.write_text(parser)
 

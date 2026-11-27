@@ -7,7 +7,7 @@
 the product's connector from the release's compiled/products/<product>/pipeline.json, renders
 {{ds}} in its url, and downloads the file under the guard below into /spool/<dagId>/<runId>/ as
 raw.<format> and fetch.json. Only then does it load the product's registered parser,
-documents/domains/<domain>/parsers/<parser>.py in the release, and write its rows to rows.jsonl.
+platform/domains/<domain>/parsers/<parser>.py in the release, and write its rows to rows.jsonl.
 
 Exits (phase-001-interfaces.md, the fetch container's table):
   0   fetched and parsed: raw.<ext>, fetch.json, rows.jsonl
@@ -49,7 +49,7 @@ from time import monotonic
 
 RELEASES = Path("/k2/releases")  # k2gen.model.RELEASES_MOUNT, read-only
 SPOOL = Path("/spool")
-PARSER = "documents/domains/{domain}/parsers/{parser}.py"  # as the release's document set holds it
+PARSER = "platform/domains/{domain}/parsers/{parser}.py"  # the release's run code (k2gen model.PLATFORM_CODE)
 MAX_BYTES = 64 * 2**20  # the container's cap; a connector's maxBytes may only lower it
 MAX_REDIRECTS = 5
 CONNECT_TIMEOUT_S, READ_TIMEOUT_S, DEADLINE_S = 10, 30, 300  # per connect, per read, the whole download
