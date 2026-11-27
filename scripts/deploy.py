@@ -1147,7 +1147,10 @@ def verify(ctx: Ctx, target: Release, previous_canary: str | None) -> list[str]:
         ref = target.manifest.images.get(name)
         if not ref or name not in svc or (svc[name].get("profiles") and not c["State"]["Running"]):
             continue
-        if c["Image"] != image_id(ref):
+        # An exited one-shot keeps the image of its last run: a rollback never reruns one (a migration
+        # never runs backwards), so after a rollback across airflow-migrate's image it is the newer one.
+        done_oneshot = str(svc[name].get("restart", "no")) == "no" and not c["State"]["Running"]
+        if c["Image"] != image_id(ref) and not done_oneshot:
             wrong.append(f"{name} runs {c['Image'][:19]}, the release names {ref}")
         health = (c["State"].get("Health") or {}).get("Status")
         if c["State"]["Running"] and health not in (None, "healthy"):

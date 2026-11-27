@@ -885,6 +885,18 @@ sys.exit(f"fake docker: no answer for {A}")
         assert steps.index(("rollback-swap", "ok")) < steps.index(("rollback-remove-k2-api", "ok")) < steps.index(("rollback-recreate", "ok"))
         assert steps[-1] == ("rollback-done", "ok") and os.readlink(world.root / "pointers/k2-api") == f"../{r_old.id}"
 
+    def test_a_rollback_across_a_migrating_one_shot_image_verifies(world: World) -> None:
+        """alpha.3.2 to this branch moves k2-airflow's image, so airflow-migrate reruns on the new one; a
+        rollback never reruns it, and its exited container keeps that image (exit 3 before)."""
+        world.write(world.read() | {"oneshots": ["lake-init", "airflow-migrate"], "mc_out": "-- PostgreSQL database dump complete"})
+        r1 = world.release(compose=migrate_doc("alpine:3.20"), images=MIGRATE | {"airflow-migrate": A})
+        world.live(r1)
+        r2 = world.release(compose=migrate_doc("alpine:3"), images=MIGRATE | {"airflow-migrate": B})
+        assert world.deploy(r2) == 0 and world.image_of("airflow-migrate") == "sha256:" + "b" * 64
+        with deploy.lock(world.root):
+            assert deploy.rollback(world.ctx) == 0
+        assert world.image_of("airflow-migrate") == "sha256:" + "b" * 64 and records(world)[-1]["step"] == "rollback-done"
+
     def test_a_running_service_profiled_in_both_is_recreated_not_removed(world: World) -> None:
         r1 = world.release(compose=compose_doc(), images={"clickhouse": A})
         world.live(r1)  # clickhouse runs: someone started hot-gold on purpose
