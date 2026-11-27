@@ -544,6 +544,15 @@
     },
     {
       "user": "svc\\.api|svc\\.catalog|svc\\.platform|svc\\.runs",
+      "catalog": "lake",
+      "schema": "kraken_trades",
+      "table": "bronze_trade\\$refs",
+      "privileges": [
+        "SELECT"
+      ]
+    },
+    {
+      "user": "svc\\.api|svc\\.catalog|svc\\.platform|svc\\.runs",
       "catalog": "reference_data",
       "schema": "calendars__base",
       "table": "target_days\\$refs",
