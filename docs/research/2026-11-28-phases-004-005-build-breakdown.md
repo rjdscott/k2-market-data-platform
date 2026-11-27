@@ -102,7 +102,7 @@ extra bytes on disk are small; the soak's benchmark reports the landing's growth
 
 ## What exists today that each phase reuses
 
-Checked in the tree at `f437254`, with I-3 (`0578ad4`, merged at `71e013f`) and W0-5 (`558a21b`, merged at
+Checked in the tree at `f437254`, with W0-1 and W0-2 (`df65ab8`, merged at `05bef64`), I-3 (`0578ad4`, merged at `71e013f`) and W0-5 (`558a21b`, merged at
 `fabfab5`) since landed on the phase branch.
 
 | Piece | Where | What 004 or 005 does with it |
@@ -175,8 +175,8 @@ I-7 edits k2gen emitters, so it merges before W2-19's rc is cut: after the soak 
 
 | Id | Unknown | Why risky | Throwaway proof | Command | Profile | Fallback if it fails |
 |---|---|---|---|---|---|---|
-| W0-1 | Offsets planned from the landing's newest connector snapshot, bounded per partition, eviction refused with the partitions named (pure). **In flight**, with findings 1 and 2 applied | the resume point is one JSON value in a summary; ADR-022's Outcome: a bound under the arrival rate makes eviction certain | `docker/lake/kafka.py` (new) `plan()` over `offsets.py`, `tests/test_lake_kafka.py` (new) | `$PYTEST tests/test_lake_kafka.py tests/test_lake_offsets.py -q` | unit | none needed: pure code |
-| W0-2 | One Spark commit writes every record of the planned range and its end offsets; bronze is staged from the landing by offset, per partition every landing row after the bronze through-offset up to the landing's end, filtered `stream = trade`, staged plus skipped equal to the range read; a blocked bronze still lands (ADR-047), and a retry or a kill between landing and staging leaves no hole. **In flight** with W0-1 | two writes in two commits would be ADR-022's two facts in two systems; staging keyed by run id (`connector.py:322`) never stages a retry's new range | `docker/lake/kafka.py` `land()`, `stage()`; `docker/lake/connector.py` dispatch on kind | as W0-1 | unit | none: W0-4a proves it live |
+| W0-1 | Offsets planned from the landing's newest connector snapshot, bounded per partition, eviction refused with the partitions named (pure). **Merged** with W0-2 (`df65ab8`, at `05bef64`), findings 1 and 2 applied | the resume point is one JSON value in a summary; ADR-022's Outcome: a bound under the arrival rate makes eviction certain | `docker/lake/kafka.py` (new) `plan()` over `offsets.py`, `tests/test_lake_kafka.py` (new) | `$PYTEST tests/test_lake_kafka.py tests/test_lake_offsets.py -q` | unit | none needed: pure code |
+| W0-2 | One Spark commit writes every record of the planned range and its end offsets; bronze is staged from the landing by offset, per partition every landing row after the bronze through-offset up to the landing's end, filtered `stream = trade`, staged plus skipped equal to the range read; a blocked bronze still lands (ADR-047), and a retry or a kill between landing and staging leaves no hole. **Merged** with W0-1 | two writes in two commits would be ADR-022's two facts in two systems; staging keyed by run id (`connector.py:322`) never stages a retry's new range | `docker/lake/kafka.py` `land()`, `stage()`; `docker/lake/connector.py` dispatch on kind | as W0-1 | unit | none: W0-4a proves it live |
 | W0-3 | A throwaway lake with a Redpanda on compose's pinned image, the RawMessage subject registered from `schemas/avro/raw-message.avsc`, synthetic frames produced by Spark's Kafka sink with `to_avro` and the Confluent header. **In flight** | the `run` stage has no broker today; `k2-capture replay` has no Kafka sink, by design | `scripts/lib/throwaway-lake.sh` (`redpanda_up`), `scripts/lib/kafka_seed.py` (new) | `bash scripts/lib/throwaway-lake.sh up kafka-seed <release> && bash scripts/lib/throwaway-lake.sh down kafka-seed`, the seed's count line equal to the fixture's frame lines | slot | `rpk topic produce --schema-id` in the Redpanda container, if its `rpk` encodes Avro |
 | W0-4a | On the throwaway, a synthetic fixture product `kafka-fixture` (`platform/k2gen/tests/fixtures/`, never a 004 product): one load lands every seeded frame and stages the trades; a load killed before and after its landing commit adds no row twice and leaves no hole in bronze; a retry under the same run id stages the new range; Spark's own key writes warehouse `k2` | the plan's first exit line; the cycle W0-4, W1-2, I-1 is broken by a fixture k2gen already compiles | `scripts/verify/kafka-path.sh` (new), the fixture product | `bash scripts/verify/kafka-path.sh <release> a` prints `0 FAIL`, exit 0 | slot | resume from `max(kafka_offset) + 1` per partition read from the landing itself, the summary kept as a cross-check |
 | W0-4b | Below the log start fails loudly, naming the partitions; the accept-data-loss run records `offset_gap`; a paused product resumed after its point left the log is the same case, never a silent jump | the rule I-1 freezes, proven before it is relied on | `scripts/verify/kafka-path.sh` (group b) | `bash scripts/verify/kafka-path.sh <release> b` prints `0 FAIL` | slot | none: a loud failure is the safe default |
@@ -290,10 +290,10 @@ W3-4) plus, from W2-19, its first live run.
 | W3-15 | Chapter 25 (joins across domains); current-state documents | `docs/architecture/25-*.md` (new), those files | unit | `$DOCGATES` pass | W3-12 |
 | W3-16 | Phase audit, review fixes, scratch release against real images, `FULL=1 make spine-e2e`, tag `v3.0.0-alpha.7` | `docs/audits/` (new file) | slot | `make deploy RELEASE=v3.0.0-alpha.7 && make release-verify` exits 0 | all of 005 |
 
-**Counts.** Interfaces 9 (all unit, I-8 also rc; I-3 merged). Wave 0: 16 (W0-5 merged, W0-14 conditional), of which 9 slot
+**Counts.** Interfaces 9 (all unit, I-8 also rc; I-3 merged). Wave 0: 16 (W0-1, W0-2 and W0-5 merged, W0-14 conditional), of which 9 slot
 (W0-3, W0-4a to W0-4c, W0-7 to W0-11). Wave 1: 22, of which 6 slot (W1-5, W1-6, W1-12, W1-13, W1-17, W1-20), 3 of
 them rc. Wave 2: 28 rows, of which 19 slot (W2-19 also rc), the 48-hour wall-clock row and the review W2-27. Wave 3:
-16, of which 10 slot (W3-12 also rc). In all 91 rows, 44 of them container slots; 2 merged.
+16, of which 10 slot (W3-12 also rc). In all 91 rows, 44 of them container slots; 4 merged.
 
 ## Critical path and order of work
 
@@ -302,8 +302,8 @@ every soaked file merges before the clock starts. The unit steps this revision a
 W2-18) sit beside the path and merge before the step they are listed ahead of.
 
 1. W3-4, slot (moved first)
-2. W0-1, unit (in flight)
-3. W0-2, unit (in flight)
+2. W0-1, unit (merged, `05bef64`)
+3. W0-2, unit (merged, `05bef64`)
 4. W0-3, slot (in flight)
 5. W0-13, unit
 6. W0-4a, slot
@@ -572,7 +572,7 @@ The tag: W3-16.
 ## Estimate
 
 Phases 002 and 003 (73 steps by the same method) took one long working day. This breakdown now has 91 rows, 44 of
-them container slots, two already merged, and its proofs run Spark and Redpanda together. What sets the time to the
+them container slots, four already merged, and its proofs run Spark and Redpanda together. What sets the time to the
 soak's start is the slot queue: twenty slot jobs in series, then the review and audit and their fixes; the unit
 steps run beside it. No slot job of this kind has been timed yet, so the build before the soak is still judged at
 about one more long working day, now with the review and audit inside it rather than after the soak; that is a
