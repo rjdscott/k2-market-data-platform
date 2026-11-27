@@ -220,7 +220,11 @@ K2_SPARK_S3_ACCESS_KEY is missing a value: set K2_SPARK_S3_ACCESS_KEY in .env (m
   one-shots that mount secrets run as), into `.env` at mode 600 after a copy to `.env.bak-<UTC time>`,
   printing names only. A pair that still holds the root user or password, as Trino's did in section 1's
   step 4, is replaced. `ROTATE=<engine>` gives an engine a new secret under the same access key. A new
-  pair reaches MinIO only when lake-init runs again, which the deploy does.
+  pair reaches MinIO only when lake-init runs again. This cutover's deploy runs it, since its release
+  changes lake-init; a later deploy runs it only when its release does, so after a rotation run
+  `make lake-init RECREATE="<service> ..."` (`trino` for trino, `spark-iceberg` for spark and
+  maintenance, nothing for backup and tools): lake-init on the live release, then those services
+  recreated through it to read the new secret. Until then MinIO keeps the old one.
 - **lake-init runs the release's own `platform/docker/lake/init-lake.sh`** (compose's entrypoint
   `/k2/releases/${K2_LAKE_INIT_RELEASE:-pointers/trino}/platform/docker/lake/init-lake.sh`, which deploy
   sets to the target). It refuses before any change unless every engine's pair is set and none is the

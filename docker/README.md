@@ -61,7 +61,7 @@ docker/
 docker exec k2-spark-iceberg python3 /home/iceberg/lake/spark_conf.py --smoke
 # Expect: count=1, a summary containing 'k2.smoke': '1', "✓ lake smoke passed"
 
-docker compose up -d --force-recreate --no-deps lake-init   # re-bootstrap
+make lake-init   # re-bootstrap
 ```
 
 ⚠ **The `lakekeeper` PostgreSQL database is created by an init script**

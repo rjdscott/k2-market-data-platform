@@ -158,6 +158,17 @@ once its tests passed. Each engine holds its own storage key.
   the Spark container holds the maintenance key beside its own; a parser can reach the internet beyond
   its allow-list.
 
+### Known and open
+- The connector's publish reads the `audit` branch's head, then fast-forwards `main` in a second call
+  with no compare-and-set between them, so a write to `audit` in between would be published unaudited
+  (`docker/lake/connector.py`, `publish`).
+- `lake-init` prints Lakekeeper's whole error body when a call fails, and nothing checks that body for
+  the warehouse's stored credential (`docker/lake/init-lake.sh`, `post`).
+- k2-api allows inline script on `/dbt-docs/`, where model descriptions render, and no test covers a
+  description that carries script (`services/k2-api/k2api/app.py`, `DBT_DOCS_CSP`).
+- k2-api caches the key file by its inode, modification time and size, so a rewrite that keeps all
+  three is not read until it restarts (`services/k2-api/k2api/keys.py`).
+
 ## [3.0.0-alpha.3] - 2026-11-27
 
 Phase 001 of the unified product platform plan, "the release and rules spine": the platform runs only sealed releases compiled from documents, and Trino

@@ -102,7 +102,12 @@ writes a table other than `{{ this }}`, the model's own.
 
 The **builder** `dbt_<fence>` owns only the product's base namespace `<domain>_build.<fence>__base` and
 reads its declared inputs; dbt runs as it and holds only its password. The **publisher** `pub_<fence>`
-owns the reader views and alone may move the tag. The wrapper also logs in as `svc.runs` to read and
+owns the reader views. Only the wrapper is meant to move the tag, after a passing build, in one commit
+to Lakekeeper's REST API that requires `main` and the tag to be where the tests read them. That API has
+no authentication, so Lakekeeper does not enforce who moves it: any member of network `k2-catalog`
+can. What protects the tag is that network fence ([ADR-059](ADR-059-access-rules-compiled-default-deny-over-two-catalogs-per-domain.md)
+part 7) and the commit's compare-and-set requirements, and the wrapper's drift check names a tag no
+publish recorded at that product's next build. The wrapper also logs in as `svc.runs` to read and
 write **run records** (`governance.run_records.run_record`, one row per output per event, written by
 `platform/runs/k2runs.py`, which the release carries).
 

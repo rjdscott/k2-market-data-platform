@@ -333,7 +333,7 @@ output, owned by the product's publisher, over its `audited` tag and guarded on 
 landing never blocks ([ADR-047](../adr/ADR-047-ingest-batch-audit-after-publish.md) stays), because a topic keeps only
 48 hours or 2 GiB per partition ([chapter 07](07-wire-contracts.md)); a product that falls off the topic fails loudly
 until an operator records an accept-data-loss run. dbt runs in a one-shot container with an allow-listed environment;
-each writer writes only its own namespace and reads only its declared inputs; fetches reach only declared hosts.
+each writer writes only its own namespace and reads only its declared inputs; a fetch downloads only from declared hosts, and its parser runs after it with internet access, on a network no other service joins.
 
 ### 4.5 Lifecycle states
 

@@ -136,3 +136,79 @@ def test_the_written_file_passes_check_envs_scoped_key_checks(tmp_path):
 def test_a_missing_file_is_refused(tmp_path):
     out = run(tmp_path / ".env")
     assert out.returncode == 2 and "cp .env.example" in out.stderr and not (tmp_path / ".env").exists()
+
+
+# --- A rotation reaches MinIO only when lake-init reruns (audit 2026-11-27, HIGH 8) ------------
+# A deploy runs lake-init only when its release changes lake-init; a rotation changes .env alone.
+
+
+def test_each_engines_holders_are_the_services_compose_gives_its_secret():
+    assert keys.HOLDERS == {"backup": [], "maintenance": ["spark-iceberg"], "spark": ["spark-iceberg"],
+                            "tools": [], "trino": ["trino"]}
+
+
+def test_a_rotation_names_the_lake_init_rerun_and_the_services_to_recreate(tmp_path):
+    f = scratch(tmp_path)
+    run(f)
+    out = run(f, "--rotate", "trino,maintenance")
+    assert out.returncode == 0
+    assert 'make lake-init RECREATE="spark-iceberg trino"' in out.stdout
+    assert "until then MinIO keeps the old secret" in out.stdout
+    assert "make lake-init" in run(f, "--rotate", "backup").stdout  # no holder to recreate, the rerun still
+
+
+FAKE_DOCKER = """#!/bin/sh
+echo "docker $*" >> "$LOG"
+case "$1" in
+  compose) for a; do [ "$prev" = -f ] && last=$a; prev=$a; done
+           echo "env K2_LAKE_INIT_RELEASE=$K2_LAKE_INIT_RELEASE K2_STORAGE_PLAN=$K2_STORAGE_PLAN" >> "$LOG"
+           echo "pin $(cat "$last")" >> "$LOG" ;;
+  wait) echo "$WAIT_CODE" ;;
+esac
+"""
+
+
+def make_lake_init(tmp_path, wait_code="0", recreate="trino"):
+    """`make lake-init` with a fake docker on PATH, over a scratch releases root."""
+    rid = "v3.0.0-alpha.4-0123456789ab"
+    (tmp_path / "releases" / rid).mkdir(parents=True)
+    (tmp_path / "releases" / rid / "manifest.json").write_text(
+        '{"images": {"lake-init": "minio@sha256:aa", "trino": "trinodb/trino@sha256:bb", "minio": "minio@sha256:aa"}}')
+    (tmp_path / "releases" / "pointers").mkdir()
+    (tmp_path / "releases" / "pointers" / "trino").symlink_to(Path("..") / rid)
+    (tmp_path / "bin").mkdir()
+    (tmp_path / "bin" / "docker").write_text(FAKE_DOCKER)
+    (tmp_path / "bin" / "docker").chmod(0o755)
+    env = {**os.environ, "PATH": f"{tmp_path / 'bin'}:{os.environ['PATH']}", "K2_RELEASES": str(tmp_path / "releases"),
+           "LOG": str(tmp_path / "log"), "WAIT_CODE": wait_code, "RECREATE": recreate}
+    env.pop("K2_COMPOSE_PROJECT", None)
+    out = subprocess.run(["make", "-s", "-C", str(ROOT), "lake-init"], env=env, capture_output=True, text=True)
+    return rid, out, (tmp_path / "log").read_text().splitlines() if (tmp_path / "log").exists() else []
+
+
+def test_make_lake_init_runs_deploys_invocation_on_the_live_release_then_recreates(tmp_path):
+    rid, out, log = make_lake_init(tmp_path)
+    assert out.returncode == 0, out.stderr
+    up = re.search(r'"(up)", "-d", "--no-deps", "--no-build", "--pull", "never", "--force-recreate", s\)',
+                   (ROOT / "scripts/deploy.py").read_text())
+    assert up, "deploy's one-shot invocation moved: hold make lake-init to it again"
+    flags = "up -d --no-deps --no-build --pull never --force-recreate"
+    compose = f"-f {tmp_path}/releases/{rid}/compose/docker-compose.yml"
+    assert log[0].startswith("docker compose --project-directory ") and compose in log[0]
+    assert log[0].endswith(f"{flags} lake-init")
+    assert log[1] == f"env K2_LAKE_INIT_RELEASE={rid} K2_STORAGE_PLAN=/k2/releases/{rid}/compiled/lake/storage-plan.json"
+    assert log[2] == 'pin {"services": {"lake-init": {"image": "minio@sha256:aa"}, "trino": {"image": "trinodb/trino@sha256:bb"}}}'
+    assert log[3] == "docker wait k2-lake-init"
+    assert log[4].endswith(f"{flags} trino") and compose in log[4]
+    assert f"lake-init: release {rid}, exit 0" in out.stdout
+
+
+def test_a_failed_lake_init_fails_the_target_and_recreates_nothing(tmp_path):
+    _, out, log = make_lake_init(tmp_path, wait_code="1")
+    assert out.returncode != 0 and log[-1] == "docker wait k2-lake-init"
+
+
+def test_no_live_release_is_refused(tmp_path):
+    env = {**os.environ, "K2_RELEASES": str(tmp_path)}
+    out = subprocess.run(["make", "-s", "-C", str(ROOT), "lake-init"], env=env, capture_output=True, text=True)
+    assert out.returncode != 0 and "no release at pointers/trino" in out.stderr
