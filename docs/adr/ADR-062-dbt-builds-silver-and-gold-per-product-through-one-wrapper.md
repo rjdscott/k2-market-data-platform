@@ -275,3 +275,37 @@ product's logic cannot be written as one `SELECT` per table, which makes it a re
   [ADR-056](ADR-056-unified-data-product-platform.md) parts 2 and 4,
   [ADR-061](ADR-061-readers-see-dbt-outputs-through-a-view-over-the-tested-tag.md) (the view and the tag).
 - The dbt labs: [`docs/development/dbt-labs/`](../development/dbt-labs/).
+
+---
+
+## Outcome (2026-11-27, the tie of part 4 knows every statement of the build)
+
+Part 4's tie, by the query ids dbt reports alone, refused a clean build on the live stack on 2026-11-27:
+`governance/quality-results` built its table with no rows. dbt-trino 1.12.0 builds a table under an
+enforced contract in two statements, `CREATE OR REPLACE TABLE`, which commits an empty snapshot, then
+`INSERT`, and `run_results.json` names only the `INSERT`. An insert of no rows commits nothing, so a table
+that builds empty has the `CREATE`'s snapshot as `main`, committed by a query dbt never reported.
+
+So each run of the wrapper now gives dbt a fresh Trino client tag, `k2-dbt-<128-bit nonce>`, made after
+cancel-first; `dbt/profiles.yml` puts it on every statement of the invocation (`client_tags`, from
+`K2_DBT_CLIENT_TAG`). Before it publishes, the wrapper lists the builder's queries through Trino's REST
+API (`GET /v1/query`, which it already reads for cancel-first) and keeps those that carry this run's tag.
+A moved `main` must have been committed by one of those or by a query dbt reported. Still refused: an
+earlier run's leftover query, a retry of the same run id included, since it carries an earlier tag, and
+any write that carries no tag of this run and that dbt did not report. Where the snapshot names no query
+id, the commit time decides, as part 4 says.
+
+**Its limit**, as `docker/dbt-runner/k2_dbt.py` states it: "Trino lists a finished query for
+query.min-expire-age (15 min) and after that only while it lists fewer than query.max-history (100), so a
+build whose untagged-by-dbt commit is older than that at publish is refused, never passed; raise
+min-expire-age (trino_etc.py) when a build is measured near 15 min." The failure is a refused build, never
+an untested publish.
+
+**Provenance:** `scripts/verify/run-path.sh` claim 9 builds every dbt product of the release through the
+wrapper on a throwaway lake, `currency-master`'s bronze empty there so a table of no rows is built
+(`9 PASS, 0 FAIL in 263 s`, 2026-11-27); `docker/dbt-runner/test_k2_dbt.py` pins the empty table
+(`test_an_empty_table_published_by_its_create_which_dbt_never_reports_is_its_own_commit`) and the earlier
+run's orphan (`test_each_run_has_its_own_client_tag_so_an_earlier_runs_orphan_is_refused`).
+
+**Revisit when**, besides the triggers above: a build is measured near 15 minutes from its first
+statement to its publish.

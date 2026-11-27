@@ -273,10 +273,28 @@ by `scripts/verify/dbt-wrapper.sh` on a throwaway lake (21 PASS, 0 FAIL, 2026-11
   from a tag moved by another publisher just before the commit, exited 3 and left the view narrowed and
   never widened. A published view with no column common to both snapshots publishes and pages: its
   readers get an error from the commit to the widen.
-- **The query-id tie.** Before the commit, each output's `main` must be this dbt invocation's own commit:
-  the snapshot summary's `trino_query_id` must be one of the query ids dbt reported in
-  `run_results.json`. In every run of the script each publish matched by id; none fell back to the
-  weaker check by commit time.
+- **The query-id tie, by a client tag per run.** Before the commit, each output's `main` must be this
+  dbt invocation's own commit: the snapshot summary's `trino_query_id` must be a query that carried this
+  run's Trino client tag or one dbt reported in `run_results.json`. Each run of the wrapper sets a fresh
+  tag, `k2-dbt-<128-bit nonce>`, which `dbt/profiles.yml` puts on every statement of the invocation, and
+  before it publishes lists the builder's queries (`GET /v1/query`) and keeps those that carry it. The
+  tag is needed because dbt-trino 1.12.0 builds a contract-enforced table in two statements, `CREATE OR
+  REPLACE TABLE`, which commits an empty snapshot, then `INSERT`, and reports only the `INSERT`; an
+  insert of no rows commits nothing, so a table that builds empty has the `CREATE`'s snapshot as `main`,
+  a query dbt never named. The first tie, by reported ids alone, refused such a clean build: first seen on
+  the live stack on 2026-11-27 for `governance/quality-results`, then measured on a throwaway lake by
+  `scripts/verify/run-path.sh` claim 9 (every dbt product of the release built through the wrapper,
+  `currency-master`'s bronze empty there; `9 PASS, 0 FAIL in 263 s`) and pinned by
+  `test_an_empty_table_published_by_its_create_which_dbt_never_reports_is_its_own_commit` in
+  `docker/dbt-runner/test_k2_dbt.py`. Still refused: an earlier run's leftover query, a retry of the same
+  run id included, since it carries an earlier tag
+  (`test_each_run_has_its_own_client_tag_so_an_earlier_runs_orphan_is_refused`), and any write that
+  carries no tag of this run and that dbt did not report. When the snapshot names no query, or neither
+  side gives an id, only the commit time decides, as before, and the log says so. Its stated limit, in
+  `k2_dbt.py`: "Trino lists a finished query for query.min-expire-age (15 min) and after that only while
+  it lists fewer than query.max-history (100), so a build whose untagged-by-dbt commit is older than that
+  at publish is refused, never passed; raise min-expire-age (trino_etc.py) when a build is measured near
+  15 min."
 - **Cancel first.** A build killed mid-statement leaves its query running in Trino: an `INSERT` whose
   client left after 2 s still committed about 25 s later, and Trino reported it failed only after about
   300 s, its `query.client.timeout`. Had it committed after a later run's tests, part 4's commit would have

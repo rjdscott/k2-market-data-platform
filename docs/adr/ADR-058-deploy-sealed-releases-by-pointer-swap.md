@@ -326,15 +326,45 @@ earlier attempt went past the one-shots leaves the paused DAGs paused, since the
 name the target.
 
 **Not yet verified:** a rollback of the live stack from this phase's release to `v3.0.0-alpha.3.2`
-(tested against a fake stack only); a release that changes only a MinIO policy reaches MinIO only when
+by `make rollback` (tested against a fake stack only; the one live rollback to it, deploy's own at 08:34
+UTC below, ended in exit 3); a release that changes only a MinIO policy reaches MinIO only when
 `lake-init` next runs, and the plan runs it only when its compose definition or image changes.
 
 The first deploy of a release that added products failed on the live stack on 2026-11-27, at
 `views-narrow`: the step queried a new product's view as its publisher, under the old rules, which name
-neither the view nor its publisher. The rollback's verify then exited 3 on the failed attempt's own
-namespaces, which its additive DDL had created and nothing undoes. Both are fixed. A view the release
+neither the view nor its publisher. The rollback's verify then exited 3 on two counts: the failed
+attempt's own namespaces, which its additive DDL had created and nothing undoes, and four catalog fence
+rows. The first two are fixed. A view the release
 being moved from does not declare is left to widen once the target's rules are loaded, and the drift check
 reports what a release deployed or attempted since the live one created as `LEFT` lines, not `DRIFT`, so
 that rollback exits 1. The deploy rehearsal now has a release that adds a product, forced to fail first
 and then deployed (`scripts/verify/deploy_rehearsal.py`, section 7b). No rehearsal release had ever added
 a product before, which is why it was first seen on the live stack.
+
+The four fence rows are not fixed. Deploy runs the checkout's `scripts/verify/catalog-fence.sh` over the
+checkout's `tests/access/expectations.yaml`, whose rows expect MinIO's host ports refused and `fetch` on
+`k2-egress`; `v3.0.0-alpha.3.2` publishes MinIO on `127.0.0.1:9000` and `:9001` and declares no
+`k2-egress`, so its verify printed `FAIL host -> 127.0.0.1:9000 connected, expected refused`, the same for
+`:9001`, and `FAIL fetch -> lakekeeper:8181 network fetch absent: nothing was dialled` with its `minio:9000`
+twin. A rollback to a release before phase 002 still exits 3 there; a rollback between two releases of
+this phase does not meet it.
+
+**The deploys of 2026-11-27 on the live stack** (UTC; each deploy's own lines):
+
+- 08:33, `make deploy RELEASE=v3.0.0-alpha.4-rc.1-7d00791fc1fe ALLOW_STATEFUL=minio`, from
+  `v3.0.0-alpha.3.2-bae18019daef`: `views-narrow FAILED after 0.1 s` (the case above), then
+  `rolling back to v3.0.0-alpha.3.2-bae18019daef`; the rollback's swap, recreate (15.0 s) and rules
+  passed, `rollback-verify FAILED after 7.7 s` on the drift check and the fence, and the deploy ended
+  `exit 3: the rollback failed too: page the owner`. The pointers named `v3.0.0-alpha.3.2` again.
+- 09:58 to 10:01, `make deploy RELEASE=v3.0.0-alpha.4-rc.2-e2dcf759de67 ALLOW_STATEFUL=minio`: the plan
+  said `(also undoing attempts v3.0.0-alpha.4-rc.1-7d00791fc1fe)`, `views-narrow ok` left each new view to
+  `views-widen` as fixed above, eight services were recreated in 80.3 s, verify passed with
+  `catalog-fence: 10 PASS, 0 FAIL`, and the deploy ended `is live and verified`, exit 0 in 166 s. MinIO's
+  host ports were closed after it.
+- 10:50 to 10:51, `make deploy RELEASE=v3.0.0-alpha.4-rc.3-48ad71fba732`, no `ALLOW_STATEFUL`: nothing
+  to recreate, and the first drain that met real DAGs: `drained access_canary, calendars,
+  currency_master, ecb_fx_rates, quality_results (the DAG code moved since
+  v3.0.0-alpha.4-rc.2-e2dcf759de67) in 11 s; paused access_canary, calendars, ecb_fx_rates`, and after
+  `is live and verified`, `unpaused access_canary, calendars, ecb_fx_rates: the DAGs deploy paused`. The
+  two DAGs the operator had paused stayed paused. Exit 0 in 56 s. `make release-verify` then passed with
+  `access-verify LIVE=1 passed: {'PASS': 82, 'FAIL': 0, 'SKIP': 30}` and `catalog-fence: 10 PASS, 0 FAIL`.
