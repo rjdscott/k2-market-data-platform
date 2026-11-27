@@ -149,6 +149,14 @@ def columns(out: dict[str, Any]) -> list[str]:
     return [c["name"] for c in out["columns"]]
 
 
+def primary_key(out: dict[str, Any]) -> list[str]:
+    """The declared key, by primaryKeyPosition, then declaration order: what a page is sorted by,
+    so SQL and REST answers compare row for row and a phase 007 cursor has an order."""
+    key = [(c.get("primaryKeyPosition", len(out["columns"]) + 1), i, c["name"])
+           for i, c in enumerate(out["columns"]) if c["primaryKey"]]
+    return [name for _, _, name in sorted(key)]
+
+
 def ask(user: str, sql: str, params: list[Any]) -> list[list[Any]]:
     try:
         return db.run(user, sql, params)
@@ -319,8 +327,11 @@ def get_data(domain: str, product: str, table: str, request: Request) -> Respons
         raise Refused(404, "not_found", f"{out['contractId']} has no reader relation: only its serving copy holds it")
     fields, limit, filters = parameters(request, out)
     where = " AND ".join(f"{ident(column)} = ?" for column, _ in filters)
+    # ponytail: a table that declares no key is read in Trino's order; give it a key to sort it
+    order = ", ".join(map(ident, primary_key(out)))
     sql = (f"SELECT {', '.join(map(ident, fields))} FROM {quoted(out['relation'])}"
-           f"{' WHERE ' + where if filters else ''} LIMIT {limit + 1}")  # one row past the limit: result_too_large
+           f"{' WHERE ' + where if filters else ''}{' ORDER BY ' + order if order else ''}"
+           f" LIMIT {limit + 1}")  # one row past the limit: result_too_large
     values = [value for _, value in filters]
     snapshot = tested_snapshot(rel, out)
     for _ in range(2):  # the tag read before and after; when it moved, once more

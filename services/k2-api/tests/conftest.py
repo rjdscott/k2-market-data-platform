@@ -101,8 +101,11 @@ class FakeTrino:
             ids = self.snapshots.get(f"{catalog}.{schema}.{table.removesuffix('$refs')}", [])
             return [[ids.pop(0) if len(ids) > 1 else ids[0]]] if ids else []
         columns = re.findall(r'"([a-z0-9_]+)"', sql.split(" FROM ")[0])
+        order = re.search(r" ORDER BY (.+) LIMIT", sql)
+        key = re.findall(r'"([a-z0-9_]+)"', order.group(1)) if order else []
+        rows = sorted(self.rows.get(f"{catalog}.{schema}.{table}", []), key=lambda row: [row[k] for k in key])
         limit = int(re.search(r" LIMIT ([0-9]+)$", sql).group(1))
-        return [[row[c] for c in columns] for row in self.rows.get(f"{catalog}.{schema}.{table}", [])][:limit]
+        return [[row[c] for c in columns] for row in rows][:limit]
 
 
 @pytest.fixture(autouse=True)
