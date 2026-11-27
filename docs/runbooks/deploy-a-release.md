@@ -9,20 +9,26 @@ that failed, are [roll-back-a-release.md](./roll-back-a-release.md). Why it work
 **Run every command from the repo root with `set -a && . ./.env && set +a` loaded.** The defaults:
 `K2_RELEASES=$HOME/k2-releases` (created by the first `make release`, never removed or recreated),
 `K2_SECRETS=$HOME/k2-secrets`, compose project `K2_COMPOSE_PROJECT` (unset: the checkout directory's
-name, the project `make up` gives it; set but empty is refused), Trino at
+name, the project `make up` gives it; set but empty is refused; the live stack's `.env` sets it to the
+project its containers carry, `k2-market-data-platform`, see
+[first-cutover-to-releases.md](./first-cutover-to-releases.md)), Trino at
 `https://localhost:${K2_TRINO_PORT:-8443}` by name, with `${K2_SECRETS}/tls/ca.pem`. View statements come
 from each release's own k2gen, in its tools image, so the checkout's version does not matter to them;
 the scripts deploy calls (S20's checks, S13's `identity.sh`) are the checkout's. Memory: a deploy of a
 new release starts a throwaway lake (about 4 GiB) beside the stack for its release-time suites.
 
-> **Target state: where these commands ran.** On 2026-11-27, against the rehearsal
-> (`make deploy-rehearsal KEEP=1`, [`scripts/verify/deploy_rehearsal.py`](../../scripts/verify/deploy_rehearsal.py)):
-> compose project `k2-rehearsal` with its own networks and volumes under a scratch directory in `$HOME`,
-> Trino 484 started from the release's compiled etc, a throwaway Lakekeeper, Postgres and MinIO, Spark,
-> Prometheus, the tools one-shot and a stand-in, releases cut from the k2gen good fixture set at scratch
-> tags. The live stack does not read releases yet: step S22 moves it onto them. Until then, these commands
-> must not be run against the live stack. The outputs below are the rehearsal's, its release ids and
-> scratch paths included.
+> **Where these commands ran.** The live stack runs a release: its first deploy ran on 2026-11-27 at
+> 00:28 to 00:31 UTC, release `v3.0.0-alpha.3-rc.1-490b0533ff56`, recorded in
+> [first-cutover-to-releases.md](./first-cutover-to-releases.md). Nothing else has run live: a second,
+> ordinary deploy, a rules-only deploy, a failed deploy rolled back and an interrupted one were run on the
+> rehearsal (`make deploy-rehearsal KEEP=1`, [`scripts/verify/deploy_rehearsal.py`](../../scripts/verify/deploy_rehearsal.py)),
+> not yet live: compose project `k2-rehearsal` with its own networks and volumes under a scratch directory
+> in `$HOME`, Trino 484 started from the release's compiled etc, a throwaway Lakekeeper, Postgres and MinIO,
+> Spark, Prometheus, the tools one-shot and a stand-in, releases cut from the k2gen good fixture set at
+> scratch tags. The outputs below are the rehearsal's, its release ids and scratch paths included, and the
+> `SKIP access-verify` and `SKIP catalog drift check` lines in them are the rehearsal's: on the live stack
+> the access suite and the drift check run, and the live suite is a visible SKIP until phase 002 publishes
+> the access canary. Live, `make release-status` and `make release-verify` answer for the release above.
 
 | # | Task | MTTR target | Measured |
 |---|------|-------------|----------|
@@ -351,4 +357,4 @@ record, the worst moment: the work is done and nothing says so.
 
 ---
 
-**Last verified:** 2026-11-27 against the rehearsal, branch `step/s19-deploy`; not yet on the live stack.
+**Last verified:** 2026-11-27 against the rehearsal, branch `step/s19-deploy`; on the live stack only the first deploy (the cutover, [first-cutover-to-releases.md](./first-cutover-to-releases.md), 00:28 to 00:31 UTC, release `v3.0.0-alpha.3-rc.1-490b0533ff56`); a second ordinary deploy, a rules-only deploy and a deploy that rolls itself back are not yet live.

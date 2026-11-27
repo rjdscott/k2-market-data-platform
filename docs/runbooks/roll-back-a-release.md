@@ -10,9 +10,14 @@ A deploy that fails verification rolls itself back; that case is section 6 of
 `K2_RELEASES`, `K2_SECRETS`, `K2_COMPOSE_PROJECT` and `K2_TRINO_PORT` as the deploy
 ([deploy-a-release.md](./deploy-a-release.md)).
 
-> **Target state: where these commands ran.** On 2026-11-27, against the rehearsal
-> (`make deploy-rehearsal KEEP=1`), compose project `k2-rehearsal`, never the live stack, which does not
-> read releases until step S22. The outputs below are the rehearsal's.
+> **Where these commands ran.** On 2026-11-27, against the rehearsal (`make deploy-rehearsal KEEP=1`),
+> compose project `k2-rehearsal`: a rollback has not been run on the live stack. The live stack has read
+> releases since its first deploy (2026-11-27, 00:28 to 00:31 UTC, release
+> `v3.0.0-alpha.3-rc.1-490b0533ff56`, [first-cutover-to-releases.md](./first-cutover-to-releases.md)), and
+> that deploy was a first one: there is no earlier release to go back to, so `make rollback` has nothing
+> to restore until a second release is deployed (section 4 is the case it would meet). Going back from the
+> cutover itself, to the shape before releases, is section 2 of that runbook. The outputs below are the
+> rehearsal's.
 
 | # | Task | MTTR target | Measured |
 |---|------|-------------|----------|
@@ -202,8 +207,8 @@ changed: the restore brought back its rows and owner and removed the table added
 
 ## Failure modes / incidents
 
-- None on a live stack yet.
+- None on a live stack yet: the live stack has deployed one release (the cutover), and no rollback has run there.
 
 ---
 
-**Last verified:** 2026-11-27 against the rehearsal, branch `step/s19-deploy`; not yet on the live stack.
+**Last verified:** 2026-11-27 against the rehearsal, branch `step/s19-deploy`; a rollback is not yet run on the live stack (it has one deployed release, the cutover's, so there is nothing to go back to yet).

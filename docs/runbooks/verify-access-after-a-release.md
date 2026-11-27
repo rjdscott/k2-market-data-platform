@@ -14,18 +14,21 @@ Not covered: deploying or rolling back a release (step S19's `make deploy`, `mak
 
 **Run every command from the repo root with `set -a && . ./.env && set +a` loaded.**
 
-> **Target state: where these commands ran.** On 2026-11-26, on throwaway lakes
+> **Where these commands ran.** On 2026-11-26, on throwaway lakes
 > (`scripts/lib/throwaway-lake.sh`: Trino 484, Lakekeeper, Postgres and MinIO at the stack's pins,
 > HTTPS, a generated password per run), started from a release compiled from this repository's
-> documents at commit `eed362d`. The live Trino does not use HTTPS or passwords yet: step S22
-> turns them on and mounts `${K2_SECRETS}`. Until then, `make access-verify LIVE=1` exits 2
-> (section 2), and its choices were run only on a throwaway lake standing in for the stack
-> (section 6, the `live` step).
+> documents at commit `eed362d`. Since the first live deploy (2026-11-27, 00:28 to 00:31 UTC, release
+> `v3.0.0-alpha.3-rc.1-490b0533ff56`, [first-cutover-to-releases.md](./first-cutover-to-releases.md))
+> the live Trino answers HTTPS on 8443 with passwords and reads the release through its pointer, and
+> `make release-verify` exits 0 there, its live access suite a visible SKIP (the access canary is not
+> published until phase 002). `make access-verify LIVE=1` no longer exits 2 on the stack; the live
+> suite's rows beyond that SKIP have not run, so the sections below remain the throwaway lakes' outputs.
+> Granting or revoking a role: [grant-and-revoke-access.md](./grant-and-revoke-access.md).
 
 | # | Task | MTTR target | Measured |
 |---|------|-------------|----------|
 | 1 | Verify a release before it serves anyone | <2 min | 27 s, 63 of 63 rows PASS (2026-11-26, throwaway lake) |
-| 2 | Verify the running stack | <2 min | not yet run on the stack (S22); exits 2 today |
+| 2 | Verify the running stack | <2 min | live, 2026-11-27: `make release-verify` exit 0 with the live suite a SKIP; the rows themselves not yet run live (phase 002 publishes the canary) |
 | 3 | A row fails | <10 min to a verdict | the negative control: one loosened rule, live after 0.1 s, failed exactly its role's row (2026-11-26) |
 | 4 | The drift check names a difference | <10 min to a verdict | 6 plants each named, each clean once undone (2026-11-26) |
 | 5 | The tested-data marker fails | <10 min to a verdict | a wider view, an aliased mask and a base turned view each failed it (2026-11-26) |
@@ -96,7 +99,7 @@ file fails its rows.
 
 ```bash
 make access-verify LIVE=1
-# today, before step S22 and the first deploy:
+# before the first deploy (2026-11-26; the live stack has a release since 2026-11-27, so it no longer prints this):
 # access-verify: no release at /home/<you>/k2-releases/pointers/trino (deploy points pointers/trino at one)
 # make: *** [mk/access.mk:23: access-verify] Error 2
 ```
@@ -111,7 +114,7 @@ product is refused `TO_FILE=1`, and their rows SKIP here.
 for p in p.canary-full p.canary-delayed p.canary-scoped; do make -s password PRINCIPAL=$p TO_FILE=1; done
 ```
 
-**Measured**, not yet run on the stack. On a throwaway lake with `${K2_SECRETS}` laid out from
+**Measured**, the rows not yet run on the stack (live, `make release-verify` reports the suite as a SKIP, 2026-11-27). On a throwaway lake with `${K2_SECRETS}` laid out from
 its passwords: exit 0, the planted-view row (51) and the drift row (63) skipped and nothing else.
 With one canary reader's file gone, exactly that reader's six rows failed (2026-11-26).
 
@@ -298,5 +301,5 @@ restored one answered after 5.0 to 5.1 s (n=5 each, Trino's refresh period 5 s, 
 
 ---
 
-**Last verified:** 2026-11-26 against `eed362d`, on throwaway lakes only (the stack has no HTTPS
-or passwords before step S22).
+**Last verified:** 2026-11-26 against `eed362d`, on throwaway lakes; on the live stack, 2026-11-27,
+only `make release-verify` (exit 0, the live access suite a SKIP).

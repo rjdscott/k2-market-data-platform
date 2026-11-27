@@ -12,15 +12,20 @@ annotation every rule carries); the design is in
 > **Where these commands ran.** On 2026-11-26, against throwaway copies of the `alertmanager`
 > service started from its own compose definition (`docker compose -p <scratch> run
 > --service-ports`, so the image, command, mounts, limits and the 127.0.0.1:9093 port are
-> compose's, under another container name), and through `make alert-test-standin`. The live
-> `k2-alertmanager` did not exist yet: every `docker exec k2-alertmanager ...` below ran as
-> `docker exec <throwaway> ...`, and `docker compose up -d --no-deps alertmanager` was not run,
-> because it starts the live service. The two Prometheus reads marked *live* ran on the live stack.
+> compose's, under another container name), and through `make alert-test-standin`: every
+> `docker exec k2-alertmanager ...` below ran as `docker exec <throwaway> ...` unless it says live.
+> The live `k2-alertmanager` has run since 2026-11-26 18:19:20 UTC, and the Slack webhook has been
+> installed on the live stack since 2026-11-27 (`make alerts-install-webhook`, step 3 of
+> [first-cutover-to-releases.md](./first-cutover-to-releases.md)). Live, on 2026-11-27, `make alert-test`
+> printed `PASS alert delivery to Slack: K2TestAlert ... sent (notifications 0 -> 1, failed 0 -> 0)`.
+> The live stack is release-shaped since that day: the webhook file is one of the secret files
+> a deploy requires before it recreates Alertmanager. The silence, outage and failure-alert steps
+> were not induced live.
 
 | # | Task | MTTR target | Measured |
 |---|------|-------------|----------|
 | 1 | Install or rotate the webhook | <2 min | taken at the next notification, no restart (2026-11-26, throwaway) |
-| 2 | Test delivery | <2 min | `make alert-test` a few seconds; `make alert-test-standin` 81 to 86 s (2026-11-26) |
+| 2 | Test delivery | <2 min | `make alert-test` a few seconds, live: `PASS alert delivery to Slack` with the webhook installed (2026-11-27); `make alert-test-standin` 81 to 86 s (2026-11-26) |
 | 3 | Silence an alert | <2 min | seconds (2026-11-26, throwaway) |
 | 4 | Nothing arrives in Slack | <10 min | the failure alert fired 16 s after a failed notification (2026-11-26, throwaway); not induced live |
 | 5 | Alertmanager down | <2 min | healthy 6 to 7 s after a recreate (2026-11-26, throwaway); not induced live |
@@ -146,7 +151,7 @@ It checks, in order, and exits 1 on any `FAIL`, 0 on `PASS` or `SKIP`:
 What each state prints, as run on 2026-11-26:
 
 ```
-# live stack, before Alertmanager was started
+# live stack, on 2026-11-26 before Alertmanager was started (it runs live now)
 FAIL alertmanager: k2-alertmanager is not running (docker compose up -d --no-deps alertmanager)
 
 # running, no webhook
@@ -162,7 +167,7 @@ PASS prometheus to alertmanager: k2-prometheus sends to 1 Alertmanager
 FAIL alert delivery to Slack: K2TestAlert 20261126T181047Z-2728065-2321 failed (failed 0 -> 1): docker logs --since 2m k2-alertmanager 2>&1 | grep 'Notify for alerts failed'
 ```
 
-(The container names in the last three were the throwaways'.) Slack cannot be asked whether the
+(The container names in the last three were the throwaways'. The `installed` case ran live on 2026-11-27: `PASS alert delivery to Slack: K2TestAlert ... sent (notifications 0 -> 1, failed 0 -> 0)`.) Slack cannot be asked whether the
 message arrived; `PASS` means Slack answered `ok`. Look at the channel.
 
 `make alert-test-standin` runs the whole path with nothing live touched and no Slack: the
@@ -341,4 +346,5 @@ the old one.
 ---
 
 **Last verified:** 2026-11-26 against `step/s09-alertmanager` on throwaway copies of the service
-and `make alert-test-standin`; not yet on the live stack.
+and `make alert-test-standin`; on the live stack, 2026-11-27, only `make alert-test` (the delivery
+PASS above, webhook installed); the silence, failure-alert and outage recoveries are not induced live.
