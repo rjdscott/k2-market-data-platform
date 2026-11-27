@@ -14,6 +14,8 @@
 #   2. list its objects in MinIO, and check the backup disk has room for them; a
 #      bucket under object lock is refused while any version in it is retained or
 #      on legal hold, naming the latest expiry (governance mode is never bypassed);
+#   2b. `make backup` (scripts/backup-lake.sh), the backup set's one copy path;
+#      a backup that does not complete refuses the drop;
 #   3. mc mirror them to $K2_BACKUP_DIR/drop/<UTC date>/<target>/, and copy every
 #      object version of a versioned bucket to <target>.versions/<key>/<version id>;
 #   4. compare object count and bytes, MinIO against the copy, then list MinIO
@@ -350,6 +352,11 @@ if [ "$DRY" = 1 ]; then
   echo "drop: DRY RUN: nothing copied, nothing dropped"
   exit 0
 fi
+
+# (2b) The nightly backup itself, the one copy of the backup set (`make backup`), taken
+# now: a drop never runs without a complete backup from just before it.
+bash "$ROOT/scripts/backup-lake.sh" ||
+  die "the backup (scripts/backup-lake.sh) did not complete; nothing was copied or dropped"
 
 # (3) The copy. mc exits 0 when it refuses to overwrite a differing file and prints a
 # JSON error line instead, so the lines decide.

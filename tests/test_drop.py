@@ -205,6 +205,10 @@ def stack(tmp_path):
     repo = tmp_path / "repo"
     (repo / "scripts").mkdir(parents=True)
     shutil.copy(ROOT / "scripts/drop.sh", repo / "scripts/drop.sh")
+    # The backup drop.sh runs first (scripts/backup-lake.sh, tested in test_backup_lake.py): it logs
+    # itself among the docker calls, so the order is checkable, and BACKUP_FAIL makes it fail.
+    (repo / "scripts/backup-lake.sh").write_text(
+        'echo \'["backup-lake"]\' >> "$LOG"\n[ -z "${BACKUP_FAIL:-}" ] || { echo "backup-lake: FAIL: x" >&2; exit 1; }\n')
     (repo / ".env").write_text(f"MINIO_ROOT_USER={USER}\nMINIO_ROOT_PASSWORD={PASSWORD}\nOTHER_PASSWORD=x\n")
     world = {"warehouses": {"k2": {"id": "p-k2", "bucket": "k2-lake", "prefix": "warehouse/k2", "namespaces": {
         "spike": {"t1": ["table", LOC.format("t1")], "v1": ["view", LOC.format("v1")]},
@@ -338,6 +342,17 @@ def test_dry_run_lists_and_changes_nothing(stack):
     assert (stack / "world.json").read_text() == world and tree(stack / "minio") == before
     assert not (stack / "k2-backup").exists()
     assert deletes(stack) == [] and not any(c[3:4] in (["mirror"], ["cp"]) for c in calls(stack))
+    assert ["backup-lake"] not in calls(stack)
+
+
+@pytest.mark.parametrize("target", ["k2.spike", "bucket:landing"])
+def test_a_backup_that_does_not_complete_refuses_the_drop(stack, target):
+    world, before = (stack / "world.json").read_text(), tree(stack / "minio")
+    out = run(stack, target, BACKUP_FAIL="1")
+    assert out.returncode == 1
+    assert "the backup (scripts/backup-lake.sh) did not complete; nothing was copied or dropped" in out.stderr
+    assert deletes(stack) == [] and not any("mirror" in c for c in calls(stack))
+    assert (stack / "world.json").read_text() == world and tree(stack / "minio") == before
 
 
 def test_the_helper_runs_on_the_catalogs_network(stack):
@@ -363,9 +378,10 @@ def test_drops_a_namespace_after_a_matching_copy_in_order(stack):
     rows = json.loads(manifest.read_text())["objects"]
     assert [(r["name"], r["location"], r["objects"]) for r in rows] == [
         ("k2.spike.t1", LOC.format("t1"), OBJECTS), ("k2.spike.v1", LOC.format("v1"), OBJECTS)]
-    # Order: every copy and re-listing, then the table and view drops, then the namespace.
+    # Order: the backup, every copy and re-listing, then the table and view drops, then the namespace.
     c = calls(stack)
     first_delete = next(i for i, a in enumerate(c) if "DELETE" in a)
+    assert c.count(["backup-lake"]) == 1 and c.index(["backup-lake"]) < min(i for i, a in enumerate(c) if "mirror" in a)
     assert max(i for i, a in enumerate(c) if "mirror" in a) < first_delete
     drops = [a[-1].split("/catalog/v1/p-k2/namespaces/")[1] for a in c if "DELETE" in a]
     assert drops == ["spike/tables/t1?purgeRequested=true", "spike/views/v1?purgeRequested=true", "spike"]
