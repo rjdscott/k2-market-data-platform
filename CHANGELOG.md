@@ -141,6 +141,16 @@ once its tests passed. Each engine holds its own storage key.
 - `make test` and CI run the connector, run-records, catalog site and wrapper tests; CI builds the Spark
   image its throwaway lakes need.
 
+### Fixed
+
+- Deploy's `views-narrow` skips a view the release it moves from does not declare, so a release that adds
+  a product no longer fails there; the plan lists such views as `views new in this release`.
+- A rollback across a release that added a product exits 1, not 3: the drift check reports what a release
+  deployed or attempted since the live one created as `LEFT` lines (`--left-by`, `K2_DRIFT_LEFT_BY`),
+  not `DRIFT`.
+- `make lake-init [RECREATE="<service> ..."]` reruns `lake-init` from the live release, for use after
+  `make engine-keys ROTATE=<engine>`.
+
 ### Removed
 
 - MinIO's host ports, 9000 and 9001, and with them the MinIO console screenshot.

@@ -140,6 +140,10 @@ deploy: PLAN=1: stopped before any change
 deploy: exit 0: done
 ```
 
+When the release declares a view that the release live now does not, the plan adds one line after
+`views to re-sync`: `views new in this release: <relations> (created after its rules load, at its first
+tested publish)`. Those views are not touched before the swap.
+
 **Measured**, 0.8 s for `PLAN=1` and 0.1 s for `make release-diff`, 2026-11-27, on the rehearsal.
 
 ---
@@ -167,6 +171,10 @@ Tasks still running at 300 s refuse the deploy (section 5) unless `ALLOW_RUNNING
 them and records step `allow-running`; a run keeps the release it started on either way, since every
 task reads the release its `resolve` task pinned. With no scheduler running, or no DAG in it, the step
 records why and the deploy goes on.
+**Before a release that adds a product**, its builder's and publisher's password files must exist
+(`make password PRINCIPAL=dbt_<fence> TO_FILE=1` and `make password PRINCIPAL=pub_<fence> TO_FILE=1`,
+[create-or-rotate-a-principal.md](./create-or-rotate-a-principal.md)); preflight refuses the deploy,
+naming each one that is missing and its command, before anything changes (section 5).
 **ddl** runs the one-shots first, each recreated fresh: `lake-init` runs the target release's own
 `platform/docker/lake/init-lake.sh` (`K2_LAKE_INIT_RELEASE`, `K2_STORAGE_PLAN`), so a new engine's MinIO
 user and policy exist before anything uses its key; a target that carries no such script (a release
@@ -177,7 +185,8 @@ long-running member. A service in a source release's default set that the target
 is stopped and removed (`remove-<service>`, `<service> stopped and removed: behind profile <p> in <id>`).
 **Site**, after done: the release's catalog site and dbt docs written into the `k2-site` volume k2-api
 serves (section 8); a failure there never fails or rolls back the deploy. Views lose dropped columns before the rules move (in the target's shape when the old rules admit
-it, else the old one) and take the target's shape and new columns once its rules are loaded. Only the services in the plan are recreated, one at a
+it, else the old one; a view the release being moved from does not declare is skipped, since the old rules
+cannot read it and its publisher has not created it: it is left to widen once the target's rules are loaded) and take the target's shape and new columns once its rules are loaded. Only the services in the plan are recreated, one at a
 time, each waited healthy; a rules-only release recreates none. The last line is the exit code and what it
 means. `make deploy RELEASE=<tag>` compiles the tag first when no release of that id exists.
 Before a one-shot that migrates a database (`airflow-migrate`, `lakekeeper-migrate`), `backup` dumps that
@@ -254,7 +263,8 @@ deploy: remove-<service> ok (...)
   network <project>_k2-egress created: no service compose starts uses it yet
   <service> recreated, healthy in <n> s
 deploy: recreate ok (...)
-  catalog drift check clean (<n> differences, pending none, <n> skipped)
+  catalog drift check clean (<n> differences, pending none, <n> skipped, <n> left by a release since)
+  LEFT <kind> <name>: declared by <release id>, a release deployed or attempted since the one that is live; ...
   access-verify LIVE=1 passed: {'PASS': <n>, 'FAIL': 0, 'SKIP': <n>}
   k2-api: GET http://127.0.0.1:8095/v1/release names <release id>
 deploy: verify ok (...)
