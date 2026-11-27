@@ -1378,6 +1378,18 @@ def drift(ctx: Ctx, target: Release) -> dict[str, Any]:
     return {"exit": done.returncode, "doc": doc, "text": tail(done, 12)}
 
 
+BUILD_WAIT = 300  # seconds the drift check waits for a running build's relations to go, as the drain waits
+_DBT_OWN = re.compile(r"^DRIFT (?:view|table) \S+__dbt_(?:tmp|backup): ")
+
+
+def in_flight(differences: list[Any]) -> bool:
+    """True when every difference is a relation dbt holds only while it builds (`<model>__dbt_tmp`,
+    `<model>__dbt_backup`): a deploy that does not drain runs beside a product's build (found by
+    scripts/chaos/deploy-mid-run.sh on 2026-11-27). The check is then run again, for BUILD_WAIT at
+    most: one a failed build left behind is still there afterwards, and is still drift."""
+    return bool(differences) and all(_DBT_OWN.match(str(x)) for x in differences)
+
+
 def left_dirs(ctx: Ctx, rel: Release) -> list[str]:
     """left_by() of the log, as directories the tools one-shot sees (a release no longer kept is skipped)."""
     return [f"{model.RELEASES_MOUNT}/{r}" for r in left_by(history(ctx.root), rel.id) if (ctx.root / r).is_dir()]
@@ -1416,6 +1428,13 @@ def s20_checks(ctx: Ctx, target: Release) -> tuple[list[str], list[str]]:
     (`make access-verify LIVE=1`), its rows for every product the drift check finds published."""
     lines, wrong = [], []
     d = drift(ctx, target)
+    waited = 0
+    while d["exit"] == 1 and in_flight(d["doc"].get("differences", [])) and waited < BUILD_WAIT:
+        time.sleep(10)  # a product's build is running under this deploy: dbt renames its relation away
+        waited += 10
+        d = drift(ctx, target)
+    if waited:
+        lines.append(f"catalog drift check waited {waited} s for a running dbt build's own relations")
     pending = [str(x) for x in d["doc"].get("pending", [])]
     if d["exit"] == 0:
         lines.append(f"catalog drift check clean ({len(d['doc'].get('differences', []))} differences, "
