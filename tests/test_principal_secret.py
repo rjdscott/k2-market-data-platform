@@ -113,7 +113,7 @@ def checkout() -> tuple[str, str]:
 
 
 def tracked_files_holding(text: str) -> str:
-    p = subprocess.run(["git", "grep", "-l", "-F", "-e", text]  # -e: a secret may start with a dash, cwd=ROOT, capture_output=True, text=True)
+    p = subprocess.run(["git", "grep", "-l", "-F", "-e", text], cwd=ROOT, capture_output=True, text=True)  # -e: a secret may start with a dash
     assert p.returncode in (0, 1), p.stderr
     return p.stdout
 
