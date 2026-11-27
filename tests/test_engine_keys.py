@@ -80,6 +80,38 @@ def test_rotate_replaces_one_engines_pair_alone(tmp_path):
     assert run(f, "--rotate", "fetch").returncode == 2  # fetch has no key and never gets one
 
 
+def test_a_pair_left_on_the_root_pair_gets_its_own_and_nothing_else_moves(tmp_path):
+    # The release before phase 002 shipped Trino on MinIO's root pair (its .env.example); lake-init
+    # refuses that pair, so it counts as unset, both names of it, whichever half is the root's.
+    f = scratch(tmp_path)
+    run(f)
+    root_pw = "a-root-password-0123456789"
+    f.write_text(keys.rewrite(f.read_text(), {"MINIO_ROOT_PASSWORD": root_pw, "K2_TRINO_S3_ACCESS_KEY": "k2-minio-root",
+                                              "K2_TRINO_S3_SECRET_KEY": root_pw}))
+    before = keys.values(f.read_text())
+    out = run(f)
+    assert out.returncode == 0 and sorted(written(out.stdout)) == ["K2_TRINO_S3_ACCESS_KEY", "K2_TRINO_S3_SECRET_KEY"]
+    assert root_pw not in out.stdout + out.stderr and "k2-minio-root" not in out.stdout + out.stderr
+    after = keys.values(f.read_text())
+    assert {n for n in after if after[n] != before.get(n)} == {"K2_TRINO_S3_ACCESS_KEY", "K2_TRINO_S3_SECRET_KEY"}
+    assert re.fullmatch(r"k2-trino-[0-9a-f]{8}", after["K2_TRINO_S3_ACCESS_KEY"]) and after["K2_TRINO_S3_SECRET_KEY"] != root_pw
+    assert guard.scoped_problems(after, EXAMPLE) == []
+    second = run(f)
+    assert written(second.stdout) == [] and keys.values(f.read_text()) == after
+
+
+def test_either_half_on_the_root_pair_replaces_both():
+    root = {"MINIO_ROOT_USER": "k2-minio-root", "MINIO_ROOT_PASSWORD": "a-root-password-0123456789"}
+    ids = {"K2_RUN_UID": "1", "K2_RUN_GID": "1"}
+    pairs = {n: f"own-{n}-0123456789" for e in keys.ENGINES for n in keys.pair_names(e)}
+    for half, value in (("K2_SPARK_S3_ACCESS_KEY", "k2-minio-root"), ("K2_SPARK_S3_SECRET_KEY", "a-root-password-0123456789"),
+                        ("K2_SPARK_S3_ACCESS_KEY", "a-root-password-0123456789"), ("K2_SPARK_S3_SECRET_KEY", "k2-minio-root")):
+        got = keys.plan({**root, **ids, **pairs, half: value}, {}, set(), 1, 1)
+        assert sorted(got) == ["K2_SPARK_S3_ACCESS_KEY", "K2_SPARK_S3_SECRET_KEY"], half
+    # An empty root password matches no empty secret: that one is unset, and unset alone.
+    assert keys.plan({**ids, **pairs, "MINIO_ROOT_USER": "k2-minio-root"}, {}, set(), 1, 1) == {}
+
+
 def test_a_new_access_key_never_takes_another_engines_or_the_roots(monkeypatch):
     draws = iter(["aaaaaaaa", "aaaaaaaa", "bbbbbbbb"])
     monkeypatch.setattr(keys.secrets, "token_hex", lambda n: next(draws))
