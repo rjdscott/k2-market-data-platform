@@ -157,9 +157,10 @@ jobs:
       - uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
 
       # make test-dbt: the steps scripts/dbt-test.sh lists in its header (lint,
-      # deps, parse, compile, the manifest check), with no Trino. The old marts
-      # are archived (legacy/v3-lake-ingest/dbt/) and dbt builds return in phase
-      # 002; the job keeps its name because "dbt (marts)" is a required check.
+      # deps, parse, compile, the manifest check), then each compiled product
+      # built with its tests on a throwaway lake (Docker). The old marts are
+      # archived (legacy/v3-lake-ingest/dbt/); the job keeps its name because
+      # "dbt (marts)" is a required check.
       - run: bash scripts/dbt-test.sh
 
       # The dbt trees the compiler emits (the k2gen fixture set and contracts/):
