@@ -30,4 +30,8 @@ k2:
       schema: staging
       # The session zone is the client's (docker/trino/README.md); every K2 timestamp is UTC.
       timezone: UTC
+      # Every statement of one dbt invocation carries this Trino client tag. The dbt wrapper sets a
+      # fresh k2-dbt-<nonce> per run and, before it publishes, asks Trino which queries carried it:
+      # a snapshot no such query committed is refused (docker/dbt-runner/k2_dbt.py, built_here).
+      client_tags: ["{{ env_var('K2_DBT_CLIENT_TAG', 'k2-dbt-manual') }}"]
       threads: 4
