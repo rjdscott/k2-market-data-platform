@@ -342,6 +342,13 @@ column. `schema_id` and the envelope columns are never `required`: a frame unfra
 is no `RawMessage`, or whose body does not read, is staged with them null and fails `parses`.
 k2gen's `connectors.kafka-bronze-shape` and `pipeline.schema.json` hold this shape.
 
+2026-11-28 (review finding D3): an id is unresolvable only when the registry answers 404 for it;
+any other registry error fails the task, exit 1, before the stage writes or the audit records
+anything. `parses` also compares each staged row with the frame's decode from the landing: a frame
+whose bronze columns are not what its decode projects (null where the decode is not, as when the
+registry answered 404 at the stage and serves the id since) fails the batch, naming partition,
+offset and the columns.
+
 2026-11-28 (review finding D2): a kill between the stage and the audit leaves no stuck batch either.
 A stage that finds another run's batch unpublished on `audit` resets `audit` to `main` and stages
 the range again from `main`'s through-offsets, with whatever landed since, when that batch has no

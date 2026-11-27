@@ -39,10 +39,13 @@ audit  checks the batch at `audit`'s head over the range it staged (main's throu
        parses       every staged frame, read again from the landing at the snapshot the stage
                     read, is Confluent-framed with an id the registry serves as RawMessage, its
                     body reads, its writer schema has each of bronze's envelope columns by name
-                    and of a type that reads as the column's (problems), and the filter keeps
-                    it; a failure names partition and offset and any column, at most LISTED of
-                    them, never a byte of the frame. So a column the stage wrote NULL because
-                    the record lacks it never publishes as a silent null.
+                    and of a type that reads as the column's (problems), the filter keeps it,
+                    and bronze's staged row holds what it decodes to; a failure names partition
+                    and offset and any column, at most LISTED of them, never a byte of the
+                    frame. So a column the stage wrote NULL, because the record lacks it or the
+                    registry answered 404 for its id then, never publishes as a silent null. Any
+                    other registry error fails the task, before the stage writes or the audit
+                    records anything (catalog.fetch_schema).
        keys_unique  (kafka_partition, kafka_offset) once within the batch, and none on main.
        A run whose batch staged nothing passes each, saying so.
 
@@ -349,21 +352,26 @@ def accounting(topic: str, ranges: dict, lost: dict, landed: list, staged: list,
                   f"{want_all} landed over {len(ranges)} partitions")
 
 
-def unparsed_reason(schema_id, registered: bool, decoded: bool, problem: str | None = None) -> str:
+def unparsed_reason(schema_id, registered: bool, decoded: bool, problem: str | None = None,
+                    staged: str | None = None) -> str:
     """Why a staged frame fails parses, from facts about it alone: never a byte of it. `problem` is
-    its writer schema's problems() joined, or None."""
+    its writer schema's problems() joined, or None; `staged` the envelope columns, joined, whose
+    value in bronze is not what the frame decodes to now (null where the stage could not decode
+    it: the registry answered 404 then), or None."""
     if schema_id is None:
         return "not Confluent-framed"
     if not registered:
         return f"schema id {int(schema_id)} is not a registered {ENVELOPE}"
     if not decoded:
         return f"its body does not read as {ENVELOPE}"
-    return f"its writer schema {int(schema_id)} {problem}" if problem else "the filter does not keep it"
+    if problem:
+        return f"its writer schema {int(schema_id)} {problem}"
+    return f"bronze staged {staged} other than it decodes to" if staged else "the filter does not keep it"
 
 
 def parses(topic: str, frames: int, failing: int, listed: list) -> tuple[bool, str]:
-    """`listed` is the first `[(partition, offset, schema id, registered, decoded, problem)]` of the
-    `failing` frames, by partition and offset."""
+    """`listed` is the first `[(partition, offset, schema id, registered, decoded, problem, staged)]`
+    of the `failing` frames, by partition and offset."""
     if not failing:
         return True, f"{frames} frames parse"
     shown = listed[:LISTED]
@@ -704,31 +712,43 @@ class SparkLanding(C.SparkLake):
     def unparsed(self, landing: str, src: int, table: str, snapshot: int, ranges: dict, keep: str) -> tuple[int, list]:
         """How many frames of `ranges` in `table` at `snapshot` fail parses, each read again from
         `landing` at `src`, the snapshot the stage read, and the first LISTED by partition and
-        offset as `(partition, offset, schema id, registered, decoded, problem)`: only the facts,
-        never the bytes. A body that does not read decodes to null (decoded_sql), and fails."""
+        offset as `(partition, offset, schema id, registered, decoded, problem, staged)`: only the
+        facts, never the bytes. A body that does not read decodes to null (decoded_sql), and fails;
+        so does a frame whose bronze row holds other values than its decode projects (`staged`, the
+        columns named), so a column the stage wrote null publishes only when the decode is null too.
+
+        ponytail: the staged row's columns are joined to the frame, payload included; a batch is
+        bounded by maxOffsetsPerPartition."""
         from pyspark.sql import functions as F
 
         if not ranges:
             return 0, []
         where, args = range_sql(ranges)
-        staged = self.spark.sql(f"SELECT `kafka_partition`, `kafka_offset` FROM {C.rel(table)} VERSION AS OF "
-                                f"{C.snapshot_id(snapshot)} WHERE {where}", args).distinct()
-        raw = self._framed(landing, src, ranges, "`kafka_partition`, `kafka_offset`, `record_value`").join(
-            staged, ["kafka_partition", "kafka_offset"], "left_semi")
         columns = envelope_columns({f.name: f.dataType.simpleString() for f in self.spark.table(C.rel(table)).schema})
+        was = "_staged_"  # a prefix no envelope column can carry: NAME starts with a letter
+        staged = (self.spark.sql(f"SELECT `kafka_partition`, `kafka_offset`, {', '.join(C.name(n) for n in columns)} "
+                                 f"FROM {C.rel(table)} VERSION AS OF {C.snapshot_id(snapshot)} WHERE {where}", args)
+                  .select("kafka_partition", "kafka_offset", *[F.col(n).alias(was + n) for n in columns]).distinct())
+        raw = self._framed(landing, src, ranges, "`kafka_partition`, `kafka_offset`, `record_value`").join(
+            staged, ["kafka_partition", "kafka_offset"])
         envelopes = self.envelopes(raw)
         cols = ["kafka_partition", "kafka_offset", "schema_id"]
         facts = (raw.where(F.col("schema_id").isNull() | ~F.col("schema_id").isin(list(envelopes)))
                  .select(*cols, F.lit(False).alias("registered"), F.lit(False).alias("decoded"),
-                         F.lit(None).cast("string").alias("problem"), F.lit(False).alias("kept")))
+                         F.lit(None).cast("string").alias("problem"), F.lit(None).cast("string").alias("staged"),
+                         F.lit(False).alias("kept")))
         for sid, schema in sorted(envelopes.items()):
             decoded = self._decoded(raw.where(F.col("schema_id") == sid), schema)
             fields = {f.name: f.dataType.simpleString() for f in decoded.schema["envelope"].dataType.fields}
             problem = ", and ".join(problems(fields, columns)) or None
-            facts = facts.unionByName(decoded.select(*cols, F.lit(True).alias("registered"),
-                                                     F.col("envelope").isNotNull().alias("decoded"),
-                                                     F.lit(problem).cast("string").alias("problem"),
-                                                     F.coalesce(F.expr(keep), F.lit(False)).alias("kept")))
-        bad = facts.where(~(F.col("registered") & F.col("decoded") & F.col("kept") & F.col("problem").isNull()))
-        listed = [tuple(r)[:6] for r in bad.orderBy("kafka_partition", "kafka_offset").limit(LISTED).collect()]
+            projected = decoded.selectExpr("*", *project_sql(fields, columns))
+            differs = F.concat_ws(", ", *[F.when(~F.col(n).eqNullSafe(F.col(was + n)), F.lit(n)) for n in columns])
+            facts = facts.unionByName(projected.select(*cols, F.lit(True).alias("registered"),
+                                                       F.col("envelope").isNotNull().alias("decoded"),
+                                                       F.lit(problem).cast("string").alias("problem"),
+                                                       F.when(differs != "", differs).alias("staged"),
+                                                       F.coalesce(F.expr(keep), F.lit(False)).alias("kept")))
+        bad = facts.where(~(F.col("registered") & F.col("decoded") & F.col("kept") & F.col("problem").isNull()
+                            & F.col("staged").isNull()))
+        listed = [tuple(r)[:7] for r in bad.orderBy("kafka_partition", "kafka_offset").limit(LISTED).collect()]
         return bad.count(), listed

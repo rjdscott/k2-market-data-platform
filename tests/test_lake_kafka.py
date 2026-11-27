@@ -7,13 +7,16 @@ predicate run in DuckDB, so the SQL Spark runs is the SQL tested. The shells ove
 throwaway-lake proof. Values are synthetic.
 """
 
+import io
 import json
+import urllib.error
 from pathlib import Path
 
 import connector as C
 import duckdb
 import kafka as K
 import pytest
+from conftest import import_lake_module
 from test_lake_connector import model  # k2gen's names, executed from model.py
 
 import offsets as O
@@ -244,7 +247,7 @@ class Lake:
     def unparsed(self, landing, src, table, snapshot, ranges, keep):
         """As SparkLanding.unparsed: bronze's frames, their bytes read again from the landing at `src`."""
         assert landing == LANDING
-        staged = {(r["kafka_partition"], r["kafka_offset"]) for r in self._in(snapshot, ranges)}
+        staged = {(r["kafka_partition"], r["kafka_offset"]): r for r in self._in(snapshot, ranges)}
         rows = sorted((r for r in self._in(src, ranges) if (r["kafka_partition"], r["kafka_offset"]) in staged),
                       key=lambda r: (r["kafka_partition"], r["kafka_offset"]))
         envelopes = [envelope(r["record_value"]) for r in rows]
@@ -252,8 +255,12 @@ class Lake:
         for r, e, kept in zip(rows, envelopes, duck_keep(keep, envelopes)):
             sid = decode(r["record_value"])[0]
             problem = ", and ".join(K.problems(WRITERS[sid], ENVELOPE_COLUMNS)) or None if e is not None else None
-            if e is None or not kept or problem:
-                bad.append((r["kafka_partition"], r["kafka_offset"], sid, sid in WRITERS, e is not None, problem))
+            row = staged[(r["kafka_partition"], r["kafka_offset"])]
+            want = {n: e.get(n) if K.compatible(WRITERS[sid].get(n), t) else None
+                    for n, t in ENVELOPE_COLUMNS.items()} if e is not None else {}
+            differs = ", ".join(n for n in want if row[n] != want[n]) or None
+            if e is None or not kept or problem or differs:
+                bad.append((r["kafka_partition"], r["kafka_offset"], sid, sid in WRITERS, e is not None, problem, differs))
         return len(bad), bad[:K.LISTED]
 
     def append(self, table, records, props):  # audit_checks
@@ -774,6 +781,54 @@ def test_a_writer_schema_lacking_or_retyping_a_bronze_column_fails_parses_naming
         f"column symbol takes; {TOPIC}/0 offset 2: its writer schema 3 has field symbol as bigint, which bronze's "
         "column symbol (string) does not take"))
     assert checks["accounting"][0] and checks["keys_unique"][0]
+
+
+def test_a_frame_bronze_staged_null_that_decodes_now_fails_parses_never_a_silent_null(monkeypatch):
+    """The registry answered 404 for id 1 at the stage (restored since): every envelope column
+    staged null. The audit's own decode reads it, so only bronze's staged values can fail it."""
+    topic, lake = Topic(partitions=1), Lake()
+    topic.produce(0, frame("trade", symbol="A/B"), frame("trade", sid=4, symbol="C/D"))
+    with monkeypatch.context() as m:
+        m.delitem(WRITERS, 1)
+        K.load(ctx(1), topic, lake)
+    assert [(r["stream"], r["symbol"]) for r in lake.rows(BRONZE, "audit")] == [(None, None), ("trade", "C/D")]
+    code, checks = audited(lake, 1)
+    assert code == C.EXIT_FAILED and checks["parses"] == (
+        False, f"1 of 2 frames do not parse: {TOPIC}/0 offset 0: bronze staged stream, symbol other than it decodes to")
+
+
+def test_only_a_404_is_an_unresolvable_schema_and_any_other_registry_error_fails_the_task(monkeypatch):
+    catalog = import_lake_module("catalog")
+    raw = json.dumps({"type": "record", "name": K.ENVELOPE, "fields": []})
+
+    def urlopen(url, timeout):
+        sid = int(url.rsplit("/", 1)[1])
+        if sid == 1:
+            return io.BytesIO(json.dumps({"schema": raw}).encode())
+        raise urllib.error.HTTPError(url, 404 if sid == 7 else 503, "synthetic", {}, None)
+
+    monkeypatch.setattr(catalog.urllib.request, "urlopen", urlopen)
+    with pytest.raises(catalog.UnresolvableSchema):
+        catalog.fetch_schema(7, "http://registry")
+    with pytest.raises(urllib.error.HTTPError, match="503"):
+        catalog.fetch_schema(5, "http://registry")
+
+    class Frames:  # what envelopes reads of a DataFrame: its distinct schema ids
+        def __init__(self, ids):
+            self.ids = ids
+
+        def select(self, *_):
+            return self
+
+        where = distinct = select
+
+        def collect(self):
+            return [(i,) for i in self.ids]
+
+    lake = K.SparkLanding(None, "http://registry")
+    assert lake.envelopes(Frames([1, 7])) == {1: raw}  # 7 is no schema: its frames fail parses
+    with pytest.raises(urllib.error.HTTPError):  # 5 is unknown: the task fails before the stage writes
+        lake.envelopes(Frames([1, 5]))
 
 
 def test_a_field_reads_as_its_column_when_equal_or_an_avro_promotion():
