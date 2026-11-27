@@ -107,8 +107,8 @@ schema:
 roles:
   - role: full_reader
     access: read
-  # delayed_reader (plan 004) is offered once access.inherit-role admits it over an input that
-  # offers full_reader only (the security master); its policy below is kept, commented, until then.
+  - role: delayed_reader
+    access: read
 customProperties:
   - property: layer
     value: silver
@@ -118,11 +118,11 @@ customProperties:
     value: rebuild  # rebuilt from bronze
   - property: partitioning
     value: [day(trade_ts)]
-  # - property: policies
-  #   value:
-  #     delayed_reader:
-  #       # On trade_ts, the market time the delay is about, which the products derived from this
-  #       # one (canonical-trades, candles) carry and delay on (access.inherit-delay); a venue clock
-  #       # ahead of the platform's only delays a row longer.
-  #       delay: {column: trade_ts, minutes: 20}
-  #       mask: [conn_id, conn_msg_seq]
+  - property: policies
+    value:
+      delayed_reader:
+        # On trade_ts, the market time the delay is about, which the products derived from this
+        # one (canonical-trades, candles) carry and delay on (access.inherit-delay); a venue clock
+        # ahead of the platform's only delays a row longer.
+        delay: {column: trade_ts, minutes: 20}
+        mask: [conn_id, conn_msg_seq]

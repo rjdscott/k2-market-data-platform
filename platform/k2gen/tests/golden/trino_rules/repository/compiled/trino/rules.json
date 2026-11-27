@@ -91,7 +91,7 @@
       "allow": "read-only"
     },
     {
-      "group": "kraken_instruments__full_reader|kraken_trades__full_reader",
+      "group": "kraken_instruments__full_reader|kraken_trades__delayed_reader|kraken_trades__full_reader",
       "catalog": "market_capture",
       "allow": "read-only"
     },
@@ -101,7 +101,7 @@
       "allow": "read-only"
     },
     {
-      "group": "access_canary__delayed_reader|access_canary__full_reader|access_canary__public_reader|calendars__full_reader|ecb_fx_rates__full_reader|kraken_instruments__full_reader|kraken_trades__full_reader|security_master__full_reader",
+      "group": "access_canary__delayed_reader|access_canary__full_reader|access_canary__public_reader|calendars__full_reader|ecb_fx_rates__full_reader|kraken_instruments__full_reader|kraken_trades__delayed_reader|kraken_trades__full_reader|security_master__full_reader",
       "catalog": "system",
       "allow": "read-only"
     },
@@ -264,7 +264,7 @@
       ]
     },
     {
-      "group": "access_canary__delayed_reader|access_canary__full_reader|access_canary__public_reader|calendars__full_reader|ecb_fx_rates__full_reader|kraken_instruments__full_reader|kraken_trades__full_reader|security_master__full_reader",
+      "group": "access_canary__delayed_reader|access_canary__full_reader|access_canary__public_reader|calendars__full_reader|ecb_fx_rates__full_reader|kraken_instruments__full_reader|kraken_trades__delayed_reader|kraken_trades__full_reader|security_master__full_reader",
       "catalog": "system",
       "schema": "jdbc",
       "table": "attributes|catalogs|columns|procedure_columns|procedures|pseudo_columns|schemas|super_tables|super_types|table_types|tables|types|udts",
@@ -273,7 +273,7 @@
       ]
     },
     {
-      "group": "access_canary__delayed_reader|access_canary__full_reader|access_canary__public_reader|calendars__full_reader|ecb_fx_rates__full_reader|kraken_instruments__full_reader|kraken_trades__full_reader|security_master__full_reader",
+      "group": "access_canary__delayed_reader|access_canary__full_reader|access_canary__public_reader|calendars__full_reader|ecb_fx_rates__full_reader|kraken_instruments__full_reader|kraken_trades__delayed_reader|kraken_trades__full_reader|security_master__full_reader",
       "catalog": "system",
       "schema": "metadata",
       "table": "analyze_properties|catalogs|column_properties|materialized_view_properties|materialized_views|schema_properties|table_comments|table_properties",
@@ -961,6 +961,26 @@
       "table": "silver_listing",
       "privileges": [
         "SELECT"
+      ]
+    },
+    {
+      "group": "kraken_trades__delayed_reader",
+      "catalog": "market_capture",
+      "schema": "kraken_trades",
+      "table": "silver_trade",
+      "privileges": [
+        "SELECT"
+      ],
+      "filter": "(\"trade_ts\" < current_timestamp - INTERVAL '20' MINUTE)",
+      "columns": [
+        {
+          "name": "conn_id",
+          "mask": "CAST(NULL AS varchar)"
+        },
+        {
+          "name": "conn_msg_seq",
+          "mask": "CAST(NULL AS bigint)"
+        }
       ]
     },
     {

@@ -239,6 +239,20 @@
         {
           "role": "full_reader",
           "inWords": "every row and column"
+        },
+        {
+          "role": "delayed_reader",
+          "policies": {
+            "delay": {
+              "column": "trade_ts",
+              "minutes": 20
+            },
+            "mask": [
+              "conn_id",
+              "conn_msg_seq"
+            ]
+          },
+          "inWords": "only rows whose trade_ts is at least 20 minutes old; conn_id and conn_msg_seq read as null"
         }
       ],
       "readers": [],
