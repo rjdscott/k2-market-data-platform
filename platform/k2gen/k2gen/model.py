@@ -1061,7 +1061,17 @@ class DriftExpectation:
     expect: Literal["clean"]
 
 
-Expectation = TableExpectation | DeniedExpectation | StatementExpectation | ProbeExpectation | DriftExpectation
+@dataclass(frozen=True)
+class StorageKeyExpectation:
+    """Added 2026-11-27 (phase 002, W0-3): one S3 operation with an engine's own key, never the key itself."""
+
+    engine: Literal["spark", "trino", "maintenance", "backup", "tools"]  # whose K2_<ENGINE>_S3_* pair
+    target: str  # <bucket> or <bucket>/<prefix>
+    operation: Literal["read", "write"]
+    expect: Literal["refused", "allowed"]
+
+
+Expectation = TableExpectation | DeniedExpectation | StatementExpectation | ProbeExpectation | DriftExpectation | StorageKeyExpectation
 
 
 @dataclass(frozen=True)
@@ -1370,10 +1380,13 @@ def _product(pdir: str, parsed: Mapping[str, Any], documents: Mapping[str, bytes
 
 
 def _expectation(row: Mapping[str, Any]) -> Expectation:
-    """One row, told apart by its keys as the schema tells the five shapes apart."""
+    """One row, told apart by its keys as the schema tells the six shapes apart."""
     via = tuple(row.get("via", ("sql",)))  # REST joins in phase 003 (expectations.schema.json)
     if "probe" in row:
         return ProbeExpectation(row["probe"]["from"], row["probe"]["target"], row["expect"])
+    if "storageKey" in row:
+        k = row["storageKey"]
+        return StorageKeyExpectation(k["engine"], k["target"], k["operation"], row["expect"])
     if "drift" in row:
         return DriftExpectation(row["drift"], row["expect"])
     if "sql" in row:
