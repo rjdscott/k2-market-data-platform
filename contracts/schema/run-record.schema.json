@@ -21,7 +21,7 @@
       }
     },
     "productState": {
-      "description": "A derived product's completeness, computed from its newest run's inputs, not stored in a column: complete (every input read at its audited snapshot, none late), partial: <comma-separated contract ids of the inputs missing or late> (the run built from the rest), or degraded (an input is paused, deprecated or retired and the run built from its last audited snapshot).",
+      "description": "A derived product's completeness, computed from its newest run's inputs, not stored in a column: complete (every input read at its audited snapshot, none late), partial: <comma-separated contract ids of the inputs missing or late> (the run built from the rest), or degraded (the newest build published while a warn-severity test failed, such as unresolved rows = 0). An input that is paused or was never audited is missing, so it makes the product partial; degraded wins when both hold.",
       "type": "string",
       "pattern": "^(complete|degraded|partial: [a-z][a-z0-9-]*\\.[a-z][a-z0-9-]*\\.[a-z][a-z0-9_]*(, [a-z][a-z0-9-]*\\.[a-z][a-z0-9-]*\\.[a-z][a-z0-9_]*)*)$"
     }
@@ -45,9 +45,9 @@
         "properties": {
           "contractId": {"description": "The input's contract id.", "type": "string", "pattern": "^[a-z][a-z0-9]*(-[a-z0-9]+)*\\.[a-z][a-z0-9]*(-[a-z0-9]+)*\\.[a-z][a-z0-9_]*$"},
           "relation": {"description": "What the run read: k2gen.model.input_relation of the input.", "type": "string", "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"},
-          "snapshot": {"description": "The audited snapshot id read; null when the input was never audited.", "type": ["integer", "null"]},
+          "snapshot": {"description": "The audited snapshot id read; null when the run read none: the input was never audited, or was absent (its port says whenAbsent empty or emptyIntoTable and it was paused), read as zero rows.", "type": ["integer", "null"]},
           "state": {"description": "The input product's lifecycle state in the run's release; how late it was is lagMinutes.", "enum": ["active", "paused", "deprecated", "retired"]},
-          "lagMinutes": {"description": "How far the input was behind, in minutes: the run's start time minus the input's audited commit time (the committed_at of its audited snapshot), never below 0; null when the input was never audited.", "type": ["number", "null"], "minimum": 0}
+          "lagMinutes": {"description": "How far the input was behind, in minutes: the run's start time minus the input's audited commit time (the committed_at of its audited snapshot), never below 0; null when the run read no snapshot of it (see snapshot).", "type": ["number", "null"], "minimum": 0}
         }
       }
     },

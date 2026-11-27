@@ -156,7 +156,14 @@
               "version": {"description": "The input contract's version this product was written against.", "$ref": "#/$defs/semver"},
               "contractId": {"description": "The input table's contract id.", "$ref": "#/$defs/contractId"},
               "customProperties": {"description": "K2's input port properties.", "type": "array", "items": {"$ref": "#/$defs/inputPortProperty"}}
-            }
+            },
+            "allOf": [
+              {
+                "description": "An input read empty when absent is optional: a required one with no audited snapshot stops the build first (wrapper exit 4).",
+                "if": {"required": ["customProperties"], "properties": {"customProperties": {"contains": {"required": ["property", "value"], "properties": {"property": {"const": "whenAbsent"}, "value": {"not": {"const": "fail"}}}}}}},
+                "then": {"properties": {"customProperties": {"contains": {"required": ["property", "value"], "properties": {"property": {"const": "required"}, "value": {"const": false}}}}}}
+              }
+            ]
           }
         },
         "outputPorts": {
@@ -286,10 +293,11 @@
       "description": "One K2 custom property of an input port.",
       "type": "object",
       "required": ["property", "value"],
-      "properties": {"property": {"description": "The property's name.", "enum": ["required", "maxLagMinutes"]}},
+      "properties": {"property": {"description": "The property's name.", "enum": ["required", "maxLagMinutes", "whenAbsent"]}},
       "allOf": [
-        {"if": {"properties": {"property": {"const": "required"}}}, "then": {"properties": {"value": {"description": "A required input that was never audited stops the build (wrapper exit 4); an optional one makes the product partial.", "type": "boolean"}}}},
-        {"if": {"properties": {"property": {"const": "maxLagMinutes"}}}, "then": {"properties": {"value": {"description": "How far behind the input may be before this product is shown partial; null for no bound.", "type": ["integer", "null"], "minimum": 0}}}}
+        {"if": {"properties": {"property": {"const": "required"}}}, "then": {"properties": {"value": {"description": "A required input that was never audited stops the build (wrapper exit 4); an optional one is read as its whenAbsent says.", "type": "boolean"}}}},
+        {"if": {"properties": {"property": {"const": "maxLagMinutes"}}}, "then": {"properties": {"value": {"description": "How far behind the input may be before this product is shown partial; null for no bound.", "type": ["integer", "null"], "minimum": 0}}}},
+        {"if": {"properties": {"property": {"const": "whenAbsent"}}}, "then": {"properties": {"value": {"description": "What the build reads for an optional input that is paused or was never audited. fail (the default): no snapshot fails the build at compile, and a paused input with one is read at it. empty: k2_input renders zero rows of the input's contracted columns, and the run records it with a null snapshot, so the product is partial. emptyIntoTable: as empty, also accepted when a model of this product is not incremental, which then rebuilds from zero rows and publishes empty; without it k2gen check refuses empty there (docs.empty-input-into-table).", "enum": ["fail", "empty", "emptyIntoTable"]}}}}
       ]
     },
     "outputPortProperty": {

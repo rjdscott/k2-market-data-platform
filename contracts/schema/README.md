@@ -68,7 +68,7 @@ serving copy, input requirement, build kind, access policy, backup mode, unit or
 | Property | Where | `$defs` |
 |---|---|---|
 | `connector`, `schedule`, `terms`, `lifecycleChange`, `examples`, `seeds` | product file `customProperties` | `productProperty` |
-| `required`, `maxLagMinutes` | product file `inputPorts[].customProperties` | `inputPortProperty` |
+| `required`, `maxLagMinutes`, `whenAbsent` (`empty` only with `required: false`) | product file `inputPorts[].customProperties` | `inputPortProperty` |
 | `serves` | product file `outputPorts[].customProperties` | `outputPortProperty` |
 | `layer`, `build`, `backup`, `retention`, `partitioning`, `sort`, `policies` | table contract `customProperties`; `layer`, `build` and `backup` required | `contractProperty` |
 | `unit`, `time` | a column's `customProperties` | `columnProperty` |
