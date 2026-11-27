@@ -274,3 +274,57 @@ guarded view never compared equal (`catalog_drift.tokens` now drops exactly the 
 cannot change a meaning); `identity.sh` read only `--etc-dir <path>`, not A1's `--etc-dir=<path>`; the
 access suite did not read people's passwords where the throwaway lake now files them (handled in
 deploy's own call path, its owner fixing the reader).
+
+## Outcome (2026-11-27, phases 002 and 003: the run path behind the pointers)
+
+The decision stands. With product pipelines, run code and `k2-api` behind the pointers, the sequence in
+`scripts/deploy.py` changed in seven ways, each held by a test in `tests/test_deploy.py` against a fake
+stack and the rehearsal (`make deploy-rehearsal`; `FAST=1` is the one `make spine-e2e` runs):
+
+1. **A release carries the run code.** `platform/<repository path>` holds the DAG folder
+   (`docker/airflow/dags/`), the Spark scripts with `lake-init`'s script and MinIO policies
+   (`docker/lake/`), the alert rules, the parsers (`domains/`), the run-records client and the catalog
+   site generator (`model.PLATFORM_CODE`). Airflow reads its DAG folder, Prometheus its rules, and
+   `k2-api` everything through their pointers; a DAG run pins its release once, at `resolve`, so a deploy
+   mid-run leaves the run on its release. Prometheus is sent `SIGHUP` at the swap.
+2. **The drain is real.** Consequences called it a SKIP until DAGs existed. When Trino restarts or a DAG's
+   task list or code changes (`drain_need`), the DAGs affected are paused, their names written to
+   `<releases root>/deploy-paused.json` first, and their running tasks waited for, polled every 10 s up to
+   300 s (`DRAIN_WAIT_S`, half of the 10-minute deploy in the revisit triggers). Still running then
+   refuses the deploy, exit 2, and unpauses them, unless `ALLOW_RUNNING=1`, recorded as the step
+   `allow-running`. No scheduler, or no DAG, is recorded and the deploy goes on. Deploy unpauses exactly
+   what it paused once one release runs again; on exit 3 they stay paused until a rerun or `make
+   rollback` reaches done. `make rollback` does not drain: it is the way out of a bad release, and
+   waiting on that release's runs would hold it there.
+3. **`lake-init` runs the release's own script.** Its compose entrypoint is
+   `/k2/releases/${K2_LAKE_INIT_RELEASE:-pointers/trino}/platform/docker/lake/init-lake.sh`, and deploy
+   sets `K2_LAKE_INIT_RELEASE` and `K2_STORAGE_PLAN` to the target, so the storage policies applied are
+   the tag's, not the checkout's. A target that carries no such script (a release before this phase)
+   skips `lake-init` with a visible line: its warehouses exist and it never had scoped users.
+4. **`remove-<service>`.** A running service that the target declares only behind a profile is stopped
+   and removed after the swap, one record per service. This is what a rollback to a release before phase
+   003 needs, where `k2-api` was a profiled stub: without it `k2-api` kept running and verify failed on its
+   image, exit 3.
+5. **Networks are created at recreate.** Compose makes a network only for a service it starts, and
+   `k2-egress` has no compose-started member (Airflow starts `fetch` with `docker run`), so deploy creates
+   every network the release declares that is missing, with compose's own labels so a later `up` adopts it.
+6. **Preflight names every missing secret.** Every secret file the target's services mount, the build
+   principals' and publishers' password files, and those the deploy's own SQL logs in with are checked
+   before anything changes; each missing one is named with the `make` command that writes it. Before
+   this, three service password files could be absent and the deploy failed after the warehouses had
+   already changed.
+7. **`site`, after done.** The release's catalog site (`k2site.py`, in `tools` as `svc.catalog`) and dbt
+   docs (`k2-dbt docs`, which opens no connection) are written to the `k2-site` volume that `k2-api`
+   serves. A failure is recorded as step `site` and said; it never fails or rolls back the deploy. It runs
+   after a rollback too, so the site describes what is live; `make site` reruns it and `make site-install`
+   schedules it daily.
+
+Verify also asks `k2-api` which release it serves (`GET /v1/release`), and the live access suite runs in
+`tools` with each engine's storage key passed by name for that run
+([ADR-054](ADR-054-a-storage-key-per-engine-with-catalog-signing-off.md)). A ddl failure on a rerun whose
+earlier attempt went past the one-shots leaves the paused DAGs paused, since the pointers may already
+name the target.
+
+**Not yet verified:** a rollback of the live stack from this phase's release to `v3.0.0-alpha.3.2`
+(tested against a fake stack only); a release that changes only a MinIO policy reaches MinIO only when
+`lake-init` next runs, and the plan runs it only when its compose definition or image changes.
