@@ -1,0 +1,21 @@
+{
+  "tag": "v3.0.0-alpha.3-rc.1",
+  "products": [
+    {
+      "id": "ops-insight.daily-load",
+      "name": "daily-load",
+      "domain": "ops-insight",
+      "status": "active",
+      "owner": "insight-team",
+      "purpose": "Synthetic readings per station per day, from the sensor domain's tested readings."
+    },
+    {
+      "id": "sensor-net.station-readings",
+      "name": "station-readings",
+      "domain": "sensor-net",
+      "status": "active",
+      "owner": "sensor-team",
+      "purpose": "Synthetic station readings, one typed row per reading, landed as the made-up feed sent them."
+    }
+  ]
+}
