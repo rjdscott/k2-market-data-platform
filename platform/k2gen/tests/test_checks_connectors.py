@@ -73,7 +73,13 @@ def _swap_key(props: list) -> None:
 
 
 CASES = {
-    "kafka bronze with a decoded column": ("connectors.kafka-bronze-shape", lambda: edited(
+    "kafka bronze with no envelope column": ("connectors.kafka-bronze-shape", lambda: edited(
+        f"{FEED}/bronze_frames.odcs.yaml", _column(lambda p: [p.pop(4) for _ in range(2)]))),
+    "kafka bronze still holding the frame's bytes": ("connectors.kafka-bronze-shape", lambda: edited(
+        f"{FEED}/bronze_frames.odcs.yaml", _column(lambda p: p.insert(4, {"name": "record_value", "physicalType": "varbinary", "description": "The bytes."})))),
+    "kafka bronze with a required envelope column": ("connectors.kafka-bronze-shape", lambda: edited(
+        f"{FEED}/bronze_frames.odcs.yaml", _column(lambda p: p[4].update(required=True)))),
+    "kafka bronze with a decoded column after its lineage": ("connectors.kafka-bronze-shape", lambda: edited(
         f"{FEED}/bronze_frames.odcs.yaml", _column(lambda p: p.append({"name": "station_id", "physicalType": "varchar", "description": "Decoded."})))),
     "kafka bronze without a lineage column": ("connectors.kafka-bronze-shape", lambda: edited(
         f"{FEED}/bronze_frames.odcs.yaml", _column(lambda p: p.pop()))),

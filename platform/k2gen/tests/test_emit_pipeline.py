@@ -178,11 +178,16 @@ def test_a_kafka_product_compiles_to_what_kafka_py_reads() -> None:
                                 "startFrom": "earliest-retained", "maxOffsetsPerPartition": 1000}
     assert doc["landing"] == {"table": "lake.station_feed.landing"}
     assert doc["bronze"] == [{"table": "lake.station_feed.bronze_frames", "key": ["kafka_partition", "kafka_offset"],
-                              "values": ["kafka_timestamp", "record_key", "record_value"], "decimal": [], "patterns": {},
+                              "values": ["kafka_timestamp", "schema_id", "stream", "payload"], "decimal": [], "patterns": {},
                               "audits": [], "branch": model.AUDIT_BRANCH, "checks": "lake.station_feed.audit_checks"}]
     landing = [c.name for c in model.PLATFORM_TABLES[model.KAFKA_LANDING].columns]
-    assert [*doc["bronze"][0]["key"], *doc["bronze"][0]["values"], *pipeline.KAFKA_LINEAGE] == landing
+    assert [*doc["bronze"][0]["key"], doc["bronze"][0]["values"][0]] == landing[:3] and pipeline.KAFKA_LINEAGE == tuple(landing[5:])
     assert model.schema_errors("pipeline", doc) == []
+    for values in (["kafka_timestamp", "schema_id"], ["kafka_timestamp", "schema_id", "record_value"],
+                   ["kafka_timestamp", "record_key", "record_value"], ["schema_id", "kafka_timestamp", "stream"],
+                   ["kafka_timestamp", "schema_id", "stream", "batch_id"]):  # no envelope column, the bytes, the old shape, out of order, lineage
+        doc["bronze"][0]["values"] = values
+        assert [e for e in model.schema_errors("pipeline", doc) if "$.bronze[0].values" in e], values
     dags = {d["product"]: d["tasks"] for d in json.loads(emitted[model.DAGS])["dags"]}
     assert dags[FEED_ID] == ["resolve", "load", "audit", "publish", "record", "maintain"]
 

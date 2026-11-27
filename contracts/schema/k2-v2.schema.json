@@ -336,7 +336,7 @@
       ]
     },
     "kafkaConnector": {
-      "description": "Reads the product's own topic at its own position; lands every record of the planned range byte for byte, control frames included, in lake.<fence>.landing, end offsets in the same commit (ADR-022); bronze is staged from the landing by offset, the filter applied there (I-1). Built in phase 004.",
+      "description": "Reads the product's own topic at its own position; lands every record of the planned range byte for byte, control frames included, in lake.<fence>.landing, end offsets in the same commit (ADR-022); bronze is staged from the landing by offset, the filter applied there, each frame's envelope decoded by its writer schema id into bronze's envelope columns by field name, never its bytes (I-1, 2026-11-28). Built in phase 004.",
       "type": "object",
       "additionalProperties": false,
       "required": ["kind", "brokers", "registry", "topic", "envelope", "payload", "startFrom", "maxOffsetsPerPartition"],

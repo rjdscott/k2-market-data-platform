@@ -303,12 +303,42 @@
         "type": "timestamp(6) with time zone"
       },
       {
-        "name": "record_key",
+        "name": "schema_id",
         "required": false,
-        "type": "varbinary"
+        "type": "integer"
       },
       {
-        "name": "record_value",
+        "name": "exchange",
+        "required": false,
+        "type": "varchar"
+      },
+      {
+        "name": "stream",
+        "required": false,
+        "type": "varchar"
+      },
+      {
+        "name": "symbol",
+        "required": false,
+        "type": "varchar"
+      },
+      {
+        "name": "recv_ts_ns",
+        "required": false,
+        "type": "bigint"
+      },
+      {
+        "name": "conn_id",
+        "required": false,
+        "type": "varchar"
+      },
+      {
+        "name": "conn_msg_seq",
+        "required": false,
+        "type": "bigint"
+      },
+      {
+        "name": "payload",
         "required": false,
         "type": "varbinary"
       },

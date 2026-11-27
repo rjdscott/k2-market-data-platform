@@ -36,7 +36,7 @@
       ]
     },
     "bronze": {
-      "description": "The bronze tables the connector publishes by Spark write-audit-publish. A kafka product has exactly one, staged from the landing by offset: the landing's columns by name, key [kafka_partition, kafka_offset], each bronze commit's summary holding the landing offsets staged through, the landing snapshot read and the skipped counts, so staged plus skipped equals the landing range read (I-1).",
+      "description": "The bronze tables the connector publishes by Spark write-audit-publish. A kafka product has exactly one, staged from the landing by offset: key [kafka_partition, kafka_offset], then kafka_timestamp, schema_id (the frame's Confluent writer schema id) and the decoded envelope's columns by field name, then the landing batch's lineage (record_key and record_value stay in the landing, which bronze is rebuilt from), each bronze commit's summary holding the landing offsets staged through, the landing snapshot read and the skipped counts, so staged plus skipped equals the landing range read (I-1).",
       "type": "array",
       "items": {
         "type": "object",
@@ -96,7 +96,7 @@
   "dependentRequired": {"connector": ["landing"], "landing": ["connector"]},
   "allOf": [
     {
-      "description": "A kafka product (I-1): the landing is the table, and its one bronze table holds the landing's columns as kafka.py stages them, keyed by offset, the lineage columns (batch_id, landed_at, run_id, release_id) neither key nor values. Any other connector lands objects and their log.",
+      "description": "A kafka product (I-1, 2026-11-28): the landing is the table, and its one bronze table holds what kafka.py stages, keyed by offset: its values kafka_timestamp, schema_id, then at least one column of the decoded envelope (Trino decodes no Avro, so bronze carries it decoded), never record_key or record_value; the lineage columns (batch_id, landed_at, run_id, release_id) neither key nor values. Any other connector lands objects and their log.",
       "if": {"required": ["connector"], "properties": {"connector": {"required": ["kind"], "properties": {"kind": {"const": "kafka"}}}}},
       "then": {
         "required": ["bronze"],
@@ -106,7 +106,8 @@
             "required": ["decimal", "patterns"],
             "properties": {
               "key": {"const": ["kafka_partition", "kafka_offset"]},
-              "values": {"const": ["kafka_timestamp", "record_key", "record_value"]},
+              "values": {"minItems": 3, "prefixItems": [{"const": "kafka_timestamp"}, {"const": "schema_id"}],
+                         "not": {"contains": {"enum": ["record_key", "record_value", "batch_id", "landed_at", "run_id", "release_id"]}}},
               "decimal": {"const": []},
               "patterns": {"const": {}}
             }
