@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# W0-4a and W0-4b (phases 004 and 005): the Kafka connector's load, audit and publish on ONE
+# W0-4a, W0-4b and W0-4c (phases 004 and 005): the Kafka connector's load, audit and publish on ONE
 # throwaway lake with a Redpanda (prefix kafka-path, K2_THROWAWAY_REDPANDA=1), each task the
 # release's own docker/lake/connector.py in the shape the DAG factory gives it (run-path-lib.sh's
 # WRAPPER, by docker exec into one long-lived Spark container), on the synthetic fixture product
@@ -9,7 +9,7 @@
 # from services/capture-rust/tests/fixtures/synthetic-kraken-20s.jsonl (1185 frames, 3 trades),
 # and its 20 heartbeat lines alone for a batch of control frames.
 #
-#   bash scripts/verify/kafka-path.sh <release dir> [a|b]     # KEEP=1 keeps the scratch directory
+#   bash scripts/verify/kafka-path.sh <release dir> [a|b|c]   # KEEP=1 keeps the scratch directory
 #
 # <release dir> is the one run-path.sh takes (rp_start's checks); the lake runs on the fixture's
 # release. A kill is the driver SIGKILLed inside the task by scripts/lib/kafka_path_probe.py's
@@ -32,6 +32,9 @@
 #     partition with no new records read at start = end with failOnDataLoss true
 #   9 a corrupt Avro body (scripts/lib/kafka_path_probe.py corrupt) fails parses naming its
 #     partition and offset; audit and publish exit 3, main not moved
+#  10 bronze carries the decoded envelope (I-1, 2026-11-28): its columns the contract's, every row
+#     stream = trade, schema_id the registered id, payload the seeded line's bytes byte for byte,
+#     symbol as the adapter's rule has it; the corrupt frame staged with every envelope column null
 # group b
 #   1 a start below the log start (records deleted by `rpk topic trim-prefix` past the committed end
 #     offsets, on every partition that has them) fails loudly naming each partition; nothing lands
@@ -39,6 +42,20 @@
 #     and returns it as offsetGaps (what the run's offset_gap record is written from)
 #   3 the audit's accounting passes with the gap excluded, and publish moves main
 #   4 after one further clean run the newest landing commit still carries the gap (cumulative)
+#   5 bronze main still carries the decoded envelope as seeded (a's claim 10's rule)
+# group c (W0-4c), each maintain pass maintain.py exactly as the factory's task runs it; the
+# thresholds met by seeding small files (COMPACT_MIN_FILES has no override): `kafka_path_probe.py
+# cycles`, 50 runs of three trade frames in one Spark application, kafka.py's own tasks
+#   1 compaction is skipped, its reason in the result, while audit holds an unpublished batch; that
+#     batch then publishes (it could not, had main moved under it)
+#   2 maintain.py --compact: one replace snapshot on the landing and on bronze, k2.job maintenance,
+#     no k2.kafka-offsets; rows unchanged, fewer live files
+#   3 the default pass: continuity passes; expiry and remove_orphan_files (24-hour floor, over a
+#     listing made with the maintenance key) run, and no live file is deleted
+#   4 the same expiry step at now + 30 days (`kafka_path_probe.py expire`), all past retention:
+#     the newest connector snapshot of each table and the chain to it survive, older ones go
+#   5 the next run resumes from that snapshot's offsets: no re-land, no restage, no hole
+#   6 the continuity check passes after it
 # Spark task wall times go to <rp>/times and are printed as INFO lines.
 #
 # One container job (run-path-lib.sh's guards); a killed run leaves the lake to
@@ -47,7 +64,7 @@ set -uo pipefail
 # shellcheck source=scripts/lib/run-path-lib.sh
 . "$(dirname "$0")/../lib/run-path-lib.sh"
 GROUP=${2:-a}
-case $GROUP in a) N=9 ;; b) N=4 ;; *) echo "kafka-path: no group $GROUP (a or b)" >&2; exit 2 ;; esac
+case $GROUP in a) N=10 ;; b) N=5 ;; c) N=6 ;; *) echo "kafka-path: no group $GROUP (a, b or c)" >&2; exit 2 ;; esac
 rp_start kafka-path "${1:-}" "$N"
 FX=platform/k2gen/tests/fixtures/kafka-fixture
 KF=market-capture.kafka-fixture DAG=kafka_fixture
@@ -98,6 +115,37 @@ claims() {
 }
 timings() { while read -r label code secs; do echo "INFO time $label exit $code ${secs} s"; done < "$RP/times" | tee -a "$W/claims"; }
 
+mtask() {  # mtask <run> <maintain|compact>: factory.SparkTask's maintain argv for the fixture
+  local run=$1 t=$2 t0 flag=; shift 2
+  [ "$t" = compact ] && flag=--compact
+  t0=$(date +%s.%N)
+  docker exec "$SPARK" sh -c "$WRAPPER" "/tmp/k2-airflow-$run.$t.pid" "/k2/releases/$ID/platform/docker/lake/maintain.py" \
+    $flag --release "$ID" --product "$KF" --run-id "$DAG/$run" > "$RP/$run.$t.out" 2> "$RP/$run.$t.err"
+  echo $? > "$RP/$run.$t.rc"
+  echo "$run.$t $(cat "$RP/$run.$t.rc") $(awk "BEGIN {printf \"%.1f\", $(date +%s.%N) - $t0}")" >> "$RP/times"
+  echo "$P: $run.$t exit $(cat "$RP/$run.$t.rc")"
+}
+
+if [ "$GROUP" = c ]; then
+  seed "$FULL"; run c1
+  seed "$FULL"; run c2
+  t0=$(date +%s)
+  docker exec -i "$SPARK" python3 - cycles "/k2/releases/$ID" "$KF" "$DAG" 50 < "$PROBE" > "$RP/cycles.log" 2>&1 \
+    || echo "$P: the cycles failed: $(grep -v '^\s' "$RP/cycles.log" | tail -2)"
+  echo "cycles $? $(( $(date +%s) - t0 ))" >> "$RP/times"; tail -1 "$RP/cycles.log"
+  seed "$FULL"; ktask c3 load; ktask c3 audit; facts c3
+  mtask c3 compact; facts c3s
+  ktask c3 publish; facts c3p
+  mtask c4 compact; facts c4
+  mtask c5 maintain; facts c5
+  docker exec -i "$SPARK" python3 - expire "/k2/releases/$ID" "$KF" 30 < "$PROBE" > "$RP/c6.expire.out" 2> "$RP/c6.expire.err"
+  echo $? > "$RP/c6.expire.rc"; facts c6
+  seed "$FULL"; run c7; facts c7
+  mtask c8 maintain
+  timings; claims compact-skip compact maintain expire resume continuity
+  finish
+fi
+
 if [ "$GROUP" = b ]; then
   TOPIC=$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["connector"]["topic"])' \
     "$STATE/releases/$ID/compiled/products/$KF/pipeline.json")
@@ -118,7 +166,7 @@ PY2
   ktask b3 load; facts b3
   ktask b4 load --accept-data-loss; ktask b4 audit; ktask b4 publish; facts b4
   seed "$FULL"; run b5; facts b5
-  timings; claims below accepted gap-audit carried
+  timings; claims below accepted gap-audit carried envelope-b
   finish
 fi
 
@@ -134,5 +182,5 @@ docker exec -i "$SPARK" python3 - corrupt "/k2/releases/$ID" "$KF" < "$PROBE" > 
   || echo "$P: the corrupt frame was not produced: $(tail -2 "$RP/corrupt.log")"
 run k9; facts k9                                               # 9
 
-timings; claims land publish idle kill-after kill-before retry key empty corrupt
+timings; claims land publish idle kill-after kill-before retry key empty corrupt envelope
 finish
