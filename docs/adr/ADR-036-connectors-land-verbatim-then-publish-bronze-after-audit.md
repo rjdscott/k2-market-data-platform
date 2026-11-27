@@ -471,6 +471,14 @@ The `https-file` kind is built (`docker/fetch/fetch.py`, `docker/lake/connector.
   deletes a product's landed objects whose key's day is more than 14 days old, keeping any whose batch has
   no rows published on `main`, any not in `landing_files`, and any key that does not parse. It runs with the
   maintenance key, which may delete landings and write nothing ([ADR-054](ADR-054-a-storage-key-per-engine-with-catalog-signing-off.md)).
+- **A response that closes its connection ends the read.** On the live stack on 2026-11-27,
+  `currency_master`'s fetch exited 1 with `OSError: [Errno 9] Bad file descriptor`: on a connection the
+  server closes after a body with a `Content-Length`, the response closes the socket as it reads the last
+  byte, and the next turn of the read loop set a timeout on that closed socket. The loop now reads only
+  while the response is open, and a body that ends short of its `Content-Length` fails the task; the
+  fake socket of `tests/test_fetch.py` closes as a real one does and covers every response shape
+  (length with keep-alive and with close, HTTP/1.0, chunked, read to the close, empty, each after a
+  redirect that closes).
 
 **What a parser can still reach.** The allow-list guards the fetch's own download, not the parser, which
 runs in the same process with ordinary sockets: from `k2-egress` it can reach any internet host on any

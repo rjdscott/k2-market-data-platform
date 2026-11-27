@@ -10,7 +10,9 @@ How a row is written, and why the rows are never generated, is in
 [`tests/access/README.md`](../../tests/access/README.md). The rules themselves are
 [ADR-059](../adr/ADR-059-access-rules-compiled-default-deny-over-two-catalogs-per-domain.md).
 Not covered: deploying or rolling back a release (step S19's `make deploy`, `make release-verify`,
-`make rollback`), and the network fence probes (step S22's `scripts/verify/catalog-fence.sh`).
+`make rollback`), and the network fence probes (step S22's `scripts/verify/catalog-fence.sh`; what
+its structure line admits, the platform's own labelled one-shots included, is in
+[deploy-a-release.md](./deploy-a-release.md) section 3).
 
 **Run every command from the repo root with `set -a && . ./.env && set +a` loaded.**
 
@@ -19,22 +21,20 @@ Not covered: deploying or rolling back a release (step S19's `make deploy`, `mak
 > HTTPS, a generated password per run), started from a release compiled from this repository's
 > documents at commit `eed362d`. Since the first live deploy (2026-11-27, 00:28 to 00:31 UTC, release
 > `v3.0.0-alpha.3-rc.1-490b0533ff56`, [first-cutover-to-releases.md](./first-cutover-to-releases.md))
-> the live Trino answers HTTPS on 8443 with passwords and reads the release through its pointer, and
-> `make release-verify` exits 0 there, its live access suite a visible SKIP (the access canary is not
-> published until phase 002). `make access-verify LIVE=1` no longer exits 2 on the stack; the live
-> suite's rows beyond that SKIP have not run, so the sections below remain the throwaway lakes' outputs.
+> the live Trino answers HTTPS on 8443 with passwords and reads the release through its pointer.
 > Granting or revoking a role: [grant-and-revoke-access.md](./grant-and-revoke-access.md).
 >
-> **Phases 002 and 003 changed section 2.** `make access-verify LIVE=1` runs in a tools one-shot now,
-> the expectations gained storage-key rows (21, one per engine key and target) and rows held again
-> through k2-api (`via: [sql, rest]`), and the file has 112 rows at this commit. Section 2 is written from
-> `scripts/deploy.py` (`access_live`), `mk/access.mk` and `scripts/access_verify.py`; its live run is
-> not yet: first run after the deploy of this release.
+> **Phases 002 and 003 changed section 2, and it ran live on 2026-11-27.** `make access-verify LIVE=1`
+> runs in a tools one-shot now, the expectations gained storage-key rows (21, one per engine key and
+> target) and rows held again through k2-api (`via: [sql, rest]`), and the file has 112 rows at this
+> commit. After the deploy of `v3.0.0-alpha.4-rc.3-48ad71fba732` and the products' first runs,
+> `make release-verify` ran the live suite: 82 rows PASS, 0 FAIL, 30 SKIP (section 2). The other
+> sections remain the throwaway lakes' outputs.
 
 | # | Task | MTTR target | Measured |
 |---|------|-------------|----------|
 | 1 | Verify a release before it serves anyone | <2 min | 27 s, 63 of 63 rows PASS (2026-11-26, throwaway lake) |
-| 2 | Verify the running stack | <2 min | live, 2026-11-27: `make release-verify` exit 0 with the live suite a SKIP; the rows themselves not yet run live (phase 002 publishes the canary) |
+| 2 | Verify the running stack | <2 min | live, 2026-11-27, release rc.3: 82 PASS, 0 FAIL, 30 SKIP inside `make release-verify`, exit 0; the suite alone not timed |
 | 3 | A row fails | <10 min to a verdict | the negative control: one loosened rule, live after 0.1 s, failed exactly its role's row (2026-11-26) |
 | 4 | The drift check names a difference | <10 min to a verdict | 6 plants each named, each clean once undone (2026-11-26) |
 | 5 | The tested-data marker fails | <10 min to a verdict | a wider view, an aliased mask and a base turned view each failed it (2026-11-26) |
@@ -116,11 +116,21 @@ file fails its rows.
 **Recovery**
 
 ```bash
-make access-verify LIVE=1
-# before the first deploy (2026-11-26; the live stack has a release since 2026-11-27, so it no longer prints this):
-# access-verify: no release at /home/<you>/k2-releases/pointers/trino (deploy points pointers/trino at one)
-# make: *** [mk/access.mk:23: access-verify] Error 2
+make access-verify LIVE=1     # alone; make release-verify runs the same suite among its checks
 ```
+
+On the live stack, 2026-11-27, release `v3.0.0-alpha.4-rc.3-48ad71fba732`, inside `make release-verify`
+(exit 0), with the fence's line beside it:
+
+```text
+  access-verify LIVE=1 passed: {'PASS': 82, 'FAIL': 0, 'SKIP': 30}
+  catalog-fence: 10 PASS, 0 FAIL
+```
+
+While a product the drift check finds unpublished remains, the suite is a visible SKIP instead, as in the
+deploys of rc.2 and rc.3 before every product had run: `SKIP access-verify LIVE=1: not yet published, so no
+live row can read it: PENDING view governance.quality_results.test_results: its product has not published
+yet, ...; every row ran on a throwaway lake at release time (preflight); phase 002 publishes them`.
 
 The canary's readers (`p.canary-*`) are test principals: granted on the access canary and on
 no other product, so their passwords are the platform's. Give each its file once, as a service's
@@ -138,9 +148,20 @@ when it has a key already) runs it` (`scripts/access_verify.py`; the path is the
 `${K2_SECRETS}/api-keys/`). `TO_FILE=1` writes the key to that
 file, mode 600, and prints it nowhere, so the file is the only copy; a redirect of the printed key is
 refused, since stdout must be a terminal. The file is under `api-keys/`, never `api/`, which k2-api
-mounts ([create-or-rotate-a-principal.md](./create-or-rotate-a-principal.md)).
+mounts ([create-or-rotate-a-principal.md](./create-or-rotate-a-principal.md)). On the live stack it was
+made on 2026-11-27:
 
-**Measured**, the rows not yet run on the stack (live, `make release-verify` reports the suite as a SKIP, 2026-11-27). On a throwaway lake with `${K2_SECRETS}` laid out from
+```text
+principal-secret: p.analyst-a: sha256 in ~/k2-secrets/api/keys.json, key in ~/k2-secrets/api-keys/p.analyst-a.key (mode 600)
+```
+
+Today's REST rows still SKIP on live: their principal, `p.analyst-a`, is granted on a real product, so its
+password is its owner's (`scripts/access_verify.py`, `live_skip`); they ran on the throwaway lake at release
+time. The same day the operator held their denials by hand through k2-api with that key file: no key 401,
+`bronze_daily` with the key 403.
+
+**Measured**, live, 2026-11-27: 82 PASS, 0 FAIL, 30 SKIP, inside a `make release-verify` that exited 0;
+the suite alone not timed. On a throwaway lake with `${K2_SECRETS}` laid out from
 its passwords: exit 0, the planted-view row (51) and the drift row (63) skipped and nothing else.
 With one canary reader's file gone, exactly that reader's six rows failed (2026-11-26).
 
@@ -331,7 +352,7 @@ restored one answered after 5.0 to 5.1 s (n=5 each, Trino's refresh period 5 s, 
 
 ---
 
-**Last verified:** 2026-11-26 against `eed362d`, on throwaway lakes; on the live stack, 2026-11-27,
-only `make release-verify` (exit 0, the live access suite a SKIP). Section 2 as phases 002 and 003 left
-it (the tools one-shot, the storage-key and REST rows, the key files): not yet: first run after the deploy
-of this release.
+**Last verified:** section 2 on 2026-11-27, on the live stack, release `v3.0.0-alpha.4-rc.3-48ad71fba732`
+(the live suite inside `make release-verify`: 82 PASS, 0 FAIL, 30 SKIP; the key file made with
+`TO_FILE=1`). Sections 1 and 3 to 6 on 2026-11-26 against `eed362d`, on throwaway lakes. Not yet live: a
+failing row, the drift check's `LEFT` lines on this stack, and a REST row run rather than skipped.

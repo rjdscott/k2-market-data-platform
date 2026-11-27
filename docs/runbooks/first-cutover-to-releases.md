@@ -158,12 +158,14 @@ their `State.StartedAt`; Lakekeeper has no published port and is on the catalog'
 against the local CA and a statement without a password gets 401. Alertmanager was in the plan but
 compose found nothing to change in it, so it was not restarted.
 
-**Still not covered**: the live access canary. Until phase 002 publishes it, release-verify's live
-suite is a visible SKIP (`not yet published`). Its readers are test principals, granted on the canary
-and nothing else, so `make password PRINCIPAL=p.canary-<name> TO_FILE=1` files their passwords
-([verify-access-after-a-release.md](./verify-access-after-a-release.md) section 2). A fresh
-install of the release-shaped stack on an empty host is also not yet run
-([fresh install](./fresh-install.md)).
+**Not covered at the cutover**: the live access canary. Until phase 002 published it, release-verify's
+live suite was a visible SKIP (`not yet published`). Its readers are test principals, granted on the
+canary and nothing else, so `make password PRINCIPAL=p.canary-<name> TO_FILE=1` files their passwords
+([verify-access-after-a-release.md](./verify-access-after-a-release.md) section 2). Covered since
+2026-11-27: the three `p.canary-*` files were written that day, the `access_canary` DAG published the
+canary, and `make release-verify` after `v3.0.0-alpha.4-rc.3-48ad71fba732` printed
+`access-verify LIVE=1 passed: {'PASS': 82, 'FAIL': 0, 'SKIP': 30}`. A fresh install of the
+release-shaped stack on an empty host is still not yet run ([fresh install](./fresh-install.md)).
 
 ---
 
@@ -244,22 +246,46 @@ K2_SPARK_S3_ACCESS_KEY is missing a value: set K2_SPARK_S3_ACCESS_KEY in .env (m
 ```bash
 make engine-keys                 # names only; a second run writes nothing
 set -a && . ./.env && set +a     # deploy passes the storage-key names to the live suite from here
+for id in dbt_calendars pub_calendars dbt_currency_master pub_currency_master \
+  dbt_ecb_fx_rates pub_ecb_fx_rates dbt_quality_results pub_quality_results \
+  p.canary-full p.canary-delayed p.canary-scoped; do
+  make password PRINCIPAL=$id TO_FILE=1; done
+make api-key PRINCIPAL=p.analyst-a TO_FILE=1   # the reader the access suite's REST rows use
 make deploy RELEASE=<release id> PLAN=1
+make deploy RELEASE=<release id> ALLOW_STATEFUL=minio   # the first deploy that drops MinIO's ports
 ```
+
+On the live stack, 2026-11-27 08:30 UTC, `make engine-keys` on the live `.env`, then again:
 
 ```text
 engine-keys: wrote K2_BACKUP_S3_ACCESS_KEY
 ...
 engine-keys: wrote K2_RUN_GID
-engine-keys: 12 names written to <dir>/env (mode 600); the old file is <dir>/env.bak-20261127T064448474585Z
-engine-keys: nothing to write, every name in <dir>/env is set
+engine-keys: 12 names written to ~/<checkout>/.env (mode 600); the old file is ~/<checkout>/.env.bak-<UTC>
+...
+engine-keys: nothing to write, every name in ~/<checkout>/.env is set
 ```
 
-Those lines are from `python3 scripts/engine-keys.py --env-file <dir>/env` run twice on a copy of
-`.env.example` in a scratch directory, 2026-11-27, nothing started.
+The twelve `wrote` lines are the five engines' pairs, then `K2_RUN_UID` and `K2_RUN_GID`. Each
+`make password ... TO_FILE=1` above exited 0 and left its file at mode 600, and the API key's line was:
 
-**Measured**, not yet measured on a stack: the first deploy of a release of this phase runs lake-init with
-the scoped users.
+```text
+principal-secret: p.analyst-a: sha256 in ~/k2-secrets/api/keys.json, key in ~/k2-secrets/api-keys/p.analyst-a.key (mode 600)
+```
+
+A `PLAN=1` deploy run before those files existed was refused at preflight, before any change
+(`deploy: preflight FAILED after 1.7 s: secret files missing under ~/k2-secrets: api/keys.json (make api-key); principals/dbt_calendars.password (make password PRINCIPAL=dbt_calendars TO_FILE=1); ...`,
+then `deploy: exit 2: refused before any change`; [deploy-a-release.md](./deploy-a-release.md)
+section 5).
+
+**Measured**, on the live stack, 2026-11-27: the first deploy of a release of this phase,
+`v3.0.0-alpha.4-rc.1-7d00791fc1fe` at 08:33 UTC, ran lake-init with the scoped users
+(`one-shot lake-init exited 0 in 21.8 s`), then failed at its views-narrow step and rolled back
+([roll-back-a-release.md](./roll-back-a-release.md)). The next,
+`make deploy RELEASE=v3.0.0-alpha.4-rc.2-e2dcf759de67 ALLOW_STATEFUL=minio`, exited 0 in 166 s
+(`one-shot lake-init exited 0 in 7.3 s`, `minio recreated, healthy in 6.3 s`, its verify
+`catalog-fence: 10 PASS, 0 FAIL`). After it `127.0.0.1:9000` and `127.0.0.1:9001` were closed from
+the host.
 
 ---
 
@@ -269,8 +295,10 @@ the scoped users.
 
 ---
 
-**Last verified:** 2026-11-27 on the live stack (the cutover, section 1), release
-`v3.0.0-alpha.3-rc.1-490b0533ff56`; section 2, the rollback, on the rehearsal only
-(`make deploy-rehearsal CUTOVER=1`, 8 s), never needed live. Section 3: `make engine-keys` run on a
-scratch copy of `.env.example` and the compose refusal rendered, 2026-11-27; on a stack, not yet: first run
-after the deploy of this release.
+**Last verified:** 2026-11-27 on the live stack: section 1, the cutover, release
+`v3.0.0-alpha.3-rc.1-490b0533ff56`; section 3, `make engine-keys` (twice), the password files, the
+API key, the preflight refusal and the first deploys of phase 002 with `ALLOW_STATEFUL=minio`
+(releases `v3.0.0-alpha.4-rc.1-7d00791fc1fe` and `v3.0.0-alpha.4-rc.2-e2dcf759de67`), and MinIO's
+closed host ports. Section 2, the rollback to today's shape, on the rehearsal only
+(`make deploy-rehearsal CUTOVER=1`, 8 s), never needed live. Not yet: `ROTATE=<engine>` and
+`make lake-init RECREATE=...` after a rotation (section 3).
