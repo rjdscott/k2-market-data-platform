@@ -1,0 +1,22 @@
+# dbt unit tests: each runs one model's SQL on the rows written here instead of its real inputs,
+# and compares the result with the expected rows. They prove the logic, not the data.
+unit_tests:
+  - name: target_days_marks_holidays_weekends_and_open_days
+    model: calendars__target_days  # the dbt name, <fence>__<table> (k2gen.model.dbt_model)
+    description: >-
+      Two closing days at the end of 2025 give the span 25 to 31 December: a holiday (Thursday 25),
+      a second holiday (Friday 26), a weekend (27 and 28) and open days (29 to 31).
+    given:
+      - input: ref('calendars__target_closing_days')
+        rows:
+          - {closing_day: "2025-12-25", name: Christmas Day}
+          - {closing_day: "2025-12-26", name: 26 December}
+    expect:
+      rows:
+        - {calendar_date: "2025-12-25", is_target_day: false, closing_reason: Christmas Day}
+        - {calendar_date: "2025-12-26", is_target_day: false, closing_reason: 26 December}
+        - {calendar_date: "2025-12-27", is_target_day: false, closing_reason: Saturday}
+        - {calendar_date: "2025-12-28", is_target_day: false, closing_reason: Sunday}
+        - {calendar_date: "2025-12-29", is_target_day: true, closing_reason: null}
+        - {calendar_date: "2025-12-30", is_target_day: true, closing_reason: null}
+        - {calendar_date: "2025-12-31", is_target_day: true, closing_reason: null}

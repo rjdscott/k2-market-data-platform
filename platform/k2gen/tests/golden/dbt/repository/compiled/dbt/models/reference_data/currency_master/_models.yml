@@ -1,0 +1,45 @@
+# Compiled by k2gen (platform/k2gen/k2gen/emit/dbt.py) from the release's documents. Never edit it: change the documents.
+version: 2
+models:
+- name: currency_master__currency
+  description: One row per ISO 4217 alphabetic currency code that any landed list has held, with its numeric code, name, minor
+    units and fund flag.
+  config:
+    alias: currency
+    meta:
+      k2:
+        contract: reference-data.currency-master.currency
+        reader: reference_data.currency_master.currency
+  columns:
+  - name: code
+    description: The alphabetic code, three capital letters (EUR); unique.
+    data_type: varchar
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+    - unique
+  - name: numeric_code
+    description: The numeric code, three digits, leading zeros kept (008).
+    data_type: varchar
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  - name: name
+    description: The currency's name as the list writes it.
+    data_type: varchar
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  - name: minor_units
+    description: Digits after the decimal point (2 for EUR); null where the list says N.A.
+    data_type: integer
+  - name: is_fund
+    description: True when the list marks the entry a fund, not a circulating currency.
+    data_type: boolean
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null

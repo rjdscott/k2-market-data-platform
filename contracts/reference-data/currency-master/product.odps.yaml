@@ -1,0 +1,50 @@
+# The ISO 4217 currency list: fetched weekly as its maintenance agency publishes it ("list one",
+# XML), landed verbatim, parsed in the fetch container by domains/reference-data/parsers/iso4217.py,
+# published to bronze after its audit, and typed into one row per currency code by dbt.
+apiVersion: v1.1.0
+kind: DataProduct
+id: reference-data.currency-master
+name: currency-master
+version: 1.0.0
+status: active
+domain: reference-data
+type: sourceAligned
+description:
+  purpose: >-
+    The currencies of ISO 4217, one row per alphabetic code with its numeric code, name, minor
+    units and whether it is a fund, from the list SIX Group publishes as the standard's
+    maintenance agency. The reference other products check currency codes against.
+  limitations: >-
+    The publisher's terms of reuse are not yet recorded here: the owner confirms them before any
+    grant outside the owning team (k2gen check refuses such a grant while no terms are recorded).
+    A code stays in currency once any landed list has held it; the list carries no withdrawal date
+    the parser reads. A published code whose values change in a later list fails the bronze audit
+    (values_unchanged), which holds every later file until someone looks.
+  usage: >-
+    Read reference_data.currency_master.currency; join on code. numeric_code is a string, since
+    its leading zeros are part of it (008).
+team:
+  name: reference-data-team
+outputPorts:
+  - name: bronze_currencies
+    version: 1.0.0
+    contractId: reference-data.currency-master.bronze_currencies
+  - name: currency
+    version: 1.0.0
+    contractId: reference-data.currency-master.currency
+    inputContracts:  # a sibling, not an input port: the catalog's lineage edge bronze to currency
+      - id: reference-data.currency-master.bronze_currencies
+        version: 1.0.0
+customProperties:
+  - property: connector
+    value:
+      kind: https-file
+      url: "https://www.six-group.com/dam/download/financial-information/data-center/iso-currrency/lists/list-one.xml"
+      allowHosts: [www.six-group.com]
+      format: xml
+      parser: iso4217
+  - property: schedule
+    value:
+      # Mondays at 05:00 UTC: the list changes a few times a year, and an unchanged file adds
+      # nothing (fetch exits 10 on the same sha256). No timeout yet: set from measured runs.
+      cron: "0 5 * * 1"

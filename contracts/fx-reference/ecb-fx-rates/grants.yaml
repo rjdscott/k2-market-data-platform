@@ -1,0 +1,4 @@
+# Owner-only for now: no table offers a role, so only the owning team and the platform read it.
+# The first reader outside fx-reference-team (step W2-9) comes after the owner confirms the ECB's
+# terms and records them in the product file (ADR-055 part 5).
+grants: []

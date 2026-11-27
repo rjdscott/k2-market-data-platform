@@ -3,8 +3,13 @@
 fetch calls parse(bytes) -> list of dicts; any raise is a parse failure (exit 30, bytes kept).
 Rates stay the published strings: decimal precision is the model's job, never a float here.
 Standard library only; a parser cannot import a sibling module.
+
+The audits, rate_positive and no_future_date, are the bronze table's declared parser audits:
+fetch calls each on the parsed rows (`def <audit>(rows) -> list[str]`, one description per
+failing row, [] passes) and the connector's audit task records the result.
 """
 import datetime
+import decimal
 import re
 import xml.etree.ElementTree as ET
 
@@ -45,3 +50,22 @@ def parse(raw: bytes) -> list[dict]:
     if not rows:
         raise ValueError("no rows")
     return rows
+
+
+def today() -> datetime.date:
+    """The UTC date now; the tests replace it to hold the clock still."""
+    return datetime.datetime.now(datetime.timezone.utc).date()
+
+
+def rate_positive(rows: list[dict]) -> list[str]:
+    """A reference rate is units of a currency per euro, so above zero; zero or below is corrupt."""
+    return [f"{r['rate_date']} {r['currency']}: rate {r['rate']} is not above zero"
+            for r in rows if decimal.Decimal(r["rate"]) <= 0]
+
+
+def no_future_date(rows: list[dict]) -> list[str]:
+    """No fixing is dated after today in UTC. Today itself is allowed: the newest date of a file
+    fetched after the 16:00 CET publication is today, and CET is never behind UTC."""
+    now = today()
+    return [f"{r['rate_date']} {r['currency']}: dated after today ({now}, UTC)"
+            for r in rows if datetime.date.fromisoformat(r["rate_date"]) > now]

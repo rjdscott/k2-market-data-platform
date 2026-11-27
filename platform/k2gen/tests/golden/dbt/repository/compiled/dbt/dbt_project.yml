@@ -40,13 +40,28 @@ models:
     +on_schema_change: append_new_columns
     +contract:
       enforced: true
+    fx_reference:
+      ecb_fx_rates:
+        +database: fx_reference_build
+        +schema: ecb_fx_rates__base
     governance:
       access_canary:
         +database: governance_build
         +schema: access_canary__base
+    reference_data:
+      calendars:
+        +database: reference_data_build
+        +schema: calendars__base
+      currency_master:
+        +database: reference_data_build
+        +schema: currency_master__base
 seeds:
   k2:
     governance:
       access_canary:
         +database: governance_build
         +schema: access_canary__base
+    reference_data:
+      calendars:
+        +database: reference_data_build
+        +schema: calendars__base

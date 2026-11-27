@@ -13,6 +13,56 @@
         "record",
         "maintain"
       ]
+    },
+    {
+      "dagId": "calendars",
+      "pipeline": "compiled/products/reference-data.calendars/pipeline.json",
+      "product": "reference-data.calendars",
+      "schedule": "0 4 * * *",
+      "status": "active",
+      "tasks": [
+        "resolve",
+        "build",
+        "expire",
+        "record",
+        "maintain"
+      ]
+    },
+    {
+      "dagId": "currency_master",
+      "pipeline": "compiled/products/reference-data.currency-master/pipeline.json",
+      "product": "reference-data.currency-master",
+      "schedule": "0 5 * * 1",
+      "status": "active",
+      "tasks": [
+        "resolve",
+        "fetch",
+        "load",
+        "audit",
+        "publish",
+        "build",
+        "expire",
+        "record",
+        "maintain"
+      ]
+    },
+    {
+      "dagId": "ecb_fx_rates",
+      "pipeline": "compiled/products/fx-reference.ecb-fx-rates/pipeline.json",
+      "product": "fx-reference.ecb-fx-rates",
+      "schedule": "30 15 * * 1-5",
+      "status": "active",
+      "tasks": [
+        "resolve",
+        "fetch",
+        "load",
+        "audit",
+        "publish",
+        "build",
+        "expire",
+        "record",
+        "maintain"
+      ]
     }
   ]
 }

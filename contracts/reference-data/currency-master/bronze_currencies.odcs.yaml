@@ -1,0 +1,58 @@
+apiVersion: v3.2.0
+kind: DataContract
+id: reference-data.currency-master.bronze_currencies
+name: bronze_currencies
+version: 1.0.0
+domain: reference-data
+description:
+  purpose: >-
+    One row per alphabetic currency code of one landed ISO 4217 list, as the parser read it; a
+    code shared by several countries is one row. Each landed file adds its own rows.
+team:
+  name: reference-data-team
+schema:
+  - id: bronze_currencies
+    name: bronze_currencies
+    physicalName: currency_master.bronze_currencies
+    physicalType: table
+    properties:
+      - name: code
+        physicalType: varchar
+        logicalType: string
+        logicalTypeOptions:
+          pattern: "^[A-Z]{3}$"
+        required: true
+        primaryKey: true
+        primaryKeyPosition: 1
+        description: The alphabetic code, three capital letters (EUR).
+      - name: numeric_code
+        physicalType: varchar
+        logicalType: string
+        logicalTypeOptions:
+          pattern: "^[0-9]{3}$"
+        required: true
+        description: The numeric code, three digits as published, leading zeros kept (008).
+      - name: name
+        physicalType: varchar
+        required: true
+        description: The currency's name as the list writes it.
+      - name: minor_units
+        physicalType: integer
+        description: Digits after the decimal point (2 for EUR); null where the list says N.A.
+      - name: is_fund
+        physicalType: boolean
+        required: true
+        description: True when the list marks the entry a fund (IsFund), not a circulating currency.
+      - name: source_file_sha256
+        physicalType: varchar
+        required: true
+        primaryKey: true
+        primaryKeyPosition: 2
+        description: The landed file's sha256, set by the connector on every row (its lineage).
+customProperties:
+  - property: layer
+    value: bronze
+  - property: build
+    value: connector
+  - property: backup
+    value: rebuild  # rebuilt from the landed files

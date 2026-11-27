@@ -1,0 +1,1 @@
+SELECT "rate_date", "currency", "rate", "source_file_sha256" FROM "fx_reference"."ecb_fx_rates__base"."silver_rates" FOR VERSION AS OF 'audited' WHERE EXISTS (SELECT 1 FROM "fx_reference"."ecb_fx_rates__base"."silver_rates$refs" WHERE "name" = 'audited' AND "type" = 'TAG')

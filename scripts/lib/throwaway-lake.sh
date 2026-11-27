@@ -96,6 +96,7 @@ down() {
 # Every engine's pair, by name: K2_<ENGINE>_S3_ACCESS_KEY and _SECRET_KEY for each policy file
 # (one definition: docker/lake/init-lake.sh reads the same directory).
 S3_NAMES=(K2_S3_ENDPOINT)
+[ -f "$REPO/docker/lake/minio/policies/trino.json" ] || { echo "throwaway-lake: no docker/lake/minio/policies/*.json under $REPO (a scratch copy must carry docker/lake)" >&2; exit 1; }
 for f in "$REPO"/docker/lake/minio/policies/*.json; do
   e=${f##*/} e=${e%.json}
   S3_NAMES+=("K2_${e^^}_S3_ACCESS_KEY" "K2_${e^^}_S3_SECRET_KEY")

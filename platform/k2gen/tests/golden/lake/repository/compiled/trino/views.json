@@ -1,6 +1,30 @@
 {
   "views": [
     {
+      "base": "fx_reference.ecb_fx_rates__base.gold_eur_rates_daily",
+      "columns": [
+        "rate_date",
+        "currency",
+        "rate",
+        "is_carried",
+        "carried_days",
+        "rate_available_at"
+      ],
+      "owner": "pub_ecb_fx_rates",
+      "relation": "fx_reference.ecb_fx_rates.gold_eur_rates_daily"
+    },
+    {
+      "base": "fx_reference.ecb_fx_rates__base.silver_rates",
+      "columns": [
+        "rate_date",
+        "currency",
+        "rate",
+        "source_file_sha256"
+      ],
+      "owner": "pub_ecb_fx_rates",
+      "relation": "fx_reference.ecb_fx_rates.silver_rates"
+    },
+    {
       "base": "governance.access_canary__base.events",
       "columns": [
         "id",
@@ -10,6 +34,28 @@
       ],
       "owner": "pub_access_canary",
       "relation": "governance.access_canary.events"
+    },
+    {
+      "base": "reference_data.calendars__base.target_days",
+      "columns": [
+        "calendar_date",
+        "is_target_day",
+        "closing_reason"
+      ],
+      "owner": "pub_calendars",
+      "relation": "reference_data.calendars.target_days"
+    },
+    {
+      "base": "reference_data.currency_master__base.currency",
+      "columns": [
+        "code",
+        "numeric_code",
+        "name",
+        "minor_units",
+        "is_fund"
+      ],
+      "owner": "pub_currency_master",
+      "relation": "reference_data.currency_master.currency"
     }
   ]
 }

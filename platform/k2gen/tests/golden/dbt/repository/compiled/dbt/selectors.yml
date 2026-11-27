@@ -1,8 +1,26 @@
 # Compiled by k2gen (platform/k2gen/k2gen/emit/dbt.py) from the release's documents. Never edit it: change the documents.
 selectors:
+- name: ecb_fx_rates
+  description: 'fx-reference.ecb-fx-rates: its seeds and models, with their tests and unit tests; built as dbt_ecb_fx_rates
+    (the wrapper''s dbt build --selector).'
+  definition:
+    method: fqn
+    value: k2.fx_reference.ecb_fx_rates
 - name: access_canary
   description: 'governance.access-canary: its seeds and models, with their tests and unit tests; built as dbt_access_canary
     (the wrapper''s dbt build --selector).'
   definition:
     method: fqn
     value: k2.governance.access_canary
+- name: calendars
+  description: 'reference-data.calendars: its seeds and models, with their tests and unit tests; built as dbt_calendars (the
+    wrapper''s dbt build --selector).'
+  definition:
+    method: fqn
+    value: k2.reference_data.calendars
+- name: currency_master
+  description: 'reference-data.currency-master: its seeds and models, with their tests and unit tests; built as dbt_currency_master
+    (the wrapper''s dbt build --selector).'
+  definition:
+    method: fqn
+    value: k2.reference_data.currency_master
