@@ -101,6 +101,21 @@ jobs:
         working-directory: platform/k2gen
         run: uv run --locked ruff check . && uv run --locked mypy
 
+  api:
+    name: k2-api (tests)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
+
+      # services/k2-api/ is its own uv project: pytest and ruff from its lock, no network,
+      # no Trino (a fake stands at its one Trino client, enforcing a compiled release's rules).
+      - name: Tests and ruff (make test-api)
+        run: make test-api
+
   clickhouse:
     name: ClickHouse (gold schema)
     runs-on: ubuntu-latest
@@ -207,6 +222,11 @@ jobs:
             dockerfile: docker/dbt-runner/Dockerfile
             load: true
             tag: dbt-runner:local
+          # The REST service (phase 003), checked below as compose runs it.
+          - name: k2-api
+            dockerfile: services/k2-api/Dockerfile
+            load: true
+            tag: k2-api:local
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -266,6 +286,17 @@ jobs:
           docker run --rm --read-only --tmpfs /tmp:rw,noexec,nosuid,size=64m --cap-drop ALL
           --security-opt no-new-privileges --network none --user 12345:12345 dbt-runner:local
           sh -c 'dbt --version && command -v k2-dbt && k2-dbt --help'
+
+      # As compose runs it (an arbitrary uid with group 0, read-only root, no capability): uvicorn
+      # starts and /healthz answers, with no network but loopback and no release mounted.
+      - name: k2-api serves /healthz, in the image just built
+        if: matrix.name == 'k2-api'
+        run: >-
+          docker run --rm --read-only --tmpfs /tmp:rw,noexec,nosuid,size=16m --cap-drop ALL
+          --security-opt no-new-privileges --network none --user 12345:0 k2-api:local
+          sh -c 'uvicorn k2api.app:app --host 127.0.0.1 --port 8095 & for i in 1 2 3 4 5 6 7 8 9 10; do
+          python -c "import urllib.request; print(urllib.request.urlopen(\"http://127.0.0.1:8095/healthz\").read().decode())"
+          && exit 0; sleep 1; done; exit 1'
 
   compose:
     name: Compose (config validation)

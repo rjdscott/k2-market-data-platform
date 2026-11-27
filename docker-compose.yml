@@ -1427,7 +1427,7 @@ services:
   # Declared now so the budget gate counts and pin-checks them and later steps
   # fill them in place (docs/development/phase-001-interfaces.md A13). Each is
   # a stub on alpine that prints SKIP and exits until its owning step replaces the
-  # image and command (tools, fetch and dbt-runner have; k2-api is still a stub).
+  # image and command (tools, fetch, dbt-runner and k2-api all have).
   # The default profile and its sums are unchanged.
   # The tools one-shot (ADR-058): `make deploy` runs it to move the release pointers on the VM
   # side of Docker Desktop's file sharing, and `make release` to compile a tag with that tag's
@@ -1556,24 +1556,68 @@ services:
           memory: 768M
     restart: "no"
 
+  # k2-api (phase 003): read-only REST over the release's data products (services/k2-api/:
+  # its routes are openapi.yaml). It reads the release through its pointer at every request,
+  # so a deploy moves it without a recreate. It runs as the host user, K2_RUN_UID, with group
+  # 0, as airflow-scheduler does: svc.api's password file and api/keys.json are mode 600 and
+  # owned by the host user (the image's own uid, 10004, is for any other run). Exactly two
+  # environment names and four read-only mounts, each never created when missing
+  # (tests/test_catalog_fence_compose.py, tests/test_secret_mounts.py): the releases root, the
+  # api/ directory (keys.json is rewritten in place, so the directory, never the file), svc.api's
+  # password file and the CA. No storage key, no Docker socket.
   k2-api:
     profiles: ["api"]
     logging: *k2-logging
-    image: alpine:3.20  # stub: phase 003 builds services/k2-api/ (its routes: services/k2-api/openapi.yaml)
-    command: ["echo", "SKIP k2-api: built in phase 003"]
+    build:
+      context: .
+      dockerfile: services/k2-api/Dockerfile
+    image: k2-api:local
+    user: "${K2_RUN_UID:?set K2_RUN_UID in .env (make engine-keys)}:0"
     networks:
       # Trino only, as svc.api: it reads rows through the reader view and the tested
       # snapshot id from `t$refs` over SQL, never Lakekeeper's REST API, so never
       # k2-catalog, where a caller-facing service could forge a view (ADR-061 part 6).
       - k2-net
+    ports:
+      - "127.0.0.1:${K2_API_PORT:-8095}:8095"
+    environment:
+      K2_TRINO_HOST: trino
+      K2_TRINO_INTERNAL_PORT: "8443"
     volumes:
       - *k2-releases-ro
+      - &k2-api-secret
+        type: bind
+        source: ${K2_SECRETS:-${HOME}/k2-secrets}/api
+        target: /run/k2-secrets/api
+        read_only: true
+        bind:
+          create_host_path: false
+      - <<: *k2-api-secret
+        source: ${K2_SECRETS:-${HOME}/k2-secrets}/principals/svc.api.password
+        target: /run/k2-secrets/api.password
+      - <<: *k2-api-secret
+        source: ${K2_SECRETS:-${HOME}/k2-secrets}/tls/ca.pem
+        target: /run/k2-secrets/tls/ca.pem
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=16m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    # No curl in the slim image: the image's own Python asks the route that reaches nothing.
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8095/healthz', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
     deploy:
       resources:
         limits:
           cpus: '0.5'
           memory: 512M
-    restart: "no"
+    restart: unless-stopped
 
 #############################################################################
 # RESOURCE SUMMARY (Consolidated - Full Platform)
@@ -1602,7 +1646,7 @@ services:
 # tools                 | 0.25      | 256M         | Phase 001 stub, profile tools (step S19), not in the sums
 # fetch                 | 0.5       | 512M         | Fetch one-shot (docker/fetch/), profile fetch, not in the sums
 # dbt-runner            | 0.5 x 2   | 768M x 2     | dbt wrapper one-shot (docker/dbt-runner/), profile build, not in the sums
-# k2-api                | 0.5       | 512M         | Phase 001 stub, profile api (phase 003), not in the sums
+# k2-api                | 0.5       | 512M         | REST over the data products (services/k2-api/), profile api, not in the sums
 #
 # The three capture-* containers are also cpuset-pinned to cores 12-14
 # (`${K2_CAPTURE_CPUSET-12-14}`, .env.example). A cpuset is placement, not quota:
@@ -1648,5 +1692,5 @@ services:
 # Target: 25 CPU / 48 GiB at the bootstrap peak (ADR-045)
 #
 # Instrument config: see config/instruments.yaml (single source of truth)
-# Last updated: 2026-11-26 (alertmanager, phase 001 step S09; before it the phase 001 stubs tools, fetch, dbt-runner and k2-api behind profiles; before it lake-ddl and lake-metrics retired with the old lake ingest, ADR-056 and the ADR-010 Outcome; before it clickhouse behind the profile hot-gold, ADR-057)
+# Last updated: 2026-11-27 (k2-api built in place of its stub, phase 003 W3-5, its limits unchanged; before it alertmanager, phase 001 step S09; before it the phase 001 stubs tools, fetch, dbt-runner and k2-api behind profiles; before it lake-ddl and lake-metrics retired with the old lake ingest, ADR-056 and the ADR-010 Outcome; before it clickhouse behind the profile hot-gold, ADR-057)
 #############################################################################

@@ -1,0 +1,7 @@
+# The build context is the repository root; the image needs only these (services/k2-api/Dockerfile).
+*
+!services/k2-api/pyproject.toml
+!services/k2-api/uv.lock
+!services/k2-api/openapi.yaml
+!services/k2-api/k2api
+**/__pycache__
