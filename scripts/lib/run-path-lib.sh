@@ -72,24 +72,25 @@ finish() {  # finish [why]: the summary line; exit 0 only when every claim passe
   exit $?
 }
 
-rp_fail_release() {  # rp_fail_release <python patch>: a release of this tree with the patch applied (argv[1] the clone); sets IDF
-  mkdir -p "$W/fail/clone"
-  git ls-files -co --exclude-standard -z | xargs -0 cp --parents -t "$W/fail/clone"
-  python3 - "$W/fail/clone" <<< "$1" || die "the plant no longer applies to this tree (its assert above)"
+rp_fail_release() {  # rp_fail_release <python patch> [name]: a release of this tree with the patch applied (argv[1] the clone), under $W/<name> (default fail); sets IDF
+  local d=$W/${2:-fail}
+  mkdir -p "$d/clone"
+  git ls-files -co --exclude-standard -z | xargs -0 cp --parents -t "$d/clone"
+  python3 - "$d/clone" <<< "$1" || die "the plant no longer applies to this tree (its assert above)"
   python3 - docker-compose.yml > "$W/images.json" <<'PY'
 import json, re, sys
 names = re.findall(r"^  ([a-z][a-z0-9-]*):\n", open(sys.argv[1]).read(), re.M)
 print(json.dumps({n: "run-path/placeholder@sha256:" + "0" * 64 for n in names}))
 PY
-  local git=(git -C "$W/fail/clone" -c user.name=run-path -c user.email=run-path@example.org)
+  local git=(git -C "$d/clone" -c user.name=run-path -c user.email=run-path@example.org)
   { "${git[@]}" init -q -b main && "${git[@]}" add -A && "${git[@]}" commit -q -m "$P: a failing test" &&
     "${git[@]}" tag -a v0.0.0-runpath.1 -m "$P"; } || die "the failing tree did not commit"
   local k2gen=(uv run --project "$REPO/platform/k2gen" --locked -q k2gen)
-  "${k2gen[@]}" docset --tag v0.0.0-runpath.1 --repo "$W/fail/clone" --out "$W/fail/set" > "$W/compile.log" 2>&1 &&
-    "${k2gen[@]}" release --set "$W/fail/set" --previous none --images "$W/images.json" --out "$W/fail/releases" 2>>"$W/compile.log" \
-    | tail -1 > "$W/fail/id"
-  IDF=$(cat "$W/fail/id")
-  if [ -z "$IDF" ] || [ ! -d "$W/fail/releases/$IDF" ]; then tail -20 "$W/compile.log" >&2; die "the failing release did not compile"; fi
+  "${k2gen[@]}" docset --tag v0.0.0-runpath.1 --repo "$d/clone" --out "$d/set" > "$W/compile.log" 2>&1 &&
+    "${k2gen[@]}" release --set "$d/set" --previous none --images "$W/images.json" --out "$d/releases" 2>>"$W/compile.log" \
+    | tail -1 > "$d/id"
+  IDF=$(cat "$d/id")
+  if [ -z "$IDF" ] || [ ! -d "$d/releases/$IDF" ]; then tail -20 "$W/compile.log" >&2; die "the failing release did not compile"; fi
 }
 
 rp_image() {  # the dbt-runner image, from this tree
