@@ -17,7 +17,9 @@ first failure:
 
  1 preflight     the release is sealed and every file matches its manifest; the release it moves from
                  is known (the newest good one in the log); the secret files it needs exist (only
-                 their sha256 goes into the log); disk and memory floors; no dropped backup entry
+                 their sha256 goes into the log), a password file for each principal the live suite
+                 logs in as among them (a partner's or a person's rows it skips, so never asked);
+                 disk and memory floors; no dropped backup entry
                  over data storage still holds; no stateful service changes unless ALLOW_STATEFUL
                  names it; no other deploy holds the lock (taken before anything); then, on a
                  throwaway lake from the release, S20's access rows and the tested-data marker (a
@@ -790,10 +792,24 @@ def make_for(path: str) -> str:
     return m[1] if m else "docs/runbooks/create-or-rotate-a-principal.md"
 
 
+def live_principals(rel: Release) -> set[str]:
+    """The principals the live suite (access_live, at verify) logs in to Trino as, by the suite's own rule
+    over the release's rows (access_verify.live_principals, the checkout's script access_live runs): a
+    person's or a partner's rows are skipped there, their password being their owner's, so none is asked."""
+    if not (rel.root / model.DOCUMENTS_DIR / model.EXPECTATIONS).is_file():
+        return set()
+    if str(HERE) not in sys.path:
+        sys.path.insert(0, str(HERE))
+    import access_verify  # by name, not _load: its dataclasses look their module up in sys.modules
+    found: set[str] = access_verify.live_principals(access_verify.load(rel.root))
+    return found
+
+
 def required_secrets(ctx: Ctx, p: Plan) -> list[str]:
     """Every secret file the target's services mount, each directory bind by the files
-    model.SECRET_FILES puts in it, the build principals' password files, and those this deploy's
-    own SQL logs in with: the missing ones, before anything changes."""
+    model.SECRET_FILES puts in it, the build principals' password files, those this deploy's
+    own SQL logs in with, and those the live suite logs in with (else its rows fail after the
+    swap, and the deploy rolls back): the missing ones, before anything changes."""
     need, dirs = {CA}, set()
     for b in secret_binds(p.target):
         inside = {f.path for f in model.SECRET_FILES if f.path.startswith(f"{b}/") and "<" not in f.path}
@@ -807,6 +823,7 @@ def required_secrets(ctx: Ctx, p: Plan) -> list[str]:
     if any(model.ddl_path("trino", *t.split(".")) in p.target.manifest.files for t in p.ddl) or HOLDS_DDL in p.target.manifest.files:
         need.add(model.password_file("svc.platform"))  # the ddl's creator, and the holds' reader at resume
     need |= {model.password_file(v.owner) for v in p.views}
+    need |= {model.password_file(x) for x in live_principals(p.target)}  # svc.operator's among them: the holds' rows
     return sorted([n for n in need if not (ctx.secrets / n).is_file()] + [d for d in dirs if not (ctx.secrets / d).exists()])
 
 

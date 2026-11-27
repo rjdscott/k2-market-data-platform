@@ -1077,6 +1077,26 @@ sys.exit(f"fake docker: no answer for {A}")
             (world.secrets / n).write_text("fixture\n")
         assert deploy.required_secrets(world.ctx, p) == []
 
+    def test_preflight_refuses_while_a_principal_the_live_suite_logs_in_as_has_no_password_file(world: World) -> None:
+        """svc.operator's rows run on live (its host-held login is the platform operator's), so its file is
+        asked before anything moves, not failed by the live suite after the swap; a partner's rows are skipped
+        there (access_verify.OWNER_HELD), so its file is never asked."""
+        principals = "contracts/access/principals.yaml"
+        rows = ('  - {principal: svc.operator, sql: "SELECT 1", expect: ok}\n'
+                '  - {principal: svc.partner-dashboard, sql: "SELECT 1", expect: denied}\n')
+        declared = "".join(f"  - id: {x}\n    kind: service\n    owner: platform-team\n" for x in ("svc.operator", "svc.partner-dashboard"))
+        world.live(world.release())
+        r1 = world.release(over={EXPECT: (GOOD / EXPECT).read_bytes() + rows.encode(),
+                                 principals: (GOOD / principals).read_bytes() + declared.encode()})
+        live = deploy.live_principals(r1)
+        assert "svc.operator" in live and "svc.partner-dashboard" not in live, live
+        with pytest.raises(deploy.Refused) as e:
+            world.deploy(r1)
+        assert "principals/svc.operator.password (make password PRINCIPAL=svc.operator TO_FILE=1)" in str(e.value)
+        assert "partner" not in str(e.value) and world.ups() == [] and records(world)[-1]["step"] == "preflight"
+        (world.secrets / "principals/svc.operator.password").write_text("fixture\n")
+        assert world.deploy(r1) == 0
+
     # --- review R6: lake-init runs the deployed release's own script and policies --------
 
     def test_lake_init_runs_the_target_release_script_and_an_older_release_skips_it(world: World) -> None:

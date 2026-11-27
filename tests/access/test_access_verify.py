@@ -249,6 +249,7 @@ def test_an_extra_namespace_is_named(drift):
 LIVE = r"""
 import hashlib, json, sys
 from pathlib import Path
+from types import SimpleNamespace
 sys.path.insert(0, "scripts")
 import access_verify as av
 from k2gen import model
@@ -273,9 +274,14 @@ legs = {
     "the drift row": model.DriftExpectation("catalog", "clean"),
     "a storage-key row": model.StorageKeyExpectation("tools", "k2-landing", "read", "allowed"),
     "a service's REST row": model.DeniedExpectation("svc.api", "system.runtime.queries", ("sql", "rest")),
+    "a partner's statement": model.StatementExpectation("svc.partner-dashboard", "SELECT 1", "denied", {}),
+    "the operator's statement": model.StatementExpectation("svc.operator", "SELECT 1", "ok", {}),
 }
+env = {"trino": "https://t:8443", "apiKeys": "/nonexistent"}
 print(json.dumps({"skips": {k: av.live_skip(e, m) for k, e in rows.items()},
-                  "legs": {k: av.legs(e, m, "live", {"trino": "https://t:8443", "apiKeys": "/nonexistent"}) for k, e in legs.items()}}))
+                  "legs": {k: av.legs(e, m, "live", env) for k, e in legs.items()},
+                  "release": {k: av.legs(legs[k], m, "release", env) for k in ("a person's statement", "a partner's statement")},
+                  "principals": sorted(av.live_principals(SimpleNamespace(products=m.products, expectations=tuple(legs.values()))))}))
 """
 
 
@@ -297,6 +303,14 @@ def test_the_live_scope_runs_only_platform_held_passwords_on_the_canary():
     # A REST leg with no key file on live is a skip of that leg alone, naming the command; its SQL leg runs.
     (sql, _), (rest, why) = legs["a service's REST row"]
     assert (sql, rest) == ("sql", "rest") and legs["a service's REST row"][0][1] is None and "make api-key PRINCIPAL=svc.api" in why
+    # A partner's service holds its own credential, as a person does (av.OWNER_HELD): skipped live with the
+    # person's reason, and run at release time, where the throwaway lake makes every principal's password.
+    # The operator's host-held login is the platform's: it runs live, so deploy's preflight asks its file.
+    assert legs["a partner's statement"] == [["row", "svc.partner-dashboard's password is its owner's, not the platform's; "
+                                              "its row ran on the throwaway lake at release time"]]
+    assert got["release"] == {"a person's statement": [["row", None]], "a partner's statement": [["row", None]]}
+    assert legs["the operator's statement"] == [["row", None]]
+    assert got["principals"] == ["svc.api", "svc.operator"]  # never the person's, nor the partner's
 
 
 def test_the_lake_env_json_is_read_as_the_lake_writes_it(tmp_path, monkeypatch):
