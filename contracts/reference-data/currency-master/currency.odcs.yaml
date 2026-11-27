@@ -1,0 +1,46 @@
+apiVersion: v3.2.0
+kind: DataContract
+id: reference-data.currency-master.currency
+name: currency
+version: 1.0.0
+domain: reference-data
+description:
+  purpose: >-
+    One row per ISO 4217 alphabetic currency code that any landed list has held, with its numeric
+    code, name, minor units and fund flag.
+team:
+  name: reference-data-team
+schema:
+  - id: currency
+    name: currency
+    physicalName: currency_master.currency
+    physicalType: table
+    properties:
+      - name: code
+        physicalType: varchar
+        required: true
+        primaryKey: true
+        primaryKeyPosition: 1
+        description: The alphabetic code, three capital letters (EUR); unique.
+      - name: numeric_code
+        physicalType: varchar
+        required: true
+        description: The numeric code, three digits, leading zeros kept (008).
+      - name: name
+        physicalType: varchar
+        required: true
+        description: The currency's name as the list writes it.
+      - name: minor_units
+        physicalType: integer
+        description: Digits after the decimal point (2 for EUR); null where the list says N.A.
+      - name: is_fund
+        physicalType: boolean
+        required: true
+        description: True when the list marks the entry a fund, not a circulating currency.
+customProperties:
+  - property: layer
+    value: silver
+  - property: build
+    value: dbt
+  - property: backup
+    value: rebuild
