@@ -8,15 +8,18 @@
 #   R1   the tree as it is: the access canary, governance.access-canary
 #   R1f  R1 with one more seed row, a duplicate of key (1, north) noted w118-failed: k2_unique_key fails
 #   R2   R1 with one more contract column, extra varchar, which the model fills
+#   R3   R2 with extra retyped to bigint
 #
 # Nine runs of the one product, each claim below one PASS or FAIL line, then `<n> PASS, <m> FAIL`:
 #   run1 R1   a first pass moves audited onto main and the reader view serves the five tested rows
 #   run2 R1f  a failed test leaves main at the tag (rollback_to_snapshot) while a reader polling the
 #             view every 50 ms through the whole run never sees a row of the failed build
 #   run3 R1   killed once its started row is written; run4 R1 reconciles it, then passes
-#   run5 R2   a schema change narrows the real view, moves the tag, then widens it (the view's version
-#             times around the table's last update); the previous tag is not null, so the commit
-#             carried both requirements and passed; a reader polling the view never sees an error
+#   run5 R2   an added column: the previous tag is not null, so the commit carried both
+#             requirements and passed
+#   run5b R3  a retyped column narrows the real view, moves the tag, then widens it (the view's
+#             version log around the table's last update), a reader polling the view every 50 ms
+#             answered every time (an added column's narrowing is the view reconcile already left)
 #   run6 R1f  a failed build after a schema change is restored by create-or-replace: main is a new
 #             snapshot with the tag's rows and schema, and the table keeps its partitioning
 #   run7 R1   passes (the tag back on four columns)
@@ -49,6 +52,7 @@ IMAGE=dbt-runner:w118-$RUN_TAG
 PRODUCT=governance.access-canary
 W=$(mktemp -d "$HOME/.k2-dbt-wrapper.XXXXXX")  # under $HOME, the one place Docker Desktop shares
 cleanup() {
+  [ "${KEEP:-}" = 1 ] && [ -n "${STATE:-}" ] && cp -a "$STATE/w118" "$W/" 2>/dev/null
   bash "$L" down "$P" >/dev/null 2>&1
   docker rmi -f "$IMAGE" >/dev/null 2>&1
   [ "${KEEP:-}" = 1 ] && echo "dbt-wrapper: scratch kept in $W" || { chmod -R u+w "$W"; rm -rf "$W"; }
@@ -66,21 +70,25 @@ print(json.dumps({n: "w118/placeholder@sha256:" + "0" * 64 for n in names}))
 PY
 patch_none() { :; }
 patch_failing() { echo "1,north,w118-failed,1440" >> contracts/governance/access-canary/seeds/event_offsets.csv; }
-patch_column() {
-  python3 - <<'PY'
+patch_column() {  # W118_EXTRA: the type of the column extra
+  W118_EXTRA=${W118_EXTRA:-varchar} python3 - <<'PY'
+import os
 from pathlib import Path
+typ = os.environ["W118_EXTRA"]
 c = Path("contracts/governance/access-canary/events.odcs.yaml")
 text = c.read_text()
-column = ("      - name: extra\n        physicalType: varchar\n        required: false\n"
-          "        description: A column scripts/verify/dbt-wrapper.sh adds and drops.\n")
+column = (f"      - name: extra\n        physicalType: {typ}\n        required: false\n"
+          "        description: A column scripts/verify/dbt-wrapper.sh adds, retypes and drops.\n")
 assert text.count("\nroles:\n") == 1
 c.write_text(text.replace("\nroles:\n", "\n" + column + "roles:\n"))
 m = Path("contracts/governance/access-canary/models/events.sql")
 sql = m.read_text()
 assert sql.count("\nfrom ") == 1
-m.write_text(sql.replace("\nfrom ", ",\n  cast('w118-extra' as varchar) as extra\nfrom "))
+value = "'w118-extra'" if typ == "varchar" else "7"
+m.write_text(sql.replace("\nfrom ", f",\n  cast({value} as {typ}) as extra\nfrom "))
 PY
 }
+patch_retype() { W118_EXTRA=bigint patch_column; }
 compile() {  # compile <name> <patch>: the release's directory on stdout
   local d=$W/$1
   mkdir -p "$d/clone"
@@ -94,17 +102,17 @@ compile() {  # compile <name> <patch>: the release's directory on stdout
     "${k2gen[@]}" release --set "$d/set" --previous none --images "$W/images.json" --out "$d/releases" 2>>"$W/compile.log" \
       | tail -1 | xargs basename | sed "s|^|$d/releases/|"
 }
-R1=$(compile r1 patch_none) && R1F=$(compile r1f patch_failing) && R2=$(compile r2 patch_column) \
+R1=$(compile r1 patch_none) && R1F=$(compile r1f patch_failing) && R2=$(compile r2 patch_column) && R3=$(compile r3 patch_retype) \
   || { tail -20 "$W/compile.log" >&2; die "a release did not compile ($W/compile.log)"; }
-ID1=$(basename "$R1") ID1F=$(basename "$R1F") ID2=$(basename "$R2")
-echo "dbt-wrapper: releases $ID1, $ID1F, $ID2"
+ID1=$(basename "$R1") ID1F=$(basename "$R1F") ID2=$(basename "$R2") ID3=$(basename "$R3")
+echo "dbt-wrapper: releases $ID1, $ID1F, $ID2, $ID3"
 
 # ---- the image, and the lake ----------------------------------------------------------------
 docker build -q -f docker/dbt-runner/Dockerfile -t "$IMAGE" . > "$W/build.log" 2>&1 \
   || { tail -20 "$W/build.log" >&2; die "the dbt-runner image did not build"; }
 bash "$L" up "$P" "$R1" > "$W/up.log" 2>&1 || { tail -20 "$W/up.log" >&2; die "the throwaway lake did not start"; }
 STATE=$(bash "$L" state "$P")
-cp -a "$R1F" "$R2" "$STATE/releases/"
+cp -a "$R1F" "$R2" "$R3" "$STATE/releases/"
 mkdir -p "$STATE/w118"
 S=$STATE/secrets/k2
 for f in principals/dbt_access_canary.password principals/pub_access_canary.password principals/svc.runs.password tls/ca.pem; do
@@ -141,7 +149,9 @@ def state():
     refs = meta.get("refs") or {}
     main, tag = (refs.get("main") or {}).get("snapshot-id"), (refs.get("audited") or {}).get("snapshot-id")
     vmeta = c.view("access_canary", "events")
-    reader = trino.run(READER, f"SELECT id, region, note FROM {quote_relation(VIEW)} ORDER BY id, region")
+    reader = trino.run(READER, f"SELECT * FROM {quote_relation(VIEW)} ORDER BY id, region")
+    names = [c for c, _ in reader.columns]
+    versions = {v["version-id"]: v["representations"][0]["sql"] for v in (vmeta or {}).get("versions", [])}
     spec = next((s for s in meta.get("partition-specs", []) if s["spec-id"] == meta.get("default-spec-id")), {})
     rows = lambda at: trino.ok(BUILDER, f"SELECT id, region, note FROM {quote_relation(OUT)}{at} ORDER BY id, region")
     return {"main": main, "tag": tag, "last_updated": meta.get("last-updated-ms"),
@@ -149,9 +159,11 @@ def state():
             "current_schema": [f["name"] for f in next((s for s in meta.get("schemas", []) if s["schema-id"] == meta.get("current-schema-id")), {"fields": []})["fields"]],
             "tag_cols": cd.columns_at(meta, tag) if tag else [],
             "partitioning": [(f["name"], f["transform"]) for f in spec.get("fields", [])],
-            "view_versions": [{"ts": v["timestamp-ms"], "sql": v["representations"][0]["sql"]}
-                              for v in sorted((vmeta or {}).get("versions", []), key=lambda v: v["version-id"])],
-            "reader_cols": [c for c, _ in reader.columns], "reader_rows": reader.rows, "reader_error": reader.error,
+            # Time order: Lakekeeper lists the log by version, and Iceberg reuses an identical version.
+            "view_log": sorted(({"ts": e["timestamp-ms"], "sql": versions[e["version-id"]]} for e in (vmeta or {}).get("version-log", [])),
+                               key=lambda e: e["ts"]),
+            "reader_cols": names, "reader_types": dict(reader.columns), "reader_error": reader.error,
+            "reader_rows": [[r[names.index(c)] for c in ("id", "region", "note")] for r in reader.rows] if not reader.error else [],
             "main_rows": rows("") if main else [], "tag_rows": rows(" FOR VERSION AS OF 'audited'") if tag else []}
 
 
@@ -194,6 +206,15 @@ elif cmd == "poll":  # a reader polls the view every 50 ms until the stop file a
         time.sleep(0.05)
     (D / f"poll-{args[0]}.json").write_text(json.dumps({"polls": polls, "errors": errors[:5], "n_errors": len(errors),
                                                         "bad": bad[:3], "n_bad": len(bad)}))
+elif cmd == "facts":  # what the fakes assumed, as the real lake answers it
+    base = trino.run(BUILDER, f"SELECT * FROM {quote_relation(OUT)} LIMIT 0")
+    view = trino.run(READER, f"SELECT * FROM {quote_relation(VIEW)} LIMIT 0")
+    missing = trino.run(BUILDER, 'SELECT * FROM "governance_build"."access_canary__base"."w118_absent$refs"')
+    refs = trino.run(BUILDER, f"SELECT name, type, snapshot_id FROM {quote_relation(OUT + '$refs')}")
+    (D / "facts.json").write_text(json.dumps({"base types (the wrapper's columns())": dict(base.columns),
+                                              "reader view types": dict(view.columns),
+                                              "a missing table's $refs": f"{missing.error}: {missing.message[:120]}",
+                                              "$refs rows": refs.rows, "$refs types": dict(refs.columns)}, indent=1))
 elif cmd == "claims":
     s = {p.stem.removeprefix("state-"): json.loads(p.read_text()) for p in D.glob("state-*.json")}
     drift = {p.stem.removeprefix("drift-"): json.loads(p.read_text()) for p in D.glob("drift-*.json")}
@@ -201,6 +222,8 @@ elif cmd == "claims":
     rc = {p.stem: int(p.read_text()) for p in D.glob("run*.rc")}
     err = {p.stem: p.read_text() for p in D.glob("run*.err")}
     rec = records()
+    for k, v in json.loads((D / "facts.json").read_text()).items():
+        print(f"INFO {k}: {v}")
     dq = dict(trino.ok(BUILDER, "SELECT run_id, count(*) FROM governance_build.access_canary__base.dq_test_results GROUP BY run_id"))
     fails = 0
 
@@ -229,18 +252,21 @@ elif cmd == "claims":
           "started" in ev("run3") and ev("run3")[-1] in ("reconciled", "audited", "rolled_back")
           and rc.get("run4") == 0 and c["tag"] == c["main"],
           f"run3's records {ev('run3')}; run4 exit {rc.get('run4')}, tag {c['tag']} main {c['main']}")
-    d, p5 = s["run5"], poll.get("run5", {})
-    vs = d["view_versions"]
-    narrow, widen = (vs[-2], vs[-1]) if len(vs) >= 2 else ({}, {})
-    claim("a schema change narrows the real view, moves the tag, then widens it, every poll answered",
-          rc.get("run5") == 0 and d["reader_cols"] == C2 and '"extra"' not in narrow.get("sql", '"extra"')
-          and '"extra"' in widen.get("sql", "") and narrow.get("ts", 0) <= d["last_updated"] <= widen.get("ts", 0)
-          and p5.get("n_errors") == 0 and p5.get("n_bad") == 0 and p5.get("polls", 0) >= 20,
-          f"exit {rc.get('run5')}; narrow at {narrow.get('ts')}, tag commit at {d['last_updated']}, widen at {widen.get('ts')}; "
-          f"view {d['reader_cols']}; {p5.get('polls')} polls, {p5.get('n_errors')} errors, {p5.get('n_bad')} wrong")
+    d = s["run5"]
     claim("the commit's two requirements with a non-null previous tag pass on the real catalog",
-          rc.get("run5") == 0 and c["tag"] is not None and d["tag"] == d["main"] != c["tag"],
-          f"the tag moved from {c['tag']} to {d['tag']} (main {d['main']})")
+          rc.get("run5") == 0 and c["tag"] is not None and d["tag"] == d["main"] != c["tag"] and d["reader_cols"] == C2,
+          f"the tag moved from {c['tag']} to {d['tag']} (main {d['main']}), view {d['reader_cols']}")
+    r, p5 = s["run5b"], poll.get("run5b", {})
+    log = r["view_log"]
+    narrow, widen = (log[-2], log[-1]) if len(log) >= 2 else ({}, {})
+    claim("a retyped column narrows the real view, moves the tag, then widens it, every poll answered",
+          rc.get("run5b") == 0 and r["reader_cols"] == C2 and r["reader_types"].get("extra") == "bigint"
+          and '"extra"' not in narrow.get("sql", '"extra"') and '"extra"' in widen.get("sql", "")
+          and narrow.get("ts", 0) <= r["last_updated"] <= widen.get("ts", 0)
+          and p5.get("n_errors") == 0 and p5.get("n_bad") == 0 and p5.get("polls", 0) >= 20,
+          f"exit {rc.get('run5b')}; narrow at {narrow.get('ts')}, tag commit at {r['last_updated']}, widen at {widen.get('ts')}; "
+          f"view {r['reader_types']}; {p5.get('polls')} polls, {p5.get('n_errors')} errors {p5.get('errors')}, {p5.get('n_bad')} wrong")
+    d = r
     e = s["run6"]
     rolled = [r for r in rec if r["run"] == "access_canary/run6" and r["event"] == "rolled_back"]
     claim("a failed build after a schema change is restored by create-or-replace: the tag's rows and schema",
@@ -258,11 +284,11 @@ elif cmd == "claims":
     i = s["run9"]
     claim("the next run reconciles it and passes", rc.get("run9") == 0 and "audited" in ev("run8") and i["reader_cols"] == C2
           and i["tag"] == i["main"], f"run8's records {ev('run8')}; run9 exit {rc.get('run9')}, view {i['reader_cols']}")
-    ran = [r for r in ("run1", "run2", "run4", "run5", "run6", "run7", "run8", "run9")]
+    ran = ["run1", "run2", "run4", "run5", "run5b", "run6", "run7", "run8", "run9"]
     claim("every run that ran dbt wrote its dq_test_results rows", all(dq.get(f"access_canary/{r}", 0) > 0 for r in ran),
           {r: dq.get(f"access_canary/{r}", 0) for r in ran})
     claim("the drift check is clean after every run, its tags held to the run records",
-          set(drift) == {"run1", "run2", "run4", "run5", "run6", "run7", "run9"} and all(not f["differences"] and not f["skipped"] for f in drift.values()),
+          set(drift) == {"run1", "run2", "run4", "run5", "run5b", "run6", "run7", "run9"} and all(not f["differences"] and not f["skipped"] for f in drift.values()),
           {k: f["differences"][:2] or "clean" for k, f in sorted(drift.items())})
     xcom = {}
     for r in ran:
@@ -338,7 +364,8 @@ run "$ID1F" run2 poll;      probe drift "$ID1F" run2
 oneshot "$ID1" run3 -d -- k2-dbt $(build_args "$ID1" run3) > /dev/null
 probe wait-started run3 && docker kill "$P-dbt-run3" > /dev/null && echo "dbt-wrapper: run3 killed after started"
 run "$ID1" run4;            probe drift "$ID1" run4
-run "$ID2" run5 poll;       probe drift "$ID2" run5
+run "$ID2" run5;            probe drift "$ID2" run5
+run "$ID3" run5b poll;      probe drift "$ID3" run5b
 run "$ID1F" run6;           probe drift "$ID1F" run6
 run "$ID1" run7;            probe drift "$ID1" run7
 # shellcheck disable=SC2046
@@ -347,6 +374,7 @@ echo $? > "$STATE/w118/run8.rc"; echo "dbt-wrapper: run8 ($ID2, another publishe
 probe state run8
 run "$ID2" run9;            probe drift "$ID2" run9
 
+probe facts
 probe claims | tee "$W/claims"
 fail=$(grep -c '^FAIL' "$W/claims"); pass=$(grep -c '^PASS' "$W/claims")
 echo "dbt-wrapper: $pass PASS, $fail FAIL in $((SECONDS - T0)) s"
