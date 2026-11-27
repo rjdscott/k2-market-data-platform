@@ -27,6 +27,8 @@ from airflow.dag_processing.dagbag import BundleDagBag
 from airflow.models.dagrun import DagRun
 from airflow.sdk import TriggerRule
 from airflow.sdk.exceptions import AirflowException, AirflowFailException, AirflowSkipException
+from airflow.ti_deps.deps.trigger_rule_dep import TriggerRuleDep
+from airflow.utils.state import State, TaskInstanceState
 
 REPO = Path(__file__).resolve().parents[3]
 DAGS = REPO / "docker/airflow/dags"
@@ -141,7 +143,8 @@ class Shape(unittest.TestCase):
                           "publish": "lake_spark", "build": "dbt", "expire": "lake_spark", "record": "default_pool",
                           "maintain": "lake_spark"})
         rules = {t.task_id: t.trigger_rule for t in d.tasks}
-        self.assertEqual({t for t, r in rules.items() if r != TriggerRule.ALL_SUCCESS}, {"expire", "record"})
+        self.assertEqual({t for t, r in rules.items() if r != TriggerRule.ALL_SUCCESS}, {"build", "expire", "record"})
+        self.assertEqual(rules["build"], TriggerRule.NONE_FAILED)
         self.assertEqual({rules["expire"], rules["record"]}, {TriggerRule.ALL_DONE_SETUP_SUCCESS})
         self.assertEqual({t.task_id for t in d.tasks if t.is_teardown}, {"expire", "record"})
         self.assertFalse(any(t.is_setup for t in d.tasks))  # no setup: the teardowns behave as all_done
@@ -169,6 +172,65 @@ class Shape(unittest.TestCase):
         bad = {k: v for k, v in good.items() if k != "schedule"}
         with self.assertRaises(ValueError):
             factory.check_entry(0, bad)
+
+
+S, SK, F, UF = (TaskInstanceState.SUCCESS, TaskInstanceState.SKIPPED, TaskInstanceState.FAILED,
+                TaskInstanceState.UPSTREAM_FAILED)
+
+
+def schedule(dag, outcomes: dict) -> tuple[dict, str]:
+    """One run as the scheduler decides it, with Airflow's own TriggerRuleDep and run-state rule: a
+    task whose upstreams are done gets the state its rule sets (skipped, upstream_failed) or, when
+    the rule passes, its outcome (success unless `outcomes` says otherwise)."""
+    states: dict = {}
+    while len(states) < len(dag.tasks):
+        for t in dag.tasks:
+            if t.task_id in states or not t.upstream_task_ids <= set(states):
+                continue
+            finished = [SimpleNamespace(task_id=u, state=states[u], map_index=-1, task=dag.get_task(u))
+                        for u in t.upstream_task_ids]
+            dep = SimpleNamespace(ensure_finished_tis=lambda dr, session, f=finished: f, flag_upstream_failed=True,
+                                  wait_for_past_depends_before_skipping=False, have_changed_ti_states=False,
+                                  upstream_task_id_counts={})
+            ti = SimpleNamespace(task=t, task_id=t.task_id, dag_id=dag.dag_id, run_id=RUN, map_index=-1,
+                                 get_dagrun=lambda session: None,
+                                 set_state=lambda state, session, tid=t.task_id: states.__setitem__(tid, state) or True)
+            failing = [d for d in TriggerRuleDep()._get_dep_statuses(ti, dep, session=None) if not d.passed]
+            if t.task_id not in states:
+                if failing:
+                    raise AssertionError(f"{t.task_id} would wait forever: {failing[0].reason}")
+                states[t.task_id] = outcomes.get(t.task_id, S)
+    tis = [TIState(t, s) for t, s in states.items()]
+    leaves = DagRun._tis_for_dagrun_state(None, dag=dag, tis=tis)
+    return states, "failed" if any(ti.state in State.failed_states for ti in leaves) else "success"
+
+
+class Scheduling(unittest.TestCase):
+    """Whole runs through Airflow's trigger rules: what runs, and the run's final state."""
+
+    def test_an_unchanged_file_still_builds_and_the_run_succeeds(self):
+        dag = factory.build(GOLDEN)["station_readings"]
+        for maintain in (S, SK):  # maintenance due or not
+            states, run = schedule(dag, {"fetch": SK, "maintain": maintain})
+            self.assertEqual({t: states[t] for t in ("load", "audit", "publish")}, dict.fromkeys(("load", "audit", "publish"), SK))
+            self.assertEqual((states["build"], states["expire"], states["record"], run), (S, S, S, "success"))
+
+    def test_a_failed_audit_or_a_refused_load_does_not_build_and_fails_the_run(self):
+        dag = factory.build(GOLDEN)["station_readings"]
+        for failed in ("audit", "load", "fetch"):
+            with self.subTest(failed=failed):
+                states, run = schedule(dag, {failed: F})
+                self.assertEqual((states["build"], states["expire"], states["record"], run), (UF, S, S, "failed"))
+
+    def test_a_failed_build_still_expires_and_records_and_fails_the_run(self):
+        for dag in factory.build(GOLDEN).values():
+            states, run = schedule(dag, {"build": F})
+            self.assertEqual((states["expire"], states["record"], run), (S, S, "failed"), dag.dag_id)
+
+    def test_a_clean_run_and_a_dbt_only_run_succeed(self):
+        for dag in factory.build(GOLDEN).values():
+            states, run = schedule(dag, {})
+            self.assertEqual((set(states.values()), run), ({S}, "success"), dag.dag_id)
 
 
 class Parse(unittest.TestCase):
@@ -310,9 +372,9 @@ class Paths(unittest.TestCase):
         with Docker(code=10), self.assertRaises(AirflowSkipException):
             task("station_readings", "fetch").execute(ctx(TI()))
         d = factory.build(GOLDEN)["station_readings"]
-        for t in ("load", "audit", "publish", "build"):  # all_success: a skipped upstream skips them
+        for t in ("load", "audit", "publish"):  # all_success: a skipped upstream skips them; build runs (Scheduling)
             self.assertEqual(d.get_task(t).trigger_rule, TriggerRule.ALL_SUCCESS)
-        with Docker() as docker, self.assertRaises(AirflowSkipException):  # expire: build never ran
+        with Docker() as docker, self.assertRaises(AirflowSkipException):  # expire: build left no ids
             task("station_readings", "expire").execute(ctx(TI()))
         self.assertEqual(docker.calls, [])
         crumbs = [{"task_id": "fetch", "state": "skipped"}, *({"task_id": t, "state": "skipped"}
