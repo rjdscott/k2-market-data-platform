@@ -171,11 +171,12 @@ def abut(rs):
 
 
 tests = {r: [t for t in st.get(r, {}).get("tests", []) if t[1].endswith(f".{HIST}")] for r in runs}
-# dq_test_results names an ODCS sql rule by a slug of its query, never by its name, so the five
-# rules of the contract (no overlap, no gap, one open row, first at 1970, not empty) are counted.
+# dq_test_results names each ODCS rule by its own name (k2gen's dbt emitter), so the contract's five
+# rules (no overlap, no gap, one open row, first at 1970, not empty) are each found by name.
+RULES = ("versions_do_not_overlap", "versions_leave_no_gap", "one_open_row_per_key", "first_version_opens_1970", "intervals_not_empty")
 bad = [f"{r}: {t[0]} {t[2]}" for r in runs for t in tests[r] if t[2] != "pass"]
-bad += [f"{r}: {len([t for t in tests[r] if t[0].startswith('k2_quality')])} k2_quality results, not 5"
-        for r in runs if len([t for t in tests[r] if t[0].startswith("k2_quality")]) != 5]
+bad += [f"{r}: rule results {sorted(t[0] for t in tests[r] if t[0] in RULES)}, not each of {RULES} once"
+        for r in runs if sorted(t[0] for t in tests[r] if t[0] in RULES) != sorted(RULES)]
 bad += [f"{r}: {b}" for r in runs for b in abut(rows(r, HIST))]
 say(not bad, "(a) dbt's data tests (no overlap, no gap, one open row per key) ran and passed in every build, "
     "and the published rows abut half-open", bad[0] if bad else f"{sum(len(t) for t in tests.values())} test results, "
@@ -231,7 +232,7 @@ say(ok and not bad, "(b) both outputs publish through the wrapper in each build"
     ("every moved main committed by a tagged statement of its build" if ok else next(published(r)[1] for r in runs if not published(r)[0])))
 
 # (c) the warn test
-w = [t for t in st.get(runs[0], {}).get("tests", []) if t[0].startswith("k2_quality") and t[1].endswith(f".{HELD}")]
+w = [t for t in st.get(runs[0], {}).get("tests", []) if t[0] == "held_rows_zero" and t[1].endswith(f".{HELD}")]  # the rule's own name
 ok, why = published(runs[0])
 say(ok and len(w) == 1 and w[0][2] == "warn" and w[0][3] == 1 and len(h1) == 2,
     "(c) the warn test 'held rows = 0' fails and the build still publishes the held rows",
@@ -241,7 +242,7 @@ print(f"INFO {runs[0]} XCom {xcom(runs[0])}; run records {[(e, t.split('.')[-1],
       f"dbt_invocation_id {sorted({x[5] for x in rec if x[5]})} joins dq_test_results {[(t[0][:40], t[2], t[4]) for t in w]}")
 x0 = xcom(runs[0])
 details = [x[4] for x in rec if x[0] == "audited"]
-named = x0.get("degraded") is True and bool(w) and any(w[0][0] in n for n in x0.get("warned") or [])
+named = x0.get("degraded") is True and bool(w) and [n.split(".")[2] for n in x0.get("warned") or []] == ["held_rows_zero"]
 rows_say = len(details) == 3 and all(d == json.dumps({"degraded": True, "warned": x0.get("warned")}, separators=(",", ":"))
                                      for d in details)
 quiet = [r for r in runs[1:] if "degraded" in xcom(r)]  # the held rows resolved: no warn, no degraded
