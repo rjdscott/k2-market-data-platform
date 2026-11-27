@@ -12,6 +12,7 @@ import copy
 import hashlib
 import importlib.util
 import json
+import os
 import re
 import types
 from collections.abc import Mapping
@@ -417,6 +418,82 @@ def test_an_undeclared_parser_audit_is_ignored_and_logged(pipeline, spool, capsy
     code, rows = audited(pipeline, spool, [clean, {**clean, "name": "extra_check", "passed": False}])
     assert code == C.EXIT_OK and "extra_check" not in rows
     assert "extra_check" in capsys.readouterr().out
+
+
+# --- A spool entry is this run's own files, never a link (audit 2026-11-27, HIGH 6) -----------
+# fetch mounts only its DAG's spool directory, but Spark mounts the whole volume: a parser that
+# leaves a link in its own entry must not make this product land and stage another's files.
+
+OTHER = "other_dag/scheduled__2026-11-27T15:15:00+00:00"
+SECRET_ROWS = [{**ROWS[0], "station_id": "another-products-row"}]
+
+
+def other_products_entry(spool):
+    """Another DAG's run, spooled whole: the target a planted link points at."""
+    return spool(run=OTHER, rows=SECRET_ROWS)
+
+
+def refused_load(pipeline, capsys):
+    store, lake = Store(), FakeLake()
+    code, _ = C.load(ctx(pipeline), store, lake)
+    err = capsys.readouterr().err
+    assert code == C.EXIT_REFUSED and store.puts == [] and lake.tables[LOG] == [] and lake.rows == {}
+    assert "another-products-row" not in err  # names the entry, never what its target holds
+    return err
+
+
+def test_a_symlinked_raw_file_is_refused_and_nothing_lands(pipeline, spool, capsys):
+    other = other_products_entry(spool)
+    entry = spool()
+    (entry / "raw.csv").unlink()
+    (entry / "raw.csv").symlink_to(Path("../..") / OTHER / "raw.csv")
+    assert (entry / "raw.csv").read_bytes() == (other / "raw.csv").read_bytes()  # the link does resolve
+    assert "raw.csv" in refused_load(pipeline, capsys)
+
+
+@pytest.mark.parametrize("level", ["run", "dag"])
+def test_a_symlinked_run_or_dag_directory_is_refused(pipeline, spool, capsys, tmp_path, level):
+    other_products_entry(spool)
+    dag, run = RUN.split("/")
+    if level == "run":
+        (tmp_path / dag).mkdir()
+        (tmp_path / dag / run).symlink_to(Path("..") / OTHER)
+    else:
+        (tmp_path / dag).symlink_to(OTHER.split("/")[0])
+    assert (C.SPOOL / RUN / "rows.jsonl").exists()  # it resolves to the other product's entry
+    refused_load(pipeline, capsys)
+
+
+def test_a_hard_linked_rows_file_is_refused(pipeline, spool, capsys):
+    other = other_products_entry(spool)
+    entry = spool()
+    (entry / "rows.jsonl").unlink()
+    (entry / "rows.jsonl").hardlink_to(other / "rows.jsonl")
+    assert "rows.jsonl" in refused_load(pipeline, capsys)
+
+
+def test_a_fifo_is_refused_without_blocking(pipeline, spool, capsys):
+    entry = spool()
+    (entry / "rows.jsonl").unlink()
+    os.mkfifo(entry / "rows.jsonl")  # opened blocking, a read would wait for a writer forever
+    assert "rows.jsonl" in refused_load(pipeline, capsys)
+
+
+def test_a_symlinked_audits_file_is_refused_at_audit(pipeline, spool):
+    other = spool(run=OTHER, audits=[{"name": "value_parses", "passed": True, "failures": 0, "detail": ""}])
+    entry = spool()
+    (entry / "audits.json").symlink_to(Path("../..") / OTHER / "audits.json")
+    assert (other / "audits.json").exists()
+    store, lake = Store(), FakeLake()
+    assert C.load(ctx(pipeline), store, lake)[0] == C.EXIT_OK
+    with pytest.raises(C.Refused, match="audits.json"):  # main() exits 2 on Refused
+        C.audit(ctx(pipeline), store, lake)
+    assert lake.tables[CHECKS] == []
+
+
+def test_fetchs_own_files_have_one_link_each(tmp_path):
+    FETCH.write_new(tmp_path / "rows.jsonl", "{}\n")
+    assert (tmp_path / "rows.jsonl").stat().st_nlink == 1 and [p.name for p in tmp_path.iterdir()] == ["rows.jsonl"]
 
 
 def test_the_connector_imports_no_product_code():

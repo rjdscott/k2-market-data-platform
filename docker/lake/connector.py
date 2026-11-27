@@ -31,8 +31,9 @@ publish  fast-forwards `main` to `audit` (Iceberg's fast_forward, which refuses 
          only if the batch's newest audit at `audit`'s current head passed every check; a batch
          that staged nothing (the same bytes again) moves nothing.
 
-Exits: 0 done (audit: every check passed); 1 a task error; 2 refused (a sha256 or size mismatch,
-other bytes under the key, `audit` holding another unpublished batch); 3 the batch failed its audit
+Exits: 0 done (audit: every check passed); 1 a task error; 2 refused (a spool file that is a link at
+any level, not a regular file, or has a second link; a sha256 or size mismatch, other bytes under the
+key, `audit` holding another unpublished batch); 3 the batch failed its audit
 (publish: its audit at `audit`'s head is missing or failed, main not moved).
 The last line on stdout is the task's result as JSON, {"exit": <n>, ...}, for the DAG's record
 task, which writes the run record (this task writes none).
@@ -44,11 +45,13 @@ put on the landing bucket, no delete. Nothing here prints a key.
 from __future__ import annotations
 
 import argparse
+import errno
 import hashlib
 import hmac
 import json
 import os
 import re
+import stat
 import sys
 import urllib.error
 import urllib.parse
@@ -124,26 +127,54 @@ class Run:
         [bronze] = self.pipeline["bronze"]
         return bronze
 
+    def read(self, file: str) -> bytes:
+        """One file of the run's entry, opened one level at a time from SPOOL without following a
+        link: refused unless /spool/<dagId>/<runId>/<file> is a regular file with one link. fetch
+        mounts only its DAG's directory, Spark the whole volume, so a parser's symbolic or hard
+        link would otherwise land another product's files as this one's (audit 2026-11-27, HIGH 6).
+        FileNotFoundError when it is absent."""
+        why = f"spool entry {self.entry / file} is not a regular file with one link inside {self.entry}/"
+        fds = [os.open(SPOOL, os.O_RDONLY | os.O_DIRECTORY)]
+        try:
+            for part, flag in [*((p, os.O_DIRECTORY) for p in self.run_id.split("/")), (file, os.O_NONBLOCK)]:
+                try:  # O_NONBLOCK: a FIFO opens at once, to be refused below, instead of waiting
+                    fds.append(os.open(part, os.O_RDONLY | os.O_NOFOLLOW | flag, dir_fd=fds[-1]))
+                except OSError as e:
+                    if e.errno in (errno.ELOOP, errno.ENOTDIR, errno.ENXIO):
+                        raise Refused(f"{why}; nothing read") from None
+                    raise
+            st = os.fstat(fds[-1])
+            if not stat.S_ISREG(st.st_mode) or st.st_nlink != 1:
+                raise Refused(f"{why}; nothing read")
+            with open(fds[-1], "rb", closefd=False) as f:
+                return f.read()
+        finally:
+            for fd in fds:
+                os.close(fd)
+
     def audits(self) -> dict:
         """audits.json's entries by name, as fetch wrote them; none when it wrote no file."""
-        path = self.entry / "audits.json"
-        if not path.exists():
+        try:
+            text = self.read("audits.json")
+        except FileNotFoundError:
             return {}
         try:
-            return {a["name"]: a for a in json.loads(path.read_text())["audits"]}
+            return {a["name"]: a for a in json.loads(text)["audits"]}
         except (ValueError, KeyError, TypeError) as e:
             print(f"audit: audits.json does not read ({type(e).__name__}); every parser audit fails")
             return {}
 
     def lines(self) -> list[str] | None:
         """rows.jsonl's lines, or None when fetch's parse failed (exit 30)."""
-        path = self.entry / "rows.jsonl"
-        return path.read_text(encoding="utf-8").splitlines() if path.exists() else None
+        try:
+            return self.read("rows.jsonl").decode("utf-8").splitlines()
+        except FileNotFoundError:
+            return None
 
     def spooled(self) -> tuple[dict, bytes, str]:
         """fetch.json, the raw bytes and their verified sha256."""
-        record = json.loads((self.entry / "fetch.json").read_text())
-        data = self.raw.read_bytes()
+        record = json.loads(self.read("fetch.json"))
+        data = self.read(self.raw.name)
         return record, data, verify(record, data)
 
 
@@ -253,10 +284,10 @@ def load(run: Run, store, lake) -> tuple[int, dict]:
     """Lands the spooled file and logs it in landing_files, then stages its rows on `audit`."""
     try:
         record, data, sha = run.spooled()
+        lines = run.lines()
     except Refused as e:
         print(f"load refused: {e}; nothing landed", file=sys.stderr)
         return EXIT_REFUSED, {}
-    lines = run.lines()
     parsed = lines is not None
     key = object_key(run.pipeline, record, sha)
     uri = f"s3://{LANDING_BUCKET}/{key}"
