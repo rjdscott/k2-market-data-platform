@@ -6,12 +6,32 @@
   "type": "object",
   "additionalProperties": false,
   "required": ["run_id", "product_id", "release_id", "task", "event", "table_name", "snapshot_before", "snapshot_after", "inputs", "rows_written", "bytes_written", "started_at", "recorded_at", "duration_s", "detail", "dbt_invocation_id", "openlineage_run_id"],
+  "$defs": {
+    "offsetGapDetail": {
+      "description": "The detail of an offset_gap row, as JSON text: what an accept-data-loss run gave up, and why the operator accepted it.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["partitions", "reason"],
+      "properties": {
+        "partitions": {"type": "array", "minItems": 1, "items": {"type": "object", "additionalProperties": false, "required": ["partition", "fromOffset", "toOffset"], "properties": {
+          "partition": {"description": "The topic partition.", "type": "integer", "minimum": 0},
+          "fromOffset": {"description": "The first offset not loaded.", "type": "integer", "minimum": 0},
+          "toOffset": {"description": "The last offset not loaded; at least fromOffset.", "type": "integer", "minimum": 0}}}},
+        "reason": {"description": "The operator's reason, as given to the accept-data-loss run.", "type": "string", "minLength": 1}
+      }
+    },
+    "productState": {
+      "description": "A derived product's completeness, computed from its newest run's inputs, not stored in a column: complete (every input read at its audited snapshot, none late), partial: <comma-separated contract ids of the inputs missing or late> (the run built from the rest), or degraded (an input is paused, deprecated or retired and the run built from its last audited snapshot).",
+      "type": "string",
+      "pattern": "^(complete|degraded|partial: [a-z][a-z0-9-]*\\.[a-z][a-z0-9-]*\\.[a-z][a-z0-9_]*(, [a-z][a-z0-9-]*\\.[a-z][a-z0-9-]*\\.[a-z][a-z0-9_]*)*)$"
+    }
+  },
   "properties": {
     "run_id": {"description": "The Airflow run, <dag_id>/<run_id>.", "type": "string", "pattern": "^[a-z][a-z0-9_]*/.+$"},
     "product_id": {"description": "<domain>.<product>.", "type": "string", "pattern": "^[a-z][a-z0-9]*(-[a-z0-9]+)*\\.[a-z][a-z0-9]*(-[a-z0-9]+)*$"},
     "release_id": {"description": "The release the run was pinned to (A1).", "type": "string", "pattern": "^v[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?-[0-9a-f]{12}$"},
     "task": {"description": "The task that wrote the row.", "enum": ["fetch", "load", "audit", "publish", "build", "expire", "record", "maintain"]},
-    "event": {"description": "What happened. audited: the audited tag moved (dbt) or main fast-forwarded (bronze).", "enum": ["started", "passed", "failed", "rolled_back", "audited", "reconciled", "expired"]},
+    "event": {"description": "What happened. audited: the audited tag moved (dbt) or main fast-forwarded (bronze). offset_gap: an accept-data-loss load skipped offsets; detail is then the JSON text of #/$defs/offsetGapDetail.", "enum": ["started", "passed", "failed", "rolled_back", "audited", "reconciled", "expired", "offset_gap"]},
     "table_name": {"description": "The table, fully qualified as the writer names it; null for a task-level row.", "type": ["string", "null"], "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"},
     "snapshot_before": {"description": "The table's snapshot id saved before the step.", "type": ["integer", "null"]},
     "snapshot_after": {"description": "The table's snapshot id after the step.", "type": ["integer", "null"]},
@@ -27,7 +47,7 @@
           "relation": {"description": "What the run read: k2gen.model.input_relation of the input.", "type": "string", "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"},
           "snapshot": {"description": "The audited snapshot id read; null when the input was never audited.", "type": ["integer", "null"]},
           "state": {"description": "The input product's lifecycle state in the run's release; how late it was is lagMinutes.", "enum": ["active", "paused", "deprecated", "retired"]},
-          "lagMinutes": {"description": "How far the input was behind, in minutes; null when unknown.", "type": ["number", "null"], "minimum": 0}
+          "lagMinutes": {"description": "How far the input was behind, in minutes: the run's start time minus the input's audited commit time (the committed_at of its audited snapshot), never below 0; null when the input was never audited.", "type": ["number", "null"], "minimum": 0}
         }
       }
     },

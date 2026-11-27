@@ -18,7 +18,7 @@ CREATE TABLE governance_build.run_records.run_record (
     product_id varchar COMMENT 'The product: <domain>.<product>, as in its ODPS document',
     release_id varchar COMMENT 'The release the run resolved once at its start: <tag>-<sha12> (A1)',
     task varchar COMMENT 'The step that wrote the row: fetch, load, audit, publish, build, expire, record or maintain',
-    event varchar COMMENT 'What happened: started, passed, failed, rolled_back, audited, reconciled or expired',
+    event varchar COMMENT 'What happened: started, passed, failed, rolled_back, audited, reconciled, expired or offset_gap (an accept-data-loss load skipped offsets; detail says which)',
     table_name varchar COMMENT 'The table the row is about, fully qualified (<catalog>.<namespace>.<table>); null for a row about the whole task',
     snapshot_before bigint COMMENT 'The table''s main snapshot id saved before the step; the id a failed build is restored to',
     snapshot_after bigint COMMENT 'The table''s main snapshot id after the step; on an audited row the id the tag or main now names',
