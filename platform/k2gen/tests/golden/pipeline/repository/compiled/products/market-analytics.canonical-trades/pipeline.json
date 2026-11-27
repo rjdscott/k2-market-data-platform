@@ -1,0 +1,32 @@
+{
+  "build": {
+    "engine": "dbt",
+    "outputs": [
+      "market_analytics_build.canonical_trades__base.trades"
+    ],
+    "publisher": "pub_canonical_trades",
+    "selector": "canonical_trades",
+    "writer": "dbt_canonical_trades"
+  },
+  "dagId": "canonical_trades",
+  "domain": "market-analytics",
+  "fence": "canonical_trades",
+  "inputs": [
+    {
+      "contractId": "market-capture.kraken-trades.silver_trade",
+      "maxLagMinutes": 15,
+      "relation": "market_capture.kraken_trades__base.silver_trade",
+      "required": false,
+      "whenAbsent": "empty"
+    }
+  ],
+  "maintain": {
+    "cron": "54 2 * * *"
+  },
+  "product": "market-analytics.canonical-trades",
+  "schedule": {
+    "cron": "2-59/5 * * * *",
+    "timeoutMinutes": 10
+  },
+  "status": "active"
+}

@@ -51,6 +51,13 @@ models:
       quality_results:
         +database: governance_build
         +schema: quality_results__base
+    market_analytics:
+      candles:
+        +database: market_analytics_build
+        +schema: candles__base
+      canonical_trades:
+        +database: market_analytics_build
+        +schema: canonical_trades__base
     market_capture:
       kraken_instruments:
         +database: market_capture_build

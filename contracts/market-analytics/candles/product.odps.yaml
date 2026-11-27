@@ -1,0 +1,75 @@
+# OHLCV candles at 1m, 5m, 1h and 1d over canonical-trades, read through k2_input at its tested
+# snapshot, duplicates excluded. Each build recomputes every bucket a newly written trade falls in,
+# over all the trades of that bucket, and merges it in: a late trade rewrites its candle at every
+# timeframe, never adds to it (the archived lake's rule, legacy/v3-lake-ingest/lake/gold.py).
+# delayed_reader replaces the retired delayed-candles: a candle once its window ended 20 minutes ago.
+apiVersion: v1.1.0
+kind: DataProduct
+id: market-analytics.candles
+name: candles
+version: 1.0.0
+status: active
+domain: market-analytics
+type: consumerAligned
+description:
+  purpose: >-
+    Open, high, low, close, volume, quote volume and trade count per venue, instrument and time
+    window, at one minute, five minutes, one hour and one day, windows half-open and in UTC.
+  limitations: >-
+    Kraken only, as canonical-trades is. A window with no trade has no row, rather than a row
+    carried from the last close. A candle is final only once every trade in its window has
+    reached canonical-trades: a trade published late (a venue frame held and taken back)
+    recomputes its candles on the next build, at every timeframe. A venue's later delivery of a
+    trade (is_duplicate) is not counted. quote_volume rounds each price to 12 and each quantity to
+    10 fractional digits before multiplying, which loses nothing while the listing's
+    pair_decimals and lot_decimals are at most those. The venues' terms of reuse are not yet
+    recorded: the product stays owner-only until they are.
+  usage: >-
+    Read market_analytics.candles.ohlcv_1m, ohlcv_5m, ohlcv_1h or ohlcv_1d, keyed by (venue,
+    instrument_id, window_start); a window is [window_start, window_end) in UTC, so a day is a UTC
+    day. A delayed_reader sees a candle once window_end is at least 20 minutes old.
+team:
+  name: analytics-team
+inputPorts:
+  - name: trades
+    version: 1.0.0
+    contractId: market-analytics.canonical-trades.trades
+    customProperties:
+      - property: required
+        value: true  # the only input: never audited, no build (wrapper exit 4); paused, read at its last audited snapshot
+      - property: maxLagMinutes
+        value: 15  # three of its five-minute runs
+outputPorts:
+  - name: ohlcv_1m
+    version: 1.0.0
+    contractId: market-analytics.candles.ohlcv_1m
+    inputContracts:
+      - id: market-analytics.canonical-trades.trades
+        version: 1.0.0
+  - name: ohlcv_5m
+    version: 1.0.0
+    contractId: market-analytics.candles.ohlcv_5m
+    inputContracts:
+      - id: market-analytics.canonical-trades.trades
+        version: 1.0.0
+  - name: ohlcv_1h
+    version: 1.0.0
+    contractId: market-analytics.candles.ohlcv_1h
+    inputContracts:
+      - id: market-analytics.canonical-trades.trades
+        version: 1.0.0
+  - name: ohlcv_1d
+    version: 1.0.0
+    contractId: market-analytics.candles.ohlcv_1d
+    inputContracts:
+      - id: market-analytics.canonical-trades.trades
+        version: 1.0.0
+customProperties:
+  - property: schedule
+    value:
+      # Every five minutes at minutes 4, 9, 14 and so on: two minutes after each canonical-trades
+      # run starts (2-59/5), so most builds read its newest tested snapshot. The timeout is two
+      # periods, an engineering bound until the first measured runs set it (W0-12, the soak's
+      # benchmark).
+      cron: "4-59/5 * * * *"
+      timeoutMinutes: 10

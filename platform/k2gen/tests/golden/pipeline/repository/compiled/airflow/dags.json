@@ -29,6 +29,34 @@
       ]
     },
     {
+      "dagId": "candles",
+      "pipeline": "compiled/products/market-analytics.candles/pipeline.json",
+      "product": "market-analytics.candles",
+      "schedule": "4-59/5 * * * *",
+      "status": "active",
+      "tasks": [
+        "resolve",
+        "build",
+        "expire",
+        "record",
+        "maintain"
+      ]
+    },
+    {
+      "dagId": "canonical_trades",
+      "pipeline": "compiled/products/market-analytics.canonical-trades/pipeline.json",
+      "product": "market-analytics.canonical-trades",
+      "schedule": "2-59/5 * * * *",
+      "status": "active",
+      "tasks": [
+        "resolve",
+        "build",
+        "expire",
+        "record",
+        "maintain"
+      ]
+    },
+    {
       "dagId": "currency_master",
       "pipeline": "compiled/products/reference-data.currency-master/pipeline.json",
       "product": "reference-data.currency-master",

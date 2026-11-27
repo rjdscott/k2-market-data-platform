@@ -366,6 +366,391 @@
     "partitioning": [],
     "sort": []
   },
+  "market_analytics.candles__base.ohlcv_1d": {
+    "columns": [
+      {
+        "name": "venue",
+        "required": true,
+        "type": "varchar"
+      },
+      {
+        "name": "instrument_id",
+        "required": true,
+        "type": "varchar"
+      },
+      {
+        "name": "window_start",
+        "required": true,
+        "type": "timestamp(6) with time zone"
+      },
+      {
+        "name": "window_end",
+        "required": true,
+        "type": "timestamp(6) with time zone"
+      },
+      {
+        "name": "open",
+        "required": true,
+        "type": "decimal(38,18)"
+      },
+      {
+        "name": "high",
+        "required": true,
+        "type": "decimal(38,18)"
+      },
+      {
+        "name": "low",
+        "required": true,
+        "type": "decimal(38,18)"
+      },
+      {
+        "name": "close",
+        "required": true,
+        "type": "decimal(38,18)"
+      },
+      {
+        "name": "volume",
+        "required": true,
+        "type": "decimal(38,18)"
+      },
+      {
+        "name": "quote_volume",
+        "required": true,
+        "type": "decimal(38,18)"
+      },
+      {
+        "name": "trade_count",
+        "required": true,
+        "type": "bigint"
+      },
+      {
+        "name": "first_trade_at",
+        "required": true,
+        "type": "timestamp(6) with time zone"
+      },
+      {
+        "name": "last_trade_at",
+        "required": true,
+        "type": "timestamp(6) with time zone"
+      },
+      {
+        "name": "through_load_seq",
+        "required": true,
+        "type": "bigint"
+      }
+    ],
+    "partitioning": [
+      "year(window_start)"
+    ],
+    "sort": []
+  },
+  "market_analytics.candles__base.ohlcv_1h": {
+    "columns": [
+      {
+        "name": "venue",
+        "required": true,
+        "type": "varchar"
+      },
+      {
+        "name": "instrument_id",
+        "required": true,
+        "type": "varchar"
+      },
+      {
+        "name": "window_start",
+        "required": true,
+        "type": "timestamp(6) with time zone"
+      },
+      {
+        "name": "window_end",
+        "required": true,
+        "type": "timestamp(6) with time zone"
+      },
+      {
+        "name": "open",
+        "required": true,
+        "type": "decimal(38,18)"
+      },
+      {
+        "name": "high",
+        "required": true,
+        "type": "decimal(38,18)"
+      },
+      {
+        "name": "low",
+        "required": true,
+        "type": "decimal(38,18)"
+      },
+      {
+        "name": "close",
+        "required": true,
+        "type": "decimal(38,18)"
+      },
+      {
+        "name": "volume",
+        "required": true,
+        "type": "decimal(38,18)"
+      },
+      {
+        "name": "quote_volume",
+        "required": true,
+        "type": "decimal(38,18)"
+      },
+      {
+        "name": "trade_count",
+        "required": true,
+        "type": "bigint"
+      },
+      {
+        "name": "first_trade_at",
+        "required": true,
+        "type": "timestamp(6) with time zone"
+      },
+      {
+        "name": "last_trade_at",
+        "required": true,
+        "type": "timestamp(6) with time zone"
+      },
+      {
+        "name": "through_load_seq",
+        "required": true,
+        "type": "bigint"
+      }
+    ],
+    "partitioning": [
+      "year(window_start)"
+    ],
+    "sort": []
+  },
+  "market_analytics.candles__base.ohlcv_1m": {
+    "columns": [
+      {
+        "name": "venue",
+        "required": true,
+        "type": "varchar"
+      },
+      {
+        "name": "instrument_id",
+        "required": true,
+        "type": "varchar"
+      },
+      {
+        "name": "window_start",
+        "required": true,
+        "type": "timestamp(6) with time zone"
+      },
+      {
+        "name": "window_end",
+        "required": true,
+        "type": "timestamp(6) with time zone"
+      },
+      {
+        "name": "open",
+        "required": true,
+        "type": "decimal(38,18)"
+      },
+      {
+        "name": "high",
+        "required": true,
+        "type": "decimal(38,18)"
+      },
+      {
+        "name": "low",
+        "required": true,
+        "type": "decimal(38,18)"
+      },
+      {
+        "name": "close",
+        "required": true,
+        "type": "decimal(38,18)"
+      },
+      {
+        "name": "volume",
+        "required": true,
+        "type": "decimal(38,18)"
+      },
+      {
+        "name": "quote_volume",
+        "required": true,
+        "type": "decimal(38,18)"
+      },
+      {
+        "name": "trade_count",
+        "required": true,
+        "type": "bigint"
+      },
+      {
+        "name": "first_trade_at",
+        "required": true,
+        "type": "timestamp(6) with time zone"
+      },
+      {
+        "name": "last_trade_at",
+        "required": true,
+        "type": "timestamp(6) with time zone"
+      },
+      {
+        "name": "through_load_seq",
+        "required": true,
+        "type": "bigint"
+      }
+    ],
+    "partitioning": [
+      "month(window_start)"
+    ],
+    "sort": []
+  },
+  "market_analytics.candles__base.ohlcv_5m": {
+    "columns": [
+      {
+        "name": "venue",
+        "required": true,
+        "type": "varchar"
+      },
+      {
+        "name": "instrument_id",
+        "required": true,
+        "type": "varchar"
+      },
+      {
+        "name": "window_start",
+        "required": true,
+        "type": "timestamp(6) with time zone"
+      },
+      {
+        "name": "window_end",
+        "required": true,
+        "type": "timestamp(6) with time zone"
+      },
+      {
+        "name": "open",
+        "required": true,
+        "type": "decimal(38,18)"
+      },
+      {
+        "name": "high",
+        "required": true,
+        "type": "decimal(38,18)"
+      },
+      {
+        "name": "low",
+        "required": true,
+        "type": "decimal(38,18)"
+      },
+      {
+        "name": "close",
+        "required": true,
+        "type": "decimal(38,18)"
+      },
+      {
+        "name": "volume",
+        "required": true,
+        "type": "decimal(38,18)"
+      },
+      {
+        "name": "quote_volume",
+        "required": true,
+        "type": "decimal(38,18)"
+      },
+      {
+        "name": "trade_count",
+        "required": true,
+        "type": "bigint"
+      },
+      {
+        "name": "first_trade_at",
+        "required": true,
+        "type": "timestamp(6) with time zone"
+      },
+      {
+        "name": "last_trade_at",
+        "required": true,
+        "type": "timestamp(6) with time zone"
+      },
+      {
+        "name": "through_load_seq",
+        "required": true,
+        "type": "bigint"
+      }
+    ],
+    "partitioning": [
+      "month(window_start)"
+    ],
+    "sort": []
+  },
+  "market_analytics.canonical_trades__base.trades": {
+    "columns": [
+      {
+        "name": "venue",
+        "required": true,
+        "type": "varchar"
+      },
+      {
+        "name": "kafka_partition",
+        "required": true,
+        "type": "integer"
+      },
+      {
+        "name": "kafka_offset",
+        "required": true,
+        "type": "bigint"
+      },
+      {
+        "name": "trade_ordinal",
+        "required": true,
+        "type": "integer"
+      },
+      {
+        "name": "trade_ts",
+        "required": true,
+        "type": "timestamp(6) with time zone"
+      },
+      {
+        "name": "instrument_id",
+        "required": true,
+        "type": "varchar"
+      },
+      {
+        "name": "venue_symbol",
+        "required": true,
+        "type": "varchar"
+      },
+      {
+        "name": "trade_id",
+        "required": true,
+        "type": "bigint"
+      },
+      {
+        "name": "side",
+        "required": true,
+        "type": "varchar"
+      },
+      {
+        "name": "price",
+        "required": true,
+        "type": "decimal(38,18)"
+      },
+      {
+        "name": "quantity",
+        "required": true,
+        "type": "decimal(38,18)"
+      },
+      {
+        "name": "is_duplicate",
+        "required": true,
+        "type": "boolean"
+      },
+      {
+        "name": "load_seq",
+        "required": true,
+        "type": "bigint"
+      }
+    ],
+    "partitioning": [
+      "day(trade_ts)"
+    ],
+    "sort": []
+  },
   "market_capture.kraken_instruments__base.silver_listing": {
     "columns": [
       {

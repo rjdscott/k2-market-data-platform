@@ -54,3 +54,9 @@ site-install:  ## Schedule `make site` daily at 05:15 UTC: a systemd user timer 
 	systemctl --user daemon-reload
 	systemctl --user enable --now k2-site.timer
 	@echo "Scheduled daily at 05:15 UTC. Deploy regenerates the site too; 'make site' runs it now."
+
+.PHONY: hold unhold
+hold:  ## PRODUCT=<domain/name> REASON="<text, at most 200 chars>" Hold a product of the live release: the hold row first, then its DAG paused; no deploy unpauses it, its resolve task refuses runs (scripts/hold.py)
+	@uv run --no-project --with trino==0.340.0 python3 scripts/hold.py hold "$(PRODUCT)" "$(REASON)"
+unhold:  ## PRODUCT=<domain/name> End the operator hold: the release row, then the DAG unpaused unless a rebuild or restore hold is still open (scripts/hold.py)
+	@uv run --no-project --with trino==0.340.0 python3 scripts/hold.py unhold "$(PRODUCT)"

@@ -31,6 +31,19 @@ tasks (fetch comes or goes), so deploy's drain still sees every shape change:
 A public-API product runs the same fetch one-shot as a file product (fetch.py reads the kind), so
 its DAG is the file kind's.
 
+A product whose pipeline.json names a refresh target (key `refresh`, the target's product id) adds
+`build >> refresh` (W1-6, phase-001-interfaces.md, "Holds"): Airflow's TriggerDagRunOperator, skipped
+unless build's result says `degraded: true`, starting the target's DAG once per run and never waiting
+for it. A target is another product of the release whose own pipeline names no refresh target, so the
+chain is one hop; the parse refuses anything else. dags.json does not list `refresh`, so a pipeline
+that gains or loses the key changes the DAG's shape without a drain. ponytail: safe, since the task
+reads only build's result and triggers at most once per run id; list it in dags.json's tasks if a
+shape change must ever drain.
+
+Holds (I-7): resolve refuses a run of a held product, naming the hold, read as svc.runs through the
+pinned release's k2runs.held. A release without the holds table holds nothing; a read that fails
+refuses the run (fail closed).
+
 Accepting data loss (phase-001-interfaces.md, "Accepting data loss"): a manually triggered run of a
 Kafka product's DAG with conf exactly {"acceptDataLoss": true, "reason": "<non-empty>"} gives load,
 and no other task, `--accept-data-loss`; resolve refuses any other conf before anything is read.
@@ -53,7 +66,7 @@ Spark tasks (load, audit, publish, expire, maintain, compact) are `docker exec` 
 Spark container, as the retired LakeScript ran them (IMPLEMENTATION-N0-N1 A13), from the pinned
 release's `platform/docker/lake/`. The scheduler holds the Docker socket (ADR-059 Outcome,
 2026-11-27); this module imports only the standard library, Airflow and oneshot.py, and loads one
-platform module, `platform/runs/k2runs.py`, from the pinned release in `record`;
+platform module, `platform/runs/k2runs.py`, from the pinned release in `resolve` and `record`;
 never anything under `domains/` (docker/airflow/tests/test_factory.py holds it to that).
 """
 
@@ -67,6 +80,8 @@ import subprocess
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+# The standard provider: apache-airflow 3.3.2's own dependency, 1.19.0 under the image's constraints.
+from airflow.providers.standard.operators.trigger_dagrun import TriggerDagRunOperator
 from airflow.sdk import DAG, BaseOperator, TriggerRule
 from airflow.sdk.exceptions import AirflowException, AirflowFailException, AirflowSkipException
 from croniter import croniter  # Airflow's own cron dependency
@@ -76,6 +91,9 @@ POINTER = RELEASES_MOUNT + "/pointers/airflow"
 SPARK = "k2-spark-iceberg"  # compose's container_name, the same under any project name
 LAKE = "platform/docker/lake"  # the Spark scripts inside a release
 K2RUNS = "platform/platform/runs/k2runs.py"
+# k2gen's model.ddl_path for the holds, deploy's HOLDS_DDL: a release with this file has the table.
+HOLDS_DDL = "compiled/lake/ddl/trino/governance.run_records.holds.sql"
+REFRESH = "refresh"  # pipeline.json: the product whose DAG a degraded build starts (W1-6)
 POOLS = {"fetch": "fetch", "build": "dbt",
          **dict.fromkeys(("load", "audit", "publish", "expire", "maintain", "compact"), "lake_spark")}
 TASKS = ("resolve", "fetch", "load", "audit", "publish", "build", "expire", "record", "maintain")
@@ -160,13 +178,31 @@ def data_loss_reason(dag_run, kafka: bool) -> str | None:
     return reason
 
 
-class Resolve(BaseOperator):
-    """The run's conf checked, then realpath of the airflow pointer, once per run: `{"release",
-    "releasePath"}` by XCom."""
+def refuse_if_held(release_path: str, product: str) -> None:
+    """I-7: a held product's run fails here, naming the hold, read as svc.runs (the password the
+    scheduler mounts for record). A release without the holds table holds nothing. A read that fails
+    refuses the run too, so a hold is never skipped because Trino was down.
+    ponytail: fail closed, so an unplanned Trino outage refuses every run while it lasts; such a run
+    would fail at build and record anyway, and a deploy that restarts Trino drains every DAG first."""
+    if not Path(release_path, HOLDS_DDL).is_file():
+        return
+    try:
+        k2runs = load_k2runs(release_path)
+        hold = k2runs.held(k2runs.connect(), product)
+    except Exception as e:  # noqa: BLE001 - unread holds refuse the run
+        raise AirflowException(f"run refused: the holds of {product} could not be read: {type(e).__name__}: {e}") from None
+    if hold:
+        raise AirflowFailException(f"run refused: {product} is held ({hold['kind']} hold by {hold['held_by']} at "
+                                   f"{hold['held_at']}): {hold['reason']}; it runs again once the hold is released")
 
-    def __init__(self, *, kafka: bool = False, **kwargs) -> None:
+
+class Resolve(BaseOperator):
+    """The run's conf checked, then realpath of the airflow pointer, once per run, then the product's
+    holds under that release: `{"release", "releasePath"}` by XCom."""
+
+    def __init__(self, *, product: str, kafka: bool = False, **kwargs) -> None:
         super().__init__(**kwargs)
-        self.kafka = kafka
+        self.product, self.kafka = product, kafka
 
     def execute(self, context) -> dict:
         data_loss_reason(context.get("dag_run"), self.kafka)  # before the pointer, before any task
@@ -174,7 +210,26 @@ class Resolve(BaseOperator):
         parent, release = os.path.split(path)
         if parent != RELEASES_MOUNT or not RELEASE.fullmatch(release) or release == "pointers":
             raise AirflowFailException(f"{POINTER} resolves to {path!r}, not {RELEASES_MOUNT}/<release id>")
+        refuse_if_held(path, self.product)
         return {"release": release, "releasePath": path}
+
+
+class Refresh(TriggerDagRunOperator):
+    """W1-6: the refresh target's DAG started when build's result says `degraded: true`, else a skip.
+    One run per triggering run (a fixed run id, skipped when it exists), never waited for, no retry.
+    No conf, and no OpenLineage keys injected into it: the target's resolve refuses any other conf."""
+
+    def __init__(self, *, target: str, **kwargs) -> None:
+        super().__init__(task_id=REFRESH, trigger_dag_id=target, skip_when_already_exists=True,
+                         wait_for_completion=False, openlineage_inject_parent_info=False, retries=0, **kwargs)
+
+    def execute(self, context) -> None:
+        ti = context["ti"]
+        result = ti.xcom_pull(task_ids="build", key="result")
+        if not (isinstance(result, dict) and result.get("degraded") is True):
+            raise AirflowSkipException(f"build is not degraded, so no {self.trigger_dag_id} run: {result!r}")
+        self.trigger_run_id = f"refresh__{ti.run_id}"
+        return super().execute(context)
 
 
 class PinnedOneShot(OneShotOperator):
@@ -379,8 +434,23 @@ def check_entry(i: int, e: object) -> dict:
     return e
 
 
-def make_dag(release: Path, e: dict) -> DAG:
-    doc = read_json(release / e["pipeline"])
+def refresh_targets(entries: list[dict], docs: dict[str, dict]) -> dict[str, str]:
+    """{product: the DAG id its degraded build starts}, or a ValueError naming the product: a target
+    is another product of this dags.json whose own pipeline names no refresh target (one hop, no loop)."""
+    dag_of, out = {e["product"]: e["dagId"] for e in entries}, {}
+    for product, doc in docs.items():
+        if (target := doc.get(REFRESH)) is None:
+            continue
+        if target == product or target not in dag_of:
+            raise ValueError(f"{product}: refresh target {target!r} is not another product of this release's dags.json")
+        if REFRESH in docs[target]:
+            raise ValueError(f"{product}: refresh target {target} names its own refresh target "
+                             f"{docs[target][REFRESH]!r}; a refresh is one hop, so a target triggers nothing")
+        out[product] = dag_of[target]
+    return out
+
+
+def make_dag(e: dict, doc: dict, refresh: str | None) -> DAG:
     timeout = doc["schedule"].get("timeoutMinutes")
     kafka = (doc.get("connector") or {}).get("kind") == "kafka"
     with DAG(e["dagId"], schedule=e["schedule"], start_date=START, catchup=False, max_active_runs=1,
@@ -391,7 +461,7 @@ def make_dag(release: Path, e: dict) -> DAG:
              # `make release-verify`; Airflow applies this at creation only, so an existing DAG keeps its state.
              is_paused_upon_creation=True, tags=[e["product"]]) as dag:
         product, tasks = e["product"], e["tasks"]
-        ops = {"resolve": Resolve(task_id="resolve", kafka=kafka)}
+        ops = {"resolve": Resolve(task_id="resolve", product=product, kafka=kafka)}
         for t in tasks:
             if t in ("fetch", "build"):
                 # build: no retry (its failures are deterministic), and none_failed, so it runs after
@@ -417,6 +487,10 @@ def make_dag(release: Path, e: dict) -> DAG:
             if "compact" in ops:
                 end = end >> ops["compact"]
             end >> ops["record"]
+        if refresh:  # all_success: a degraded build publishes, so build succeeded
+            if "build" not in ops:
+                raise ValueError(f"{product}: a refresh target without a build task")
+            ops["build"] >> Refresh(target=refresh)
         if "expire" in ops:
             ops["expire"].as_teardown()
         ops["record"].as_teardown()
@@ -428,7 +502,9 @@ def build(release: Path) -> dict[str, DAG]:
     if not isinstance(entries, list):
         raise ValueError("dags.json: dags is not a list")
     checked = [check_entry(i, e) for i, e in enumerate(entries)]  # every entry before any DAG
-    return {e["dagId"]: make_dag(release, e) for e in checked}
+    docs = {e["product"]: read_json(release / e["pipeline"]) for e in checked}
+    refresh = refresh_targets(checked, docs)
+    return {e["dagId"]: make_dag(e, docs[e["product"]], refresh.get(e["product"])) for e in checked}
 
 
 _parents = Path(__file__).resolve().parents  # a checkout mount (a release from before the run code) is shallower: no DAG

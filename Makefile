@@ -150,7 +150,7 @@ check-alerts:  ## promtool: syntax-check every rule file and run the alert unit 
 
 # platform/k2gen is checked with the ruff and mypy pinned in its own lock, as CI's contracts job does.
 lint:  ## Ruff over docker/lake, the Airflow image tests, the gate scripts and other scripts/ Python, and the tests; ruff and mypy (strict) over platform/k2gen
-	uv run --no-project --with ruff==0.17.6 ruff check docker/lake docker/airflow scripts/screenshots scripts/check_docs.py scripts/check-budget.py scripts/check-env.py scripts/make-synthetic-fixtures.py scripts/principal-secret.py scripts/engine-keys.py scripts/backup_lake.py scripts/deploy.py scripts/access_verify.py scripts/trino_rules_test.py scripts/trino_rules_c1_test.py scripts/verify docker/tools docker/fetch docker/dbt-runner platform/runs platform/catalog-site domains tests
+	uv run --no-project --with ruff==0.17.6 ruff check docker/lake docker/airflow scripts/screenshots scripts/check_docs.py scripts/check-budget.py scripts/check-env.py scripts/make-synthetic-fixtures.py scripts/principal-secret.py scripts/engine-keys.py scripts/backup_lake.py scripts/deploy.py scripts/hold.py scripts/access_verify.py scripts/trino_rules_test.py scripts/trino_rules_c1_test.py scripts/verify docker/tools docker/fetch docker/dbt-runner platform/runs platform/catalog-site domains tests
 	cd platform/k2gen && uv run --locked -q ruff check . && uv run --locked -q mypy
 
 # Stood down, not deleted: the old lake ingest, the tables these gates read and

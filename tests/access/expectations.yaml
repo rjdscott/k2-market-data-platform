@@ -171,6 +171,16 @@ expectations:
   - {principal: p.canary-full, table: reference_data.security_master__base.venue_symbol_held, denied: true}  # no grant yet: nobody holds a role on it
   - {principal: p.canary-full, table: reference_data.security_master__base.code_exceptions, denied: true}  # no grant yet: nobody holds a role on it
   - {principal: p.canary-full, table: reference_data.security_master__base.stablecoins, denied: true}  # no grant yet: nobody holds a role on it
+  - {principal: p.canary-full, table: market_analytics.canonical_trades.trades, denied: true}  # no grant yet: nobody holds a role on it
+  - {principal: p.canary-full, table: market_analytics.canonical_trades__base.trades, denied: true}  # no grant yet: nobody holds a role on it
+  - {principal: p.canary-full, table: market_analytics.candles.ohlcv_1m, denied: true}  # no grant yet: nobody holds a role on it
+  - {principal: p.canary-full, table: market_analytics.candles__base.ohlcv_1m, denied: true}  # no grant yet: nobody holds a role on it
+  - {principal: p.canary-full, table: market_analytics.candles.ohlcv_5m, denied: true}  # no grant yet: nobody holds a role on it
+  - {principal: p.canary-full, table: market_analytics.candles__base.ohlcv_5m, denied: true}  # no grant yet: nobody holds a role on it
+  - {principal: p.canary-full, table: market_analytics.candles.ohlcv_1h, denied: true}  # no grant yet: nobody holds a role on it
+  - {principal: p.canary-full, table: market_analytics.candles__base.ohlcv_1h, denied: true}  # no grant yet: nobody holds a role on it
+  - {principal: p.canary-full, table: market_analytics.candles.ohlcv_1d, denied: true}  # no grant yet: nobody holds a role on it
+  - {principal: p.canary-full, table: market_analytics.candles__base.ohlcv_1d, denied: true}  # no grant yet: nobody holds a role on it
   # No compaction by a consumer (plan 002's optimize line). The reader name is a view, which Trino
   # refuses as NOT_SUPPORTED before any access check, so the denials name the table under it.
   - {principal: p.analyst-a, sql: "ALTER TABLE fx_reference.ecb_fx_rates.silver_rates EXECUTE optimize", expect: error}  # a view: not supported

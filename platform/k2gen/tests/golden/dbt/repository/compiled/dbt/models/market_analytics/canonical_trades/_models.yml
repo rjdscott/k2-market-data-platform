@@ -1,0 +1,130 @@
+# Compiled by k2gen (platform/k2gen/k2gen/emit/dbt.py) from the release's documents. Never edit it: change the documents.
+version: 2
+models:
+- name: canonical_trades__trades
+  description: 'One row per trade and delivery of every venue, in one set of columns: each venue silver row once, its duplicate
+    flag as the venue set it, and the venue row''s key as its lineage.'
+  config:
+    alias: trades
+    properties:
+      partitioning: ARRAY['day(trade_ts)']
+    unique_key:
+    - venue
+    - kafka_partition
+    - kafka_offset
+    - trade_ordinal
+    - trade_ts
+    meta:
+      k2:
+        contract: market-analytics.canonical-trades.trades
+        reader: market_analytics.canonical_trades.trades
+  columns:
+  - name: venue
+    description: The venue the trade happened on, the security master's venue (kraken); a constant per venue input, derived
+      from no column.
+    data_type: varchar
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  - name: kafka_partition
+    description: The venue row's topic partition; venue, kafka_partition, kafka_offset, trade_ordinal and trade_ts are the
+      venue silver row's key.
+    data_type: integer
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  - name: kafka_offset
+    description: The venue row's frame offset in its partition.
+    data_type: bigint
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  - name: trade_ordinal
+    description: The venue row's position in its frame, from 1.
+    data_type: integer
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  - name: trade_ts
+    description: The venue's time of the trade, in UTC to the microsecond. The partition source (day), so it is in the key,
+      as an incremental merge's unique key holds every partition source column; the first four key columns alone are already
+      unique.
+    data_type: timestamp(6) with time zone
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  - name: instrument_id
+    description: The security master's instrument the venue's symbol named at trade_ts, as the venue product resolved it.
+    data_type: varchar
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  - name: venue_symbol
+    description: The symbol as the venue spells it.
+    data_type: varchar
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  - name: trade_id
+    description: The venue's trade id; with venue and venue_symbol, the trade a delivery is of.
+    data_type: bigint
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  - name: side
+    description: The taker's side, buy or sell.
+    data_type: varchar
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  - name: price
+    description: The price in the quote asset, exactly as the venue product holds it.
+    data_type: decimal(38,18)
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  - name: quantity
+    description: The quantity in the base asset, exactly as the venue product holds it.
+    data_type: decimal(38,18)
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  - name: is_duplicate
+    description: 'The venue product''s flag: true for a later delivery of a trade already delivered. Kept, never dropped;
+      when the venue flips it (a held frame taken back is older than a delivery already published), the row here follows on
+      the next build.'
+    data_type: boolean
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  - name: load_seq
+    description: 'The build order of the row: each build numbers the rows it writes, new or with a changed flag, after the
+      highest number already here, in key order. A derived product (candles) reads the rows past the highest number it has
+      counted, a number rather than a clock (I-1''s rule for a watermark). A full refresh numbers from 1 again, so the products
+      built on this one are rebuilt after it.'
+    data_type: bigint
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  data_tests:
+  - k2_unique_key:
+      arguments:
+        columns:
+        - venue
+        - kafka_partition
+        - kafka_offset
+        - trade_ordinal
+        - trade_ts
