@@ -33,3 +33,4 @@ One file per measurement session, `YYYY-MM-DD.md`.
 |------|--------|------------|
 | [2026-02-19](./2026-02-19-v2-baseline.md) | `c3fd668` | p99 170–197 ms exchange→Silver (n=12–13, **cold start**) · 6/6 failure modes, worst MTTR 32 s · 15.1 CPU / 21.875 GB declared · 236 K rows/s offload. Retro-compiled 2026-08-26 |
 | [2026-11-26](./2026-11-26-product-run-cost.md) | `64a07c2` | one product run 6.51 s of Spark, median of n = 5 (max 6.60 s, the p90 at n = 5) · dbt build 3.50 s median, n = 6 · per-product Spark sessions stay · delete-file bound 288 per five-minute silver table between daily compactions |
+| [2026-11-27](./2026-11-27-ecb-fx-run-times.md) | `167b93a` | ECB FX DAG run on an unchanged file 31.2 / 32.63 / 34.8 s min / mean / max, n = 20 · one run with a new file end to end 121.7 s, n = 1 · the product's timeout set to 10 minutes from it |
