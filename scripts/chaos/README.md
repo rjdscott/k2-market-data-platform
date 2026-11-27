@@ -1,6 +1,6 @@
-# `scripts/chaos/`: fault injection for the capture tier
+# `scripts/chaos/`: fault injection for the capture tier and the run path
 
-Five scripts: four break the running stack on purpose, wait for the alert that is
+Two groups. The run path's four (plan 002's verification, [below](#the-run-path-scripts-plan-002)) break one product's run on a throwaway lake, or on the live stack under a deploy. The capture tier's five come first here: four break the running stack on purpose, wait for the alert that is
 supposed to notice, measure how long recovery took, and put the stack back; the
 fifth records an honest gap it cannot yet inject. They
 are the `proof` column of
@@ -117,6 +117,37 @@ the scrape `job` (`capture-<exchange>`) for `up`-based alerts like `CaptureDown`
 Without that scope `capture-kill.sh --exchange binance` would return "firing" off an
 unrelated kraken alert and every number after the wait would belong to the wrong
 venue.
+
+---
+
+## The run-path scripts (plan 002)
+
+Plan 002's verification block names five scripts for the ECB run path. Four are in this
+directory and the fifth, `fx-idempotent.sh`, is a check rather than a fault, so it lives in
+`scripts/verify/`. The four throwaway ones take a compiled release
+(`bash <script> <release dir>`, for example the one `scripts/verify/ci-validate.sh` prints) and
+build a throwaway lake of their own from it (`scripts/lib/throwaway-lake.sh`, the script's name
+as its prefix). Every task in them runs the release's own code, in the shape the DAG factory
+gives it, on the machinery `scripts/verify/run-path.sh` (spine-e2e's `run` stage) shares through
+`scripts/lib/run-path-lib.sh`. Each prints one PASS or FAIL line per claim and `<n> PASS, <m>
+FAIL`, stops at the first FAIL, and refuses to start beside another container job or under
+10 GiB available. None touches the running stack but `deploy-mid-run.sh`, which is for the
+operator on the live stack after the first deploy of the release under test.
+
+| Script | What it proves | Where it runs | Recorded result |
+|---|---|---|---|
+| `fx-bad-file.sh` | the corrupt synthetic ECB file lands and fails its audit, bronze `main` does not move, the next file is refused at load with its bytes landed, the operator's clearing statement (`ALTER TABLE <bronze> REPLACE BRANCH audit AS OF VERSION <main>`) lets its load proceed, and both landing objects are their spooled raw files byte for byte | a throwaway lake, prefix `fx-bad-file` | 2026-11-27: `fx-bad-file: 3 PASS, 0 FAIL in 126 s` |
+| [`../verify/fx-idempotent.sh`](../verify/fx-idempotent.sh) | the same bytes again add no landing object, no `landing_files` row and no bronze row, and the build passes with the same silver and gold rows: every count before and after | a throwaway lake, prefix `fx-idempotent` | 2026-11-27: `fx-idempotent: 5 PASS, 0 FAIL in 123 s` (every count 1 -> 1 or 15 -> 15) |
+| `dbt-failing-test.sh` | a planted data test failure (gold's newest USD row twice, the second at rate 999) restores silver and gold to their prior snapshots with a `rolled_back` row each; a reader polling gold through its view every 50 ms never sees the failed build; expire removes the build's snapshots by id; the expire task's run record is written | a throwaway lake, prefix `dbt-failing-test` | 2026-11-27: `dbt-failing-test: 6 PASS, 0 FAIL in 160 s` (150 polls, each the 15 tested rows) |
+| `trino-stop-mid-build.sh` | the running dbt runner's environment holds exactly the seven names the release gives its kind and the image's own, no secret; with Trino stopped once the build's `started` rows are in, the wrapper exits non-zero and publishes nothing; the next run writes `reconciled` first, then builds and publishes | a throwaway lake, prefix `trino-stop` | 2026-11-27: `trino-stop: 6 PASS, 0 FAIL in 159 s`, on the second run: the first stopped at claim 4 on the harness's own name check, which counted the Python base image's `GPG_KEY` (the public fingerprint of Python's release-signing key) as a forbidden name; the check now applies to the names the run adds to the image's own |
+| `deploy-mid-run.sh <dag_id> <release id>` | a run triggered on the live release R-1 and overtaken by `make deploy` finishes on R-1, every run-record row of it says R-1, and the next run says the new release | the live stack; refused unless `make deploy PLAN=1` shows no drain and nothing recreated (a documentation-only or rules-only release); `--dry-run` prints the plan | not yet run; written before its first live run, its header says what to watch |
+
+Two things these scripts record rather than hide. The expire task's run record that
+`dbt-failing-test.sh` writes is the row the DAG's `record` task writes for an expire that
+succeeded, event `passed`: plan 002 names an `expired` row, and no code writes that event (the
+script's header says so). And on a throwaway lake the dbt runner's flags are
+`run-path-lib.sh`'s, which mirror `oneshot.py`; the operator's own flags are held to the same
+names by `docker/airflow/tests/test_oneshot.py`.
 
 ---
 
