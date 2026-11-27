@@ -1,0 +1,60 @@
+{
+  "bronze": [
+    {
+      "audits": [],
+      "branch": "audit",
+      "checks": "lake.currency_master.audit_checks",
+      "decimal": [],
+      "key": [
+        "code",
+        "source_file_sha256"
+      ],
+      "patterns": {
+        "code": "^[A-Z]{3}$",
+        "numeric_code": "^[0-9]{3}$"
+      },
+      "table": "lake.currency_master.bronze_currencies",
+      "values": [
+        "numeric_code",
+        "name",
+        "minor_units",
+        "is_fund"
+      ]
+    }
+  ],
+  "build": {
+    "engine": "dbt",
+    "outputs": [
+      "reference_data_build.currency_master__base.currency"
+    ],
+    "publisher": "pub_currency_master",
+    "selector": "currency_master",
+    "writer": "dbt_currency_master"
+  },
+  "connector": {
+    "allowHosts": [
+      "www.six-group.com"
+    ],
+    "format": "xml",
+    "kind": "https-file",
+    "parser": "iso4217",
+    "url": "https://www.six-group.com/dam/download/financial-information/data-center/iso-currrency/lists/list-one.xml"
+  },
+  "dagId": "currency_master",
+  "domain": "reference-data",
+  "fence": "currency_master",
+  "inputs": [],
+  "landing": {
+    "bucket": "k2-landing",
+    "log": "lake.currency_master.landing_files",
+    "prefix": "reference-data/currency-master/"
+  },
+  "maintain": {
+    "cron": "51 2 * * *"
+  },
+  "product": "reference-data.currency-master",
+  "schedule": {
+    "cron": "0 5 * * 1"
+  },
+  "status": "active"
+}

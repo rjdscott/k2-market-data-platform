@@ -26,6 +26,14 @@ networks:
   # images never join it.
   k2-catalog:
     driver: bridge
+  # fetch's own network (review F5/R7, 2026-11-27): a product's parser runs in fetch, so fetch
+  # reaches the internet and nothing of the stack. No other service joins it: Docker's embedded
+  # DNS answers on a user-defined bridge only for containers on that network, and separate bridges
+  # do not route to each other, so minio, trino, redpanda and the rest neither resolve nor answer
+  # from here (tests/test_catalog_fence_compose.py; the `fetch` probe rows of
+  # tests/access/expectations.yaml on the stack).
+  k2-egress:
+    driver: bridge
 
 #############################################################################
 # VOLUMES
@@ -58,6 +66,18 @@ volumes:
   minio-data:
     driver: local
 
+  # The fetch one-shot's spool, /spool/<dagId>/<runId>/ (phase-001-interfaces.md): fetch writes
+  # it; the operator mounts it as <project>_k2-spool, so it keeps compose's default name.
+  k2-spool:
+    driver: local
+
+  # The generated sites (W3-11), <name>/current/ of each: catalog/ by k2site.py in the tools
+  # one-shot, dbt-docs/ by `k2-dbt docs` in a dbt-runner one-shot, both run by deploy as the host
+  # user; k2-api serves them read-only. Public pages only. Its root is mode 1777 from whichever
+  # image mounts it first, empty (tools /site, k2-api /srv/k2-site).
+  k2-site:
+    driver: local
+
 
 # Every container's local log is capped. Docker's json-file driver keeps a container's
 # output in one file that grows without limit unless told otherwise; on 2026-11-26 the
@@ -81,9 +101,9 @@ x-logging: &k2-logging
 # mount. Mounted by every service that reads a pointer (scripts/deploy.py POINTERS):
 # trino, airflow-scheduler, airflow-dag-processor, spark-iceberg, prometheus, and the
 # profiled stubs; and by lake-init, for the storage plan (the trino pointer's, or the
-# release deploy names in K2_STORAGE_PLAN). Only Trino and lake-init read through it
-# today; the DAGs, the Spark jobs and the alert rules move onto their pointers in
-# phase 002, when a release first carries them.
+# release deploy names in K2_STORAGE_PLAN). Airflow's DAG folder and Prometheus's rules
+# are read through their pointers (`platform/` in the release, k2gen PLATFORM_CODE); a
+# Spark task runs the scripts of the release its run pinned, /k2/releases/<id>/platform/.
 x-k2-releases-ro: &k2-releases-ro
   type: bind
   source: ${K2_RELEASES:-${HOME}/k2-releases}
@@ -128,6 +148,16 @@ x-airflow-env: &airflow-env
   AIRFLOW__CORE__EXECUTION_API_SERVER_URL: http://airflow-api-server:8080/execution/
   AIRFLOW__API_AUTH__JWT_SECRET: ${AIRFLOW_JWT_SECRET}
   AIRFLOW__API__SECRET_KEY: ${AIRFLOW_API_SECRET_KEY}
+  # The DAG folder is the airflow pointer's release (ADR-058), read through the releases root:
+  # the default bundle, dags-folder, follows it. A dangling path (no pointer yet, or a release
+  # without platform/) is an empty folder to Airflow 3.3: the bundle logs a warning, no file is
+  # found, no DAG, and every service starts healthy. Files are listed every 300 s
+  # ([dag_processor] refresh_interval) and each parsed every 30 s, so a swap reaches factory.py,
+  # whose path does not change, within 30 s.
+  AIRFLOW__CORE__DAGS_FOLDER: /k2/releases/pointers/airflow/platform/docker/airflow/dags
+  # A scheduler that dies under a running task leaves it running until the orphan check resets
+  # it, by default every 300 s (scripts/verify/oneshot-slots.sh, W0-8).
+  AIRFLOW__SCHEDULER__ORPHANED_TASKS_CHECK_INTERVAL: "30"
   # Tags in InfluxDB form, which the statsd exporter turns into labels, and no
   # legacy names: those embed dag_id in the metric name and would arrive twice.
   AIRFLOW__METRICS__STATSD_ON: "True"
@@ -329,9 +359,9 @@ services:
     networks:
       - k2-net
       - k2-catalog  # Lakekeeper reaches it (storage checks, purges); so do lake-init and drop.sh, from there
-    ports:
-      - "127.0.0.1:9000:9000"     # API
-      - "127.0.0.1:9001:9001"     # Console
+    # No host port (W1-23): the S3 API (9000) and console (9001) are reached from a container on
+    # these networks only, so the host's way to the lake's objects is Trino and its rules.
+    # tests/test_catalog_fence_compose.py pins it.
     volumes:
       - minio-data:/data
     environment:
@@ -377,9 +407,8 @@ services:
     volumes:
       - prometheus-data:/prometheus
       - ./docker/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
-      # The rules stay on the checkout until a release carries them (phase 002); the
-      # releases root is mounted now so deploy can check the pointer it will read.
-      - ./docker/prometheus/rules:/etc/prometheus/rules:ro
+      # The rules: the prometheus pointer's platform/docker/prometheus/rules/*.yml
+      # (prometheus.yml rule_files), reread on the SIGHUP deploy sends at each swap.
       - *k2-releases-ro
     command:
       - '--config.file=/etc/prometheus/prometheus.yml'
@@ -636,21 +665,24 @@ services:
   # ───────────────────────────────────────────────────────────────────────
   # The scheduler of the lake writes. Its old DAGs (the 5-minute ingest, the
   # nightly maintenance, the rebuild and the hourly dbt marts) are retired to
-  # legacy/v3-lake-ingest/airflow/ (ADR-056), so docker/airflow/dags holds no
-  # DAG until phase 002 adds one per product. docs/runbooks/airflow-scheduling.md
-  # has the recoveries.
+  # legacy/v3-lake-ingest/airflow/ (ADR-056). The DAGs are the release's: one per
+  # product from docker/airflow/dags/factory.py, read through the airflow pointer
+  # (AIRFLOW__CORE__DAGS_FOLDER above), never from the checkout.
+  # docs/runbooks/airflow-scheduling.md has the recoveries.
   #
   # LocalExecutor, so tasks run inside airflow-scheduler, and that is the only
   # service given the Docker socket. No triggerer: nothing here defers.
   #
-  # ./docker/airflow/dags and ./dbt are directory bind mounts held by the
-  # scheduler and the dag-processor, read-only: cosmos ran each dbt command in
-  # a temporary copy of symlinks, where dbt writes target/ and logs/. A checkout
-  # switch or a write-then-rename edit needs both recreated (CLAUDE.md,
-  # bind-mount gotcha).
+  # ./dbt is a directory bind mount held by the scheduler and the dag-processor,
+  # read-only: cosmos ran each dbt command in a temporary copy of symlinks, where
+  # dbt writes target/ and logs/. A checkout switch or a write-then-rename edit
+  # needs both recreated (CLAUDE.md, bind-mount gotcha).
 
   # One-shot: creates the `airflow` role and database on prefect-db when
-  # missing (docker/airflow/init-db.sh), then `airflow db migrate`.
+  # missing (docker/airflow/init-db.sh), then `airflow db migrate`, then the three
+  # pools the factory's tasks name (phase-001-interfaces.md, "Run-time contracts"):
+  # a task in a pool that does not exist never schedules. `pools set` creates or
+  # updates, so every run converges them.
   airflow-migrate:
     logging: *k2-logging
     build:
@@ -666,7 +698,14 @@ services:
       PGUSER: ${PREFECT_DB_USER}
       PGPASSWORD: ${PREFECT_DB_PASSWORD}
       AIRFLOW_DB_PASSWORD: ${AIRFLOW_DB_PASSWORD}
-    command: ["bash", "/opt/k2/init-db.sh"]
+    command:
+      - bash
+      - -c
+      - >-
+        bash /opt/k2/init-db.sh
+        && airflow pools set lake_spark 1 'Spark tasks: one driver at a time in spark-iceberg'
+        && airflow pools set fetch 1 'fetch one-shots'
+        && airflow pools set dbt 2 'dbt-runner one-shots'
     depends_on:
       prefect-db:
         condition: service_healthy
@@ -722,9 +761,24 @@ services:
 
   # Scheduler, and with LocalExecutor the four task slots too. The Docker
   # socket is root on the Docker
-  # engine, whatever the uid inside (ADR-034). It runs as the image's `airflow`
-  # user; group_add gives it the socket's group, which is 0 on Docker Desktop
-  # and `docker` on a Linux engine: set K2_DOCKER_GID (.env.example).
+  # engine, whatever the uid inside (ADR-034). group_add gives it the socket's
+  # group, which is 0 on Docker Desktop and `docker` on a Linux engine: set
+  # K2_DOCKER_GID (.env.example).
+  #
+  # It runs as the host user, K2_RUN_UID, with group 0 (the image supports any
+  # uid with group 0, as Airflow's own compose file runs it): `record` reads
+  # svc.runs's password file, mode 600 and owned by the host user, as the
+  # one-shots that mount secrets do (docker/airflow/dags/oneshot.py). The socket
+  # already makes it root on the engine, so the uid widens nothing; the other
+  # Airflow services keep the image's `airflow` user and mount no secret.
+  #
+  # The environment past the shared block is the one-shot operator's: the host
+  # side of its mounts (K2_RELEASES, K2_SECRETS, as the daemon resolves a bind
+  # source on the host), the project its networks and spool volume belong to,
+  # the uid its secret-mounting kinds run as, and dbt-runner's fixed values,
+  # passed on by name (the same values as the dbt-runner service's). K2_TRINO_HOST,
+  # K2_TRINO_INTERNAL_PORT and K2_RUNS_USER are also `record`'s, through k2runs.connect():
+  # Trino is on k2-net too, so the scheduler stays off k2-catalog. No storage key.
   #
   # stop_grace_period covers a task's on_kill, which stops the Spark driver
   # (up to 10 s) before the container goes: without it, `docker compose stop`
@@ -734,20 +788,40 @@ services:
     image: k2-airflow:3.3.2  # built by airflow-migrate
     container_name: k2-airflow-scheduler
     hostname: airflow-scheduler
+    user: "${K2_RUN_UID:?set K2_RUN_UID in .env (make engine-keys)}:0"
     networks:
       - k2-net
     volumes:
-      # The DAGs and dbt stay on the checkout until a release carries them (phase 002);
-      # the releases root is mounted now for the `resolve` task's pointer.
-      - ./docker/airflow/dags:/opt/airflow/dags:ro
       - ./dbt:/opt/k2/dbt:ro
       - *k2-releases-ro
       - /var/run/docker.sock:/var/run/docker.sock
+      # Each file by name, never created when missing (tests/test_secret_mounts.py).
+      - type: bind
+        source: ${K2_SECRETS:-${HOME}/k2-secrets}/principals/svc.runs.password
+        target: /run/k2-secrets/runs.password
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${K2_SECRETS:-${HOME}/k2-secrets}/tls/ca.pem
+        target: /run/k2-secrets/tls/ca.pem
+        read_only: true
+        bind:
+          create_host_path: false
     group_add:
       - "${K2_DOCKER_GID:-0}"
     environment:
       <<: *airflow-env
       AIRFLOW__SCHEDULER__ENABLE_HEALTH_CHECK: "True"
+      K2_RELEASES: ${K2_RELEASES:-${HOME}/k2-releases}
+      K2_SECRETS: ${K2_SECRETS:-${HOME}/k2-secrets}
+      K2_COMPOSE_PROJECT: ${COMPOSE_PROJECT_NAME}
+      K2_RUN_UID: ${K2_RUN_UID:?set K2_RUN_UID in .env (make engine-keys)}
+      K2_RUN_GID: ${K2_RUN_GID:?set K2_RUN_GID in .env (make engine-keys)}
+      K2_TRINO_HOST: trino
+      K2_TRINO_INTERNAL_PORT: "8443"
+      K2_RUNS_USER: svc.runs
+      K2_CATALOG_URI: http://lakekeeper:8181/catalog
     command: ["scheduler"]
     depends_on:
       airflow-migrate:
@@ -773,8 +847,9 @@ services:
       com.k2.tier: "control-plane"
       com.k2.version: "v3"
 
-  # Parses docker/airflow/dags into the database; in Airflow 3 the scheduler
-  # no longer does. No socket, no published port.
+  # Parses the airflow pointer's DAG folder into the database; in Airflow 3 the
+  # scheduler no longer does. No socket, no published port, no secret and none of
+  # the one-shot environment: parsing reads only the release's files.
   airflow-dag-processor:
     logging: *k2-logging
     image: k2-airflow:3.3.2  # built by airflow-migrate
@@ -783,8 +858,6 @@ services:
     networks:
       - k2-net
     volumes:
-      # As the scheduler's: the DAGs on the checkout until phase 002, the root mounted now.
-      - ./docker/airflow/dags:/opt/airflow/dags:ro
       - ./dbt:/opt/k2/dbt:ro
       - *k2-releases-ro
     environment: *airflow-env
@@ -885,19 +958,29 @@ services:
       # place needs --force-recreate (CLAUDE.md, bind-mount gotcha).
       - ./config/instruments.yaml:/home/iceberg/config/instruments.yaml:ro
       - ./config/bars.yaml:/home/iceberg/config/bars.yaml:ro
-      # The jobs stay on the checkout until a release carries them (phase 002); the
-      # releases root is mounted now for the spark pointer.
+      # A run's scripts: /k2/releases/<id>/platform/docker/lake/, the release its resolve pinned.
       - *k2-releases-ro
+      # fetch's spool, read by the connector's load task. Read-only: only fetch writes it. The
+      # image creates /spool with fetch's owner (docker/spark/Dockerfile), so whichever of the two
+      # mounts the empty volume first, Docker gives its root fetch's uid and fetch can write.
+      - k2-spool:/spool:ro
+    # Two storage keys, never the root pair (docker/lake/minio/policies/, made by lake-init):
+    # Spark's, which docker/lake/spark_conf.py hands each session's catalogs and the connector signs
+    # landings with, and the maintenance key, which only expire's session uses (docker/lake/expire.py).
+    # The maintenance key lives here, not in the scheduler: the scheduler never holds a storage key.
     environment:
-      # MinIO / S3 credentials (Iceberg cold storage)
-      - AWS_ACCESS_KEY_ID=${MINIO_ROOT_USER}
-      - AWS_SECRET_ACCESS_KEY=${MINIO_ROOT_PASSWORD}
-      - AWS_REGION=us-east-1
-      - AWS_S3_ENDPOINT=http://minio:9000
-      # Same credentials under their own names — docker/lake/spark_conf.py passes
-      # them to the `lake` catalog's S3FileIO explicitly, not via the AWS chain.
-      - MINIO_ROOT_USER=${MINIO_ROOT_USER}
-      - MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD}
+      K2_SPARK_S3_ACCESS_KEY: ${K2_SPARK_S3_ACCESS_KEY:?set K2_SPARK_S3_ACCESS_KEY in .env (make engine-keys)}
+      K2_SPARK_S3_SECRET_KEY: ${K2_SPARK_S3_SECRET_KEY:?set K2_SPARK_S3_SECRET_KEY in .env (make engine-keys)}
+      K2_MAINTENANCE_S3_ACCESS_KEY: ${K2_MAINTENANCE_S3_ACCESS_KEY:?set K2_MAINTENANCE_S3_ACCESS_KEY in .env (make engine-keys)}
+      K2_MAINTENANCE_S3_SECRET_KEY: ${K2_MAINTENANCE_S3_SECRET_KEY:?set K2_MAINTENANCE_S3_SECRET_KEY in .env (make engine-keys)}
+      K2_S3_ENDPOINT: http://minio:9000
+      K2_S3_REGION: local-01
+      # Spark's pair again under the AWS SDK's names, for one reader: scripts/deploy.py's spark-sql
+      # DDL on warehouse k2 (SPARK_LAKE) sets no key and takes S3FileIO's default chain. They go when
+      # deploy passes the K2_SPARK names instead.
+      AWS_ACCESS_KEY_ID: ${K2_SPARK_S3_ACCESS_KEY:?set K2_SPARK_S3_ACCESS_KEY in .env (make engine-keys)}
+      AWS_SECRET_ACCESS_KEY: ${K2_SPARK_S3_SECRET_KEY:?set K2_SPARK_S3_SECRET_KEY in .env (make engine-keys)}
+      AWS_REGION: us-east-1
     # ClickHouse and PostgreSQL credentials went with docker/offload/ in Phase D,
     # and nothing that runs here needs them.
     depends_on:
@@ -1034,16 +1117,32 @@ services:
     container_name: k2-lake-init
     networks:
       - k2-catalog  # it calls Lakekeeper and MinIO, both there
+    # The releases root alone, never the checkout (review R6): the script and the MinIO policies it
+    # grants are the release's own platform/docker/lake/, and so is the warehouse list
+    # (compiled/lake/storage-plan.json). Deploy sets K2_LAKE_INIT_RELEASE to the release it deploys;
+    # unset (`docker compose up lake-init` by hand), the release the trino pointer names.
     volumes:
-      - ./docker/lake:/init:ro
-      - *k2-releases-ro  # the warehouse list: the release's compiled/lake/storage-plan.json
+      - *k2-releases-ro
+    # The one service besides minio holding the root pair: it makes the buckets, the warehouses
+    # (whose storage credential Lakekeeper keeps) and one MinIO user per engine from the ten names
+    # below, refusing a pair unset, equal to the root's or shared (init-lake.sh).
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      K2_SPARK_S3_ACCESS_KEY: ${K2_SPARK_S3_ACCESS_KEY:?set K2_SPARK_S3_ACCESS_KEY in .env (make engine-keys)}
+      K2_SPARK_S3_SECRET_KEY: ${K2_SPARK_S3_SECRET_KEY:?set K2_SPARK_S3_SECRET_KEY in .env (make engine-keys)}
+      K2_TRINO_S3_ACCESS_KEY: ${K2_TRINO_S3_ACCESS_KEY:?set K2_TRINO_S3_ACCESS_KEY in .env (make engine-keys)}
+      K2_TRINO_S3_SECRET_KEY: ${K2_TRINO_S3_SECRET_KEY:?set K2_TRINO_S3_SECRET_KEY in .env (make engine-keys)}
+      K2_MAINTENANCE_S3_ACCESS_KEY: ${K2_MAINTENANCE_S3_ACCESS_KEY:?set K2_MAINTENANCE_S3_ACCESS_KEY in .env (make engine-keys)}
+      K2_MAINTENANCE_S3_SECRET_KEY: ${K2_MAINTENANCE_S3_SECRET_KEY:?set K2_MAINTENANCE_S3_SECRET_KEY in .env (make engine-keys)}
+      K2_BACKUP_S3_ACCESS_KEY: ${K2_BACKUP_S3_ACCESS_KEY:?set K2_BACKUP_S3_ACCESS_KEY in .env (make engine-keys)}
+      K2_BACKUP_S3_SECRET_KEY: ${K2_BACKUP_S3_SECRET_KEY:?set K2_BACKUP_S3_SECRET_KEY in .env (make engine-keys)}
+      K2_TOOLS_S3_ACCESS_KEY: ${K2_TOOLS_S3_ACCESS_KEY:?set K2_TOOLS_S3_ACCESS_KEY in .env (make engine-keys)}
+      K2_TOOLS_S3_SECRET_KEY: ${K2_TOOLS_S3_SECRET_KEY:?set K2_TOOLS_S3_SECRET_KEY in .env (make engine-keys)}
       # Empty: the script reads the plan through the trino pointer. Deploy sets it to the
       # release being deployed, so a first deploy and a new warehouse read that release.
       K2_STORAGE_PLAN: ${K2_STORAGE_PLAN:-}
-    entrypoint: ["/bin/bash", "/init/init-lake.sh"]
+    entrypoint: ["/bin/bash", "/k2/releases/${K2_LAKE_INIT_RELEASE:-pointers/trino}/platform/docker/lake/init-lake.sh"]
     depends_on:
       minio:
         condition: service_healthy
@@ -1053,7 +1152,7 @@ services:
       resources:
         limits:
           cpus: '0.25'
-          memory: 128M
+          memory: 256M
     restart: "no"
     labels:
       com.k2.service: "init"
@@ -1102,8 +1201,9 @@ services:
       - ${K2_SECRETS:-${HOME}/k2-secrets}/trino:/run/k2-secrets/trino:ro
     environment:
       K2_TRINO_SHARED_SECRET: ${K2_TRINO_SHARED_SECRET:?set K2_TRINO_SHARED_SECRET in .env (openssl rand -hex 32)}
-      K2_TRINO_S3_ACCESS_KEY: ${K2_TRINO_S3_ACCESS_KEY:?set K2_TRINO_S3_ACCESS_KEY in .env}
-      K2_TRINO_S3_SECRET_KEY: ${K2_TRINO_S3_SECRET_KEY:?set K2_TRINO_S3_SECRET_KEY in .env}
+      # Its own MinIO user (policy docker/lake/minio/policies/trino.json), never the root pair.
+      K2_TRINO_S3_ACCESS_KEY: ${K2_TRINO_S3_ACCESS_KEY:?set K2_TRINO_S3_ACCESS_KEY in .env (make engine-keys)}
+      K2_TRINO_S3_SECRET_KEY: ${K2_TRINO_S3_SECRET_KEY:?set K2_TRINO_S3_SECRET_KEY in .env (make engine-keys)}
     depends_on:
       lakekeeper:
         condition: service_healthy
@@ -1344,8 +1444,9 @@ services:
 #############################################################################
   # Declared now so the budget gate counts and pin-checks them and later steps
   # fill them in place (docs/development/phase-001-interfaces.md A13). Each is
-  # a stub on alpine that prints SKIP and exits: its owning step replaces the
-  # image and command. The default profile and its sums are unchanged.
+  # a stub on alpine that prints SKIP and exits until its owning step replaces the
+  # image and command (tools, fetch, dbt-runner and k2-api all have). k2-api has since
+  # left the profiles for the default set (W3-11); the other three stay one-shots.
   # The tools one-shot (ADR-058): `make deploy` runs it to move the release pointers on the VM
   # side of Docker Desktop's file sharing, and `make release` to compile a tag with that tag's
   # k2gen. `make release` builds it from the tag and tags it tools:<image id 12>, which the release
@@ -1361,10 +1462,34 @@ services:
     networks:
       - k2-net
       - k2-catalog
+    # No storage key: nothing a `compose run tools` step runs reads one. scripts/backup-lake.sh
+    # passes the backup's to its own `docker run -e`, and a step that needs a key passes it by
+    # name for that run alone, so swap, pointers and k2site never hold one.
+    environment:
+      # The catalog site's run-time facts, read as svc.catalog (platform/catalog-site/k2site.py).
+      K2_TRINO_HOST: trino
+      K2_TRINO_INTERNAL_PORT: "8443"
     volumes:
       # The one read-write mount of the releases root: pointers swap only here (A1).
       - <<: *k2-releases-ro
         read_only: false
+      # k2site.py --out /site/catalog; k2-api reads it as /srv/k2-site/catalog/current.
+      - type: volume
+        source: k2-site
+        target: /site
+      # svc.catalog's password and the CA, for k2site.py's facts. Each file by name, never created
+      # when missing (tests/test_secret_mounts.py): a short-syntax bind would make a directory
+      # where `make password` later writes the file.
+      - &k2-secret-file
+        type: bind
+        source: ${K2_SECRETS:-${HOME}/k2-secrets}/principals/svc.catalog.password
+        target: /run/k2-secrets/catalog.password
+        read_only: true
+        bind:
+          create_host_path: false
+      - <<: *k2-secret-file
+        source: ${K2_SECRETS:-${HOME}/k2-secrets}/tls/ca.pem
+        target: /run/k2-secrets/tls/ca.pem
     deploy:
       resources:
         limits:
@@ -1372,15 +1497,36 @@ services:
           memory: 256M
     restart: "no"
 
+  # The two run one-shots (phase 002). Airflow starts them with `docker run` from the release's
+  # compiled/oneshots.json (docker/airflow/dags/oneshot.py), never with compose: these services
+  # are what the budget gate counts and pin-checks, what `make release` builds and pins into the
+  # manifest, and what k2gen's ONESHOT_KINDS must agree with (tests/test_catalog_fence_compose.py,
+  # platform/k2gen/tests/test_emit_pipeline.py). Each runs as the operator runs it: a read-only
+  # root, a 64m noexec /tmp, no capability, no new privileges, never the Docker socket.
   fetch:
     profiles: ["fetch"]
     logging: *k2-logging
-    image: alpine:3.20  # stub: phase 002 builds docker/fetch/
-    command: ["echo", "SKIP fetch: built in phase 002"]
+    build:
+      context: .
+      dockerfile: docker/fetch/Dockerfile
+    image: fetch:local
+    command: ["k2-fetch"]
     networks:
-      - k2-net  # egress only, never k2-catalog (A8)
+      - k2-egress  # egress only: alone on its network, never k2-net or k2-catalog (A8)
+    # No environment but the release (oneshots.json's env); no storage key and no secret mount:
+    # what a parser can reach, it can leak.
+    environment:
+      K2_RELEASE:
     volumes:
       - *k2-releases-ro
+      - k2-spool:/spool
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
     deploy:
       resources:
         limits:
@@ -1391,12 +1537,48 @@ services:
   dbt-runner:
     profiles: ["build"]
     logging: *k2-logging
-    image: alpine:3.20  # stub: phase 002 builds docker/dbt-runner/
-    command: ["echo", "SKIP dbt-runner: built in phase 002"]
+    build:
+      context: .
+      dockerfile: docker/dbt-runner/Dockerfile
+    image: dbt-runner:local
+    command: ["k2-dbt"]
     networks:
-      - k2-catalog  # the tag commit goes to the catalog (A7, A13)
+      - k2-catalog  # Trino is on it too; the tag commit goes to the catalog (A7, A13)
+    # Exactly the wrapper's seven names (phase-001-interfaces.md, "The dbt wrapper"). The builder,
+    # the publisher and the release are per run: the operator passes them; by hand, export
+    # K2_TRINO_USER=dbt_<fence> K2_PUB_USER=pub_<fence> K2_RELEASE=<id>, which also pick the two
+    # password files below. Passwords are files, read by the wrapper alone, never variables.
+    environment:
+      K2_TRINO_HOST: trino
+      K2_TRINO_INTERNAL_PORT: "8443"
+      K2_TRINO_USER:
+      K2_PUB_USER:
+      K2_RUNS_USER: svc.runs
+      K2_CATALOG_URI: http://lakekeeper:8181/catalog
+      K2_RELEASE:
+    # Each file by name (tests/test_secret_mounts.py), never created when missing: a short-syntax
+    # bind would make a directory where `make password` later writes the file.
     volumes:
       - *k2-releases-ro
+      - <<: *k2-secret-file
+        source: ${K2_SECRETS:-${HOME}/k2-secrets}/principals/${K2_TRINO_USER:-}.password
+        target: /run/k2-secrets/builder.password
+      - <<: *k2-secret-file
+        source: ${K2_SECRETS:-${HOME}/k2-secrets}/principals/${K2_PUB_USER:-}.password
+        target: /run/k2-secrets/publisher.password
+      - <<: *k2-secret-file
+        source: ${K2_SECRETS:-${HOME}/k2-secrets}/principals/svc.runs.password
+        target: /run/k2-secrets/runs.password
+      - <<: *k2-secret-file
+        source: ${K2_SECRETS:-${HOME}/k2-secrets}/tls/ca.pem
+        target: /run/k2-secrets/tls/ca.pem
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
     deploy:
       replicas: 2
       resources:
@@ -1405,24 +1587,73 @@ services:
           memory: 768M
     restart: "no"
 
+  # k2-api (phase 003): read-only REST over the release's data products (services/k2-api/:
+  # its routes are openapi.yaml). It reads the release through its pointer at every request,
+  # so a deploy moves it without a recreate. It runs as the host user, K2_RUN_UID, with group
+  # 0, as airflow-scheduler does: svc.api's password file and api/keys.json are mode 600 and
+  # owned by the host user (the image's own uid, 10004, is for any other run). Exactly two
+  # environment names and four read-only mounts, each never created when missing
+  # (tests/test_catalog_fence_compose.py, tests/test_secret_mounts.py): the releases root, the
+  # api/ directory (keys.json is rewritten in place, so the directory, never the file), svc.api's
+  # password file and the CA; and the k2-site volume, read-only, for /catalog/ and /dbt-docs/.
+  # No storage key, no Docker socket. In the default set (W3-11): plan 003's exit has every part,
+  # k2-api included, report the release, and deploy moves only the default set.
   k2-api:
-    profiles: ["api"]
     logging: *k2-logging
-    image: alpine:3.20  # stub: phase 003 builds services/k2-api/ (its routes: services/k2-api/openapi.yaml)
-    command: ["echo", "SKIP k2-api: built in phase 003"]
+    build:
+      context: .
+      dockerfile: services/k2-api/Dockerfile
+    image: k2-api:local
+    user: "${K2_RUN_UID:?set K2_RUN_UID in .env (make engine-keys)}:0"
     networks:
       # Trino only, as svc.api: it reads rows through the reader view and the tested
       # snapshot id from `t$refs` over SQL, never Lakekeeper's REST API, so never
       # k2-catalog, where a caller-facing service could forge a view (ADR-061 part 6).
       - k2-net
+    ports:
+      - "127.0.0.1:${K2_API_PORT:-8095}:8095"
+    environment:
+      K2_TRINO_HOST: trino
+      K2_TRINO_INTERNAL_PORT: "8443"
     volumes:
       - *k2-releases-ro
+      - &k2-api-secret
+        type: bind
+        source: ${K2_SECRETS:-${HOME}/k2-secrets}/api
+        target: /run/k2-secrets/api
+        read_only: true
+        bind:
+          create_host_path: false
+      - <<: *k2-api-secret
+        source: ${K2_SECRETS:-${HOME}/k2-secrets}/principals/svc.api.password
+        target: /run/k2-secrets/api.password
+      - <<: *k2-api-secret
+        source: ${K2_SECRETS:-${HOME}/k2-secrets}/tls/ca.pem
+        target: /run/k2-secrets/tls/ca.pem
+      - type: volume
+        source: k2-site
+        target: /srv/k2-site
+        read_only: true
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=16m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    # No curl in the slim image: the image's own Python asks the route that reaches nothing.
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8095/healthz', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
     deploy:
       resources:
         limits:
           cpus: '0.5'
           memory: 512M
-    restart: "no"
+    restart: unless-stopped
 
 #############################################################################
 # RESOURCE SUMMARY (Consolidated - Full Platform)
@@ -1448,16 +1679,16 @@ services:
 # capture-binance       | 0.25      | 256M         | Rust capture, Binance (12 pairs, trades + L2)
 # capture-kraken        | 0.25      | 256M         | Rust capture, Kraken (11 pairs, trades + L2)
 # capture-coinbase      | 0.25      | 512M         | Rust capture, Coinbase (11 pairs, trades + L2)
+# k2-api                | 0.5       | 512M         | REST over the data products and the two sites (services/k2-api/)
 # tools                 | 0.25      | 256M         | Phase 001 stub, profile tools (step S19), not in the sums
-# fetch                 | 0.5       | 512M         | Phase 001 stub, profile fetch (phase 002), not in the sums
-# dbt-runner            | 0.5 x 2   | 768M x 2     | Phase 001 stub, profile build (phase 002), not in the sums
-# k2-api                | 0.5       | 512M         | Phase 001 stub, profile api (phase 003), not in the sums
+# fetch                 | 0.5       | 512M         | Fetch one-shot (docker/fetch/), profile fetch, not in the sums
+# dbt-runner            | 0.5 x 2   | 768M x 2     | dbt wrapper one-shot (docker/dbt-runner/), profile build, not in the sums
 #
 # The three capture-* containers are also cpuset-pinned to cores 12-14
 # (`${K2_CAPTURE_CPUSET-12-14}`, .env.example). A cpuset is placement, not quota:
 # it does not change the limit sums below. See the ADR-010 Outcome addendum.
 # ----------------------|-----------|--------------|---------------------------
-# STEADY STATE (18 long-running) | 15.30 CPU | 27.250 GiB | v3 capture, lake catalog and engines, Airflow, Trino
+# STEADY STATE (19 long-running) | 15.80 CPU | 27.750 GiB | v3 capture, lake catalog and engines, Airflow, Trino, k2-api
 #
 # One-shots are NOT free. They declare limits and they run concurrently with
 # the steady state at boot, so the budget that matters at `docker compose up` is
@@ -1465,21 +1696,20 @@ services:
 #
 #   redpanda-init      0.25 | 128M  topics + Avro subjects (docker/redpanda/init.sh)
 #   lakekeeper-migrate 0.5  | 256M  v3 catalog DB schema
-#   lake-init          0.25 | 128M  v3 bucket + catalog + warehouses (docker/lake/init-lake.sh)
+#   lake-init          0.25 | 256M  v3 bucket + catalog + warehouses, engine users (docker/lake/init-lake.sh)
 #   airflow-migrate    0.5  | 1G    airflow role + database, then `airflow db migrate`
 #   ----------------------------------------------------------------------------
-#   one-shot subtotal  1.5  | 1.5G
+#   one-shot subtotal  1.5  | 1.625G
 #
-# Bootstrap peak: 16.80 CPU / 28.750 GiB, all 22 default-profile services,
+# Bootstrap peak: 17.30 CPU / 29.375 GiB, all 23 default-profile services,
 # against the 25 CPU / 48 GiB ceiling ADR-045 sets at the bootstrap peak
 # (superseding ADR-034's 20 CPU / 36 GiB, which superseded ADR-010's 16 CPU /
-# 40 GB). scripts/check-budget.py fails CI over it. Headroom: 8.20 CPU and
-# 19.250 GiB. With `--profile hot-gold` (clickhouse, paused by ADR-057) the
-# peak is 20.80 CPU / 36.750 GiB over 23 services; the script reports that line
-# and gates only the default, as it does for the stub profiles tools (17.05 /
-# 29.000 GiB), fetch and api (17.30 / 29.250 GiB each) and build (17.80 /
-# 30.250 GiB). The host gives Docker 28 CPU / 49.5 GiB; 3 cores
-# and 1.5 GiB stay outside the ceiling for the OS and the engine (ADR-045 says why that is enough).
+# 40 GB). scripts/check-budget.py fails CI over it. Headroom: 7.70 CPU and
+# 18.625 GiB. With `--profile hot-gold` (clickhouse, paused by ADR-057) the
+# peak is 21.30 CPU / 37.375 GiB over 24 services; the script reports that line
+# and gates only the default, as it does for the one-shot profiles tools (17.55 /
+# 29.625 GiB), fetch (17.80 / 29.875 GiB) and build (18.30 / 30.875 GiB). The
+# host gives Docker 28 CPU / 49.5 GiB; 3 cores and 1.5 GiB stay outside the ceiling for the OS and the engine (ADR-045 says why that is enough).
 #
 # History: retiring the three Kotlin feed handlers (ADR-019) gave back the
 # 1.5 CPU / 1.5 GB they declared, and deleting docker/offload/ took its metrics
@@ -1497,5 +1727,5 @@ services:
 # Target: 25 CPU / 48 GiB at the bootstrap peak (ADR-045)
 #
 # Instrument config: see config/instruments.yaml (single source of truth)
-# Last updated: 2026-11-26 (alertmanager, phase 001 step S09; before it the phase 001 stubs tools, fetch, dbt-runner and k2-api behind profiles; before it lake-ddl and lake-metrics retired with the old lake ingest, ADR-056 and the ADR-010 Outcome; before it clickhouse behind the profile hot-gold, ADR-057)
+# Last updated: 2026-11-27 (k2-api joins the default set, phase 003 W3-11, +0.5 CPU / 512M; before it k2-api built in place of its stub, phase 003 W3-5, its limits unchanged; before it alertmanager, phase 001 step S09; before it the phase 001 stubs tools, fetch, dbt-runner and k2-api behind profiles; before it lake-ddl and lake-metrics retired with the old lake ingest, ADR-056 and the ADR-010 Outcome; before it clickhouse behind the profile hot-gold, ADR-057)
 #############################################################################

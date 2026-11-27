@@ -1,0 +1,13 @@
+# The build context is the repository root; the image needs only these (docker/dbt-runner/Dockerfile).
+*
+!dbt/pyproject.toml
+!dbt/uv.lock
+!dbt/profiles.yml
+!docker/dbt-runner
+!platform/k2gen/k2gen
+!platform/k2gen/uv.lock
+!contracts/schema
+!scripts/verify/catalog_drift.py
+docker/dbt-runner/Dockerfile*
+docker/dbt-runner/**/test_*
+**/__pycache__

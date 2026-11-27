@@ -1,0 +1,91 @@
+# Compiled by k2gen (platform/k2gen/k2gen/emit/dbt.py) from the release's documents. Never edit it: change the documents.
+version: 2
+models:
+- name: quality_results__test_results
+  description: One row per dbt data test and unit test a product's builder ran, from the results table that builder writes
+    beside its outputs (dbt/macros/k2_results.sql), with the product it belongs to.
+  config:
+    alias: test_results
+    meta:
+      k2:
+        contract: governance.quality-results.test_results
+        reader: governance.quality_results.test_results
+  columns:
+  - name: product_id
+    description: The product whose builder ran the test, <domain>.<product>.
+    data_type: varchar
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  - name: run_id
+    description: The Airflow run, <dag_id>/<run_id>; joins the product's run records.
+    data_type: varchar
+  - name: dbt_invocation_id
+    description: dbt's invocation id.
+    data_type: varchar
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  - name: release_id
+    description: The release the run resolved at its start, <tag>-<sha12>.
+    data_type: varchar
+  - name: run_started_at
+    description: When the dbt invocation started, UTC.
+    data_type: timestamp(6) with time zone
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  - name: writer
+    description: The builder that ran the test, dbt_<fence>; always the product's own.
+    data_type: varchar
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  - name: unique_id
+    description: The test's dbt node id.
+    data_type: varchar
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  - name: test_name
+    description: The test's dbt name.
+    data_type: varchar
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  - name: tested
+    description: The relation of the model or seed tested, <catalog>.<namespace>.<table>; null when dbt did not say.
+    data_type: varchar
+  - name: status
+    description: dbt's status, pass, fail, warn, error or skipped (a test behind a failure in the same invocation).
+    data_type: varchar
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  - name: failures
+    description: The failing rows dbt counted; null when it counted none.
+    data_type: bigint
+  - name: execution_time
+    description: Seconds the test ran.
+    data_type: double
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  - name: message
+    description: dbt's message, at most 1000 characters; a failed unit test's is the diff.
+    data_type: varchar
+  data_tests:
+  - k2_unique_key:
+      arguments:
+        columns:
+        - product_id
+        - dbt_invocation_id
+        - unique_id

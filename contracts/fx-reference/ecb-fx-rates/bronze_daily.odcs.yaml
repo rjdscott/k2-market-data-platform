@@ -1,0 +1,64 @@
+apiVersion: v3.2.0
+kind: DataContract
+id: fx-reference.ecb-fx-rates.bronze_daily
+name: bronze_daily
+version: 1.0.0
+domain: fx-reference
+description:
+  purpose: >-
+    One row per fixing date and currency of one landed 90-day file, the rate the string the ECB
+    published. Each landed file adds its own rows, so a date appears once per file that holds it.
+team:
+  name: fx-reference-team
+schema:
+  - id: bronze_daily
+    name: bronze_daily
+    physicalName: ecb_fx_rates.bronze_daily
+    physicalType: table
+    properties:
+      - name: rate_date
+        physicalType: date
+        required: true
+        primaryKey: true
+        primaryKeyPosition: 1
+        description: The fixing's date (the file's Cube time), a TARGET day.
+        customProperties:
+          - property: time
+            value: event
+      - name: currency
+        physicalType: varchar
+        logicalType: string
+        logicalTypeOptions:
+          pattern: "^[A-Z]{3}$"
+        required: true
+        primaryKey: true
+        primaryKeyPosition: 2
+        description: The quoted currency's ISO 4217 code (USD); the base is always the euro.
+      - name: rate
+        physicalType: varchar
+        required: true
+        description: Units of the currency per one euro, the string exactly as published, such as 1.5000; typed in silver.
+      - name: source_file_sha256
+        physicalType: varchar
+        required: true
+        primaryKey: true
+        primaryKeyPosition: 3
+        description: The landed file's sha256, set by the connector on every row (its lineage).
+    quality:
+      - name: rate_positive
+        type: custom
+        engine: k2-connector
+        implementation: rate_positive
+        description: Every rate is above zero (domains/fx-reference/parsers/ecb_fx.py).
+      - name: no_future_date
+        type: custom
+        engine: k2-connector
+        implementation: no_future_date
+        description: No fixing is dated after the fetch's day in UTC (domains/fx-reference/parsers/ecb_fx.py).
+customProperties:
+  - property: layer
+    value: bronze
+  - property: build
+    value: connector
+  - property: backup
+    value: restore  # the 90-day file forgets: a lost landing cannot be fetched again after 90 days

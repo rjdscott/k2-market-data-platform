@@ -1,5 +1,17 @@
 {
+  "fx_reference.ecb_fx_rates__base.gold_eur_rates_daily": 7,
+  "fx_reference.ecb_fx_rates__base.silver_rates": 7,
   "governance.access_canary__base.event_offsets": 7,
   "governance.access_canary__base.events": 1,
-  "governance.run_records.run_record": 7
+  "governance.quality_results__base.test_results": 7,
+  "governance.run_records.run_record": 7,
+  "k2.currency_master.audit_checks": 7,
+  "k2.currency_master.bronze_currencies": 7,
+  "k2.currency_master.landing_files": 7,
+  "k2.ecb_fx_rates.audit_checks": 7,
+  "k2.ecb_fx_rates.bronze_daily": 7,
+  "k2.ecb_fx_rates.landing_files": 7,
+  "reference_data.calendars__base.target_closing_days": 7,
+  "reference_data.calendars__base.target_days": 7,
+  "reference_data.currency_master__base.currency": 7
 }

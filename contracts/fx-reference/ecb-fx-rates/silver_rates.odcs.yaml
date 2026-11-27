@@ -1,0 +1,54 @@
+apiVersion: v3.2.0
+kind: DataContract
+id: fx-reference.ecb-fx-rates.silver_rates
+name: silver_rates
+version: 1.0.0
+domain: fx-reference
+description:
+  purpose: >-
+    One row per fixing date and currency, the rate as an exact decimal: each fixing once, however
+    many landed files repeat it, taken from the newest file that holds it.
+team:
+  name: fx-reference-team
+schema:
+  - id: silver_rates
+    name: silver_rates
+    physicalName: ecb_fx_rates.silver_rates
+    physicalType: table
+    properties:
+      - name: rate_date
+        physicalType: date
+        required: true
+        primaryKey: true
+        primaryKeyPosition: 1
+        description: >-
+          The fixing's date, a TARGET day. The partition source (year), so it is in the key: an
+          incremental merge's unique key holds every partition source column.
+        customProperties:
+          - property: time
+            value: event
+      - name: currency
+        physicalType: varchar
+        required: true
+        primaryKey: true
+        primaryKeyPosition: 2
+        description: The quoted currency's ISO 4217 code; the base is always the euro.
+      - name: rate
+        physicalType: decimal(20,10)
+        required: true
+        description: >-
+          Units of the currency per one euro, the published string cast exactly to a decimal
+          (1.5000 is 1.5); a reference fixing, not a market close.
+      - name: source_file_sha256
+        physicalType: varchar
+        required: true
+        description: The landed file the rate was taken from, the newest one holding this date and currency.
+customProperties:
+  - property: layer
+    value: silver
+  - property: build
+    value: dbt
+  - property: backup
+    value: rebuild  # rebuilt from bronze
+  - property: partitioning
+    value: [year(rate_date)]  # about 7,500 rows a year: one partition a year keeps files few

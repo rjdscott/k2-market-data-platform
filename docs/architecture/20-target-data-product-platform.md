@@ -216,8 +216,8 @@ once (only hashes are kept). Steps 8 and 9: SQL over TLS, password checked, retu
 policies. Steps 10 to 13: a REST call to the **k2-api data routes** becomes the same query, principal and marker.
 
 One engine, principal, rule set and snapshot give the same rows, and the access test (section 4.6) proves it through
-both. Reader catalogs refuse every write and table procedure (a maintenance or rollback command run as SQL); today any
-user can roll back a mart and Trino believes any user name ([chapter 19](19-lakehouse-and-domain-warehouses.md)).
+both. Reader catalogs refuse every write and table procedure (a maintenance or rollback command run as SQL); before the
+release and rules spine any user could roll back a mart and Trino believed any user name ([chapter 19](19-lakehouse-and-domain-warehouses.md)).
 k2-api logs in as itself and, by a rule naming only it, queries as the caller; it never writes, decides access or
 reads storage.
 
@@ -333,7 +333,7 @@ output, owned by the product's publisher, over its `audited` tag and guarded on 
 landing never blocks ([ADR-047](../adr/ADR-047-ingest-batch-audit-after-publish.md) stays), because a topic keeps only
 48 hours or 2 GiB per partition ([chapter 07](07-wire-contracts.md)); a product that falls off the topic fails loudly
 until an operator records an accept-data-loss run. dbt runs in a one-shot container with an allow-listed environment;
-each writer writes only its own namespace and reads only its declared inputs; fetches reach only declared hosts.
+each writer writes only its own namespace and reads only its declared inputs; a fetch downloads only from declared hosts, and its parser runs after it with internet access, on a network no other service joins.
 
 ### 4.5 Lifecycle states
 
@@ -564,8 +564,9 @@ As built in the release and rules spine ([chapter 21](21-releases-and-deploy.md)
 container, reader views narrow before the swap and widen after the new rules load, and the access test runs as part
 of `release-verify` after the swap, on a throwaway lake at release time.
 
-Today services bind-mount the working tree; one checkout emptied the DAG folder for 35 minutes on 2026-11-25
-(`CLAUDE.md`). In the target a run is pinned to its release, a release in use is never deleted, a rollback moves code,
+Services used to bind-mount the working tree; one checkout emptied the DAG folder for 35 minutes on 2026-11-25
+(`CLAUDE.md`). Since the run spine, DAGs, Spark scripts and alert rules are read from the release
+([chapter 21](21-releases-and-deploy.md)). In the target a run is pinned to its release, a release in use is never deleted, a rollback moves code,
 rules and images but never data, and secrets are named by environment variable, never held. Each release lists its
 backup set, generated from the contracts; other tables are rebuilt from their landings. The first restore drill ends
 the Kraken phase.
@@ -757,20 +758,20 @@ landings are kept (needed by the Kraken phase).
 
 | Layer | Today, as chapters 04 to 19, 21 and 22 describe it | Target, in this chapter | Moves in phase |
 |---|---|---|---|
-| Sources and landing | Kafka only: one job read every venue's topic into one shared raw archive until it retired in the first phase ([08](08-lake-ingest.md)) | a connector and a verbatim landing per product, five kinds (4.4) | files in the run spine; Kafka and public API in the Kraken phase; FTP, SFTP, S3 in remaining connector kinds |
-| Layers and storage | Spark stage code, one run for every venue and layer; warehouse `k2` by layer ([09](09-lake-layers.md)) | bronze by its connector, silver and gold as dbt models, only the layers that add a guarantee; a namespace per product (4.1, 4.4) | run spine; Kraken phase; widen crypto |
-| Marts and tested reads | dbt marts rebuilt whole every hour from lake gold; readers see each newest snapshot ([19](19-lakehouse-and-domain-warehouses.md)) | merged, tested, rolled back on failure; every reader at the marker (4.4) | run spine |
+| Sources and landing | files over HTTPS only (`https-file`): a connector and a verbatim landing per product ([21](21-releases-and-deploy.md)); no Kafka source since the old ingest retired in the first phase | a connector and a verbatim landing per product, five kinds (4.4) | files in the run spine; Kafka and public API in the Kraken phase; FTP, SFTP, S3 in remaining connector kinds |
+| Layers and storage | bronze by its connector, silver and gold as dbt models, a namespace per product, for the file products ([21](21-releases-and-deploy.md)); no crypto product yet | bronze by its connector, silver and gold as dbt models, only the layers that add a guarantee; a namespace per product (4.1, 4.4) | run spine; Kraken phase; widen crypto |
+| Marts and tested reads | built per product through the dbt wrapper, rolled back on failure, every reader at the marker ([22](22-access-and-identity.md), [ADR-062](../adr/ADR-062-dbt-builds-silver-and-gold-per-product-through-one-wrapper.md)) | merged, tested, rolled back on failure; every reader at the marker (4.4) | run spine |
 | Security master | a hand-kept file, `config/instruments.yaml`, as type-2 dimensions, no asset level ([12](12-data-strategy.md)) | two levels from venue reference APIs, exceptions list, held rows (4.7) | Kraken phase; widen crypto |
-| Catalog | each product's catalog JSON in its release, and Lakekeeper ([21](21-releases-and-deploy.md), [18](18-data-mesh.md)) | catalog site, k2-api metadata routes, Lakekeeper, governance records (4.1) | first version in serving and teaching; complete in the catalog phase |
+| Catalog | each product's catalog JSON in its release, the catalog site's first version and k2-api's metadata routes, Lakekeeper ([22](22-access-and-identity.md)) | catalog site, k2-api metadata routes, Lakekeeper, governance records (4.1) | first version in serving and teaching; complete in the catalog phase |
 | SQL serving and identity | a read-only reader catalog and a build catalog per domain, passwords over TLS ([22](22-access-and-identity.md)) | read-only reader catalogs, a writer per product, passwords over TLS (4.6) | release and rules spine |
-| REST | none ([04](04-system-overview.md)) | k2-api data routes, the same answer as SQL (4.2) | a minimal route in the run spine; complete in the REST API phase |
-| Permissions | compiled default-deny rules, grants per product, named policies, hand-written expectations; every engine on the root key ([22](22-access-and-identity.md)) | grants per product, named policies, hand-written expectations, scoped keys (4.6) | release and rules spine; run spine |
+| REST | k2-api's metadata routes and one data route, the same answer as SQL; no cursor or `as_of` ([22](22-access-and-identity.md)) | k2-api data routes, the same answer as SQL (4.2) | a minimal route in the run spine; complete in the REST API phase |
+| Permissions | compiled default-deny rules, grants per product, named policies, hand-written expectations; a storage key per engine ([22](22-access-and-identity.md)) | grants per product, named policies, hand-written expectations, scoped keys (4.6) | release and rules spine; run spine |
 | Deploy | sealed releases, a pointer per service, automatic rollback ([21](21-releases-and-deploy.md)) | immutable releases, a pointer per service, automatic rollback (4.9) | release and rules spine |
 | Lifecycle | a field in `product.yaml` and `git log` ([18](18-data-mesh.md)) | four states, holds, history from release manifests (4.5) | spine phases; holds in the Kraken phase |
-| Metadata, lineage, usage | dbt test results, lake audits, the dbt manifest; no usage ([18](18-data-mesh.md)) | governance products, OpenLineage, usage events (4.12) | catalog phase |
+| Metadata, lineage, usage | run records, each builder's test results unioned by `governance.quality-results`, the dbt docs; no lineage events or usage ([22](22-access-and-identity.md)) | governance products, OpenLineage, usage events (4.12) | catalog phase |
 | Hot tier | ClickHouse gold, fed from the topics ([10](10-clickhouse-gold.md)) | paused behind a profile, volume kept (4.10) | clear the ground |
 | Alerts | rules as code in `docker/prometheus/rules/`, delivered to Slack by Alertmanager ([11](11-observability.md)) | delivered to a Slack channel through an incoming webhook kept as a local secret | controls, alerts and release engineering |
-| Backup | `scripts/backup-lake.sh`, whose four fixed tables retired in the first phase; it prints a SKIP naming the run spine | a set generated from the contracts, restore and rebuild, an early drill (4.9); the copy stays on this host until the release gate | run spine; first drill in the Kraken phase |
+| Backup | the release's backup set, compiled from the contracts, copied by `make backup` with a read-only key; no restore drill yet | a set generated from the contracts, restore and rebuild, an early drill (4.9); the copy stays on this host until the release gate | run spine; first drill in the Kraken phase |
 | Infrastructure | compose files and hand-run setup | this host declared and checkable: one command shows drift, one converges | infrastructure as code |
 
 **The cost, stated plainly.** The old pipeline was retired in the first phase (`lake_ingest`, its `raw`, `bronze`,

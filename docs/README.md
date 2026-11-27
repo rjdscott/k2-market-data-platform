@@ -41,7 +41,7 @@ research/  →  adr/  →  plans/  →  audits/
 | [plans/](plans/) | Multi-phase design documents with exit criteria per phase | [README](plans/README.md) |
 | [audits/](audits/) | Point-in-time sweeps of one surface, with a findings table | [README](audits/README.md) |
 | [benchmarks/](benchmarks/) | Dated measurement snapshots. Every published number traces here | [README](benchmarks/README.md) |
-| [runbooks/](runbooks/) | 18 incident procedures, one per alert family or host failure, with measured MTTR where a failure was induced | [README](runbooks/README.md) · [template](runbooks/template.md) |
+| [runbooks/](runbooks/) | The procedures: one per alert family or host failure, and the operations a product's life needs (deploy and roll back a release, back up and restore, [onboard a file product](runbooks/onboard-a-file-product.md), a [failed file audit](runbooks/file-source-audit-failed.md), a [connector failure](runbooks/connector-failure.md)), with measured MTTR where a failure was induced | [README](runbooks/README.md) · [template](runbooks/template.md) |
 
 ## Reference
 
@@ -64,7 +64,7 @@ The system as built, for readers who want the detail rather than the argument.
 | [architecture/06-capture-venues.md](architecture/06-capture-venues.md) | How a capture process works, the per-venue dialects, and what a fourth exchange costs |
 | [architecture/01-what-k2-is.md](architecture/01-what-k2-is.md) | What this platform is for, the workloads it is deliberately wrong for, and the six rules the design is held to |
 | [operations/](operations/README.md) | Running the stack: the [operator guide](operations/README.md) (start, health, consoles, stop, recreate one service, roll out a change, logs), [quick reference](operations/quick-reference.md), [Docker budget](operations/docker-resources.md), [observability](operations/observability.md), [dashboards and consoles](operations/dashboards.md), [latency budgets](operations/latency-budgets.md), [adding an exchange](operations/adding-new-exchanges.md), [cost model](operations/cost-model.md) |
-| [development/](development/) | [setup.md](development/setup.md) and [testing.md](development/testing.md), prerequisites, and how to run the Rust and Python suites; [spine-e2e.md](development/spine-e2e.md), the release and rules spine end to end at every merge point; [golden-path.md](development/golden-path.md), adding a data product |
+| [development/](development/) | [setup.md](development/setup.md) and [testing.md](development/testing.md), prerequisites, and how to run the Rust and Python suites; [spine-e2e.md](development/spine-e2e.md), the release and rules spine end to end at every merge point; [golden-path.md](development/golden-path.md), adding a data product; [dbt labs](development/dbt-labs/README.md), three labs on the ECB products (a source and a model, an incremental merge with a unit test, a failing test that rolls back); [reviewing-dbt-work.md](development/reviewing-dbt-work.md), what to read in a dbt pull request |
 
 ## Migration journey
 

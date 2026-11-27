@@ -171,7 +171,8 @@ RUN_VALUE_FLAGS = {"-v", "--volume", "-w", "--workdir", "-e", "--env", "--env-fi
                    "-u", "--user", "--entrypoint", "--name", "-p", "--publish", "--ipc", "--mount", "--platform",
                    "-l", "--label", "--add-host", "--cpus", "-m", "--memory", "--tmpfs", "--cap-add", "--cap-drop",
                    "--security-opt", "--ulimit", "-h", "--hostname", "--device", "--pull", "--shm-size", "--pid",
-                   "--restart", "--gpus", "--log-driver", "--log-opt", "--group-add", "--dns", "--expose"}
+                   "--restart", "--gpus", "--log-driver", "--log-opt", "--group-add", "--dns", "--expose",
+                   "--pids-limit", "--network-alias", "--memory-swap", "--stop-timeout", "--health-cmd"}
 USES = re.compile(r"^\s*(?:-\s+)?uses:\s*(\S+)(.*)$")
 PINNED_USES = re.compile(r"^[\w.-]+/[\w./-]+@[0-9a-f]{40}$")
 SUBST = re.compile(r"\$\$?\([^()]*\)")

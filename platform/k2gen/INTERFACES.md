@@ -62,11 +62,11 @@ adding one with the right signature, leaves it green; a drifted signature fails 
 | A6 run records | `run-record.schema.json` (one row, `dbt_invocation_id` and `openlineage_run_id` included); the DDL `platform/runs/run_record.sql` (`model.RUN_RECORD_SQL`), equal column for column (`tests/test_frozen_interfaces.py`) |
 | A7 `k2_input` and the wrapper | `pipeline.schema.json` `build`; `model.View`, `model.VIEWS`; `dbt/macros/k2_input.sql`; the wrapper's contract in the phase page |
 | A8 names | `model.py`: `fence`, the catalog, namespace, builder, publisher, group, DAG, dbt and relation helpers, the principal lists below, `canary_user` |
-| A9 access expectations | `expectations.schema.json` (a statement row may carry `session`, the header form; a read row `mustAppear`, the positive assertion); `model.py`: the five expectation types, `MustAppear` |
+| A9 access expectations | `expectations.schema.json` (a statement row may carry `session`, the header form; a read row `mustAppear`, the positive assertion); `model.py`: the six expectation types (the sixth, `StorageKeyExpectation`, added 2026-11-27 for phase 002), `MustAppear` |
 | A10 roles, principals, grants, policies | `k2-v2.schema.json#/$defs/{roles,principals,grants,policies,rolePolicy}`; `model.py`: `RoleDef`, `Principal`, `Grant`, `RolePolicy`, the secrets table below |
 | A11 catalog JSON | `catalog-product.schema.json`, its `$defs/index` for `index.json`; `model.Product.support`, `.links` (ODPS support and authoritativeDefinitions) |
 | A12 REST | `services/k2-api/openapi.yaml` |
-| A13 one-shots | compose stubs; `oneshots.schema.json` |
+| A13 one-shots | compose stubs; `oneshots.schema.json` (added 2026-11-27: the network `k2-egress`, fetch's alone, in `ONESHOT_KINDS`) |
 | backup set, storage plan | `backup-set.schema.json`, `storage-plan.schema.json` |
 
 ## Release paths
@@ -83,12 +83,16 @@ adding one with the right signature, leaves it green; a drifted signature fails 
 | `API_PRINCIPALS` | `compiled/api/principals.json`, `{"principals": [id]}` | S14 |
 | `CATALOG_INDEX`, `catalog_path(id)` | `compiled/catalog/index.json`, `compiled/catalog/products/<id>.json` | S18 |
 | (S17) | `compiled/dbt/` | S17 |
+| `PLATFORM_DIR`, `PLATFORM_CODE` (added 2026-11-27) | `platform/<repository path>`: the set's run code under `docker/airflow/dags/`, `docker/lake/`, `docker/prometheus/rules/`, `domains/`, `platform/runs/` and `platform/catalog-site/` (W3-9), each root's suffixes only (`.py`; `.yml` for the rules; `.sh` and `.json` too under `docker/lake/`: lake-init's `init-lake.sh` and the MinIO policies it grants, run from the release, review R6), never a test, a cache or `conftest.py`; each root is a `DOCUMENT_ROOTS` entry too, so the tag approves the code and `documents/` holds it as well | W1-4 (`release.run_code`) |
 
 `need_of(path)`: `compose/docker-compose.yml` can set `recreate` (the services whose definition
 differs), `compiled/trino/etc/` sets `trinoRestart`, `compiled/airflow/dags.json` can set
 `dagShapeChange` (when a DAG's task list differs), `compiled/lake/ddl/` adds to `ddl`; everything
 else under `compiled/`, `documents/` and `provenance.json` needs nothing, being read through a
 pointer. A path no entry covers is a `KeyError`, so a new kind of file is classified first.
+Added 2026-11-27: `platform/docker/airflow/dags/` sets `dagShapeChange` on any change, the factory
+deciding each DAG's tasks; the rest of `platform/` needs nothing (Spark, the fetch one-shot and
+`record` read it at a run's start; deploy sends Prometheus SIGHUP at every swap).
 
 ## Names, dispatch and quoting
 

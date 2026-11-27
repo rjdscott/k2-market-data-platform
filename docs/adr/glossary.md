@@ -1072,7 +1072,8 @@ Where: `contracts/schema/` (ODCS today; ODPS from the release and rules spine).
 A connector is the code that reads one kind of source for one product: `kafka`, `public-api`,
 `https-file`, `s3-file`, `sftp` or `ftp`. It is configured in the product's ODPS file, lands what
 it read verbatim in the product's own landing, and never shares a landing with another product.
-File and API kinds run in a one-shot fetch container limited to the product's declared hosts.
+File and API kinds run in a one-shot fetch container whose download is limited to the product's
+declared hosts.
 Where: [ADR-056](ADR-056-unified-data-product-platform.md) part 3,
 [ADR-036](ADR-036-connectors-land-verbatim-then-publish-bronze-after-audit.md).
 
@@ -1082,13 +1083,16 @@ The fetch container is a one-shot container that runs one fetch for one product:
 file or an API response, writes the bytes and a fetch record (URL, final URL, sha256, size, time)
 to the run's spool directory before anything parses them, then parses them with the product's
 registered parser. It holds no storage key and cannot reach MinIO or Lakekeeper. Its **host
-allow-list** is the product's `allowHosts`: it connects only to addresses resolved from those
-names and checked to be public, and follows a redirect only over `https` to a host on the list.
+allow-list** is the product's `allowHosts`: the download connects only to addresses resolved from
+those names and checked to be public, and follows a redirect only over `https` to a host on the
+list. The list guards the download, not the parser, which runs afterwards in the same container
+with ordinary sockets and can reach any internet host from `k2-egress`, a network no other service
+joins.
 That stops a **server-side request forgery** (SSRF), where a server is made to request an address
 an outsider chose, such as an internal service behind a redirect. Nothing a source sends is ever
 executed.
 Where: [ADR-036](ADR-036-connectors-land-verbatim-then-publish-bronze-after-audit.md) parts 2
-and 3.
+and 3, and its Outcome.
 
 ### Medallion layers of a product
 
@@ -1220,6 +1224,33 @@ output: each requires `main` at the tested snapshot and `audited` at the previou
 requirement is stale the catalog answers 409 and moves no tag, so a publisher working from stale
 values cannot overwrite another's move.
 Where: [ADR-061](ADR-061-readers-see-dbt-outputs-through-a-view-over-the-tested-tag.md) point 4.
+
+### Storage key and remote signing
+
+A **storage key** is an access key and secret for MinIO; each engine has one, a MinIO user whose policy
+lists the bucket paths it may read, write or delete. Every S3 request is signed with the secret, and
+MinIO checks the signature against the key's policy. With **remote signing**, an engine asks the
+catalog to sign each request with the warehouse's stored credential instead of its own key, so its own
+key is never checked; with **vended credentials**, the catalog hands out a short-lived key per table.
+K2 uses neither: every warehouse has both off, so each engine's own key is the one MinIO checks.
+Where: [ADR-054](ADR-054-a-storage-key-per-engine-with-catalog-signing-off.md).
+
+### dbt wrapper and run records
+
+The **wrapper**, `k2-dbt build`, is the one program that runs a product's dbt build: it cancels the
+builder's leftover queries, repairs what a dead run left, pins each input at its tested snapshot, runs
+one `dbt build`, restores every output of a failed build, and on a pass moves the
+[tested-data marker](#tested-data-marker). A **run record** is one row per output per event
+(`started`, `rolled_back`, `audited`, `reconciled`) in `governance.run_records.run_record`, naming the
+snapshots before and after; the next run reads them to finish what an earlier one left.
+Where: [ADR-062](ADR-062-dbt-builds-silver-and-gold-per-product-through-one-wrapper.md).
+
+### Orphaned query
+
+A Trino query whose client has gone, for example a build container that was killed. Trino keeps
+running it until its client timeout (five minutes by default), and it can still commit, so the wrapper
+cancels every query its builder still runs before it reads any state.
+Where: [ADR-062](ADR-062-dbt-builds-silver-and-gold-per-product-through-one-wrapper.md) part 4.
 
 ### Access rules and the file group provider
 

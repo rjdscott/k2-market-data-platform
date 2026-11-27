@@ -1,6 +1,28 @@
 {
   "entries": [
     {
+      "bucket": "k2-landing",
+      "kind": "landing",
+      "prefix": "fx-reference/ecb-fx-rates/"
+    },
+    {
+      "bucket": "k2-landing",
+      "kind": "landing",
+      "prefix": "reference-data/currency-master/"
+    },
+    {
+      "kind": "table",
+      "mode": "rebuild",
+      "ref": "audited",
+      "table": "fx_reference.ecb_fx_rates__base.gold_eur_rates_daily"
+    },
+    {
+      "kind": "table",
+      "mode": "rebuild",
+      "ref": "audited",
+      "table": "fx_reference.ecb_fx_rates__base.silver_rates"
+    },
+    {
       "kind": "table",
       "mode": "rebuild",
       "ref": "audited",
@@ -8,9 +30,63 @@
     },
     {
       "kind": "table",
+      "mode": "rebuild",
+      "ref": "audited",
+      "table": "governance.quality_results__base.test_results"
+    },
+    {
+      "kind": "table",
       "mode": "restore",
       "ref": "main",
       "table": "governance.run_records.run_record"
+    },
+    {
+      "kind": "table",
+      "mode": "restore",
+      "ref": "main",
+      "table": "k2.currency_master.audit_checks"
+    },
+    {
+      "kind": "table",
+      "mode": "rebuild",
+      "ref": "main",
+      "table": "k2.currency_master.bronze_currencies"
+    },
+    {
+      "kind": "table",
+      "mode": "restore",
+      "ref": "main",
+      "table": "k2.currency_master.landing_files"
+    },
+    {
+      "kind": "table",
+      "mode": "restore",
+      "ref": "main",
+      "table": "k2.ecb_fx_rates.audit_checks"
+    },
+    {
+      "kind": "table",
+      "mode": "restore",
+      "ref": "main",
+      "table": "k2.ecb_fx_rates.bronze_daily"
+    },
+    {
+      "kind": "table",
+      "mode": "restore",
+      "ref": "main",
+      "table": "k2.ecb_fx_rates.landing_files"
+    },
+    {
+      "kind": "table",
+      "mode": "rebuild",
+      "ref": "audited",
+      "table": "reference_data.calendars__base.target_days"
+    },
+    {
+      "kind": "table",
+      "mode": "rebuild",
+      "ref": "audited",
+      "table": "reference_data.currency_master__base.currency"
     },
     {
       "kind": "lakekeeper-db"

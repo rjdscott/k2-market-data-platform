@@ -27,6 +27,13 @@ name an S3 secret key pairs with, not a secret), is:
 - a known default (an image's factory password, a word typed in a hurry) or
   any other value .env.example ships;
 - shorter than MIN_LENGTH characters.
+
+Each engine's storage pair (K2_<ENGINE>_S3_ACCESS_KEY and _SECRET_KEY, one per policy file under
+docker/lake/minio/policies/) is refused as lake-init refuses it: unset or still the placeholder,
+equal to the root pair (the access key to MINIO_ROOT_USER, the secret to MINIO_ROOT_PASSWORD), or
+an access key another engine also has. The root pair and every engine's pair hold only SAFE_SET:
+lake-init writes the root pair into a JSON body by shell interpolation, where a quote or a
+backslash breaks it, and what `openssl rand` and `make engine-keys` generate is inside the set.
 """
 
 import argparse
@@ -54,8 +61,10 @@ CREDENTIALS = {
     "AIRFLOW_API_SECRET_KEY": None,
     "GRAFANA_PASSWORD": "admin",                # GF_SECURITY_ADMIN_USER in docker-compose.yml
     "K2_TRINO_SHARED_SECRET": None,             # Trino's internal shared secret (ADR-060)
-    "K2_TRINO_S3_SECRET_KEY": "$K2_TRINO_S3_ACCESS_KEY",  # Trino's S3 pair
 }
+# The engines with a MinIO user: one definition, the policy files lake-init reads.
+ENGINES = sorted(p.stem.upper() for p in (ROOT / "docker/lake/minio/policies").glob("*.json"))
+CREDENTIALS |= {f"K2_{e}_S3_SECRET_KEY": f"$K2_{e}_S3_ACCESS_KEY" for e in ENGINES}  # each engine's S3 pair
 # What .env.example tells you to generate clears this three times over
 # (`openssl rand -hex 24` is 48 characters, `-base64 32` is 44), and 16 random
 # hex characters are still 64 bits; a word, a name or a keyboard walk someone
@@ -67,6 +76,11 @@ KNOWN = {"admin", "administrator", "password", "passw0rd", "p@ssw0rd", "changeme
          "minioadmin", "minio123", "postgres", "prefect", "airflow", "clickhouse", "grafana", "default",
          "root", "toor", "test", "guest", "letmein", "qwerty", "123456", "12345678", "1234567890"}
 FIX = "set it to `openssl rand -hex 24`"
+# Hex, base64 and secrets.token_urlsafe; nothing JSON, a URL or a shell would quote.
+SAFE = re.compile(r"[A-Za-z0-9_.~+/=-]*")
+SAFE_SET = "letters, digits and -_.~+/="
+STORAGE = ["MINIO_ROOT_USER", "MINIO_ROOT_PASSWORD",
+           *(f"K2_{e}_S3_{h}_KEY" for e in ENGINES for h in ("ACCESS", "SECRET"))]
 
 
 def check(env: dict[str, str], example: str) -> list[str]:
@@ -86,6 +100,29 @@ def check(env: dict[str, str], example: str) -> list[str]:
             problems.append(f"{name} is a known default or a value .env.example ships; {FIX}")
         elif len(value) < MIN_LENGTH:
             problems.append(f"{name} is shorter than {MIN_LENGTH} characters; {FIX}")
+    problems += [f"{n} holds a character outside {SAFE_SET}: lake-init writes the root pair into a JSON body; {FIX}"
+                 for n in STORAGE if not SAFE.fullmatch(env.get(n, ""))]
+    return problems + scoped_problems(env, example)
+
+
+def scoped_problems(env: dict[str, str], example: str) -> list[str]:
+    """lake-init's three refusals of an engine's pair (docker/lake/init-lake.sh), by name only. A
+    secret unset or a placeholder is check()'s; the access key's own placeholder is here."""
+    shipped = dict(re.findall(r"^(K2_[A-Z]+_S3_ACCESS_KEY)=(.*)$", example, re.M))
+    problems, owner = [], {}
+    for e in ENGINES:
+        ak, sk = f"K2_{e}_S3_ACCESS_KEY", f"K2_{e}_S3_SECRET_KEY"
+        access = env.get(ak, "")
+        if access in ("", shipped.get(ak)):
+            problems.append(f"{ak} is unset, empty or still the .env.example placeholder; `make engine-keys` writes it")
+            continue
+        if access == env.get("MINIO_ROOT_USER"):
+            problems.append(f"{ak} equals MINIO_ROOT_USER: {e.lower()} gets its own MinIO user, never the root's")
+        if env.get(sk) and env.get(sk) == env.get("MINIO_ROOT_PASSWORD"):
+            problems.append(f"{sk} equals MINIO_ROOT_PASSWORD: {e.lower()} gets its own MinIO user, never the root's")
+        if access in owner:
+            problems.append(f"{ak} is also {owner[access]}'s access key: one MinIO user per engine")
+        owner.setdefault(access, ak)
     return problems
 
 
@@ -128,7 +165,8 @@ def main() -> int:
     for p in problems:
         print(f"check-env: FAIL {where}: {p}", file=sys.stderr)
     if not problems:
-        print(f"check-env: PASS {where} as compose resolves it (no secret unset, a placeholder, its user, a known default, or under {MIN_LENGTH} characters)")
+        print(f"check-env: PASS {where} as compose resolves it (no secret unset, a placeholder, its user, a known default, or under {MIN_LENGTH} characters; "
+              f"each of {len(ENGINES)} engines' storage pairs set, not the root pair, not shared; every storage value in {SAFE_SET})")
     return 1 if problems else 0
 
 

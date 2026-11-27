@@ -108,7 +108,7 @@ for view, p, t, cat in outputs():
     key = key_of(t)
     tagged = {r[0] for r in trino.ok(pub, f"SELECT {quote_ident(key)} FROM {base} FOR VERSION AS OF {tag}")}
     planted = {r[0] for r in trino.ok(pub, f"SELECT {quote_ident(key)} FROM {base}")} - tagged
-    for g in p.grants:
+    for g in (g for g in p.grants if g.role in {r.role for r in t.roles}):  # only readers of a role this table offers
         pol = t.policies.get(g.role)
         if key in (pol.mask if pol else ()):
             print(f"SKIP {view.relation} {g.principal}: its role masks the key {key}, so its keys say nothing")
@@ -120,14 +120,15 @@ for view, p, t, cat in outputs():
 if "--no-schema-change" in sys.argv or failed:
     print(f"SKIP schema change: {'--no-schema-change' if not failed else 'a check above failed'}")
 else:
-    view, p, t, cat = next(outputs())
+    view, p, t, cat = next(o for o in outputs() if any(g.role in {r.role for r in o[2].roles} for g in o[1].grants))  # a grantee of this table polls the view
     filters = {c for pol in t.policies.values() for c in ([pol.delay.column] if pol.delay else []) + ([pol.row_scope.column] if pol.row_scope else [])}
     col = next((c for c in view.columns if c != key_of(t) and c not in filters), None)
     if col is None:  # a contract of only its key and its filters' columns: nothing to drop and add back
         print(f"SKIP schema change: {view.relation} has no column but its key and its policies' filter columns")
         print("tested-data-marker: PASS")
         sys.exit(0)
-    reader = next((g.principal for g in p.grants if not t.policies.get(g.role)), p.grants[0].principal)
+    readers = [g for g in p.grants if g.role in {r.role for r in t.roles}]
+    reader = next((g.principal for g in readers if not t.policies.get(g.role)), readers[0].principal)
     dbt, pub = model.builder(p.name), model.publisher(p.name)
     build, base = quote_relation(model.build_relation(p.domain, p.name, t.name)), quote_relation(view.base)
     count_sql = f"SELECT count(*) FROM {quote_relation(view.relation)}"

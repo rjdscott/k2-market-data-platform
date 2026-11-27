@@ -17,12 +17,17 @@ scripts/verify/deploy_rehearsal.py (`make deploy-rehearsal`).
 from __future__ import annotations
 
 import hashlib
+import http.server
 import importlib.util
 import json
 import os
+import re
+import shutil
 import subprocess
 import sys
+import threading
 import time
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
@@ -50,6 +55,7 @@ else:
     from k2gen.emit.lake import create_view, view_update
 
     sys.path.insert(0, str(ROOT / "platform/k2gen/tests"))
+    import test_release
     from test_release import write_set  # the good fixture set as `k2gen docset` writes it
 
     def load(name: str, path: Path) -> Any:
@@ -71,6 +77,15 @@ else:
     VIEW = "sensor_net.station_readings.silver_readings"
     SILVER = "contracts/sensor-net/station-readings/silver_readings.odcs.yaml"
     GOOD = ROOT / "platform/k2gen/tests/fixtures/v2/good"
+    # The good set without ops-insight's daily-load (nothing reads it): the release after it ADDS a product,
+    # whose builder and publisher the rules loaded before the swap do not know.
+    DAILY_LOAD, NEW_VIEW = "contracts/ops-insight/daily-load", "ops_insight.daily_load.gold_daily_load"
+    WITHOUT_DAILY_LOAD = {
+        "tests/access/expectations.yaml": ["  - principal: svc.load-dashboard\n    table: ops_insight.daily_load.gold_daily_load\n"
+                                           "    via: [sql]\n    visible: [load_date, station_id, readings, mean_value]\n"
+                                           "    mustAppear: {minRows: 1}\n",
+                                           "  - {principal: svc.load-dashboard, table: ops_insight.daily_load__base.gold_daily_load, denied: true}\n"],
+        "contracts/access/principals.yaml": [f"  - id: {p}_daily_load\n    kind: service\n    owner: insight-team\n" for p in ("dbt", "pub")]}
 
     def compose_doc(standin: str = "alpine:3.20", lakekeeper: str = "quay.io/lakekeeper/catalog:v0.13.9") -> dict[str, Any]:
         return {"services": {
@@ -103,6 +118,8 @@ if A[:2] == ["image", "inspect"]:
     print(S["images"][ref]); sys.exit(0)
 if A[0] == "pull":
     S["images"][A[-1]] = "sha256:" + A[-1][-64:]; save(); log("pull", A[-1]); sys.exit(0)
+if A[0] == "run":  # the dbt docs one-shot, by plain docker run
+    log("run", *A[1:]); sys.exit(S.get("run_rc", 0))
 if A[0] == "kill":
     log("kill", A[2]); sys.exit(0)
 if A[0] == "exec":
@@ -110,15 +127,58 @@ if A[0] == "exec":
         print(S.get("mc_out", "")); sys.exit(S.get("mc_rc", 0))
     if A[2] == "readlink":
         print("\n".join(os.readlink(p.replace("/k2/releases", E["FAKE_ROOT"])) for p in A[3:])); sys.exit(0)
+    if A[2] == "airflow":  # Airflow 3.3.2's CLI: piped -o json is one line, every value a string
+        F, argv = S["airflow"], A[3:]
+        prompts = argv[:2] in (["dags", "pause"], ["dags", "unpause"]) and argv[-1:] != ["-y"]  # the real CLI would ask on a pipe
+        argv = [a for a in argv if a != "-y"]
+        log("airflow", *argv)
+        if prompts:
+            sys.exit(1)
+        if argv == ["dags", "list", "-o", "json"]:
+            print(json.dumps([{"dag_id": d, "fileloc": "/x/factory.py", "is_paused": str(p)} for d, p in sorted(F["paused"].items())]))
+        elif argv[:2] in (["dags", "pause"], ["dags", "unpause"]) and len(argv) == 3:
+            if argv[2] in F["paused"]:
+                F["paused"][argv[2]] = argv[1] == "pause"
+        elif argv[:2] == ["dags", "list-runs"] and argv[3:] == ["--state", "running", "-o", "json"]:
+            # a paused DAG's run stays running, its later tasks unscheduled, after its task is done
+            print(json.dumps([{"dag_id": argv[2], "run_id": "scheduled__1", "state": "running"}] if argv[2] in F["busy"] else []))
+        elif argv[:2] == ["tasks", "states-for-dag-run"] and argv[3:] == ["scheduled__1", "-o", "json"]:
+            n = F["busy"][argv[2]]  # its build runs for n more polls; -1: for ever
+            F["busy"][argv[2]] = n - 1 if n > 0 else n
+            print(json.dumps([{"dag_id": argv[2], "task_id": "resolve", "state": "success"},
+                              {"dag_id": argv[2], "task_id": "build", "state": "running" if n else "success"}]))
+        else:
+            sys.exit(f"fake airflow: no such command {argv}")
+        save(); sys.exit(0)
     log("exec", *A[2:4]); sys.exit(0)
+if A[:2] == ["network", "inspect"]:
+    sys.exit(0 if A[-1] in S.get("networks", {}) else 1)
+if A[:2] == ["network", "create"]:
+    labels = dict(A[i + 1].split("=", 1) for i, a in enumerate(A) if a == "--label")
+    S.setdefault("networks", {})[A[-1]] = {"driver": A[A.index("--driver") + 1], "labels": labels}
+    save(); log("network", *A[1:]); sys.exit(0)
+if A[:2] == ["network", "ls"]:  # --filter label=com.docker.compose.project=k2 --format <its version label>
+    print("\n".join(n["labels"].get("com.docker.compose.version", "") for n in S.get("networks", {}).values())); sys.exit(0)
 assert A[0] == "compose", A
 files = [A[i + 1] for i, a in enumerate(A) if a == "-f"]
 pinned = json.loads(open(files[1]).read())["services"]
 rest = A[A.index(files[1]) + 1:]
+if rest[0] in ("--profile", "rm", "up"):
+    log("compose", *rest)  # the exact command, for the tests that assert it
+while rest[0] in ("--profile", "--all-resources"):
+    rest = rest[2:] if rest[0] == "--profile" else rest[1:]
 if rest[0] == "config":
+    if "json" in rest:  # rendered: the World's k2-api port, and its networks
+        print(json.dumps(S["rendered"]))
     sys.exit(0)
+if rest[0] == "rm":
+    S["containers"] = [c for c in S["containers"] if c["service"] != rest[-1]]
+    save(); sys.exit(0)
 if rest[0] == "run":
-    argv = rest[rest.index("k2tools") + 1:]
+    i = rest.index("tools")
+    if rest[i + 1] != "k2tools":  # another entry in tools: the catalog site's python3
+        log("tools-run", *rest[i + 1:]); sys.exit(S.get("tools_rc", 0))
+    argv = rest[i + 2:]
     if argv[0] in ("swap", "pointers"):
         log("tools", *argv)
         out = subprocess.run([sys.executable, E["K2TOOLS"], *argv], env={**E, "K2_RELEASES_MOUNT": E["FAKE_ROOT"]},
@@ -133,7 +193,7 @@ if rest[0] == "up":
     oneshot = svc in S.get("oneshots", [])
     S["containers"].append({"id": uuid.uuid4().hex, "service": svc, "created": f"{time.time_ns()}",
                             "image": S["images"][pinned[svc]["image"]], "status": "exited" if oneshot else "running"})
-    save(); log("up", svc, pinned[svc]["image"]); sys.exit(0)
+    save(); log("up", svc, pinned[svc]["image"], E.get("K2_LAKE_INIT_RELEASE", "")); sys.exit(0)
 sys.exit(f"fake docker: no answer for {A}")
 '''
 
@@ -151,9 +211,34 @@ sys.exit(f"fake docker: no answer for {A}")
                          "K2TOOLS": ROOT / "docker/tools/k2tools.py", "K2_BACKUP_DIR": tmp / "backup"}.items():
                 monkeypatch.setenv(k, str(v))
             images = {r: "sha256:" + r[-64:] for r in (A, B, TRINO, LK, LK2)} | {TOOLS: "sha256:0123456789ab" + "0" * 52}
-            self.write({"containers": [], "images": images, "tables": {}, "oneshots": ["lake-init"]})
+            # k2-api on a loopback port of this test: /v1/release names the release its pointer names,
+            # or another (api_says), or answers 503 (api_says = "down")
+            self.api_says: str | None = None
+            world = self
+
+            class Api(http.server.BaseHTTPRequestHandler):
+                def do_GET(self) -> None:
+                    try:
+                        rid = world.api_says or os.readlink(world.root / "pointers/k2-api").removeprefix("../")
+                    except OSError:
+                        rid = "down"
+                    body = json.dumps({"release": rid}).encode()
+                    self.send_response(503 if rid == "down" else 200)
+                    self.end_headers()
+                    self.wfile.write(body)
+
+                def log_message(self, *a: Any) -> None:
+                    pass
+
+            self.api = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Api)
+            threading.Thread(target=self.api.serve_forever, daemon=True).start()
+            port = {"host_ip": "127.0.0.1", "target": 8095, "published": str(self.api.server_address[1]), "protocol": "tcp"}
+            self.write({"containers": [], "images": images, "tables": {}, "oneshots": ["lake-init"],
+                        "rendered": {"services": {"k2-api": {"ports": [port]}}, "networks": {}}})
+            monkeypatch.setattr(deploy, "API_WAIT_S", 0)
             for f in ("tls/ca.pem", "trino/password.db", "tls/trino.pem", "principals/pub_station_readings.password",
-                      "principals/svc.platform.password"):
+                      "principals/svc.platform.password", *(f"principals/{p}.password" for p in (
+                          "dbt_station_readings", "dbt_daily_load", "pub_daily_load", "svc.runs"))):  # the good set's builds
                 (self.secrets / f).parent.mkdir(parents=True, exist_ok=True)
                 (self.secrets / f).write_text("svc.platform:$2y$10$" + "x" * 53 + "\n" if f.endswith(".db") else f"fixture {f}\n")
             self.views: dict[str, list[str]] = {}
@@ -165,6 +250,7 @@ sys.exit(f"fake docker: no answer for {A}")
             self.suite: list[str] = []
             self.s20: Any = lambda rel: (["drift clean"], [])
             monkeypatch.setattr(deploy, "release_suite", lambda ctx, rel: self.suite.append(rel.id) or ["suite passed"])
+            self.real_s20 = deploy.s20_checks
             monkeypatch.setattr(deploy, "s20_checks", lambda ctx, rel: self.s20(rel))
             monkeypatch.setattr(deploy, "secrets_health", lambda ctx: None)  # its own test below
             self.fence_rc = 0  # scripts/verify/catalog-fence.sh, as verify runs it
@@ -175,6 +261,7 @@ sys.exit(f"fake docker: no answer for {A}")
             self.shaped: list[str] = []
             monkeypatch.setattr(deploy, "statements", lambda ctx, rel, v, old, new: self.shaped.append(rel.id) or view_update(v, old, new))
             monkeypatch.setattr(deploy, "REFRESH_S", 0)
+            monkeypatch.setattr(deploy, "DRAIN_POLL_S", 0)
             self.ctx = deploy.Ctx(root=self.root, secrets=self.secrets, home=ROOT, project="k2", trino="https://localhost:1",
                                   operator="tester", faults=set(), tmp=tmp, say=lambda line: None)
             self.n = 0
@@ -193,10 +280,24 @@ sys.exit(f"fake docker: no answer for {A}")
             return [json.loads(x)[1:] for x in self.log.read_text().splitlines()] if self.log.exists() else []
 
         def release(self, compose: dict[str, Any] | None = None, over: dict[str, bytes] | None = None,
-                    images: dict[str, str] | None = None) -> Any:
-            """A sealed release of the good set with `over` laid on it, compiled against the newest one."""
+                    images: dict[str, str] | None = None, lake_init: bool = True, without_daily_load: bool = False) -> Any:
+            """A sealed release of the good set with `over` laid on it, compiled against the newest one;
+            lake_init: it carries docker/lake/init-lake.sh, as every release since review R6 does;
+            without_daily_load: the set without that product, its two access rows and its principals."""
             self.n += 1
-            set_dir = write_set(self.tmp / f"set{self.n}", compose or compose_doc(), over)
+            over = ({"docker/lake/init-lake.sh": b"#!/bin/bash\n"} if lake_init else {}) | (over or {})
+            if without_daily_load:
+                test_release.GOOD = self.tmp / f"good{self.n}"
+                shutil.copytree(GOOD, test_release.GOOD)
+                shutil.rmtree(test_release.GOOD / DAILY_LOAD)
+                for path, cut in WITHOUT_DAILY_LOAD.items():
+                    text = (test_release.GOOD / path).read_text()
+                    assert all(c in text for c in cut), path
+                    (test_release.GOOD / path).write_text(re.sub("|".join(map(re.escape, cut)), "", text))
+            try:
+                set_dir = write_set(self.tmp / f"set{self.n}", compose or compose_doc(), over)
+            finally:
+                test_release.GOOD = GOOD
             refs = {"trino": TRINO, "standin": A, "lakekeeper": LK, "lake-init": A, "tools": TOOLS} | (images or {})
             (self.tmp / f"images{self.n}.json").write_text(json.dumps(refs))
             kept = sorted((p for p in self.root.glob("v*")), key=lambda p: p.stat().st_mtime) if self.root.exists() else []
@@ -223,15 +324,28 @@ sys.exit(f"fake docker: no answer for {A}")
             live = deploy.k2release.read(self.root / "pointers" / "trino")
             return user == model.canary_user(live.manifest.set_sha256)
 
+        def knows(self, user: str) -> bool:
+            """Trino's `queries` rules: a principal no rule of the loaded release lets execute is refused
+            every statement, as the real one refuses a product's publisher under a release without it."""
+            try:
+                loaded = deploy.k2release.read(self.root / "pointers" / "trino")
+            except (ValueError, OSError):
+                return True  # no release loaded yet
+            rules = json.loads((loaded.root / "compiled/trino/rules.json").read_text())
+            return any(re.fullmatch(r["user"], user) for r in rules["queries"] if "execute" in r["allow"])
+
         def sql(self, ctx: Any, user: str, statement: str) -> dict[str, Any]:
             if self.down and "trino" not in self.ups():
                 raise deploy.k2tools.Unreachable("Connection refused")
+            if not self.knows(user):
+                raise deploy.k2tools.TrinoError("PERMISSION_DENIED", "Access Denied: Cannot execute query")
+            mine = "'silver_readings'" in statement  # VIEW's: no other view is published here
             if statement.startswith("SELECT column_name"):
-                return {"columns": [["column_name", "varchar"]], "rows": [[c] for c in self.views.get(VIEW, [])]}
+                return {"columns": [["column_name", "varchar"]], "rows": [[c] for c in self.views.get(VIEW, [])] if mine else []}
             if statement.startswith("SELECT * FROM"):
                 return {"columns": [[c, t] for c, t in self.tag.items()], "rows": []}
             if statement.startswith("SELECT view_definition"):
-                return {"columns": [["view_definition", "varchar"]], "rows": [[self.stored]] if VIEW in self.views else []}
+                return {"columns": [["view_definition", "varchar"]], "rows": [[self.stored]] if VIEW in self.views and mine else []}
             if statement.startswith("CREATE OR REPLACE VIEW"):
                 self.stored = statement.split(" SECURITY DEFINER AS ", 1)[1].replace(", ", "\n, ")  # Trino reformats
                 cols = self.stored.split("SELECT ", 1)[1].split(" FROM ")[0]
@@ -248,6 +362,19 @@ sys.exit(f"fake docker: no answer for {A}")
 
         def ups(self) -> list[str]:
             return [e[1] for e in self.timeline() if e[0] == "up"]
+
+        def scheduler(self, paused: dict[str, bool], busy: dict[str, int] | None = None) -> None:
+            """Airflow's scheduler running, with these DAGs (True: paused) and these runs' builds running."""
+            s = self.read()
+            s["containers"].append({"id": "c-airflow-scheduler", "service": "airflow-scheduler", "created": "0",
+                                    "image": "x", "status": "running"})
+            self.write(s | {"airflow": {"paused": paused, "busy": busy or {}}})
+
+        def paused(self) -> dict[str, bool]:
+            return dict(self.read()["airflow"]["paused"])
+
+        def airflow_calls(self) -> list[list[str]]:
+            return [e[1:] for e in self.timeline() if e[0] == "airflow"]
 
         def image_of(self, svc: str) -> str:
             return next(c["image"] for c in self.read()["containers"] if c["service"] == svc)
@@ -285,8 +412,10 @@ sys.exit(f"fake docker: no answer for {A}")
                 expect: e.replace("\n    masked: [operator_note]", "").encode()} | bumped_product("2.0.0")
 
     @pytest.fixture
-    def world(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> World:
-        return World(tmp_path, monkeypatch)
+    def world(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[World]:
+        w = World(tmp_path, monkeypatch)
+        yield w
+        w.api.shutdown()
 
     def records(w: World) -> list[dict[str, Any]]:
         return deploy.history(w.root)
@@ -327,7 +456,7 @@ sys.exit(f"fake docker: no answer for {A}")
         assert (p.recreate, p.oneshots, p.trino_restart, p.ddl) == ([], [], False, [])
         assert world.deploy(r2) == 0
         assert world.ups() == [] and os.readlink(world.root / "pointers/trino") == f"../{r2.id}"
-        assert [r["step"] for r in records(world)][-1] == "done"
+        assert [r["step"] for r in records(world)][-2:] == ["done", "site"]
 
     def test_one_image_changed_recreates_only_its_service(world: World) -> None:
         r1 = world.release()
@@ -346,7 +475,7 @@ sys.exit(f"fake docker: no answer for {A}")
         assert world.image_of("standin") == "sha256:" + "a" * 64  # R-1's image, not only its configuration
         assert os.readlink(world.root / "pointers/trino") == f"../{r1.id}"
         steps = [(r["step"], r["outcome"]) for r in records(world)]
-        assert ("verify", "failed") in steps and steps[-1] == ("rollback-done", "ok")
+        assert ("verify", "failed") in steps and steps[-2:] == [("rollback-done", "ok"), ("rollback-site", "ok")]
         assert deploy.standing(records(world))[0][-1] == r1.id
 
     def test_rollback_goes_back_to_the_previous_good_release(world: World) -> None:
@@ -557,10 +686,32 @@ sys.exit(f"fake docker: no answer for {A}")
         calls: list[list[str]] = []
         monkeypatch.setattr(deploy, "drift", lambda ctx, rel: {"exit": exit_, "doc": {"pending": pending}, "text": "x"})
         monkeypatch.setattr(deploy, "run", lambda *a, **k: calls.append(list(a)) or subprocess.CompletedProcess(a, 0, "", ""))
+        monkeypatch.setenv("K2_SPARK_S3_SECRET_KEY", "a-secret-of-this-test")
         lines, bad = deploy.s20_checks(world.ctx, r1)
-        assert bool([c for c in calls if "access-verify" in c]) is live_runs and bool(bad) is wrong, (lines, bad)
+        live = [c for c in calls if "/opt/k2/scripts/access_verify.py" in c and "live" in c]
+        assert bool(live) is live_runs and bool(bad) is wrong, (lines, bad)
+        for c in live:  # a tools one-shot; each engine's pair by -e name only, never its value on the command line
+            assert c[:2] == ["docker", "compose"] and "tools" in c and "a-secret-of-this-test" not in " ".join(c)
+            assert ["-e", "K2_SPARK_S3_SECRET_KEY"] == c[c.index("K2_SPARK_S3_SECRET_KEY") - 1:c.index("K2_SPARK_S3_SECRET_KEY") + 1]
         if pending:
             assert any(x.startswith("SKIP access-verify LIVE=1") and "governance.access-canary" in x for x in lines)
+
+    def test_live_access_verify_mounts_each_operator_key_file_by_name_and_nothing_of_api(world: World,
+                                                                                          monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.undo()
+        r1 = world.release()
+        for f in ("api-keys/p.b.key", "api-keys/p.a.key", "api/keys.json", "api/p.old.key"):
+            (world.secrets / f).parent.mkdir(parents=True, exist_ok=True)
+            (world.secrets / f).write_text("fixture\n")
+        calls: list[list[str]] = []
+        monkeypatch.setattr(deploy, "run", lambda *a, **k: calls.append(list(a)) or subprocess.CompletedProcess(a, 0, "", ""))
+        deploy.access_live(world.ctx, r1, world.ctx.tmp / "access-live.json")
+        (c,) = calls
+        mounts = [c[i + 1] for i, x in enumerate(c) if x == "-v"]
+        # the runner reads K2_SECRETS=/run/k2-secrets, so its default <secrets>/api-keys is where the files land
+        assert c[c.index(f"{model.SECRETS_ENV}=/run/k2-secrets") - 1] == "-e"
+        assert [m for m in mounts if ":/run/k2-secrets/api" in m] == [f"{world.secrets}/api-keys/{n}:/run/k2-secrets/api-keys/{n}:ro"
+                                                     for n in ("p.a.key", "p.b.key")]
 
     GUARDED = ('SELECT "id", "note" FROM "g"."a__base"."e" FOR VERSION AS OF \'audited\' WHERE EXISTS (SELECT 1 FROM '
                '"g"."a__base"."e$refs" WHERE "name" = \'audited\' AND "type" = \'TAG\')')
@@ -766,3 +917,468 @@ sys.exit(f"fake docker: no answer for {A}")
         monkeypatch.setattr(deploy, "run", lambda *a, **k: subprocess.CompletedProcess(a, 0, json.dumps(recorded[:1]), ""))
         with pytest.raises(deploy.Refused, match="no registry digest"):
             deploy.held_ref("sha256:" + "e" * 64, image, image)
+
+    # --- review R1 of phases 002+003: a running service the target puts behind a profile -----
+
+    # v3.0.0-alpha.3.2's three stubs as its compose declared them (the CI checkout fetches no tag to
+    # `git show`), beside this branch's own three stanzas, read from docker-compose.yml.
+    A32_STUBS = yaml.safe_load("""
+    k2-api:
+      profiles: [api]
+      image: alpine:3.20
+      command: [echo, "SKIP k2-api: built in phase 003"]
+      networks: [k2-net]
+      volumes: [{type: bind, source: "${K2_RELEASES:-${HOME}/k2-releases}", target: /k2/releases, read_only: true}]
+      deploy: {resources: {limits: {cpus: '0.5', memory: 512M}}}
+      restart: "no"
+    fetch:
+      profiles: [fetch]
+      image: alpine:3.20
+      command: [echo, "SKIP fetch: built in phase 002"]
+      networks: [k2-net]
+      deploy: {resources: {limits: {cpus: '0.5', memory: 512M}}}
+      restart: "no"
+    dbt-runner:
+      profiles: [build]
+      image: alpine:3.20
+      command: [echo, "SKIP dbt-runner: built in phase 002"]
+      networks: [k2-catalog]
+      deploy: {replicas: 2, resources: {limits: {cpus: '0.5', memory: 768M}}}
+      restart: "no"
+    """)
+    BUILT = {s: f"{s}:{c * 12}" for s, c in (("k2-api", "1"), ("fetch", "2"), ("dbt-runner", "3"))}  # local builds
+
+    def real_pair(world: World) -> tuple[Any, Any]:
+        """(alpha.3.2 live, its three stubs not running; this branch's release): the stanzas as each tag has them."""
+        now = yaml.safe_load((ROOT / "docker-compose.yml").read_text())["services"]
+        old, new = compose_doc(), compose_doc()
+        old["services"] |= A32_STUBS
+        new["services"] |= {s: now[s] for s in A32_STUBS}
+        r_old = world.release(compose=old, images={s: A for s in A32_STUBS})
+        r_new = world.release(compose=new, images=BUILT)
+        world.live(r_old)
+        s = world.read()
+        s["containers"] = [c for c in s["containers"] if c["service"] not in A32_STUBS]  # a profiled stub never runs
+        s["images"] |= {ref: "sha256:" + ref[-12:] + "0" * 52 for ref in BUILT.values()}
+        world.write(s)
+        for f in ("api/keys.json", "principals/svc.api.password", "principals/svc.catalog.password",
+                  "principals/svc.runs.password", "alertmanager/slack-webhook-url"):
+            (world.secrets / f).parent.mkdir(parents=True, exist_ok=True)
+            (world.secrets / f).write_text("fixture\n")
+        return r_old, r_new
+
+    def composed(world: World) -> list[list[str]]:
+        return [e[1:] for e in world.timeline() if e[0] == "compose"]
+
+    def test_k2_api_starts_on_the_way_in_and_is_removed_on_a_rollback_to_its_stub(world: World) -> None:
+        r_old, r_new = real_pair(world)
+        p = deploy.make_plan(world.ctx, r_new, [r_old])
+        assert "k2-api" in p.recreate and p.remove == [] and not {"fetch", "dbt-runner"} & {*p.recreate, *p.oneshots}
+        assert world.deploy(r_new) == 0
+        assert ["up", "-d", "--no-deps", "--no-build", "--pull", "never", "k2-api"] in composed(world)
+        assert world.image_of("k2-api") == "sha256:" + "1" * 12 + "0" * 52
+        back = deploy.make_plan(world.ctx, r_old, [r_new])
+        assert back.remove == ["k2-api"] and "k2-api" not in {*back.recreate, *back.oneshots}, back
+        world.log.unlink()
+        world.api_says = "down"  # alpha.3.2's k2-api is a profiled stub: verify must not ask it
+        with deploy.lock(world.root):
+            assert deploy.rollback(world.ctx) == 0  # was exit 3: verify found the branch's k2-api on alpha.3.2
+        assert composed(world) == [["--profile", "api", "rm", "--stop", "--force", "k2-api"]], composed(world)
+        assert "k2-api" not in {c["service"] for c in world.read()["containers"]}
+        steps = [(r["step"], r["outcome"]) for r in records(world)]
+        assert steps.index(("rollback-swap", "ok")) < steps.index(("rollback-remove-k2-api", "ok")) < steps.index(("rollback-recreate", "ok"))
+        assert steps[-2] == ("rollback-done", "ok") and os.readlink(world.root / "pointers/k2-api") == f"../{r_old.id}"
+
+    def test_a_rollback_across_a_migrating_one_shot_image_verifies(world: World) -> None:
+        """alpha.3.2 to this branch moves k2-airflow's image, so airflow-migrate reruns on the new one; a
+        rollback never reruns it, and its exited container keeps that image (exit 3 before)."""
+        world.write(world.read() | {"oneshots": ["lake-init", "airflow-migrate"], "mc_out": "-- PostgreSQL database dump complete"})
+        r1 = world.release(compose=migrate_doc("alpine:3.20"), images=MIGRATE | {"airflow-migrate": A})
+        world.live(r1)
+        r2 = world.release(compose=migrate_doc("alpine:3"), images=MIGRATE | {"airflow-migrate": B})
+        assert world.deploy(r2) == 0 and world.image_of("airflow-migrate") == "sha256:" + "b" * 64
+        with deploy.lock(world.root):
+            assert deploy.rollback(world.ctx) == 0
+        assert world.image_of("airflow-migrate") == "sha256:" + "b" * 64 and records(world)[-2]["step"] == "rollback-done"
+
+    @pytest.mark.parametrize("says, ok", [(None, True), ("v0.0.0-other-0123456789ab", False), ("down", False)])
+    def test_verify_asks_k2_api_which_release_it_serves(world: World, says: str | None, ok: bool) -> None:
+        r_old, r_new = real_pair(world)
+        assert world.deploy(r_new) == 0
+        world.api_says = says
+        if ok:
+            assert any(x.startswith("k2-api: GET http://127.0.0.1:") and x.endswith(f"/v1/release names {r_new.id}")
+                       for x in deploy.verify(world.ctx, r_new, None))
+        else:
+            with pytest.raises(deploy.Failed, match="k2-api serves v0.0.0-other" if says != "down" else "k2-api did not answer: .*503"):
+                deploy.verify(world.ctx, r_new, None)
+        assert "k2-api" in deploy.POINTERS  # and the readlink check maps service k2-api to its pointer by name
+
+    def test_every_declared_network_exists_after_a_deploy_and_a_rollback_with_compose_labels(world: World) -> None:
+        r1 = world.release()
+        world.live(r1)
+        s = world.read()
+        s["networks"] = {"k2_k2-catalog": {"driver": "bridge", "labels": {}},  # made by hand at the cutover, adopted
+                         "k2_k2-net": {"driver": "bridge", "labels": {"com.docker.compose.version": "5.0.0"}}}  # by compose
+        s["rendered"]["networks"] = {k: {"name": f"k2_{k}", "driver": "bridge", "ipam": {}} for k in ("k2-net", "k2-egress")}
+        world.write(s)
+        assert world.deploy(world.release(over=policy(60))) == 0
+        made = [e[1:] for e in world.timeline() if e[0] == "network"]
+        assert made == [["create", "--driver", "bridge", "--label", "com.docker.compose.project=k2", "--label",
+                         "com.docker.compose.network=k2-egress", "--label", "com.docker.compose.version=5.0.0", "k2_k2-egress"]]
+        assert world.read()["networks"]["k2_k2-egress"]["labels"] == {"com.docker.compose.project": "k2",
+                                                                     "com.docker.compose.network": "k2-egress",
+                                                                     "com.docker.compose.version": "5.0.0"}
+        with deploy.lock(world.root):
+            assert deploy.rollback(world.ctx) == 0
+        assert len([e for e in world.timeline() if e[0] == "network"]) == 1  # it exists: never created twice
+        s = world.read()  # no network of the project carries compose's version: the label is left off, never guessed
+        s["networks"] = {}
+        s["rendered"]["networks"] = {"k2-net": {"name": "k2_k2-net", "driver": "bridge", "ipam": {}}}
+        world.write(s)
+        assert deploy.ensure_networks(world.ctx, r1) == ["network k2_k2-net created: no service compose starts uses it yet"]
+        assert world.read()["networks"]["k2_k2-net"]["labels"] == {"com.docker.compose.project": "k2", "com.docker.compose.network": "k2-net"}
+        s = world.read()
+        s["rendered"]["networks"]["odd"] = {"name": "k2_odd", "driver": "bridge", "internal": True}
+        world.write(s)
+        with pytest.raises(deploy.Failed, match="network odd declares"):
+            deploy.ensure_networks(world.ctx, r1)
+
+    def test_a_running_service_profiled_in_both_is_recreated_not_removed(world: World) -> None:
+        r1 = world.release(compose=compose_doc(), images={"clickhouse": A})
+        world.live(r1)  # clickhouse runs: someone started hot-gold on purpose
+        r2 = world.release(compose=compose_doc(), images={"clickhouse": B})
+        p = deploy.make_plan(world.ctx, r2, [r1])
+        assert p.remove == [] and "clickhouse" in p.recreate
+
+    # --- review R3: every secret file the target mounts, before anything changes ---------
+
+    def test_preflight_names_every_missing_secret_file_of_the_target_and_its_make_command(world: World) -> None:
+        now = yaml.safe_load((ROOT / "docker-compose.yml").read_text())["services"]
+        doc = compose_doc()
+        doc["services"] |= {s: now[s] for s in ("trino", "tools", "k2-api", "airflow-scheduler", "alertmanager", "dbt-runner")}
+        r1 = world.release(compose=doc)
+        p = deploy.make_plan(world.ctx, r1, [None])
+        builds = sorted(deploy.run_principals(r1))
+        assert "svc.runs" in builds and any(x.startswith("dbt_") for x in builds) and any(x.startswith("pub_") for x in builds)
+        assert deploy.secret_binds(r1) >= {"principals/svc.catalog.password", "principals/svc.api.password", "api",
+                                           "principals/svc.runs.password", "trino", "tls/trino.pem", "alertmanager"}
+        (world.secrets / "principals/dbt_daily_load.password").unlink()  # a build's: the operator mounts it at run time
+        missing = deploy.required_secrets(world.ctx, p)
+        assert missing == ["alertmanager/slack-webhook-url", "api/keys.json", "principals/dbt_daily_load.password",
+                           "principals/svc.api.password", "principals/svc.catalog.password"], missing
+        with pytest.raises(deploy.Refused) as e:
+            world.deploy(r1)
+        assert "principals/svc.catalog.password (make password PRINCIPAL=svc.catalog TO_FILE=1)" in str(e.value)
+        assert "api/keys.json (make api-key)" in str(e.value) and "alertmanager/slack-webhook-url (make alerts-install-webhook)" in str(e.value)
+        assert "fixture" not in str(e.value) and world.ups() == [] and records(world)[-1]["step"] == "preflight"
+        for n in missing:
+            (world.secrets / n).parent.mkdir(parents=True, exist_ok=True)
+            (world.secrets / n).write_text("fixture\n")
+        assert deploy.required_secrets(world.ctx, p) == []
+
+    # --- review R6: lake-init runs the deployed release's own script and policies --------
+
+    def test_lake_init_runs_the_target_release_script_and_an_older_release_skips_it(world: World) -> None:
+        lake = yaml.safe_load((ROOT / "docker-compose.yml").read_text())["services"]["lake-init"]
+        assert not any(str(v).startswith("./") for v in lake["volumes"]), "never the checkout's docker/lake"
+        entry = lake["entrypoint"][-1]
+        assert entry == f"/k2/releases/${{K2_LAKE_INIT_RELEASE:-pointers/trino}}/{deploy.LAKE_INIT}", entry
+        world.live(world.release())
+        r1 = world.release(images={"lake-init": B})  # lake-init's image moves: it runs, from r1's own copy
+        assert world.deploy(r1) == 0
+        assert ["up", "lake-init", B, r1.id] in [e[:4] for e in world.timeline()]
+        assert (world.root / entry.replace("${K2_LAKE_INIT_RELEASE:-pointers/trino}", r1.id).removeprefix("/k2/releases/")).is_file()
+        doc = compose_doc(standin="alpine:3")
+        doc["services"]["lake-init"]["environment"] = {"MINIO_ROOT_USER": "${MINIO_ROOT_USER}"}  # its old shape
+        old = world.release(compose=doc, images={"standin": B, "lake-init": B}, lake_init=False)
+        p = deploy.make_plan(world.ctx, old, [r1])
+        assert "lake-init" not in p.oneshots and any(x.startswith(f"lake-init: {old.id} carries no {deploy.LAKE_INIT}") for x in p.skipped)
+        world.log.unlink()
+        assert world.deploy(old) == 0 and world.ups() == ["standin"]
+
+    def test_preflight_refuses_when_a_storage_key_the_live_suite_signs_with_is_not_in_the_environment(
+            world: World, monkeypatch: pytest.MonkeyPatch) -> None:
+        rows = "".join(f"  - {{storageKey: {{engine: {e}, target: k2-lake/warehouse/k2, operation: read}}, expect: allowed}}\n"
+                       for e in ("spark", "backup"))
+        r1 = world.release(over={EXPECT: (GOOD / EXPECT).read_bytes() + rows.encode()})
+        assert deploy.live_key_names(r1) == ["K2_BACKUP_S3_ACCESS_KEY", "K2_BACKUP_S3_SECRET_KEY",
+                                             "K2_SPARK_S3_ACCESS_KEY", "K2_SPARK_S3_SECRET_KEY"]
+        for n in deploy.live_key_names(r1):
+            monkeypatch.setenv(n, "a-value-of-this-test")
+        monkeypatch.delenv("K2_BACKUP_S3_SECRET_KEY")
+        with pytest.raises(deploy.Refused, match=r"sign with K2_BACKUP_S3_SECRET_KEY, not in deploy's environment.*set -a") as e:
+            world.deploy(r1)
+        assert "a-value-of-this-test" not in str(e.value) and world.ups() == []
+        assert deploy.live_key_names(world.release()) == []  # no storage-key row: nothing asked
+
+    # --- the sites after each deploy and rollback (W3-12) ------------------------------
+
+    DBT_RUNNER = "dbt-runner:" + "3" * 12
+
+    def site_release(world: World, standin: str = "alpine:3.20") -> Any:
+        doc = compose_doc(standin=standin) | {"volumes": {"k2-site": {}}}
+        return world.release(compose=doc, over={"platform/catalog-site/k2site.py": b"print('k2site: wrote /site/catalog/current')\n"},
+                             images={"dbt-runner": DBT_RUNNER} | ({"standin": B} if standin != "alpine:3.20" else {}))
+
+    def test_the_sites_run_after_done_on_a_deploy_and_a_rollback_and_a_failure_never_fails_either(world: World) -> None:
+        s = world.read()
+        world.write(s | {"images": s["images"] | {DBT_RUNNER: "sha256:" + "3" * 12 + "0" * 52}})
+        r1 = site_release(world)
+        world.live(r1)
+        s = world.read()  # dbt-runner is profiled: Airflow starts it per run, never compose
+        world.write(s | {"containers": [c for c in s["containers"] if c["service"] != "dbt-runner"]})
+        r2 = site_release(world, standin="alpine:3")
+        assert deploy.DBT_PROJECT in r2.manifest.files and deploy.CATALOG_SITE in r2.manifest.files
+        assert world.deploy(r2) == 0
+        t = world.timeline()
+        where = f"/k2/releases/{r2.id}"
+        assert ["tools-run", "python3", f"{where}/{deploy.CATALOG_SITE}", "--release", where, "--out", "/site/catalog"] in t
+        assert ["run", "--rm", "--network", "none", "--read-only", "--tmpfs", "/tmp:rw,noexec,nosuid,size=64m", "--cap-drop", "ALL",
+                "--security-opt", "no-new-privileges:true", "--pids-limit", "256", "--cpus", "0.5", "--memory", "768m",
+                "--user", f"{os.getuid()}:{os.getgid()}", "-v", f"{world.root}:/k2/releases:ro", "-v", "k2_k2-site:/site",
+                DBT_RUNNER, "k2-dbt", "docs", "--release", r2.id, "--out", "/site/dbt-docs"] in t
+        steps = [(r["step"], r["outcome"]) for r in records(world)]
+        assert steps[-2:] == [("done", "ok"), ("site", "ok")] and deploy.standing(records(world))[1] == []
+        world.write(world.read() | {"run_rc": 1})  # the dbt docs fail: the rollback still ends at exit 0
+        said: list[str] = []
+        world.ctx.say = said.append
+        with deploy.lock(world.root):
+            assert deploy.rollback(world.ctx) == 0
+        last = records(world)[-1]
+        assert (last["step"], last["outcome"]) == ("rollback-site", "failed") and "dbt docs:" in last["reason"]
+        assert any(x.startswith("deploy: site: failed") and "stays live and verified" in x for x in said), said
+        assert deploy.standing(records(world)) == ([r1.id, r2.id, r1.id], [])  # a site moves no release
+        assert deploy.sites(world.ctx, world.release()) == ["SKIP sites: " + world.release().id
+                                                            + "'s compose has no k2-site volume (a release before phase 003)"]
+        made = subprocess.run(["make", "-s", "-f", "mk/run.mk", "site", "DEPLOY=echo"], cwd=ROOT, capture_output=True, text=True)
+        assert made.stdout.strip() == "site", made.stdout + made.stderr
+
+    # --- the drain (W1-6, ADR-058) ------------------------------------------------------
+
+    CODE = "docker/airflow/dags/factory.py"  # in a release at platform/docker/airflow/dags/factory.py
+    SR, DL = "station_readings", "daily_load"  # the good set's two DAGs
+
+    def stand_in(tmp: Path, rid: str, dags: dict[str, list[str]], code: str) -> Any:
+        """A release as drain_need reads one: its manifest's files and its dags.json."""
+        (tmp / rid / "compiled/airflow").mkdir(parents=True)
+        (tmp / rid / model.DAGS).write_text(json.dumps({"dags": [{"dagId": d, "tasks": t} for d, t in dags.items()]}))
+        files = {model.DAGS: hashlib.sha256(json.dumps(dags).encode()).hexdigest(),
+                 f"platform/{CODE}": code, "compiled/trino/rules.json": rid}  # the rules move every time: never a drain
+        return type("R", (), {"id": rid, "root": tmp / rid, "manifest": type("M", (), {"files": files})})()
+
+    def test_drain_need_for_each_kind_of_change(tmp_path: Path) -> None:
+        old = stand_in(tmp_path, "v1-a", {"a": ["resolve", "build"], "b": ["resolve", "build"], "c": ["resolve"]}, "h1")
+        new = stand_in(tmp_path, "v1-b", {"a": ["resolve", "fetch", "build"], "c": ["resolve"], "d": ["resolve"]}, "h1")
+        same = stand_in(tmp_path, "v1-c", {"a": ["resolve", "fetch", "build"], "c": ["resolve"], "d": ["resolve"]}, "h1")
+        moved = stand_in(tmp_path, "v1-d", {"a": ["resolve", "build"], "b": ["resolve", "build"], "c": ["resolve"]}, "h2")
+
+        def plan(target: Any, *sources: Any, recreate: tuple[str, ...] = ()) -> Any:
+            return deploy.Plan(target, list(sources), list(recreate), [], False, [], [], [])
+
+        assert deploy.drain_need(plan(new, old)) == ({"a", "b"}, "the task list of a, b changes or goes")  # d is new: no run
+        assert deploy.drain_need(plan(same, new))[0] == set()
+        assert deploy.drain_need(plan(same, new, recreate=("standin", "trino"))) == (None, "Trino restarts")
+        assert deploy.drain_need(plan(new, moved)) == (None, "the DAG code moved since v1-d")
+        assert deploy.drain_need(plan(same, new, moved))[0] is None  # any source the code moved from: all
+        assert deploy.drain_need(plan(new, None))[0] is None  # no release before: its DAGs are unknown
+
+    def drained_world(world: World, paused: dict[str, bool], busy: dict[str, int] | None = None) -> tuple[Any, Any]:
+        """r1 live with the scheduler running; r2 moves the DAG code, so every DAG drains."""
+        r1 = world.release(over={CODE: b"# one\n"})
+        world.live(r1)
+        world.scheduler(paused, busy)
+        return r1, world.release(over={CODE: b"# two\n"})
+
+    def test_a_drain_pauses_only_the_running_dags_waits_for_their_tasks_and_unpauses_exactly_those(world: World) -> None:
+        r1, r2 = drained_world(world, {SR: False, DL: True}, busy={SR: 1})  # an operator paused daily_load
+        said: list[str] = []
+        world.ctx.say = said.append
+        assert world.deploy(r2) == 0
+        runs = [[*p, "--state", "running", "-o", "json"] for p in (["dags", "list-runs", DL], ["dags", "list-runs", SR])]
+        poll = [*runs, ["tasks", "states-for-dag-run", SR, "scheduled__1", "-o", "json"]]
+        assert world.airflow_calls() == [["dags", "list", "-o", "json"], ["dags", "pause", SR], *poll, *poll,
+                                         ["dags", "unpause", SR]]  # daily_load's run is asked, its pause kept
+        assert world.paused() == {SR: False, DL: True} and not (world.root / deploy.DRAIN_STATE).exists()
+        t = [e[:3] for e in world.timeline()]
+        assert t.index(["airflow", "dags", "pause"]) < t.index(["tools", "swap", r2.id]) < t.index(["airflow", "dags", "unpause"])
+        assert any("drain: the DAG code moved since" in x for x in said) and any(x.startswith("  drained daily_load, station_readings") for x in said)
+        steps = [r["step"] for r in records(world)]
+        assert steps[steps.index("drain") - 1: steps.index("drain") + 2] == ["backup", "drain", "ddl"]
+
+    def test_a_failed_verify_rolls_back_then_unpauses_the_drained_dags(world: World) -> None:
+        r1, r2 = drained_world(world, {SR: False, DL: True})
+        assert world.deploy(r2, "verify-mismatch") == 1
+        assert world.paused() == {SR: False, DL: True} and not (world.root / deploy.DRAIN_STATE).exists()
+        t = [e[:3] for e in world.timeline()]
+        back = max(i for i, e in enumerate(t) if e[:2] == ["tools", "swap"])  # the rollback's swap, to r1
+        assert t[back][2] == r1.id and back < t.index(["airflow", "dags", "unpause"])
+        assert world.airflow_calls()[-1] == ["dags", "unpause", SR]
+
+    def test_tasks_still_running_at_the_bound_refuse_before_the_swap_unpause_and_the_override_goes_on(
+            world: World, monkeypatch: pytest.MonkeyPatch) -> None:
+        r1, r2 = drained_world(world, {SR: False, DL: False}, busy={SR: -1})
+        monkeypatch.setattr(deploy, "DRAIN_WAIT_S", 0)
+        with pytest.raises(deploy.Refused, match=r"still running after 0 s: station_readings\.build \(run scheduled__1, running\)"):
+            world.deploy(r2)
+        assert world.paused() == {SR: False, DL: False} and world.airflow_calls()[-2:] == [["dags", "unpause", DL], ["dags", "unpause", SR]]
+        assert [e for e in world.timeline() if e[:2] == ["tools", "swap"]] == [] and world.ups() == []
+        assert (records(world)[-1]["step"], records(world)[-1]["outcome"]) == ("drain", "failed")
+        assert deploy.standing(records(world))[1] == []  # a refusal moved nothing: no unfinished attempt
+        world.ctx.allow_running = True
+        assert world.deploy(r2) == 0 and world.paused() == {SR: False, DL: False}
+        steps = [r["step"] for r in records(world)]
+        assert steps[steps.index("allow-running") + 1] == "drain" and steps[-2:] == ["done", "site"]
+
+    def test_the_paused_set_is_written_before_the_first_pause_and_a_rerun_after_a_kill_unpauses_it(
+            world: World, monkeypatch: pytest.MonkeyPatch) -> None:
+        r1, r2 = drained_world(world, {SR: False, DL: True})
+        real, seen = deploy.airflow, []
+
+        def killed(ctx: Any, cid: str, *argv: str) -> Any:
+            out = real(ctx, cid, *argv)
+            if argv[:2] == ("dags", "pause"):
+                seen.append(deploy.paused_by_deploy(ctx))
+                raise KeyboardInterrupt  # the process dies right after Airflow paused it: no except Exception runs
+            return out
+
+        monkeypatch.setattr(deploy, "airflow", killed)
+        with pytest.raises(KeyboardInterrupt):
+            world.deploy(r2)
+        assert seen == [{SR}] and world.paused() == {SR: True, DL: True}
+        monkeypatch.setattr(deploy, "airflow", real)
+        assert world.deploy(r2) == 0  # the rerun finds SR paused, so pauses nothing, and unpauses it at the end
+        assert world.paused() == {SR: False, DL: True} and ["dags", "pause", SR] not in world.airflow_calls()[2:]
+
+    @pytest.mark.parametrize("earlier", [None, "ddl", "canary", "swap"])
+    def test_a_ddl_failure_unpauses_only_when_no_attempt_went_past_the_one_shots(
+            world: World, monkeypatch: pytest.MonkeyPatch, earlier: str | None) -> None:
+        r1, r2 = drained_world(world, {SR: False, DL: True})
+        if earlier:  # an earlier attempt at r2, killed after this step (a kill after swap records only canary)
+            deploy.record(world.ctx, r2, r1.id, earlier, "ok", set())
+
+        def failing(ctx: Any, p: Any) -> list[str]:
+            raise deploy.Failed("lake-init: the one-shot exited 1")
+
+        monkeypatch.setattr(deploy, "ddl", failing)
+        with pytest.raises(deploy.Failed, match="lake-init"):
+            world.deploy(r2)
+        held = earlier in ("canary", "swap")  # past the one-shots: the pointers may name r2 already
+        assert world.paused()[SR] is held and (world.root / deploy.DRAIN_STATE).exists() is held
+        assert (["dags", "unpause", SR] in world.airflow_calls()) is not held
+
+    def test_no_drain_no_scheduler_and_no_dags_are_recorded_and_the_deploy_goes_on(world: World) -> None:
+        r1 = world.release(over={CODE: b"# one\n"})
+        world.live(r1)
+        said: list[str] = []
+        world.ctx.say = said.append
+        assert world.deploy(world.release(over={CODE: b"# two\n"})) == 0
+        assert any(x.startswith("  no scheduler: airflow-scheduler is not running") for x in said), said
+        world.scheduler({})
+        assert world.deploy(world.release(over={CODE: b"# three\n"})) == 0
+        assert any(x.startswith("  no DAGs: Airflow has none to drain") for x in said) and world.airflow_calls() == [["dags", "list", "-o", "json"]]
+        assert world.deploy(world.release(over={CODE: b"# three\n", **policy(60)})) == 0
+        assert any(x.startswith("  no drain: no Trino restart and no DAG's task list changes") for x in said)
+        assert len(world.airflow_calls()) == 1  # no change that drains: Airflow not asked
+        assert all(r["outcome"] == "ok" for r in records(world) if r["step"] == "drain")
+
+    # --- a release that adds a product (the first live deploy of alpha.4-rc.1, 2026-11-27) ----------
+
+    def test_a_view_new_in_the_target_is_never_read_as_its_publisher_before_its_rules_load(world: World) -> None:
+        r1 = world.release(without_daily_load=True)
+        world.live(r1)
+        r2 = world.release()
+        said: list[str] = []
+        world.ctx.say = said.append
+        assert NEW_VIEW in [v.relation for v in deploy.make_plan(world.ctx, r2, [r1]).views]
+        real, asked = world.sql, []
+        deploy.sql = lambda ctx, user, statement: asked.append((user, os.readlink(world.root / "pointers/trino"))) or real(ctx, user, statement)
+        assert world.deploy(r2) == 0, [x for x in said if "FAILED" in x]  # was views-narrow FAILED: PERMISSION_DENIED
+        assert ("pub_daily_load", f"../{r1.id}") not in asked, asked  # never as its publisher under r1's rules
+        assert ("pub_daily_load", f"../{r2.id}") in asked  # views-widen asks, once r2's rules are loaded
+        assert any(x.startswith(f"  {NEW_VIEW}: not in {r1.id}, so the rules loaded now do not know its publisher") for x in said)
+        assert f"  views new in this release: {NEW_VIEW} (created after its rules load, at its first tested publish)" in said
+        assert not any(NEW_VIEW in x for x in said if x.startswith("  views to re-sync"))
+
+    def test_a_view_only_an_interrupted_attempt_declares_is_narrowed_only_if_the_loaded_rules_know_its_owner(world: World) -> None:
+        r1 = world.release(without_daily_load=True)
+        world.live(r1)
+        r2, r3 = world.release(), world.release(over=policy(60))
+        p = deploy.make_plan(world.ctx, r3, [r1, r2])  # an attempt at r2 died before its swap: r1's rules hold
+        p.views = [deploy.views_of(r3)[NEW_VIEW]]
+        lines = deploy.sync_views(world.ctx, p, "narrow")
+        assert lines[0].startswith(f"{NEW_VIEW}: the rules loaded now refuse its publisher pub_daily_load"), lines
+        p.sources = [r2]  # every release it moves from declares the view: a refusal is a real failure, never explained away
+        with pytest.raises(deploy.Failed, match="PERMISSION_DENIED"):
+            deploy.sync_views(world.ctx, p, "narrow")
+
+    def test_a_rollback_across_a_new_products_ddl_verifies_with_its_leftovers_left_and_exits_1(
+            world: World, monkeypatch: pytest.MonkeyPatch) -> None:
+        r1 = world.release(without_daily_load=True)
+        world.live(r1)
+        r2 = world.release()
+
+        def drift(ctx: Any, rel: Any) -> dict[str, Any]:  # catalog_drift.py over a catalog holding r2's namespaces
+            if f"{model.RELEASES_MOUNT}/{r2.id}" in deploy.left_dirs(ctx, rel):
+                return {"exit": 0, "doc": {"left": [f"LEFT namespace ops_insight.daily_load: declared by {r2.id}"]}, "text": ""}
+            return {"exit": 1, "doc": {}, "text": "DRIFT namespace ops_insight.daily_load: the release declares no such namespace"}
+
+        monkeypatch.setattr(deploy, "drift", drift)
+        monkeypatch.setattr(deploy, "access_live", lambda ctx, rel, out: subprocess.CompletedProcess([], 0, "", ""))
+        monkeypatch.setattr(deploy, "identity", lambda ctx: ["identity.sh: stood in"])
+        world.s20 = lambda rel: world.real_s20(world.ctx, rel)
+        said: list[str] = []
+        world.ctx.say = said.append
+        assert world.deploy(r2, "verify-mismatch") == deploy.EXIT_FAILED, [x for x in said if "FAILED" in x]  # was 3
+        assert os.readlink(world.root / "pointers/trino") == f"../{r1.id}"
+        said.clear()
+        with deploy.lock(world.root):
+            assert deploy.verify_live(world.ctx) == 0  # make release-verify after the rollback: the same set, from the log
+        assert any(x.strip().startswith(f"LEFT namespace ops_insight.daily_load: declared by {r2.id}") for x in said), said
+
+    def test_the_drift_check_and_the_live_suites_drift_row_are_given_what_the_log_says_was_left(
+            world: World, monkeypatch: pytest.MonkeyPatch) -> None:
+        r1 = world.release(without_daily_load=True)
+        world.live(r1)
+        r2 = world.release()
+        deploy.record(world.ctx, r2, r1.id, "ddl", "ok", set())  # an attempt at r2 got past its ddl
+        calls: list[list[str]] = []
+        monkeypatch.setattr(deploy, "run", lambda *a, **k: calls.append(list(a)) or subprocess.CompletedProcess(a, 0, "", ""))
+        deploy.drift(world.ctx, r1)
+        deploy.access_live(world.ctx, r1, world.tmp / "live.json")
+        drift_cmd, live_cmd = calls
+        i = drift_cmd.index("--left-by")
+        assert drift_cmd[i:i + 2] == ["--left-by", f"{model.RELEASES_MOUNT}/{r2.id}"] and drift_cmd.count("--left-by") == 1
+        assert f"{deploy.drift_lib.LEFT_ENV}={model.RELEASES_MOUNT}/{r2.id}" in live_cmd
+
+    def test_left_by_is_each_release_past_its_drain_since_the_live_one_first_appears() -> None:
+        def r(rel: str, step: str, outcome: str = "ok", frm: str | None = None) -> dict[str, Any]:
+            return {"release": rel, "from": frm, "step": step, "outcome": outcome}
+
+        log = [r("a", "done"), r("old", "ddl"),  # before b first appears: a forward deploy over it is drift again
+               r("b", "preflight"), r("b", "done"),
+               r("c", "preflight"), r("c", "plan"),  # PLAN=1 moved nothing
+               r("d", "preflight"), r("d", "drain", "failed"),  # refused at its drain: no ddl ran
+               r("e", "drain"),  # killed inside its ddl: its drain is recorded, its ddl not
+               r("a", "swap"), r("a", "recreate"),  # older than b, deployed again: its own leftovers are b's to drop
+               r("f", "ddl"), r("f", "views-narrow", "failed"), r("b", "rollback-verify", frm="f"), r("b", "rollback-done", frm="f")]
+        assert deploy.left_by(log, "b") == ["e", "f"]  # every release-verify after the rollback
+        assert deploy.left_by(log[:-1], "b") == ["e", "f"]  # the rollback's own verify
+        assert deploy.left_by(log, "f") == []  # a forward deploy of f: b and a are older, and drift is drift
+        assert deploy.left_by(log, "never-deployed") == []
+
+    def test_under_a_release_without_a_product_no_rule_reaches_its_relations(world: World) -> None:
+        """What makes a LEFT line safe (catalog_drift.NOTHING_READS): the old release's rules name no
+        relation, schema or query of the product, so every principal is denied it by default."""
+        r1, r2 = world.release(without_daily_load=True), world.release()
+        rules = json.loads((r1.root / "compiled/trino/rules.json").read_text())
+        names = [(c, s, "gold_daily_load") for c in ("ops_insight", "ops_insight_build") for s in ("daily_load", "daily_load__base")]
+        assert [(n, x) for n in names for x in rules["tables"] if x.get("privileges")
+                and all(re.fullmatch(x.get(k, ".*"), v) for k, v in zip(("catalog", "schema", "table"), n))] == []
+        assert [x for x in rules["schemas"] for c, s, _ in names
+                if all(re.fullmatch(x.get(k, ".*"), v) for k, v in (("catalog", c), ("schema", s)))] == []
+        assert not any(re.fullmatch(q["user"], u) for q in rules["queries"] for u in ("pub_daily_load", "dbt_daily_load"))
+        left = deploy.drift_lib.left_by(r2.root)  # and what --left-by reads of the release that added it
+        assert {("ops_insight", "daily_load"), ("ops_insight", "daily_load__base")} <= left["namespaces"]
+        assert ("ops_insight", "daily_load__base", "gold_daily_load") in left["tables"]
+        assert left["views"][("ops_insight", "daily_load", "gold_daily_load")] == "pub_daily_load"

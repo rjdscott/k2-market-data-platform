@@ -71,6 +71,10 @@ jobs:
       - name: Pytest
         run: uv run --no-project --with pytest==9.2.0 --with pyyaml==6.0.4 --with fastavro==1.12.2 --with duckdb==1.4.4 pytest tests -q
 
+      # The code a release carries beside its documents, and the parsers: fakes only, no stack.
+      - name: Platform code and parsers (make test-platform)
+        run: make test-platform
+
   contracts:
     name: Contracts (k2gen)
     runs-on: ubuntu-latest
@@ -101,6 +105,21 @@ jobs:
         working-directory: platform/k2gen
         run: uv run --locked ruff check . && uv run --locked mypy
 
+  api:
+    name: k2-api (tests)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
+
+      # services/k2-api/ is its own uv project: pytest and ruff from its lock, no network,
+      # no Trino (a fake stands at its one Trino client, enforcing a compiled release's rules).
+      - name: Tests and ruff (make test-api)
+        run: make test-api
+
   clickhouse:
     name: ClickHouse (gold schema)
     runs-on: ubuntu-latest
@@ -119,12 +138,29 @@ jobs:
   trino:
     name: Trino (access rules)
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # Was 20 (about 6 minutes used): a cold Spark build and its load into the daemon take
+    # several more, and both lakes now start Spark beside Trino for the release's Spark tables.
+    timeout-minutes: 30
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
+
+      # scripts/lib/throwaway-lake.sh makes a release's Spark tables (warehouse k2) with the
+      # image of the compose pin, a local build no registry holds: built and loaded here under
+      # that tag (jobs share no daemon), from the cache the docker job's spark leg also fills.
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: docker/spark/Dockerfile
+          push: false
+          load: true
+          tags: k2-spark-iceberg:3.5.9_1.8.1
+          cache-from: type=gha,scope=spark
+          cache-to: type=gha,mode=max,scope=spark
 
       # scripts/trino-rules-test.sh compiles a release from fixtures (a good set
       # and a twin product) with k2gen, starts the pinned Trino 484 over a
@@ -149,17 +185,35 @@ jobs:
   dbt:
     name: dbt (marts)
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # Was 15 (under 2 minutes used before the products built on a lake): now a cold Spark build
+    # and load, a throwaway lake with Spark beside Trino, and one dbt build per product, each in
+    # a fresh venv from the uv image.
+    timeout-minutes: 30
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
 
+      # The Spark image of the compose pin, for the throwaway lake's Spark tables, as in the
+      # trino job above.
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: docker/spark/Dockerfile
+          push: false
+          load: true
+          tags: k2-spark-iceberg:3.5.9_1.8.1
+          cache-from: type=gha,scope=spark
+          cache-to: type=gha,mode=max,scope=spark
+
       # make test-dbt: the steps scripts/dbt-test.sh lists in its header (lint,
-      # deps, parse, compile, the manifest check), with no Trino. The old marts
-      # are archived (legacy/v3-lake-ingest/dbt/) and dbt builds return in phase
-      # 002; the job keeps its name because "dbt (marts)" is a required check.
+      # deps, parse, compile, the manifest check), then each compiled product
+      # built with its tests on a throwaway lake (Docker). The old marts are
+      # archived (legacy/v3-lake-ingest/dbt/); the job keeps its name because
+      # "dbt (marts)" is a required check.
       - run: bash scripts/dbt-test.sh
 
       # The dbt trees the compiler emits (the k2gen fixture set and contracts/):
@@ -196,6 +250,26 @@ jobs:
             # Only this image declares the ARG; passing it to the others would
             # just print an unconsumed-build-arg warning on three legs.
             build_args: K2_GIT_SHA=${{ github.sha }}
+          # The two run one-shots (phase 002), checked below as the Airflow
+          # one-shot operator runs them: read-only root, no capability, no network.
+          - name: fetch
+            dockerfile: docker/fetch/Dockerfile
+            load: true
+            tag: fetch:local
+          - name: dbt-runner
+            dockerfile: docker/dbt-runner/Dockerfile
+            load: true
+            tag: dbt-runner:local
+          # The deploy one-shot (ADR-058), checked below as deploy runs it.
+          - name: tools
+            dockerfile: docker/tools/Dockerfile
+            load: true
+            tag: tools:local
+          # The REST service (phase 003), checked below as compose runs it.
+          - name: k2-api
+            dockerfile: services/k2-api/Dockerfile
+            load: true
+            tag: k2-api:local
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -241,6 +315,38 @@ jobs:
           docker run --rm --network none k2-spark-iceberg:3.5.9_1.8.1
           python3 -c "import sys, ssl; print(sys.version, ssl.OPENSSL_VERSION);
           assert sys.version_info[:2] == (3, 10) and ssl.OPENSSL_VERSION_INFO[0] == 3"
+
+      - name: The fetch command, in the image just built
+        if: matrix.name == 'fetch'
+        run: >-
+          docker run --rm --read-only --tmpfs /tmp:rw,noexec,nosuid,size=64m --cap-drop ALL
+          --security-opt no-new-privileges --network none fetch:local k2-fetch --help
+
+      # As an arbitrary uid, the way the operator runs it (--user, the host user).
+      - name: dbt and the wrapper's command, in the image just built
+        if: matrix.name == 'dbt-runner'
+        run: >-
+          docker run --rm --read-only --tmpfs /tmp:rw,noexec,nosuid,size=64m --cap-drop ALL
+          --security-opt no-new-privileges --network none --user 12345:12345 dbt-runner:local
+          sh -c 'dbt --version && command -v k2-dbt && k2-dbt --help'
+
+      # As deploy runs it (--user, the host user, no network): k2gen, git and the trino client.
+      - name: k2gen, git and trino, in the image just built
+        if: matrix.name == 'tools'
+        run: >-
+          docker run --rm --network none --user 12345:12345 tools:local
+          sh -c 'k2gen --help >/dev/null && git --version && python3 -c "import trino; print(trino.__version__)"'
+
+      # As compose runs it (an arbitrary uid with group 0, read-only root, no capability): uvicorn
+      # starts and /healthz answers, with no network but loopback and no release mounted.
+      - name: k2-api serves /healthz, in the image just built
+        if: matrix.name == 'k2-api'
+        run: >-
+          docker run --rm --read-only --tmpfs /tmp:rw,noexec,nosuid,size=16m --cap-drop ALL
+          --security-opt no-new-privileges --network none --user 12345:0 k2-api:local
+          sh -c 'uvicorn k2api.app:app --host 127.0.0.1 --port 8095 & for i in 1 2 3 4 5 6 7 8 9 10; do
+          python -c "import urllib.request; print(urllib.request.urlopen(\"http://127.0.0.1:8095/healthz\").read().decode())"
+          && exit 0; sleep 1; done; exit 1'
 
   compose:
     name: Compose (config validation)

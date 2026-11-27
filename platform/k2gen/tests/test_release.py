@@ -453,3 +453,87 @@ def test_a_major_change_without_a_version_bump_is_refused_against_the_previous_r
     assert f"error versions.major-bump-missing {GOLD}: " in capsys.readouterr().err
     assert [p.name for p in (tmp_path / "releases").iterdir()] == [old.name]
     build(tmp_path, "first", over=MAJOR)  # the same set with no previous: nothing to compare, so it compiles
+
+
+# The run code a release carries under platform/ (A1, step W1-4): copied from the set at its repository
+# path, each root's code only, never a test, a cache or another file.
+CODE = {
+    "docker/airflow/dags/factory.py": b"from oneshot import run\n",
+    "docker/airflow/dags/oneshot.py": b"def run() -> None: ...\n",
+    "docker/lake/connector.py": b"import spark_conf\n",
+    "docker/lake/spark_conf.py": b"CONF = {}\n",
+    "docker/lake/init-lake.sh": b"#!/bin/sh\n",  # lake-init runs the release's own (review R6)
+    "docker/lake/minio/policies/spark.json": b"{}\n",  # and grants these
+    "docker/prometheus/rules/platform-alerts.yml": b"groups: []\n",
+    "domains/sensor-net/parsers/station_csv.py": b"def parse(data: bytes) -> list[dict]:\n    return []\n",
+    "platform/runs/k2runs.py": b"def record() -> None: ...\n",
+    "platform/catalog-site/k2site.py": b"def generate() -> None: ...\n",
+}
+NOT_CODE = {
+    "docker/airflow/dags/.gitkeep": b"",
+    "docker/airflow/dags/__pycache__/factory.cpython-312.pyc": b"\0",
+    "docker/airflow/dags/conftest.py": b"",
+    "docker/lake/README.md": b"# lake\n",
+    "docker/lake/test_connector.py": b"",
+    "docker/lake/tests/policy.json": b"{}\n",
+    "docker/lake/tests/fixture.py": b"",
+    "docker/prometheus/rules/tests/platform-alerts_test.yml": b"tests: []\n",
+    "domains/sensor-net/parsers/tests/test_station_csv.py": b"",
+    "platform/runs/run_record.sql": b"CREATE TABLE x (a int)\n",
+    "platform/runs/runs_test.py": b"",
+    "platform/catalog-site/test_k2site.py": b"",
+}
+CODE_NEEDS = {"docker/airflow/dags/": "dagShapeChange", "docker/lake/": None, "docker/prometheus/rules/": None,
+              "domains/": None, "platform/runs/": None, "platform/catalog-site/": None}
+
+
+def test_the_run_code_is_copied_under_platform_with_its_needs_and_hashes(tmp_path: Path, emitted: dict[str, str]) -> None:
+    _, root = build(tmp_path, "a", over=CODE | NOT_CODE)
+    files = tree(root)
+    manifest = release.read(root).manifest  # verifies every file, platform/ included, against its hash
+    copied = {p: data for p, data in files.items() if p.startswith(f"{model.PLATFORM_DIR}/")}
+    assert copied == {f"{model.PLATFORM_DIR}/{p}": data for p, data in CODE.items()}
+    assert all(manifest.files[p] == hashlib.sha256(data).hexdigest() for p, data in copied.items())
+    assert all(f"{model.DOCUMENTS_DIR}/{p}" in files for p in CODE | NOT_CODE)  # the set itself is unchanged
+    for path in copied:
+        source = path.removeprefix(f"{model.PLATFORM_DIR}/")
+        assert model.need_of(path) == next(n for prefix, n in CODE_NEEDS.items() if source.startswith(prefix)), path
+    assert {stat.S_IMODE((root / p).stat().st_mode) for p in copied} == {0o444}
+
+
+def test_a_set_without_run_code_has_no_platform_tree(tmp_path: Path, emitted: dict[str, str]) -> None:
+    _, root = build(tmp_path, "a", over=NOT_CODE)
+    assert not (root / model.PLATFORM_DIR).exists()
+    assert not any(p.startswith(f"{model.PLATFORM_DIR}/") for p in release.read(root).manifest.files)
+
+
+def test_every_run_code_root_is_a_document_root_and_classified() -> None:
+    """docset.load takes the code from the tag, and a path under platform/ outside a root still raises."""
+    assert set(model.PLATFORM_CODE) == set(CODE_NEEDS) and set(model.PLATFORM_CODE) <= set(model.DOCUMENT_ROOTS)
+    for path in ("platform/notes.txt", "platform/docker/other/x.py", "platform/docker/lakehouse/x.py", "platformx/a"):
+        with pytest.raises(KeyError):
+            model.need_of(path)
+
+
+@pytest.mark.parametrize(("path", "need"), [
+    ("docker/airflow/dags/factory.py", Needs((), False, True, ())),  # the factory decides each DAG's tasks: drain
+    ("docker/airflow/dags/oneshot.py", Needs((), False, True, ())),
+    ("docker/lake/connector.py", NONE),  # read at each Spark task's start
+    ("docker/lake/init-lake.sh", NONE),  # read at lake-init's next run, from the release deploy names
+    ("docker/lake/minio/policies/spark.json", NONE),
+    ("docker/prometheus/rules/platform-alerts.yml", NONE),  # deploy SIGHUPs Prometheus at every swap
+    ("domains/sensor-net/parsers/station_csv.py", NONE),
+    ("platform/runs/k2runs.py", NONE),
+    ("platform/catalog-site/k2site.py", NONE),  # read at the generator's next run
+    ("docker/lake/README.md", NONE),  # not copied, so it moves only documents/
+])
+def test_a_change_to_the_run_code_needs_only_what_reads_it(tmp_path: Path, emitted: dict[str, str], path: str, need: Needs) -> None:
+    _, old = build(tmp_path, "old", over=CODE | NOT_CODE)
+    _, new = build(tmp_path, "new", previous=old, over=CODE | NOT_CODE | {path: (CODE | NOT_CODE)[path] + b"# changed\n"})
+    assert release.read(new).manifest.needs == need
+
+
+def test_removing_the_dag_code_drains(tmp_path: Path, emitted: dict[str, str]) -> None:
+    _, old = build(tmp_path, "old", over=CODE)
+    _, new = build(tmp_path, "new", previous=old, over={p: d for p, d in CODE.items() if "dags/" not in p})
+    assert release.read(new).manifest.needs == Needs((), False, True, ())

@@ -8,8 +8,11 @@ control and asserts how it ends, exiting 1 when the control did not behave.
     prove.py release         access-verify's release scope: no row fails, and exactly the probe rows skip,
                              each for the probe reason (catalog-fence.sh runs them on the stack)
     prove.py live            access-verify's live scope against this lake (K2_SECRETS laid out from the
-                             lake's passwords): only the planted-view, drift and probe rows skip; with one
+                             lake's passwords): exactly the rows its own rule (av.legs) skips on live skip; with one
                              canary reader's password file gone, exactly that reader's rows fail
+    prove.py rest            every `via: rest` row's REST leg passes; Trino's query list shows k2-api's reads
+                             as the caller and its bound `$refs` reads as svc.api; svc.api is refused a
+                             builder by X-Trino-User; with keys k2-api does not know, every leg fails on 401
     prove.py plant <kind>    view: a definer view by REST, an undeclared name, the publisher's name
                                    forged as its owner, SQL over the base's main
                              graft: another table's snapshot added to the base by REST, the tag moved to it
@@ -21,7 +24,7 @@ control and asserts how it ends, exiting 1 when the control did not behave.
                                     its builder, through Trino (the review of S12, C1); no undo
     prove.py unplant <kind>
 
-The product under attack is the release's first dbt or code product, its first output.
+The product under attack is the release's first dbt or code output with a mask and grantees (the canary's).
 """
 
 from __future__ import annotations
@@ -45,8 +48,9 @@ ENV_FILE = Path("/work/env.json")
 TRINO, ENV = av.connect(ENV_FILE)
 RELEASE = Path(ENV["release"])
 M = av.load(RELEASE)
-P = next(p for p in sorted(M.products, key=lambda p: p.id) if any(t.build.kind in ("dbt", "code") for t in p.tables))
-T = next(t for t in P.tables if t.build.kind in ("dbt", "code"))
+# The first dbt or code output with a masking policy: the attacks need a reader role, its mask and its members.
+P, T = next((p, t) for p in sorted(M.products, key=lambda p: p.id) for t in p.tables
+            if t.build.kind in ("dbt", "code") and any(pol.mask for pol in t.policies.values()) and p.grants)
 VIEW = next(model.View(v["relation"], v["base"], tuple(v["columns"]), v["owner"])
             for v in json.loads((RELEASE / model.VIEWS).read_text())["views"] if v["relation"] == model.reader_relation(T))
 CAT = cd.Catalog(f"{ENV['lakekeeper']}/catalog", model.warehouse(P.domain))
@@ -139,9 +143,14 @@ def live() -> int:
     os.environ.pop("K2_CATALOG_URI", None)
     code, rows = run_access_verify("live", "/work/live.json")
     skipped = {n for n, (v, _) in rows.items() if v == "SKIP"}
-    want = {n for n, e in enumerate(M.expectations, 1) if av.planted(e, M) or isinstance(e, model.DriftExpectation)} | probes()
-    say(f"live scope: exit {code}; skipped rows {sorted(skipped)}, the planted-view, drift and probe rows are {sorted(want)}")
-    ok = code == 0 and skipped == want
+    # The rows the runner's own rule skips here (av.legs: a planted view, drift without the catalog
+    # API, a probe, a principal whose password is its owner's, another product's name, a REST leg
+    # with no key): equal, so a row that should run and was skipped fails the proof, as does a skip
+    # the rule does not name. Not every row: a live run that skips everything proves nothing.
+    _, live_env = av.connect(None)
+    want = {n for n, e in enumerate(M.expectations, 1) if any(skip for _, skip in av.legs(e, M, "live", live_env))}
+    say(f"live scope: exit {code}; skipped rows {sorted(skipped)}, the rows av.legs skips on live are {sorted(want)}")
+    ok = code == 0 and skipped == want and len(want) < len(M.expectations)
     gone = sorted(canary)[-1]
     (sec / "principals" / f"{gone}.password").unlink()
     code, rows = run_access_verify("live", "/work/live-missing.json")
@@ -150,6 +159,70 @@ def live() -> int:
     say(f"live scope without {gone}'s password file: exit {code}; failed rows {sorted(failed)}; its rows are {sorted(theirs)}")
     shutil.rmtree(sec)
     return 0 if ok and code == 1 and failed == theirs else 1
+
+
+def rest() -> int:
+    """The REST legs (W3-7) beyond their PASS lines: each run again, then what Trino saw of k2-api
+    (svc.api's password login, the caller as session user, values bound by EXECUTE IMMEDIATE, `$refs`
+    read as svc.api), a refused impersonation's error, an output whose tag is gone answering an allowed
+    reader 404 not_published, and every leg failing on a key k2-api does not know."""
+    rows = [e for e in M.expectations if "rest" in getattr(e, "via", ())]
+    if not rows:
+        say("rest: no row runs via rest, so k2-api is not on this lake; nothing to prove")
+        return 0
+    legs = [av.rest(TRINO, ENV, RELEASE, e) for e in rows]
+    for e, (v, why) in zip(rows, legs, strict=True):
+        say(f"rest: {v} {e.principal} {'is denied' if isinstance(e, model.DeniedExpectation) else 'reads'} {e.table}: {why}")
+    seen = TRINO.ok("svc.platform", 'SELECT "user", state, error_code, query FROM system.runtime.queries '
+                                    "WHERE source = 'k2-api' ORDER BY created")
+    for user, state, error, query in seen:
+        say(f"rest: Trino ran for k2-api as {user}: {state}{' ' + str(error) if error else ''}: {' '.join(query.split())[:150]}")
+    callers = {e.principal for e in rows}
+    as_caller = [q for u, _, _, q in seen if u in callers]
+    bound_refs = [q for u, _, _, q in seen if u == "svc.api" and q.lstrip().upper().startswith("EXECUTE IMMEDIATE") and "$refs" in q]
+    builder = model.builder(P.name)
+    refused = TRINO.run("svc.api", "SELECT 1", as_user=builder)
+    say(f"rest: svc.api logged in as itself, run as {builder} by X-Trino-User: {refused.says()}")
+    untagged = True
+    if (r := next((e for e in rows if isinstance(e, model.TableExpectation)), None)) is not None:
+        # An output never tested: its base's tag removed by REST, then put back. An allowed reader
+        # gets Trino's own error over SQL, and k2-api answers 404 not_published (neither 403 nor 503).
+        t = av.relations(M)[r.table]
+        p = next(p for p in M.products if t in p.tables)
+        cat, ns = cd.Catalog(f"{ENV['lakekeeper']}/catalog", model.warehouse(p.domain)), model.base_namespace(p.name)
+        tag = cat.table(ns, t.name)["refs"][model.AUDITED_TAG]["snapshot-id"]
+
+        def move(updates: list[dict[str, Any]], at: int | None) -> None:
+            st, doc = cd.call("POST", f"{cat.base}/namespaces/{ns}/tables/{t.name}", {"updates": updates, "requirements": [
+                {"type": "assert-ref-snapshot-id", "ref": model.AUDITED_TAG, "snapshot-id": at}]})
+            assert st == 200, f"tag of {ns}.{t.name}: HTTP {st} {doc}"
+
+        move([{"action": "remove-snapshot-ref", "ref-name": model.AUDITED_TAG}], tag)
+        try:
+            sql = TRINO.run(r.principal, f"SELECT * FROM {quote_relation(r.table)} LIMIT 0")
+            denied = next((e.principal for e in M.expectations if isinstance(e, model.DeniedExpectation) and e.table == r.table), None)
+            other = TRINO.run(denied, f"SELECT * FROM {quote_relation(r.table)} LIMIT 0") if denied else None
+            status, body = av.api_get((os.environ.get("K2_API_URL") or av.API_URL) + av.route(RELEASE, r.table)[0],
+                                      av.api_key(ENV, r.principal) or "", {"limit": "1"})
+        finally:
+            move([{"action": "set-snapshot-ref", "ref-name": model.AUDITED_TAG, "type": "tag", "snapshot-id": tag}], None)
+        say(f"rest: {ns}.{t.name} without its {model.AUDITED_TAG} tag: {r.principal} over SQL gets {sql.error}: "
+            f"{sql.message[:200]}; through k2-api: HTTP {status} {body.get('error')}"
+            + (f"; {denied}, denied it, over SQL gets {other.error}: {other.message[:200]}" if other else ""))
+        untagged = sql.error is not None and (status, body.get("error")) == (404, "not_published")
+    wrong = Path("/work/wrong-keys")
+    wrong.mkdir(exist_ok=True)
+    for u in callers:
+        (wrong / f"{u}.key").write_text("k2_" + os.urandom(24).hex() + "\n")
+    control = [av.rest(TRINO, ENV | {"apiKeys": str(wrong)}, RELEASE, e) for e in rows]
+    shutil.rmtree(wrong)
+    say(f"rest: with keys k2-api does not know: {[v for v, _ in control]}, each {sorted({w.split(':')[0] for _, w in control})}")
+    ok = all(v == "PASS" for v, _ in legs) and as_caller and bound_refs and refused.error and untagged \
+        and all(v == "FAIL" and "HTTP 401" in w for v, w in control)
+    say(f"rest: {'PASS' if ok else 'FAIL'}: {len(legs)} leg(s); {len(as_caller)} read(s) as the caller, "
+        f"{len(bound_refs)} bound $refs read(s) as svc.api, impersonation refused {bool(refused.error)}, "
+        f"an untested output not_published {untagged}, wrong keys fail")
+    return 0 if ok else 1
 
 
 def constant(c: model.Column) -> str:
@@ -235,4 +308,4 @@ def unplant(kind: str) -> int:
 
 if __name__ == "__main__":
     cmd, *args = sys.argv[1:]
-    sys.exit({"release": release, "negative": negative, "live": live, "plant": plant, "unplant": unplant}[cmd](*args))
+    sys.exit({"release": release, "negative": negative, "live": live, "rest": rest, "plant": plant, "unplant": unplant}[cmd](*args))

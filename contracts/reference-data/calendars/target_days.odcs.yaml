@@ -1,0 +1,47 @@
+apiVersion: v3.2.0
+kind: DataContract
+id: reference-data.calendars.target_days
+name: target_days
+version: 1.1.0
+domain: reference-data
+description:
+  purpose: >-
+    One row per calendar day from 1 January 2025 to 31 December 2027, marked open or closed for
+    TARGET. TARGET closes on Saturdays, Sundays, New Year's Day, Good Friday, Easter Monday,
+    1 May, 25 December and 26 December; every other day it is open.
+team:
+  name: reference-data-team
+schema:
+  - id: target_days
+    name: target_days
+    physicalName: calendars.target_days
+    physicalType: table
+    properties:
+      - name: calendar_date
+        physicalType: date
+        required: true
+        primaryKey: true
+        primaryKeyPosition: 1
+        description: The calendar day, one row each.
+      - name: is_target_day
+        physicalType: boolean
+        required: true
+        description: >-
+          True when TARGET is open that day (a weekday that is not a closing day in the seed), the
+          days the ECB publishes reference rates; false on a weekend or a closing day.
+      - name: closing_reason
+        physicalType: varchar
+        description: >-
+          Why TARGET is closed: Saturday, Sunday, or the holiday's name from the seed (Good Friday,
+          Labour Day, ...). Null on a day TARGET is open. A holiday falling on a weekend reads as
+          the weekend day, since the seed lists only the holidays that fall on weekdays.
+roles:
+  - role: full_reader  # offered, held by nobody (grants.yaml): ECB gold, laid out on these days, offers it (access.inherit-role)
+    access: read
+customProperties:
+  - property: layer
+    value: gold
+  - property: build
+    value: dbt
+  - property: backup
+    value: rebuild  # rebuilt from the seed in git

@@ -125,11 +125,74 @@ expectations:
               planning_time_ms, created, started, last_heartbeat, end, error_type, error_code]
     mustAppear: {where: "\"user\" = 'p.canary-full'", minRows: 1}
 
+  # The owner-only products (reference-data.calendars, reference-data.currency-master): nobody
+  # holds a role, so a reader of another product is refused each reader view, each base, the
+  # seed's table, each bronze table and each landing.
+  - {principal: p.canary-full, table: reference_data.calendars.target_days, denied: true}  # reader view: nobody holds a role
+  - {principal: p.canary-full, table: reference_data.calendars__base.target_days, denied: true}  # base (ADR-061)
+  - {principal: p.canary-full, table: reference_data.calendars__base.target_closing_days, denied: true}  # the seed's table in the base
+  - {principal: p.canary-full, table: reference_data.currency_master.currency, denied: true}  # reader view, no role offered
+  - {principal: p.canary-full, table: reference_data.currency_master__base.currency, denied: true}  # base (ADR-061)
+  - {principal: p.canary-full, table: lake.currency_master.bronze_currencies, denied: true}  # bronze, which offers no role
+  - {principal: p.canary-full, table: lake.currency_master.landing_files, denied: true}  # the product's landing
+  - {principal: p.canary-full, table: governance.quality_results.test_results, denied: true}  # reader view, no role offered (svc.catalog's by rule)
+  - {principal: p.canary-full, table: governance.quality_results__base.test_results, denied: true}  # base (ADR-061)
+  # fx-reference.ecb-fx-rates (step W2-9): p.analyst-a holds full_reader, offered by gold alone
+  # with no policy, so it reads gold's reader view whole and nothing else of the product. The read
+  # row asserts columns, not rows (no mustAppear): a lab lake may hold no ECB rows yet.
+  - {principal: p.analyst-a, table: fx_reference.ecb_fx_rates.gold_eur_rates_daily, via: [sql, rest], visible: [rate_date, currency, rate, is_carried, carried_days, rate_available_at]}  # gold, every column
+  - {principal: p.canary-full, table: fx_reference.ecb_fx_rates.gold_eur_rates_daily, denied: true}  # a non-holder is still refused gold
+  - {principal: p.analyst-a, table: fx_reference.ecb_fx_rates.silver_rates, denied: true}  # silver's reader view: no role offered
+  - {principal: p.analyst-a, table: fx_reference.ecb_fx_rates__base.silver_rates, denied: true}  # base (ADR-061)
+  - {principal: p.analyst-a, table: fx_reference.ecb_fx_rates__base.gold_eur_rates_daily, denied: true}  # base, even to gold's reader
+  - {principal: p.analyst-a, table: "fx_reference.ecb_fx_rates__base.silver_rates$files", denied: true}  # metadata table: paths, column bounds
+  - {principal: p.analyst-a, table: "fx_reference.ecb_fx_rates__base.gold_eur_rates_daily$files", denied: true}  # and gold's
+  - {principal: p.analyst-a, table: lake.ecb_fx_rates.bronze_daily, via: [sql, rest], denied: true}  # bronze, which offers no role
+  - {principal: p.analyst-a, table: lake.ecb_fx_rates.landing_files, denied: true}  # the product's landing
+  # No compaction by a consumer (plan 002's optimize line). The reader name is a view, which Trino
+  # refuses as NOT_SUPPORTED before any access check, so the denials name the table under it.
+  - {principal: p.analyst-a, sql: "ALTER TABLE fx_reference.ecb_fx_rates.silver_rates EXECUTE optimize", expect: error}  # a view: not supported
+  - {principal: p.analyst-a, sql: "ALTER TABLE fx_reference.ecb_fx_rates__base.silver_rates EXECUTE optimize", expect: denied}  # read-only reader catalog
+  - {principal: p.analyst-a, sql: "ALTER TABLE fx_reference_build.ecb_fx_rates__base.silver_rates EXECUTE optimize", expect: denied}  # writer catalog: not a consumer's
+
   # The catalog fence (ADR-059 part 7): Lakekeeper has no authentication, so nothing reaches it
   # but the catalog's own network. Run on the stack by scripts/verify/catalog-fence.sh.
   - {probe: {from: k2-net, target: "lakekeeper:8181"}, expect: refused}
   - {probe: {from: host, target: "127.0.0.1:18181"}, expect: refused}
   - {probe: {from: k2-catalog, target: "lakekeeper:8181"}, expect: open}
+  # fetch, where product parsers run, is on k2-egress alone (2026-11-27): neither the catalog nor
+  # the lake's storage resolves or answers there.
+  - {probe: {from: fetch, target: "lakekeeper:8181"}, expect: refused}
+  - {probe: {from: fetch, target: "minio:9000"}, expect: refused}
+  # No path around Trino (W1-23): MinIO publishes no port, so the host reaches no object but through Trino.
+  - {probe: {from: host, target: "127.0.0.1:9000"}, expect: refused}  # MinIO's S3 API
+  - {probe: {from: host, target: "127.0.0.1:9001"}, expect: refused}  # MinIO's console, a root-pair login
+
+  # Storage keys (phase 002): each engine's own MinIO key, signed by scripts/access_verify.py, does
+  # what its policy (docker/lake/minio/policies/) allows and nothing else. They mean something only
+  # because every warehouse has remote signing off (docker/lake/init-lake.sh). Warehouse k2 holds the
+  # landings' tables and bronze; governance stands for every domain warehouse.
+  - {storageKey: {engine: spark, target: k2-lake/warehouse/k2, operation: write}, expect: allowed}            # Spark writes bronze
+  - {storageKey: {engine: spark, target: k2-lake/warehouse/governance, operation: write}, expect: refused}    # never a domain warehouse
+  - {storageKey: {engine: spark, target: k2-landing, operation: write}, expect: allowed}                       # it lands files (it cannot delete one: the maintenance pair removes the probe)
+  - {storageKey: {engine: trino, target: k2-lake/warehouse/governance, operation: write}, expect: allowed}    # Trino builds the domain warehouses
+  - {storageKey: {engine: trino, target: k2-lake/warehouse/k2, operation: read}, expect: allowed}             # the lake catalog reads bronze
+  - {storageKey: {engine: trino, target: k2-lake/warehouse/k2, operation: write}, expect: refused}            # but never writes it
+  - {storageKey: {engine: trino, target: k2-landing, operation: read}, expect: refused}                        # and never sees a landing
+  - {storageKey: {engine: maintenance, target: k2-lake/warehouse/governance, operation: read}, expect: allowed}  # reads what it expires
+  - {storageKey: {engine: maintenance, target: k2-lake/warehouse/governance, operation: write}, expect: refused} # deletes, never puts
+  - {storageKey: {engine: maintenance, target: k2-lake/warehouse/k2, operation: write}, expect: refused}         # in no warehouse
+  - {storageKey: {engine: maintenance, target: k2-landing, operation: write}, expect: refused}                 # expires landings, never lands one
+  - {storageKey: {engine: backup, target: k2-lake/warehouse/k2, operation: read}, expect: allowed}             # backup reads the lake
+  - {storageKey: {engine: backup, target: k2-landing, operation: read}, expect: allowed}                       # and the landings
+  - {storageKey: {engine: backup, target: k2-lake/warehouse/k2, operation: write}, expect: refused}            # and writes nowhere: k2,
+  - {storageKey: {engine: backup, target: k2-lake/warehouse/governance, operation: write}, expect: refused}    # a domain warehouse,
+  - {storageKey: {engine: backup, target: k2-landing, operation: write}, expect: refused}                      # the landing bucket
+  - {storageKey: {engine: tools, target: k2-lake/warehouse/governance, operation: read}, expect: allowed}     # tools reads the lake
+  - {storageKey: {engine: tools, target: k2-landing, operation: read}, expect: allowed}                        # and the landings
+  - {storageKey: {engine: tools, target: k2-lake/warehouse/k2, operation: write}, expect: refused}             # and writes nowhere: k2,
+  - {storageKey: {engine: tools, target: k2-lake/warehouse/governance, operation: write}, expect: refused}     # a domain warehouse,
+  - {storageKey: {engine: tools, target: k2-landing, operation: write}, expect: refused}                       # the landing bucket
 
   # The catalog equals the release: no planted view, table or tag (ADR-061 part 6).
   - {drift: catalog, expect: clean}

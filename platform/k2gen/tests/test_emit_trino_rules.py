@@ -158,6 +158,29 @@ def test_the_repository_set_has_the_run_record_rules() -> None:
         {"user": "svc\\.catalog", "catalog": "governance", "schema": "run_records", "table": "run_record", "privileges": ["SELECT"]}]
 
 
+def _relations(rules: list[dict[str, Any]]) -> set[str]:
+    return {f"{r['catalog']}.{r['schema']}.{r['table']}" for r in rules}
+
+
+def test_the_quality_builder_alone_reads_every_writers_results_and_svc_catalog_its_view() -> None:
+    m = loaded("repository")
+    rules, _ = emitted(m)
+    results = [r for r in rules["tables"] if r.get("table") == model.TEST_RESULTS]
+    want = {model.base_relation(p.domain, p.name, model.TEST_RESULTS) for p in model.test_results_writers(m)}
+    assert len(want) == 5 and _relations(results) == want and len(results) == len(want)
+    assert {r["user"] for r in results} == {"dbt_quality_results"} and all(r["privileges"] == ["SELECT"] for r in results)
+    catalog = [r for r in rules["tables"] if r.get("user") == "svc\\.catalog"]
+    assert _relations(catalog) == {"governance.run_records.run_record", "governance.quality_results.test_results"}
+    assert all(r["privileges"] == ["SELECT"] for r in catalog)
+    # A retired writer drops out; without the quality product, nobody reads any results table.
+    retired = dataclasses.replace(m, products=tuple(dataclasses.replace(p, status="retired") if p.name == "access-canary" else p
+                                                    for p in m.products))
+    assert "governance.access_canary__base.dq_test_results" not in _relations(
+        r for r in emitted(retired)[0]["tables"] if r.get("table") == model.TEST_RESULTS)
+    gone, _ = emitted(dataclasses.replace(m, products=tuple(p for p in m.products if p.id != model.QUALITY_RESULTS)))
+    assert not [r for r in gone["tables"] if r.get("table") in (model.TEST_RESULTS, "test_results")]
+
+
 # ---- fail closed ---------------------------------------------------------------------------------
 
 

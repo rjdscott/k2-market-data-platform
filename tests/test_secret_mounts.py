@@ -3,7 +3,8 @@ throwaway client container mounts the checkout, whose .env holds the live stack'
 
 tls/ holds ca.key, which no container may ever see (k2gen.model.SECRET_FILES gives it no
 mount), so a service mounts tls/ca.pem or tls/trino.pem by name and never the directory;
-nothing mounts ${K2_SECRETS} itself, ca.key or canary/ (read on the host only). Read from
+nothing mounts ${K2_SECRETS} itself, ca.key or canary/ (read on the host only), nor api-keys/,
+the operator's plaintext API keys (deploy's live access one-shot mounts each by name). Read from
 docker-compose.yml's volumes, short and long syntax, so "never mount tls/" is enforced here
 rather than advised in a runbook.
 """
@@ -48,6 +49,8 @@ def secret_mount_problems(compose: dict) -> list[str]:
                 found.append(f"{name} mounts {under or 'tls'}: only {', '.join(sorted(NAMED_TLS))}, each by name")
             elif parts[0] == "canary" or "ca.key" in parts:
                 found.append(f"{name} mounts {under}, which no container reads")
+            elif parts[0] == "api-keys":  # plaintext keys: deploy's live access one-shot alone gets them, by name
+                found.append(f"{name} mounts {under}, the operator's API keys, which no service may hold")
     return found
 
 
@@ -62,6 +65,9 @@ def test_the_compose_file_mounts_no_secret_directory_it_should_not():
     ("${K2_SECRETS:-${HOME}/k2-secrets}:/run/k2-secrets:ro", "itself"),
     ("${HOME}/k2-secrets/tls:/run/k2-secrets/tls:ro", "tls"),
     ("${K2_SECRETS}/canary:/run/canary:ro", "canary"),
+    ("${K2_SECRETS:-${HOME}/k2-secrets}/api-keys:/run/k2-secrets/api-keys:ro", "api-keys"),
+    ("${K2_SECRETS}/api-keys/p.canary-full.key:/run/k2-secrets/api-keys/p.canary-full.key:ro", "api-keys"),
+    ({"type": "bind", "source": "${K2_SECRETS:-${HOME}/k2-secrets}", "target": "/run/k2-secrets"}, "itself"),
     ({"type": "bind", "source": "${K2_SECRETS:-${HOME}/k2-secrets}/tls", "target": "/run/k2-secrets/tls"}, "tls"),
 ])
 def test_each_forbidden_mount_is_named(volume, named):
@@ -90,3 +96,141 @@ def test_no_throwaway_client_mounts_the_checkout_with_its_env(script):
     assert not whole, whole
     for m in re.findall(r'-v "\$REPO/([^":]+):(/src/[^":]+)(:ro)?"', text) + re.findall(r'-v "\$REPO/\$d:(/src/\$d)(:ro)"', text):
         assert m[-1] == ":ro", m
+
+
+# The scheduler's `record` task writes run records as svc.runs (docker/airflow/dags/factory.py,
+# k2runs.connect()): it alone among the Airflow services mounts a secret, exactly these two files,
+# each by name, read-only, never created when missing.
+SCHEDULER_SECRETS = {"/run/k2-secrets/runs.password": "principals/svc.runs.password",
+                     "/run/k2-secrets/tls/ca.pem": "tls/ca.pem"}
+AIRFLOW = ("airflow-migrate", "airflow-api-server", "airflow-scheduler", "airflow-dag-processor")
+
+
+def airflow_secret_problems(compose: dict) -> list[str]:
+    found = []
+    for name in AIRFLOW:
+        mounts = {}
+        for v in compose["services"][name].get("volumes") or []:
+            if m := ROOT.match(source(v)):
+                if not isinstance(v, dict) or v.get("read_only") is not True or (v.get("bind") or {}).get("create_host_path") is not False:
+                    found.append(f"{name} mounts {source(v)} other than long-syntax, read-only, create_host_path false")
+                mounts[v["target"] if isinstance(v, dict) else str(v)] = source(v)[m.end():].strip("/")
+        want = SCHEDULER_SECRETS if name == "airflow-scheduler" else {}
+        if mounts != want:
+            found.append(f"{name} mounts secrets {mounts}, not {want}")
+    return found
+
+
+def test_only_the_scheduler_mounts_a_secret_and_only_its_two_files():
+    assert airflow_secret_problems(yaml.safe_load(COMPOSE.read_text())) == []
+
+
+@pytest.mark.parametrize("service, volume, says", [
+    ("airflow-dag-processor", {"type": "bind", "source": "${K2_SECRETS:-${HOME}/k2-secrets}/tls/ca.pem",
+                               "target": "/run/k2-secrets/tls/ca.pem", "read_only": True, "bind": {"create_host_path": False}},
+     "airflow-dag-processor mounts secrets"),
+    ("airflow-api-server", "${K2_SECRETS:-${HOME}/k2-secrets}/principals/svc.runs.password:/run/k2-secrets/runs.password:ro",
+     "other than long-syntax"),
+    ("airflow-scheduler", {"type": "bind", "source": "${K2_SECRETS:-${HOME}/k2-secrets}/principals/svc.platform.password",
+                           "target": "/run/k2-secrets/platform.password", "read_only": True, "bind": {"create_host_path": False}},
+     "airflow-scheduler mounts secrets"),
+    ("airflow-scheduler", {"type": "bind", "source": "${K2_SECRETS:-${HOME}/k2-secrets}/principals/svc.runs.password",
+                           "target": "/run/k2-secrets/runs.password", "read_only": True}, "create_host_path false"),
+])
+def test_a_secret_mount_off_the_schedulers_two_fails(service, volume, says):
+    doc = yaml.safe_load(COMPOSE.read_text())
+    vols = doc["services"][service].setdefault("volumes", [])
+    if isinstance(volume, dict) and volume["target"] == "/run/k2-secrets/runs.password" and service == "airflow-scheduler":
+        vols[:] = [v for v in vols if not (isinstance(v, dict) and v.get("target") == volume["target"])]
+    vols.append(volume)
+    found = airflow_secret_problems(doc)
+    assert any(says in p for p in found), found
+
+
+def test_a_scheduler_without_its_password_file_fails():
+    doc = yaml.safe_load(COMPOSE.read_text())
+    vols = doc["services"]["airflow-scheduler"]["volumes"]
+    vols[:] = [v for v in vols if not (isinstance(v, dict) and v.get("target") == "/run/k2-secrets/runs.password")]
+    assert any("airflow-scheduler mounts secrets" in p for p in airflow_secret_problems(doc))
+
+
+# k2-api reads svc.api's password, the key map and the CA (services/k2-api/k2api/db.py, keys.py), each
+# long-syntax, read-only, never created when missing; api/ by its directory, since make api-key
+# rewrites keys.json in place and a file mount would keep the old inode's content after a rename.
+API_SECRETS = {"/run/k2-secrets/api": "api", "/run/k2-secrets/api.password": "principals/svc.api.password",
+               "/run/k2-secrets/tls/ca.pem": "tls/ca.pem"}
+
+
+def api_secret_problems(compose: dict, name: str = "k2-api", want: dict[str, str] = API_SECRETS) -> list[str]:
+    found, mounts = [], {}
+    for v in compose["services"][name].get("volumes") or []:
+        if m := ROOT.match(source(v)):
+            if not isinstance(v, dict) or v.get("read_only") is not True or (v.get("bind") or {}).get("create_host_path") is not False:
+                found.append(f"{name} mounts {source(v)} other than long-syntax, read-only, create_host_path false")
+            mounts[v["target"] if isinstance(v, dict) else str(v)] = source(v)[m.end():].strip("/")
+    if mounts != want:
+        found.append(f"{name} mounts secrets {mounts}, not {want}")
+    return found
+
+
+def test_k2_api_mounts_exactly_its_three_secret_paths():
+    assert api_secret_problems(yaml.safe_load(COMPOSE.read_text())) == []
+
+
+@pytest.mark.parametrize("volume, says", [
+    ({"type": "bind", "source": "${K2_SECRETS:-${HOME}/k2-secrets}/principals/svc.platform.password",
+      "target": "/run/k2-secrets/platform.password", "read_only": True, "bind": {"create_host_path": False}}, "mounts secrets"),
+    ({"type": "bind", "source": "${K2_SECRETS:-${HOME}/k2-secrets}/trino", "target": "/run/k2-secrets/trino",
+      "read_only": True, "bind": {"create_host_path": False}}, "mounts secrets"),
+    ("${K2_SECRETS:-${HOME}/k2-secrets}/principals/svc.runs.password:/run/k2-secrets/runs.password:ro", "other than long-syntax"),
+])
+def test_a_secret_mount_off_k2_apis_three_fails(volume, says):
+    doc = yaml.safe_load(COMPOSE.read_text())
+    doc["services"]["k2-api"]["volumes"].append(volume)
+    found = api_secret_problems(doc)
+    assert any(says in p for p in found), found
+
+
+def test_k2_api_with_its_key_map_as_a_file_or_writable_fails():
+    for change in ({"source": "${K2_SECRETS:-${HOME}/k2-secrets}/api/keys.json", "target": "/run/k2-secrets/api/keys.json"},
+                   {"read_only": False}):
+        doc = yaml.safe_load(COMPOSE.read_text())
+        for v in doc["services"]["k2-api"]["volumes"]:
+            if v.get("target") == "/run/k2-secrets/api":
+                v.update(change)
+        assert api_secret_problems(doc), change
+
+
+# The tools one-shot reads the catalog site's facts as svc.catalog (platform/catalog-site/k2site.py,
+# W3-11): svc.catalog's password and the CA, each by name, read-only, never created when missing.
+# Every `compose run tools` of deploy gets them; svc.catalog reads only the run records and test
+# results (its rules), less than the storage keys tools already holds.
+TOOLS_SECRETS = {"/run/k2-secrets/catalog.password": "principals/svc.catalog.password", "/run/k2-secrets/tls/ca.pem": "tls/ca.pem"}
+
+
+def test_tools_mounts_exactly_svc_catalogs_password_and_the_ca():
+    assert api_secret_problems(yaml.safe_load(COMPOSE.read_text()), "tools", TOOLS_SECRETS) == []
+
+
+@pytest.mark.parametrize("volume, says", [
+    ({"type": "bind", "source": "${K2_SECRETS:-${HOME}/k2-secrets}/principals/svc.platform.password",
+      "target": "/run/k2-secrets/platform.password", "read_only": True, "bind": {"create_host_path": False}}, "mounts secrets"),
+    ({"type": "bind", "source": "${K2_SECRETS:-${HOME}/k2-secrets}/api", "target": "/run/k2-secrets/api",
+      "read_only": True, "bind": {"create_host_path": False}}, "mounts secrets"),
+    ("${K2_SECRETS:-${HOME}/k2-secrets}/principals/svc.catalog.password:/run/k2-secrets/catalog.password:ro",
+     "other than long-syntax"),
+])
+def test_a_secret_mount_off_tools_two_fails(volume, says):
+    doc = yaml.safe_load(COMPOSE.read_text())
+    doc["services"]["tools"]["volumes"].append(volume)
+    found = api_secret_problems(doc, "tools", TOOLS_SECRETS)
+    assert any(says in p for p in found), found
+
+
+def test_tools_with_the_catalog_password_writable_or_created_when_missing_fails():
+    for change in ({"read_only": False}, {"bind": {"create_host_path": True}}):
+        doc = yaml.safe_load(COMPOSE.read_text())
+        for v in doc["services"]["tools"]["volumes"]:
+            if v.get("target") == "/run/k2-secrets/catalog.password":
+                v.update(change)
+        assert api_secret_problems(doc, "tools", TOOLS_SECRETS), change

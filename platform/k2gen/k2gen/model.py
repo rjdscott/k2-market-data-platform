@@ -63,12 +63,34 @@ PRINCIPALS = "contracts/access/principals.yaml"
 EXPECTATIONS = "tests/access/expectations.yaml"
 COMPOSE = "docker-compose.yml"  # the tag's compose file: the release runs it (A1)
 V2_PRODUCT_FILE = "product.odps.yaml"  # its directory is a v2 product; the old validator skips it
+# The run code a release carries (A1, step W1-4, 2026-11-27): each root of the set whose code the
+# compiler copies to PLATFORM_DIR/<its repository path>, the suffixes it copies (never a test, a
+# cache or a conftest.py), and what a change to it needs at deploy (NEEDS_BY_PREFIX). Each is read
+# through a pointer, at `/k2/releases/pointers/<pointer>/platform/<root>`:
+#   docker/airflow/dags/      airflow: the DAG folder; the factory decides each DAG's tasks, so any
+#                             change drains (the DAG processor rereads the folder every 30 s)
+#   docker/lake/              spark: the scripts each Spark task runs, read at the task's start; and
+#                             lake-init's init-lake.sh with the MinIO policies it grants (minio/policies/
+#                             *.json), run from the release deploy names (review R6), never the checkout
+#   docker/prometheus/rules/  prometheus: deploy SIGHUPs Prometheus at every swap
+#   domains/                  the parsers, read by the fetch one-shot at its run
+#   platform/runs/            k2runs, the run-records client, read by `record` and the dbt wrapper
+#   platform/catalog-site/    k2site, the catalog site generator, run in tools after each deploy (W3-9)
+PLATFORM_DIR = "platform"
+PLATFORM_CODE: Mapping[str, tuple[tuple[str, ...], str | None]] = {
+    "docker/airflow/dags/": ((".py",), "dagShapeChange"),
+    "docker/lake/": ((".py", ".sh", ".json"), None),
+    "docker/prometheus/rules/": ((".yml",), None),
+    "domains/": ((".py",), None),
+    "platform/runs/": ((".py",), None),
+    "platform/catalog-site/": ((".py",), None),
+}
 # The roots of a document set: docset.load lists them in the tag's tree (git ls-tree) and reads
 # each blob as the tag holds it (git cat-file), never through `git archive`, whose output follows
 # the checkout's eol and filter settings and can change when refs move. A root the tag lacks
 # (domains/ before its first parser) is skipped, never an error. The expectations are in it so
-# the coverage check (S07) stays a pure function of the set.
-DOCUMENT_ROOTS = ("contracts/", "domains/", EXPECTATIONS, COMPOSE)
+# the coverage check (S07) stays a pure function of the set; the run code, so the tag approves it.
+DOCUMENT_ROOTS = ("contracts/", EXPECTATIONS, COMPOSE, *PLATFORM_CODE)
 
 # --- Release layout (A1) ---------------------------------------------------------------
 
@@ -118,10 +140,11 @@ def ddl_path(engine: DdlEngine, warehouse: str, namespace: str, table: str) -> s
 # and a path no prefix covers is a compile error, so a new kind of file is classified first.
 #   recreate: the compose services whose definition differs (S08 compares them one by one)
 #   trinoRestart: Trino reads etc/ at start
-#   dagShapeChange: only when a DAG's task list differs (S08 compares the two files' tasks)
+#   dagShapeChange: DAGS only when a DAG's task list differs (S08 compares the two files' tasks);
+#   the DAG code (PLATFORM_CODE) on any change
 #   ddl: the table each added or changed file names (ddl_path)
 #   None: read through the pointer at use (rules and groups every 5 s, DAGs every 30 s,
-#   pipelines, dbt, views, catalog, one-shots at their next run)
+#   pipelines, dbt, views, catalog, one-shots at their next run, the rest of the run code)
 NEEDS_BY_PREFIX: Mapping[str, str | None] = {
     RELEASE_COMPOSE: "recreate",
     "compiled/trino/etc/": "trinoRestart",
@@ -130,6 +153,7 @@ NEEDS_BY_PREFIX: Mapping[str, str | None] = {
     "compiled/": None,
     f"{DOCUMENTS_DIR}/": None,
     PROVENANCE: None,
+    **{f"{PLATFORM_DIR}/{root}": need for root, (_, need) in PLATFORM_CODE.items()},
 }
 
 
@@ -218,7 +242,8 @@ LANDING_BUCKET = "k2-landing"
 LANDING_FILES = "landing_files"  # lake.<fence>.landing_files: one row per landed object
 AUDIT_CHECKS = "audit_checks"  # lake.<fence>.audit_checks: the bronze audit's results
 KAFKA_LANDING = "landing"  # lake.<fence>.landing: a kafka connector's records
-RESERVED_TABLE_NAMES = frozenset({LANDING_FILES, AUDIT_CHECKS, KAFKA_LANDING})
+TEST_RESULTS = "dq_test_results"  # <domain>_build.<fence>__base.dq_test_results: a builder's test results (TEST_RESULTS_TABLE)
+RESERVED_TABLE_NAMES = frozenset({LANDING_FILES, AUDIT_CHECKS, KAFKA_LANDING, TEST_RESULTS})
 LINEAGE_COLUMN = "source_file_sha256"  # every fetch-kind bronze table's landed-object sha256 (S05)
 AUDIT_BRANCH = "audit"  # bronze write-audit-publish branch (Spark)
 AUDITED_TAG = "audited"  # the tested-data marker on dbt and code outputs (ADR-061)
@@ -1041,7 +1066,17 @@ class DriftExpectation:
     expect: Literal["clean"]
 
 
-Expectation = TableExpectation | DeniedExpectation | StatementExpectation | ProbeExpectation | DriftExpectation
+@dataclass(frozen=True)
+class StorageKeyExpectation:
+    """Added 2026-11-27 (phase 002, W0-3): one S3 operation with an engine's own key, never the key itself."""
+
+    engine: Literal["spark", "trino", "maintenance", "backup", "tools"]  # whose K2_<ENGINE>_S3_* pair
+    target: str  # <bucket> or <bucket>/<prefix>
+    operation: Literal["read", "write"]
+    expect: Literal["refused", "allowed"]
+
+
+Expectation = TableExpectation | DeniedExpectation | StatementExpectation | ProbeExpectation | DriftExpectation | StorageKeyExpectation
 
 
 @dataclass(frozen=True)
@@ -1209,6 +1244,33 @@ PLATFORM_TABLES: Mapping[str, PlatformTable] = {
         *_RUN), ("day(landed_at)",)),
 }
 
+# The results hook's table in each dbt product's base namespace (dbt/macros/k2_results.sql, which
+# creates it at the product's first build with a test, with these columns in this order). No DDL
+# here: the builder makes it. Only QUALITY_RESULTS's builder reads another product's, through the
+# reader catalog at main (emit/trino_rules.py), and its one model unions them all (emit/dbt.py).
+TEST_RESULTS_TABLE = PlatformTable(TEST_RESULTS, (
+    PlatformColumn("run_id", "varchar", "The Airflow run, <dag_id>/<run_id>: the var k2_run_id the wrapper sets"),
+    PlatformColumn("dbt_invocation_id", "varchar", "dbt's invocation id"),
+    PlatformColumn("release_id", "varchar", "The release the run resolved at its start (A1): the var k2_release"),
+    PlatformColumn("run_started_at", "timestamp(6) with time zone", "When the dbt invocation started, UTC"),
+    PlatformColumn("writer", "varchar", "The builder that ran the test, dbt_<fence>"),
+    PlatformColumn("unique_id", "varchar", "The test's dbt node id"),
+    PlatformColumn("test_name", "varchar", "The test's dbt name"),
+    PlatformColumn("tested", "varchar", "The relation of the model or seed tested, <catalog>.<namespace>.<table>"),
+    PlatformColumn("status", "varchar", "dbt's status: pass, fail, warn, error or skipped"),
+    PlatformColumn("failures", "bigint", "The failing rows dbt counted; null when it counted none"),
+    PlatformColumn("execution_time", "double", "Seconds the test ran"),
+    PlatformColumn("message", "varchar", "dbt's message, at most 1000 characters (a failed unit test's diff)")), ())
+QUALITY_RESULTS = "governance.quality-results"  # the one product that reads every TEST_RESULTS (ADR-046)
+
+
+def test_results_writers(m: Model) -> list[Product]:
+    """The products whose builder writes TEST_RESULTS and QUALITY_RESULTS reads: every one with a
+    dbt table but a retired one (no rules, ADR-055 part 4), itself included, by id. A paused one
+    stays: its history is still readable."""
+    return sorted((p for p in m.products if p.status != "retired" and any(t.build.kind == "dbt" for t in p.tables)),
+                  key=lambda p: p.id)
+
 
 # --- Loading (S04): private to load() ----------------------------------------------------
 #
@@ -1350,10 +1412,13 @@ def _product(pdir: str, parsed: Mapping[str, Any], documents: Mapping[str, bytes
 
 
 def _expectation(row: Mapping[str, Any]) -> Expectation:
-    """One row, told apart by its keys as the schema tells the five shapes apart."""
+    """One row, told apart by its keys as the schema tells the six shapes apart."""
     via = tuple(row.get("via", ("sql",)))  # REST joins in phase 003 (expectations.schema.json)
     if "probe" in row:
         return ProbeExpectation(row["probe"]["from"], row["probe"]["target"], row["expect"])
+    if "storageKey" in row:
+        k = row["storageKey"]
+        return StorageKeyExpectation(k["engine"], k["target"], k["operation"], row["expect"])
     if "drift" in row:
         return DriftExpectation(row["drift"], row["expect"])
     if "sql" in row:

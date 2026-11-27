@@ -1,0 +1,40 @@
+# The TARGET calendar: the days the euro payment system is open, which are the days the ECB
+# publishes its reference rates. Built by dbt from a seed a person writes; no connector, no fetch.
+apiVersion: v1.1.0
+kind: DataProduct
+id: reference-data.calendars
+name: calendars
+version: 1.1.0
+status: active
+domain: reference-data
+type: sourceAligned
+description:
+  purpose: >-
+    The TARGET calendar: one row per calendar day, each marked open or closed for TARGET, the
+    euro payment system, whose open days are the days the ECB publishes its euro reference rates.
+    Read by fx-reference.ecb-fx-rates to lay out its daily rates on TARGET days.
+  limitations: >-
+    Covers the seed's years only, 2025 to 2027: the table runs from the seed's first closing day
+    (1 January 2025) to 31 December of its last year, and holds no row after it. A person extends
+    seeds/target_closing_days.csv before 2028. TARGET's own published calendar is the authority;
+    a closing day it announces outside its usual rule (none so far) is added to the seed by hand.
+  usage: >-
+    Join on calendar_date; filter is_target_day to keep the days TARGET is open. closing_reason
+    says why a day is closed: Saturday, Sunday or the holiday's name.
+team:
+  name: reference-data-team
+outputPorts:
+  - name: target_days
+    version: 1.1.0
+    contractId: reference-data.calendars.target_days
+customProperties:
+  - property: schedule
+    value:
+      # Daily at 04:00 UTC: the seed changes only with a release, so a run is cheap and puts a
+      # new release's calendar under its tested tag the same day, before the ECB run reads it.
+      cron: "0 4 * * *"
+  - property: seeds
+    value:
+      # The rows are public calendar facts a person wrote from TARGET's rule, not a source's data;
+      # the schema records every seed as synthetic: true (no row was copied from a feed).
+      - {path: seeds/target_closing_days.csv, synthetic: true}

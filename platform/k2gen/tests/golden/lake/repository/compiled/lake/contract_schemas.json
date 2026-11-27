@@ -1,4 +1,68 @@
 {
+  "fx_reference.ecb_fx_rates__base.gold_eur_rates_daily": {
+    "columns": [
+      {
+        "name": "rate_date",
+        "required": true,
+        "type": "date"
+      },
+      {
+        "name": "currency",
+        "required": true,
+        "type": "varchar"
+      },
+      {
+        "name": "rate",
+        "required": false,
+        "type": "decimal(20,10)"
+      },
+      {
+        "name": "is_carried",
+        "required": true,
+        "type": "boolean"
+      },
+      {
+        "name": "carried_days",
+        "required": false,
+        "type": "integer"
+      },
+      {
+        "name": "rate_available_at",
+        "required": false,
+        "type": "timestamp(6) with time zone"
+      }
+    ],
+    "partitioning": [],
+    "sort": []
+  },
+  "fx_reference.ecb_fx_rates__base.silver_rates": {
+    "columns": [
+      {
+        "name": "rate_date",
+        "required": true,
+        "type": "date"
+      },
+      {
+        "name": "currency",
+        "required": true,
+        "type": "varchar"
+      },
+      {
+        "name": "rate",
+        "required": true,
+        "type": "decimal(20,10)"
+      },
+      {
+        "name": "source_file_sha256",
+        "required": true,
+        "type": "varchar"
+      }
+    ],
+    "partitioning": [
+      "year(rate_date)"
+    ],
+    "sort": []
+  },
   "governance.access_canary__base.events": {
     "columns": [
       {
@@ -25,6 +89,191 @@
     "partitioning": [
       "region"
     ],
+    "sort": []
+  },
+  "governance.quality_results__base.test_results": {
+    "columns": [
+      {
+        "name": "product_id",
+        "required": true,
+        "type": "varchar"
+      },
+      {
+        "name": "run_id",
+        "required": false,
+        "type": "varchar"
+      },
+      {
+        "name": "dbt_invocation_id",
+        "required": true,
+        "type": "varchar"
+      },
+      {
+        "name": "release_id",
+        "required": false,
+        "type": "varchar"
+      },
+      {
+        "name": "run_started_at",
+        "required": true,
+        "type": "timestamp(6) with time zone"
+      },
+      {
+        "name": "writer",
+        "required": true,
+        "type": "varchar"
+      },
+      {
+        "name": "unique_id",
+        "required": true,
+        "type": "varchar"
+      },
+      {
+        "name": "test_name",
+        "required": true,
+        "type": "varchar"
+      },
+      {
+        "name": "tested",
+        "required": false,
+        "type": "varchar"
+      },
+      {
+        "name": "status",
+        "required": true,
+        "type": "varchar"
+      },
+      {
+        "name": "failures",
+        "required": false,
+        "type": "bigint"
+      },
+      {
+        "name": "execution_time",
+        "required": true,
+        "type": "double"
+      },
+      {
+        "name": "message",
+        "required": false,
+        "type": "varchar"
+      }
+    ],
+    "partitioning": [],
+    "sort": []
+  },
+  "k2.currency_master.bronze_currencies": {
+    "columns": [
+      {
+        "name": "code",
+        "required": true,
+        "type": "varchar"
+      },
+      {
+        "name": "numeric_code",
+        "required": true,
+        "type": "varchar"
+      },
+      {
+        "name": "name",
+        "required": true,
+        "type": "varchar"
+      },
+      {
+        "name": "minor_units",
+        "required": false,
+        "type": "integer"
+      },
+      {
+        "name": "is_fund",
+        "required": true,
+        "type": "boolean"
+      },
+      {
+        "name": "source_file_sha256",
+        "required": true,
+        "type": "varchar"
+      }
+    ],
+    "partitioning": [],
+    "sort": []
+  },
+  "k2.ecb_fx_rates.bronze_daily": {
+    "columns": [
+      {
+        "name": "rate_date",
+        "required": true,
+        "type": "date"
+      },
+      {
+        "name": "currency",
+        "required": true,
+        "type": "varchar"
+      },
+      {
+        "name": "rate",
+        "required": true,
+        "type": "varchar"
+      },
+      {
+        "name": "source_file_sha256",
+        "required": true,
+        "type": "varchar"
+      }
+    ],
+    "partitioning": [],
+    "sort": []
+  },
+  "reference_data.calendars__base.target_days": {
+    "columns": [
+      {
+        "name": "calendar_date",
+        "required": true,
+        "type": "date"
+      },
+      {
+        "name": "is_target_day",
+        "required": true,
+        "type": "boolean"
+      },
+      {
+        "name": "closing_reason",
+        "required": false,
+        "type": "varchar"
+      }
+    ],
+    "partitioning": [],
+    "sort": []
+  },
+  "reference_data.currency_master__base.currency": {
+    "columns": [
+      {
+        "name": "code",
+        "required": true,
+        "type": "varchar"
+      },
+      {
+        "name": "numeric_code",
+        "required": true,
+        "type": "varchar"
+      },
+      {
+        "name": "name",
+        "required": true,
+        "type": "varchar"
+      },
+      {
+        "name": "minor_units",
+        "required": false,
+        "type": "integer"
+      },
+      {
+        "name": "is_fund",
+        "required": true,
+        "type": "boolean"
+      }
+    ],
+    "partitioning": [],
     "sort": []
   }
 }

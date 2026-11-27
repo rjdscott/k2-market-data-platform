@@ -8,7 +8,7 @@ rolling out a change) is the [operator guide](../operations/README.md).
 
 | Tool | Needed for | Notes |
 |------|-----------|-------|
-| Docker Engine + Compose v2 | everything | A Docker engine with ≥ 29 GiB memory so every `deploy.resources.limits` can be honoured, the 28.750 GiB bootstrap peak included, or ≥ 37 GiB to run the paused ClickHouse as well (`docker info --format '{{.MemTotal}}'`, **Docker Desktop defaults far lower and silently clips every limit above the VM size**; Settings → Resources → Memory); measured steady-state usage is far lower (see [../operations/docker-resources.md](../operations/docker-resources.md)), so the stack runs on less, but limits then exceed the engine. Steady state declares 15.30 CPU / 27.250 GiB of limits across 18 long-running services and peaks at 16.80 CPU / 28.750 GiB across 22 while the four one-shot init containers run; with the `hot-gold` profile, 19.30 / 35.250 across 19 and 20.80 / 36.750 across 23. All are under the 25 CPU / 48 GiB ceiling of [ADR-045](../adr/ADR-045-ceiling-25-cpu-48-gib.md) (v2 alone: 15.1 CPU / 21.875 GB), and were computed on 2026-11-26 from the compose file after `alertmanager` joined it (`python3 scripts/check-budget.py`). The engine requirement follows the declared sum, not the ceiling: 29 GiB today (37 with ClickHouse), 48 GiB if a later phase fills the ceiling. On Docker Desktop the host has a requirement of its own: the VM grows to its whole memory setting, so host RAM must exceed that setting plus everything else the host runs ([sizing](../runbooks/docker-vm-oom-kill.md#2-size-the-vm-so-the-host-keeps-enough-memory)) |
+| Docker Engine + Compose v2 | everything | A Docker engine with ≥ 30 GiB memory so every `deploy.resources.limits` can be honoured, the 29.375 GiB bootstrap peak included, ≥ 31 GiB to hold both dbt-runner slots of a product run beside it, or ≥ 38 GiB to run the paused ClickHouse as well (`docker info --format '{{.MemTotal}}'`, **Docker Desktop defaults far lower and silently clips every limit above the VM size**; Settings → Resources → Memory); measured steady-state usage is far lower (see [../operations/docker-resources.md](../operations/docker-resources.md)), so the stack runs on less, but limits then exceed the engine. `python3 scripts/check-budget.py` prints the sums: steady state 15.80 CPU / 27.750 GiB across 19 long-running services (`steady default`), 17.30 / 29.375 across 23 while the four one-shot init containers run (`bootstrap default`), and that peak plus one profile: 18.30 / 30.875 with `build` (the two dbt-runner slots), 17.80 / 29.875 with `fetch`, 17.55 / 29.625 with `tools`, 21.30 / 37.375 with `hot-gold`. All are under the 25 CPU / 48 GiB ceiling of [ADR-045](../adr/ADR-045-ceiling-25-cpu-48-gib.md) (v2 alone: 15.1 CPU / 21.875 GB), computed on 2026-11-27 from the compose file after `k2-api` joined the default set. The engine requirement follows the declared sum, not the ceiling: 30 GiB today (38 with ClickHouse), 48 GiB if a later phase fills the ceiling. On Docker Desktop the host has a requirement of its own: the VM grows to its whole memory setting, so host RAM must exceed that setting plus everything else the host runs ([sizing](../runbooks/docker-vm-oom-kill.md#2-size-the-vm-so-the-host-keeps-enough-memory)) |
 | [`uv`](https://docs.astral.sh/uv/) | the Python unit tests and ruff | Nothing else uses Python locally |
 | `jq`, `psql` | the diagnostic one-liners in the ops docs | optional |
 
@@ -162,8 +162,11 @@ The v3 ingest's own loop (`ingest.py` by stage, its probe, the ingest DAG) is ar
 uv run --no-project --with pytest==9.2.0 --with pyyaml==6.0.4 --with fastavro==1.12.2 --with duckdb==1.4.4 pytest tests -q
 ```
 
-A DAG lives in `docker/airflow/dags/`, empty until phase 002; the dag-processor re-reads a
-changed DAG file within 30 s, with nothing to redeploy
+Airflow reads its DAGs from the deployed release, not the checkout:
+`docker/airflow/dags/factory.py`, through `/k2/releases/pointers/airflow/platform/docker/airflow/dags`,
+builds one DAG per entry of the release's `compiled/airflow/dags.json`. A change to the factory
+or to a product reaches Airflow only through a tag, `make release` and `make deploy` (deploy
+drains a DAG whose shape changes); the dag-processor rereads the folder within 30 s of the swap
 ([operator guide, section 7](../operations/README.md#7-roll-out-a-merged-change)).
 
 ## Logs
@@ -172,7 +175,7 @@ changed DAG file within 30 s, with nothing to redeploy
 |--------|-------|
 | Any container | `docker compose logs -f <service>` or `make logs` |
 | Capture | `docker logs -f k2-capture-binance`, `tracing` to stderr, filtered by `RUST_LOG`. No log files: nothing is bind-mounted out |
-| DAG task runs, none until phase 002 | the Airflow task logs: the UI at http://localhost:8090, or under `/opt/airflow/logs` in `k2-airflow-scheduler` |
+| DAG task runs | the Airflow task logs: the UI at http://localhost:8090, or under `/opt/airflow/logs` in `k2-airflow-scheduler` |
 | Spark job detail | event logs in `/home/iceberg/spark-events` in `k2-spark-iceberg`, two days of them, browsable in the History Server at http://localhost:18080. A running job's UI is http://localhost:4040; a second driver running at the same time gets port 4041 <!-- counts-ok: a port number, not a count --> inside the container, not published (`docker exec k2-spark-iceberg curl -s localhost:4041/api/v1/applications`) |
 | ClickHouse server, while `hot-gold` runs | `docker logs k2-clickhouse` |
 

@@ -16,7 +16,7 @@ in [`../runbooks/`](../runbooks/README.md).
 **Terms used on this page.** The *stack* is everything `docker-compose.yml` defines. A
 *service* is one entry in that file (`clickhouse`); its *container* is `k2-<service>`
 (`k2-clickhouse`). A *one-shot* is a service that sets something up and exits
-(`restart: "no"`: `redpanda-init`, `lakekeeper-migrate`, `lake-init`, `airflow-migrate`); `Exited (0)` is its success state. *Redpanda* is the message broker the
+(`restart: "no"`: `redpanda-init`, `lakekeeper-migrate`, `lake-init`, `airflow-migrate`); `Exited (0)` is its success state. The run path's one-shots, `fetch`, `dbt-runner` and `tools`, sit behind compose profiles of their own names: the Airflow scheduler, deploy, backup or the access suite starts one for one task and removes it. *Redpanda* is the message broker the
 capture processes write every venue message to (it speaks the Kafka protocol). The *hot tier* is
 ClickHouse's `gold` database, fed live from Redpanda when it runs; its tables keep duplicate
 deliveries until a background merge, and `FINAL` in a query collapses them. A *compose profile*
@@ -25,7 +25,7 @@ tables in the *Iceberg* format (data files plus metadata that make a set of file
 atomic commits), stored in *MinIO* (an S3-compatible object store) and listed by *Lakekeeper*,
 the catalog that names each table; a *warehouse* is one named lake in that catalog, `k2` for the
 lake and one per data domain for its marts ([glossary](../adr/glossary.md#warehouse-catalog-and-schema)).
-No job writes the lake while the platform is rebuilt (below). *Trino* is the SQL engine over the
+No crypto data reaches the lake while the platform is rebuilt (below). *Trino* is the SQL engine over the
 lake; *dbt* builds *marts*, tables derived from the lake for one use, through Trino
 ([glossary](../adr/glossary.md#mart)). *Airflow* runs jobs as *DAGs*; a *paused* DAG starts no
 new run. A *bind mount* is a file or directory of this checkout mounted into a container, so the
@@ -36,16 +36,18 @@ reach.
 
 ## Read this first: the state of this host
 
-**The lake receives no data** while the platform is rebuilt
+**The lake receives no crypto data** while the platform is rebuilt
 ([ADR-056](../adr/ADR-056-unified-data-product-platform.md)). The v3 lake ingest pipeline (its
 Spark jobs, its four Airflow DAGs, its dbt marts, its tables and their alerts) is retired and
 archived in [`legacy/v3-lake-ingest/`](../../legacy/v3-lake-ingest/), and its namespaces were
 dropped after a copy. The captures keep writing to Redpanda, which keeps 48 hours or 2 GiB per
-partition of raw frames, so nothing captured before that window will reach the new lake. Airflow,
-Trino, Lakekeeper, MinIO and the Spark container still run, with no DAG and no lake table.
-**This ends** when
+partition of raw frames, so nothing captured before that window will reach the new lake. The
+lake's tables are those of the products the deployed release defines under `contracts/`, one
+Airflow DAG each (`compiled/airflow/dags.json`): `currency_master` and `ecb_fx_rates` fetch a
+published file, land it and build from it; `calendars` builds from a seed a person writes;
+`quality_results` and `access_canary` are the governance products. **This ends** when
 [phase 004](../plans/2026-11-26-unified-product-platform/004-kraken-trades-instruments-security-master.md)
-of the unified platform plan lands `kraken-trades`; phase 002 brings the first DAGs.
+of the unified platform plan lands `kraken-trades`.
 
 Two conditions on the *reference host*, the maintainer's machine where the live stack runs and
 where every command on this page was checked, change the commands below as of 2026-11-26. On
@@ -82,10 +84,11 @@ docker compose up -d --force-recreate --no-deps <service> [<service> ...]  # als
 ```
 
 `--no-deps` stops compose from also starting or recreating the services this one depends on.
-**This ends** when the credential replacement designed in
-`docs/research/2026-11-26-storage-credentials-least-privilege.md` (not yet merged) is merged and
-rolled out: `python3 scripts/check-env.py` then prints `check-env: PASS`, and `make up` works
-again. Do not try to escape it with a fresh clone on this host: section 1 says why.
+**This ends** when the owner rotates the MinIO root credential. The first half of the
+replacement is in this release: each engine signs with its own MinIO key (`make engine-keys`
+writes the five pairs; [SECURITY.md](../../SECURITY.md)), so the root pair is held only by
+MinIO, `lake-init`, `make drop` and each warehouse's stored credential. Once the root is
+rotated, `python3 scripts/check-env.py` prints `check-env: PASS`, and `make up` works again. Do not try to escape it with a fresh clone on this host: section 1 says why.
 
 **The host is short of memory.** The Docker VM is set to 50.5 GiB on a host with 62.6 GiB of
 usable RAM, and it grows to that setting within hours, so the desktop and everything else must
@@ -137,9 +140,9 @@ started in.
 
 You need Docker with Compose v2, `git`, `python3`, `jq` (the reads in section 3), and enough
 memory: the Docker engine must
-offer at least 29 GiB, so that every container's declared memory limit fits (28.688 GiB at the
-bootstrap peak, when the one-shots run beside everything else; 36.688 GiB, so 37, with the paused
-ClickHouse running; [setup.md](../development/setup.md)),
+offer at least 30 GiB, so that every container's declared memory limit fits (29.375 GiB at the
+bootstrap peak, when the one-shots run beside everything else; 37.375 GiB, so 38, with the paused
+ClickHouse running; `python3 scripts/check-budget.py`, [setup.md](../development/setup.md)),
 and on Docker Desktop the host must have more RAM than the VM's memory setting plus everything
 else it runs ([sizing](../runbooks/docker-vm-oom-kill.md#2-size-the-vm-so-the-host-keeps-enough-memory)).
 `docker info --format '{{.MemTotal}} {{.NCPU}}'` prints what the engine offers, in bytes and
@@ -176,11 +179,11 @@ benign start-up noise); that lake is retired, so a fresh clone now stops at an e
 
 **Since the cutover to releases on 2026-11-27 this sequence alone does not bring Trino up.** Trino
 starts only from a deployed release's etc, over HTTPS, with its certificate and password files under
-`${K2_SECRETS}`. Before `make up`, `.env` needs `K2_HOME` and `K2_COMPOSE_PROJECT` set, and
-`K2_TRINO_S3_ACCESS_KEY` / `K2_TRINO_S3_SECRET_KEY` equal to `MINIO_ROOT_USER` /
-`MINIO_ROOT_PASSWORD` until phase 002 makes Trino's scoped key (`.env.example`): the fill step above
-gives `K2_TRINO_S3_SECRET_KEY` its own random value, so copy MinIO's over it. Then `make tls`, the
-service passwords, `make release` and `make deploy`, in the order
+`${K2_SECRETS}`. Before `make up`, `.env` needs `K2_HOME` and `K2_COMPOSE_PROJECT` set, then
+`make engine-keys`, which writes each engine's MinIO pair (`K2_<ENGINE>_S3_ACCESS_KEY` and
+`_SECRET_KEY` for spark, trino, maintenance, backup and tools) where it is missing or still the
+shipped placeholder, and `K2_RUN_UID` / `K2_RUN_GID`, and prints names, never a value. Then
+`make tls`, the service passwords, `make release` and `make deploy`, in the order
 [fresh-install.md](../runbooks/fresh-install.md) gives. That path has not yet been run end to end
 from an empty host. <!-- VERIFY: run fresh-install.md from an empty host and record its output here -->
 
@@ -200,8 +203,9 @@ These `.env` values are host-specific, not secrets:
 ## 2. Start a machine that already holds data
 
 All data lives in named Docker volumes (Redpanda, ClickHouse, MinIO for the lake, PostgreSQL
-for the Airflow and Lakekeeper metadata, Prometheus, Grafana), which survive stopping, `make
-down` and a host reboot. `docker compose up -d` may run the one-shots again; each is written to
+for the Airflow and Lakekeeper metadata, Prometheus, Grafana, `k2-spool` for each fetched file
+and its parse until the Spark connector lands it, `k2-site` for the catalog site and dbt docs
+k2-api serves), which survive stopping, `make down` and a host reboot. `docker compose up -d` may run the one-shots again; each is written to
 be re-run (every step is create-if-missing or converge, per the header of `docker/redpanda/init.sh`
 and `docker/lake/init-lake.sh`), so a re-run changes nothing.
 
@@ -246,7 +250,9 @@ new stack needs. It does not start the paused ClickHouse (profile `hot-gold`). *
 
 **Then, either way:** run `make health` (section 3), and if capture was down, record the window
 as step 8 of [docker-vm-oom-kill.md](../runbooks/docker-vm-oom-kill.md) says. A DAG paused before
-the stop stays paused (Airflow keeps a pause in its database); none exists until phase 002.
+the stop stays paused (Airflow keeps a pause in its database). Each DAG has catchup off
+(`docker/airflow/dags/factory.py`), so the slots missed while the stack was stopped are not run;
+the next scheduled one is.
 
 ---
 
@@ -326,29 +332,31 @@ Prometheus, which answer 302 (a redirect to their login and query pages), and th
 | Service | URL | What it is for | Login |
 |---|---|---|---|
 | Grafana | http://localhost:3000 | The dashboards: start at **K2 Pipeline Overview**, then **K2 Resources** (Dashboards, in the left menu; [dashboards.md](./dashboards.md)) | user `admin`, password `GRAFANA_PASSWORD` |
-| Airflow | http://localhost:8090 (`K2_AIRFLOW_PORT`) | DAGs, their runs, task logs, pause and unpause; no DAG until phase 002 | user `admin`; password generated by Airflow on first start: `docker exec k2-airflow-api-server cat /opt/airflow/simple_auth_manager_passwords.json.generated` |
+| Airflow | http://localhost:8090 (`K2_AIRFLOW_PORT`) | One DAG per product of the deployed release: its runs, task logs, trigger, pause and unpause ([airflow-scheduling.md](../runbooks/airflow-scheduling.md)) | user `admin`; password generated by Airflow on first start: `docker exec k2-airflow-api-server cat /opt/airflow/simple_auth_manager_passwords.json.generated` |
 | Redpanda Console | http://localhost:8080 | Topics, consumer groups, live messages, decoded as Avro through the schema registry | none |
-| Trino | https://localhost:8443 (`K2_TRINO_PORT`), since 2026-11-27; not in the 2026-11-26 check above | SQL over the lake (catalog `lake`, read-only), and per data domain a read-only reader catalog and a `_build` catalog, all without a table until phase 002. HTTPS only, under the local CA, and its Web UI is off: query it with the Trino CLI as in [tls-and-passwords.md](../runbooks/tls-and-passwords.md) | a declared principal and its password (`make password PRINCIPAL=<id>`; [ADR-060](../adr/ADR-060-trino-logins-by-password-over-tls-under-a-local-ca.md)) |
+| Trino | https://localhost:8443 (`K2_TRINO_PORT`), since 2026-11-27; not in the 2026-11-26 check above | SQL over the lake (catalog `lake`, read-only), and per data domain a read-only reader catalog and a `_build` catalog; a reader sees a product's table through its reader view, as its grants allow. HTTPS only, under the local CA, and its Web UI is off: query it with the Trino CLI as in [tls-and-passwords.md](../runbooks/tls-and-passwords.md) | a declared principal and its password (`make password PRINCIPAL=<id>`; [ADR-060](../adr/ADR-060-trino-logins-by-password-over-tls-under-a-local-ca.md)) |
 | Lakekeeper | none: no host port and no UI since 2026-11-27 ([ADR-059](../adr/ADR-059-access-rules-compiled-default-deny-over-two-catalogs-per-domain.md) part 7) | The Iceberg catalog: warehouse `k2` for the lake and one warehouse per data domain, empty since the v3 lake's namespaces were dropped. It has no authentication, so its network `k2-catalog` is its fence; ask it from a container on that network, as `scripts/drop.sh` does ([quick reference](./quick-reference.md)) | none (authorization is off) |
-| MinIO console | http://localhost:9001 | The objects under the lake, bucket `k2-lake` | `MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD` |
+| k2-api | http://127.0.0.1:8095 (`K2_API_PORT`), not in the 2026-11-26 check above | Read-only REST over the release's products (`/v1/products`, `/v1/data/...`, `/v1/release`; the routes in [`openapi.yaml`](../../services/k2-api/openapi.yaml), served at `/v1/openapi.json`), the catalog site at `/catalog/` and the dbt docs at `/dbt-docs/`, regenerated by each deploy and by `make site` ([`services/k2-api/README.md`](../../services/k2-api/README.md)) | an API key on the data route only (`make api-key PRINCIPAL=<id>`, [create-or-rotate-a-principal.md](../runbooks/create-or-rotate-a-principal.md)); every other route and both sites need none |
+| MinIO | none: no host port since this release (W1-23) | The lake's objects, bucket `k2-lake`, and the fetched files, bucket `k2-landing`. Reached from containers on `k2-net` and `k2-catalog` only, each engine with its own key; the host reads the lake through Trino and k2-api | none from the host |
 | Prometheus | http://localhost:9090 | Metrics, scrape targets (`/targets`) and alert state (`/alerts`) | none |
 | Alertmanager | http://localhost:9093 | What is firing, grouped as Slack receives it; silences ([where-an-alert-goes.md](../runbooks/where-an-alert-goes.md)) | none |
 | ClickHouse | http://localhost:8123/play | **Paused** (ADR-057): answers only while the `hot-gold` profile runs. A query box over the hot tier, `SELECT count() FROM gold.trades FINAL` | user `default`, `CLICKHOUSE_PASSWORD`; read-only research user `quant`, `K2_QUANT_PASSWORD` |
-| Spark History Server | http://localhost:18080 | Finished Spark jobs, newest first, two days of them (its event-log cleaner deletes older ones); open one for its stages. The only process the Spark container runs between jobs. No job runs until phase 002 | none |
+| Spark History Server | http://localhost:18080 | Finished Spark jobs, newest first, two days of them (its event-log cleaner deletes older ones); open one for its stages: each product run's load, audit, publish, expire and maintain. The only process the Spark container runs between jobs | none |
 | Spark job UI | http://localhost:4040 | The Spark job running now, while it runs: `000` between jobs. A second driver running at the same time gets 4041 inside the container, not published: `docker exec k2-spark-iceberg curl -s localhost:4041/api/v1/applications` | none |
 
 APIs rather than consoles, also on `127.0.0.1`: Redpanda's Kafka API `19092` (the listener host
 tools use; `9092` is advertised as `redpanda:9092`, for containers), its Admin API `9644` and
 Schema Registry `8081`; ClickHouse's native protocol `9002` and its Prometheus endpoint `9363`,
-while `hot-gold` runs;
-MinIO's S3 API `9000`; PostgreSQL `15432` (`prefect-db`, a historical name: the Airflow and Lakekeeper
+while `hot-gold` runs; PostgreSQL `15432` (`prefect-db`, a historical name: the Airflow and Lakekeeper
 metadata). The capture containers' `/metrics` (8082) is not published: Prometheus reads it on
-the compose network.
+the compose network. Neither is MinIO's S3 API (9000) or console (9001) any more: from the
+host, `docker exec k2-minio curl -s -o /dev/null -w '%{http_code}\n' localhost:9000/minio/health/live`
+asks it from inside its own container.
 
 ### From another machine: an SSH tunnel, never an open port
 
 Do not publish a port on `0.0.0.0` or the host's LAN address to reach a console: most of them
-have no login, and MinIO's root credential is the known default (SECURITY.md). Forward the
+have no login (SECURITY.md). Forward the
 loopback port over SSH instead, from the other machine:
 
 ```bash
@@ -412,9 +420,11 @@ rule below). `-t <seconds>` gives the old container that long to stop cleanly.
 
 ### Which services need idle
 
-*Idle* means no Spark job in `k2-spark-iceberg` and no Airflow run queued or running. Until phase
-002 nothing schedules either, so idle is the normal state, and step 1 below confirms it rather
-than waiting for it; the phase that adds DAGs adds their pause to this pattern.
+*Idle* means no Spark job in `k2-spark-iceberg` and no Airflow run queued or running. Each
+product's DAG runs on its own schedule (`compiled/airflow/dags.json` in the deployed release),
+so idle is the time between runs, and step 1 below waits for it. A run's one-shots (`fetch`,
+`dbt-runner`) are part of its run, so a running run is what step 1 sees. To keep a DAG from
+starting a run during a recreate, pause it first ([airflow-scheduling.md](../runbooks/airflow-scheduling.md)).
 
 | Service | When it is safe | What a restart costs | As run 2026-11-25, 23:50 to 23:54 UTC |
 |---|---|---|---|
@@ -425,6 +435,7 @@ than waiting for it; the phase that adds DAGs adds their pause to this pattern.
 | `minio`, `lakekeeper`, `spark-iceberg`, `trino`, `prefect-db` | when idle (step 1): a Spark job, a Trino query or a catalog call cut mid-way fails, and `prefect-db` holds Airflow's and Lakekeeper's databases | the work in flight fails and must be run again | `minio`: healthy in 6 s; `trino` with `--force-recreate`: 10 s; `spark-iceberg`: seconds. `lakekeeper` and `prefect-db` not yet recreated on this stack |
 | `airflow-scheduler`, `airflow-api-server`, `airflow-dag-processor` | when idle: tasks run inside the scheduler and report to the api-server | a running task dies with them | not in this rollout; see [airflow-scheduling.md](../runbooks/airflow-scheduling.md) section 1 |
 | `airflow-statsd` | as the row above: after recreating it, restart the three Airflow services, which resolve its address only at start | every Airflow metric stops until they restart | [airflow-scheduling.md](../runbooks/airflow-scheduling.md) section 1 |
+| `k2-api` | any time: it keeps no state, and reads its release through its pointer at each request | a REST request or a site page in flight fails | not yet recreated on this stack |
 
 `make drop` and `make backup` run in throwaway containers of their own, which step 1 does not
 see: do not recreate `minio`, `lakekeeper` or `prefect-db` while one of them runs.
@@ -449,8 +460,8 @@ stops with a message and exit status 1, never proceeding. It counts two things a
   script, also carries `pyspark-shell`), whatever started it: a job run by hand, a spike, the
   release gate. Between jobs the image runs only tini and the History Server, neither of which
   matches. A Python script counts before its JVM starts.
-- **Any queued or running run of any Airflow DAG.** It lists the DAGs first, so it needs no
-  change when phase 002 adds them; today the list is empty.
+- **Any queued or running run of any Airflow DAG.** It lists the DAGs first, so a product a
+  release adds is covered without a change here.
 
 Paste the two functions once per shell; they work in bash and zsh.
 
@@ -496,8 +507,8 @@ run(s)`, and with a Python job in the Spark listing `stack_idle: 1 Spark driver 
 process(es) in k2-spark-iceberg`, both returning 1. The process filter, fed the History Server's
 two lines plus synthetic ones, counted a Python job, a SparkSubmit driver, a bare `python3` and a
 `python3.10` kernel as busy and the `sh -c` wrapper and `ps` itself as idle. In a throwaway
-Airflow 3.3.2 with no DAG, `airflow dags list -o json` printed `[]`, so the DAG loop has nothing
-to read today. Each poll takes 5 to 15 s; do not start step 2 unless step 1 printed `idle`.
+Airflow 3.3.2 with no DAG, `airflow dags list -o json` printed `[]`, which the DAG loop reads as
+nothing running. Each poll takes 5 to 15 s; do not start step 2 unless step 1 printed `idle`.
 
 ```bash
 # 2. Recreate (or start) the service. Chain it to the wait so a timeout stops it:
@@ -681,18 +692,14 @@ sha256sum docker/lake/offsets.py; docker exec k2-spark-iceberg sha256sum /home/i
 
 ## 7. Roll out a merged change
 
-The live checkout is bind-mounted into the running containers, so **a `git pull` in the live
-checkout is a deploy** for everything that reads its files at run time: a Spark job started
-in `k2-spark-iceberg` runs the new `docker/lake/` code, and the dag-processor re-reads a changed
-DAG file within 30 s (`min_file_process_interval`). There is no separate release step, so pull
-only what you mean to run. Since the cutover on 2026-11-27, Trino's etc and access rules and the
-list of warehouses come from a deployed release instead, through the releases root
-`${K2_RELEASES}`: a pull changes neither, and a change to them, or to the compose file, goes live by
-`make release TAG=<tag>` then `make deploy RELEASE=<id>`
-([deploy-a-release.md](../runbooks/deploy-a-release.md)). The Airflow scheduler and dag-processor,
-Spark and Prometheus mount that root read-only already, but what they would read through a pointer
-(the DAGs, the Spark scripts, the alert rules) arrives in phase 002; until then they read the
-checkout, as the table below says.
+Parts of the live checkout are still bind-mounted into running containers (the table below
+says which), so **a `git pull` in the live checkout is a deploy** for those. Everything a product
+run reads comes from a deployed release instead, through the releases root `${K2_RELEASES}`:
+Trino's etc and access rules, the warehouses, the DAGs (through the airflow pointer, reread
+within 30 s of a swap), the Spark scripts each run pins, the dbt project, the parsers, the alert
+rules, and k2-api's catalog. A pull changes none of those, and a change to them, or to the
+compose file, goes live by `make release TAG=<tag>` then `make deploy RELEASE=<id>`
+([deploy-a-release.md](../runbooks/deploy-a-release.md)).
 
 ```bash
 git status --short                         # must print nothing: a pull onto local edits is not a deploy of main
@@ -706,13 +713,14 @@ Then, for each path that changed. *When idle* means section 6's step 1 before th
 
 | Changed | Read by | After the pull |
 |---|---|---|
-| `docker/lake/*.py` | a Spark job, fresh per run; none is scheduled until phase 002 | nothing |
+| `docker/lake/*.py` | a product run's Spark tasks read the copy in the release the run pinned (`/k2/releases/<id>/platform/docker/lake/`), not the checkout's | `make release TAG=<tag>`, `make deploy RELEASE=<id>`; the next run uses it |
 | `docker/lake/ddl/` | nothing: the `lake-ddl` one-shot that applied it retired with the v3 lake | nothing |
-| `dbt/` models, macros, YAML | nothing runs dbt on the stack until phase 002 | nothing |
+| `dbt/` macros, YAML; `contracts/<domain>/<product>/models/`; `domains/<domain>/parsers/` | the release's compiled dbt project and run code, read by the `dbt-runner` and `fetch` one-shots of the next run | `make release TAG=<tag>`, `make deploy RELEASE=<id>` |
 | `dbt/uv.lock`, `dbt/package-lock.yml`, `docker/airflow/Dockerfile` | baked into the image `k2-airflow:3.3.2` | `docker compose build airflow-migrate` (the only service that builds it), then when idle `docker compose up -d --force-recreate --no-deps airflow-api-server airflow-scheduler airflow-dag-processor` |
-| `docker/airflow/dags/` | the dag-processor | nothing; confirm with `docker exec k2-airflow-scheduler airflow dags list-import-errors` (`No data found`) |
+| `docker/airflow/dags/` | the dag-processor, through the airflow pointer (`/k2/releases/pointers/airflow/platform/docker/airflow/dags`) | `make release TAG=<tag>`, `make deploy RELEASE=<id>` (deploy drains a DAG whose shape changes); confirm with `docker exec k2-airflow-scheduler airflow dags list-import-errors` (`No data found`) |
+| `docker/fetch/`, `docker/dbt-runner/`, `docker/tools/`, `services/k2-api/` | the images `make release` builds from the tag | `make release TAG=<tag>`, `make deploy RELEASE=<id>`: deploy recreates `k2-api` when its image changes; the one-shots take the new image at their next run |
 | `docker/airflow/statsd-mapping.yml` | file mount | section 6, the `airflow-statsd` row |
-| `docker/prometheus/rules/` | read at start and on SIGHUP (the hang-up signal, which Prometheus takes as "reload your configuration") | `docker kill -s HUP k2-prometheus`, then check http://localhost:9090/rules lists the change |
+| `docker/prometheus/rules/` | the release's copy, through the prometheus pointer, read at start and on SIGHUP (the hang-up signal, which Prometheus takes as "reload your configuration"); `make check-alerts` reads the checkout's | `make release TAG=<tag>`, `make deploy RELEASE=<id>`: deploy sends the SIGHUP after the swap; then check http://localhost:9090/rules lists the change |
 | `docker/prometheus/prometheus.yml` | file mount | `docker compose up -d --force-recreate --no-deps prometheus` |
 | `docker/alertmanager/alertmanager.yml` | directory mount, read at start and on reload | `curl -s -X POST localhost:9093/-/reload`, then `docker logs --tail 3 k2-alertmanager` shows `Completed loading of configuration file` |
 | `docker/grafana/dashboards/` | polled every 30 s | nothing |
@@ -748,7 +756,7 @@ at a time with the pattern in section 6.
 |---|---|---|
 | Any container's output | `docker compose logs --since 10m <service>`, or `docker logs -f k2-<service>`; `make logs` follows all of them | the container is removed (`make down`, a recreate). Save it first: `docker logs k2-<service> > <file> 2>&1` |
 | Capture | `docker logs k2-capture-<venue>`; `RUST_LOG` sets the level | as above |
-| A DAG task's own output (none until phase 002) | the Airflow task log: the UI, or `docker exec k2-airflow-scheduler sh -c "find /opt/airflow/logs -path '*dag_id=<dag>*' -name '*.log' \| sort \| tail -2"` and read the older one; the newest can still be running. The logs of the retired v3 DAGs stay there until the container is removed | the scheduler container is removed |
+| A DAG task's own output, a one-shot's included (`fetch` and `dbt-runner` run with `--rm`, so their output is kept only there) | the Airflow task log: the UI, or `docker exec k2-airflow-scheduler sh -c "find /opt/airflow/logs -path '*dag_id=<dag>*' -name '*.log' \| sort \| tail -2"` and read the older one; the newest can still be running. The logs of the retired v3 DAGs stay there until the container is removed | the scheduler container is removed |
 | Spark job detail | event logs in `/home/iceberg/spark-events` in `k2-spark-iceberg` | `spark-iceberg` is removed |
 | ClickHouse server, while `hot-gold` runs | `docker exec k2-clickhouse tail -n 50 /var/log/clickhouse-server/clickhouse-server.err.log` | a volume (`clickhouse-logs`): survives recreates and the pause |
 | Docker Desktop itself, and the host's kernel | `journalctl --user -u docker-desktop --utc`; `journalctl -k --utc` | the host's journal |
@@ -772,14 +780,16 @@ at a time with the pattern in section 6.
 
 ## 10. Back up the lake
 
-`make backup` copies what nothing can rebuild, as its own Iceberg files plus a dump of the
-catalog database, to `~/k2-backup` on the host, outside Docker; it only reads from the stack.
-The four tables it copied (the raw archive, the audit history and two dimension histories)
-retired with the v3 lake, so until
-[phase 002](../plans/2026-11-26-unified-product-platform/002-run-spine-through-ecb-fx.md)
-compiles the backup set from each product's contract it has no table to copy, and says so with a
-SKIP line naming that phase. The copies it took before stay in `~/k2-backup/lake/`, and the copies
-`make drop` took of the dropped namespaces in `~/k2-backup/drop/<date>/`. `make backup-install`,
+`make backup` copies what nothing can rebuild to `~/k2-backup` on the host, outside Docker; it
+only reads from the stack. It dumps the catalog's and Airflow's databases, then copies what the
+live release's backup set lists (`compiled/lake/backup-set.json`, compiled from each product's
+contract): each `restore` table's files at its ref, each landing prefix of `k2-landing`, and the
+releases root, from a throwaway container of the release's tools image with the backup storage
+key. Each run is `~/k2-backup/runs/<UTC>/` with its `manifest.json`; `make backup-verify` checks
+the newest run against it. A `rebuild` table, one dbt makes again from its inputs, is listed and
+not copied. The copies taken before this release stay in `~/k2-backup/lake/`, and the copies
+`make drop` took of the dropped namespaces in `~/k2-backup/drop/<date>/`; `make drop` now takes a
+full `make backup` first. `make backup-install`,
 run once from this checkout, schedules it daily at 04:30 UTC as a systemd user timer, and
 `make health` step (5) then FAILs when the last success is over 26 hours old (SKIP where it was
 never set up, as on this host on 2026-11-26). The copy is on the same disk and any process
@@ -801,7 +811,7 @@ it never deletes a table copy, nor anything under `~/k2-backup/drop/` (the copie
 | [observability.md](./observability.md) | Grafana dashboards, capture-tier metrics, the 16 Prometheus alert rules and where an alert goes |
 | [dashboards.md](./dashboards.md) | Every dashboard and console as a screenshot of a live run, in the order the data moves, with what to read from each and the runbook it leads to. Written by `make screenshots` |
 | [latency-budgets.md](./latency-budgets.md) | 7-segment latency budget plus the measured 2026-02-19 p50/p99 numbers |
-| [docker-resources.md](./docker-resources.md) | Per-service CPU/RAM limits, 15.30 CPU / 27.250 GiB across 18 long-running services, +4 one-shot (1.50 / 1.500 GiB), bootstrap peak 16.80 / 28.750 GiB against the 25 / 48 GiB ceiling, ClickHouse paused and outside them |
+| [docker-resources.md](./docker-resources.md) | Per-service CPU/RAM limits, 15.80 CPU / 27.750 GiB across 19 long-running services, +4 one-shot (1.50 / 1.625 GiB), bootstrap peak 17.30 / 29.375 GiB against the 25 / 48 GiB ceiling (`python3 scripts/check-budget.py`); ClickHouse and the run path's one-shots behind profiles, outside them |
 | [airflow-schedules.md](./airflow-schedules.md) | **Archived** with the v3 lake ingest pipeline, whose four DAGs it listed |
 | [clickhouse-database-standard.md](./clickhouse-database-standard.md) | Why everything served lives in the `gold` database (`k2` was dropped at the Phase E cutover) and how to keep it that way |
 | [adding-new-exchanges.md](./adding-new-exchanges.md) | End-to-end checklist for wiring up a 4th exchange |

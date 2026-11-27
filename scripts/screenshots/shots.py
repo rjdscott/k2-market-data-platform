@@ -9,7 +9,7 @@ gallery read them too. Fields:
   title     the image's own heading
   url       what an operator opens; capture.py adds Grafana's kiosk, theme and
             time-window parameters itself
-  app       whose login the page needs: grafana, minio, or None
+  app       whose login the page needs: grafana, or None
   ready     a selector that only matches once the page shows real data
   height    viewport height in px; the width is always 1600
   callouts  (number, target, what it points at[, "left"]): a marker on the
@@ -89,16 +89,8 @@ SHOTS = [
              "retired. Spark's UI has no dark theme.",
         leads_to="docs/runbooks/upgrade-a-pinned-component.md",
     ),
-    dict(
-        file="07-minio-lake-bucket.png", section="Lake", title="MinIO: the k2-lake bucket",
-        url="http://localhost:9001/browser/k2-lake", app="minio", height=800,
-        ready="text=k2-lake",   # the bucket is empty until phase 002 writes the first table
-        read="The object store under the lake: bucket k2-lake, its size and object count. Every Iceberg "
-             "data and metadata file of every warehouse sits in it. The old pipeline's tables were "
-             "dropped after a verified copy (`make drop`): no live crypto data lands here until "
-             "phase 004.",
-        leads_to="docs/runbooks/lake-backup-and-restore.md",
-    ),
+    # 07, MinIO's console, retired with its host port (W1-23): it logged in with the root pair from
+    # the host, the path around Trino that step closes. Its number is not reused.
     # 08 and 09, the ClickHouse hot tier, retired with its pause (ADR-057); 10 to
     # 12, the old lake DAGs in Airflow's UI, with the old lake ingest
     # (legacy/v3-lake-ingest/). The numbers are not reused, so the rest keep

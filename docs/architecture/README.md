@@ -25,8 +25,8 @@ Numbered chapters, in reading order. Start at [00](00-start-here.md).
 | 18 | [Data mesh](18-data-mesh.md) | five domains, products and their contracts, what `k2gen` checks and writes |
 | 19 | [Lakehouse and domain warehouses](19-lakehouse-and-domain-warehouses.md) | tables, catalog, warehouses; the producer lake, a mart warehouse per domain, who may write what |
 | 20 | [The target: a data product platform](20-target-data-product-platform.md) | the TARGET decided on 2026-11-26, not what runs: ethos, twelve diagrams, worked examples, distance from today |
-| 21 | [Releases and deploy](21-releases-and-deploy.md) | how documents become a running system: the tag's document set, checks, emitters, the sealed release, the pointer swap, verification, rollback |
-| 22 | [Access and identity](22-access-and-identity.md) | who can see what and why it holds: passwords over TLS, default-deny rules, named policies, the reader view over the tested tag, the catalog fence, known limits |
+| 21 | [Releases and deploy](21-releases-and-deploy.md) | how documents become a running system: the tag's document set, checks, emitters, the sealed release and its run code, the pointers each service reads, the drain, verification, rollback, and the ECB product's path from file to reader |
+| 22 | [Access and identity](22-access-and-identity.md) | who can see what and why it holds: passwords over TLS, default-deny rules, named policies, the reader view over the tested tag, the catalog fence, storage keys per engine, the REST API k2-api, the catalog site, known limits |
 | A1 | [Technology stack](A1-technology-stack.md) | versions and the ADR behind each |
 
 Decisions live in [`../adr/`](../adr/README.md), and the labels and terms they use

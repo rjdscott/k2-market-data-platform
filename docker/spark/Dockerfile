@@ -113,6 +113,11 @@ RUN mkdir -p "$SPARK_HOME/conf" /home/iceberg/spark-events \
 # PATH: spark-sql, spark-submit and the sbin scripts by name, as the old base had
 # them. PYTHONPATH: the distribution's pyspark and its py4j, which is how
 # `python3 /home/iceberg/lake/<script>.py` imports pyspark at all.
+# /spool, the mount point of fetch's spool volume (read-only here), owned as docker/fetch/Dockerfile
+# owns it (10002, mode 755): Docker gives an empty named volume the owner of the directory it is
+# first mounted on, so with both images agreeing, fetch can write whichever service mounts it first.
+RUN mkdir /spool && chown 10002:10002 /spool
+
 ENV PATH=/opt/spark/bin:/opt/spark/sbin:$PATH \
     PYTHONPATH=/opt/spark/python:/opt/spark/python/lib/py4j-0.10.9.7-src.zip
 

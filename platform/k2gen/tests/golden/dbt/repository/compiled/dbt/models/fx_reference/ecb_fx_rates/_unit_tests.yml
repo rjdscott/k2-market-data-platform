@@ -1,0 +1,127 @@
+# dbt unit tests: each runs one model's SQL on the rows written here instead of its real inputs,
+# and compares the result with the expected rows. They prove the logic, not the data. Every rate
+# and code is invented (AAA, BBB): no real fixing is written here. For the incremental model
+# each test states which branch it runs (is_incremental true or false); for an incremental run
+# the expected rows are what the model hands the MERGE, not the merged table.
+unit_tests:
+  - name: silver_rates_newest_file_wins
+    model: ecb_fx_rates__silver_rates  # the dbt name, <fence>__<table> (k2gen.model.dbt_model)
+    description: >-
+      File aa ends on 2 February, file bb on 3 February and changes the 2 February rate: bb is
+      newer, so its rate wins, and each (rate_date, currency) comes out once.
+    overrides:
+      macros:
+        is_incremental: false  # the first run: the whole of bronze
+    given:
+      - input: source('ecb_fx_rates', 'bronze_daily')
+        # format sql, every column typed: dbt reads a dict fixture's column types from the input
+        # relation in the warehouse, and bronze (or this, before the first build) may not exist there.
+        format: sql
+        rows: |
+          select date '2026-02-02' as rate_date, cast('AAA' as varchar) as currency, cast('2.0000' as varchar) as rate, cast('aa' as varchar) as source_file_sha256
+          union all select date '2026-02-02', 'AAA', '2.1000', 'bb'
+          union all select date '2026-02-03', 'AAA', '2.2000', 'bb'
+    expect:
+      rows:
+        - {rate_date: "2026-02-02", currency: AAA, rate: 2.1, source_file_sha256: bb}
+        - {rate_date: "2026-02-03", currency: AAA, rate: 2.2, source_file_sha256: bb}
+
+  - name: silver_rates_casts_trailing_zeros_exactly
+    model: ecb_fx_rates__silver_rates
+    description: The published strings 1.2300 and 150.00 become the decimals 1.23 and 150, nothing rounded.
+    overrides:
+      macros:
+        is_incremental: false
+    given:
+      - input: source('ecb_fx_rates', 'bronze_daily')
+        # format sql, every column typed: dbt reads a dict fixture's column types from the input
+        # relation in the warehouse, and bronze (or this, before the first build) may not exist there.
+        format: sql
+        rows: |
+          select date '2026-02-02' as rate_date, cast('AAA' as varchar) as currency, cast('1.2300' as varchar) as rate, cast('aa' as varchar) as source_file_sha256
+          union all select date '2026-02-02', 'BBB', '150.00', 'aa'
+    expect:
+      rows:
+        - {rate_date: "2026-02-02", currency: AAA, rate: 1.23, source_file_sha256: aa}
+        - {rate_date: "2026-02-02", currency: BBB, rate: 150, source_file_sha256: aa}
+
+  - name: silver_rates_incremental_run_adds_no_duplicate
+    model: ecb_fx_rates__silver_rates
+    description: >-
+      The table already holds 2 February. Files aa (ending 2 February) and bb (ending 3 February)
+      are at least as new, so their rows go to the MERGE, one per key, bb's on the day both hold;
+      file zz (ending 30 January) is older and adds nothing. One row per key is what keeps the
+      MERGE on (rate_date, currency) from inserting a second row for a key it already has.
+    overrides:
+      macros:
+        is_incremental: true  # a later run: the table exists
+    given:
+      - input: this
+        format: sql
+        rows: |
+          select date '2026-02-02' as rate_date, cast('AAA' as varchar) as currency, cast(2.0 as decimal(20, 10)) as rate, cast('aa' as varchar) as source_file_sha256
+      - input: source('ecb_fx_rates', 'bronze_daily')
+        # format sql, every column typed: dbt reads a dict fixture's column types from the input
+        # relation in the warehouse, and bronze (or this, before the first build) may not exist there.
+        format: sql
+        rows: |
+          select date '2026-01-30' as rate_date, cast('AAA' as varchar) as currency, cast('1.9000' as varchar) as rate, cast('zz' as varchar) as source_file_sha256
+          union all select date '2026-01-30', 'AAA', '1.9000', 'aa'
+          union all select date '2026-02-02', 'AAA', '2.0000', 'aa'
+          union all select date '2026-02-02', 'AAA', '2.0000', 'bb'
+          union all select date '2026-02-03', 'AAA', '2.1000', 'bb'
+    expect:
+      rows:
+        - {rate_date: "2026-01-30", currency: AAA, rate: 1.9, source_file_sha256: aa}
+        - {rate_date: "2026-02-02", currency: AAA, rate: 2.0, source_file_sha256: bb}
+        - {rate_date: "2026-02-03", currency: AAA, rate: 2.1, source_file_sha256: bb}
+
+  - name: gold_carries_a_rate_at_most_five_target_days
+    model: ecb_fx_rates__gold_eur_rates_daily
+    description: >-
+      AAA is published on Monday 2 February only; BBB on Tuesday 10 February only, which makes
+      10 February the newest day. AAA is carried 1 to 4 days to Friday, the weekend has no row and
+      counts no day, Monday 9 is the fifth carried day, and on Tuesday 10, the sixth, rate is null.
+      In February Frankfurt is on CET, so 16:00 there is 15:00 UTC.
+    given:
+      - input: source('calendars', 'target_days')  # k2_input renders source() in a unit test
+        format: sql  # every column typed, as above
+        rows: |
+          select date '2026-02-02' as calendar_date, true as is_target_day, cast(null as varchar) as closing_reason
+          union all select date '2026-02-03', true, null
+          union all select date '2026-02-04', true, null
+          union all select date '2026-02-05', true, null
+          union all select date '2026-02-06', true, null
+          union all select date '2026-02-07', false, null
+          union all select date '2026-02-08', false, null
+          union all select date '2026-02-09', true, null
+          union all select date '2026-02-10', true, null
+      - input: ref('ecb_fx_rates__silver_rates')
+        rows:
+          - {rate_date: "2026-02-02", currency: AAA, rate: 2.0}
+          - {rate_date: "2026-02-10", currency: BBB, rate: 3.0}
+    expect:
+      rows:
+        - {rate_date: "2026-02-02", currency: AAA, rate: 2.0, is_carried: false, carried_days: 0, rate_available_at: "2026-02-02 15:00:00 UTC"}
+        - {rate_date: "2026-02-03", currency: AAA, rate: 2.0, is_carried: true, carried_days: 1, rate_available_at: "2026-02-03 15:00:00 UTC"}
+        - {rate_date: "2026-02-04", currency: AAA, rate: 2.0, is_carried: true, carried_days: 2, rate_available_at: "2026-02-04 15:00:00 UTC"}
+        - {rate_date: "2026-02-05", currency: AAA, rate: 2.0, is_carried: true, carried_days: 3, rate_available_at: "2026-02-05 15:00:00 UTC"}
+        - {rate_date: "2026-02-06", currency: AAA, rate: 2.0, is_carried: true, carried_days: 4, rate_available_at: "2026-02-06 15:00:00 UTC"}
+        - {rate_date: "2026-02-09", currency: AAA, rate: 2.0, is_carried: true, carried_days: 5, rate_available_at: "2026-02-09 15:00:00 UTC"}
+        - {rate_date: "2026-02-10", currency: AAA, rate: null, is_carried: false, carried_days: 6, rate_available_at: null}
+        - {rate_date: "2026-02-10", currency: BBB, rate: 3.0, is_carried: false, carried_days: 0, rate_available_at: "2026-02-10 15:00:00 UTC"}
+
+  - name: gold_uses_cest_in_summer
+    model: ecb_fx_rates__gold_eur_rates_daily
+    description: In July Frankfurt is on CEST, so 16:00 there is 14:00 UTC.
+    given:
+      - input: source('calendars', 'target_days')
+        format: sql
+        rows: |
+          select date '2026-07-01' as calendar_date, true as is_target_day, cast(null as varchar) as closing_reason
+      - input: ref('ecb_fx_rates__silver_rates')
+        rows:
+          - {rate_date: "2026-07-01", currency: AAA, rate: 2.0}
+    expect:
+      rows:
+        - {rate_date: "2026-07-01", currency: AAA, rate: 2.0, is_carried: false, carried_days: 0, rate_available_at: "2026-07-01 14:00:00 UTC"}

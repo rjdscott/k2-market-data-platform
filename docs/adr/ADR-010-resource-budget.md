@@ -756,3 +756,50 @@ PASS: bootstrap default within 25 CPU / 48 GiB; limits, pins and loopback ports 
 Headroom at the gated peak: 8.20 CPU and 19.250 GiB. The summary comment at the end of
 `docker-compose.yml` carries the same sums. Plan 001 named 17.40 CPU / 29.875 GiB as its exit
 figure; that was computed before phase 000 retired `lake-metrics` and `lake-ddl`.
+
+### Outcome addendum (2026-11-27, phases 002 and 003: k2-api in the default set)
+
+`k2-api` (0.5 CPU / 512M, unchanged from its stub) leaves the profile `api` and joins the default
+profile, long-running: plan 003's exit has every part report the release, and a deploy moves only the
+default set. `fetch` and `dbt-runner` are now real images (`docker/fetch/`, `docker/dbt-runner/`) under
+the same limits as their stubs, 0.5 / 512M and 0.5 / 768M times two replicas, still behind the profiles
+`fetch` and `build`, which the gate reports and does not count in the default.
+
+```
+$ python3 scripts/check-budget.py
+steady default         19 services   15.80 CPU   27.750 GiB
+bootstrap default      23 services   17.30 CPU   29.250 GiB
+bootstrap build        24 services   18.30 CPU   30.750 GiB
+bootstrap fetch        24 services   17.80 CPU   29.750 GiB
+bootstrap hot-gold     24 services   21.30 CPU   37.250 GiB
+bootstrap tools        24 services   17.55 CPU   29.500 GiB
+PASS: bootstrap default within 25 CPU / 48 GiB; limits, pins and loopback ports hold across 8 Dockerfiles and 87 scripts and workflows
+```
+
+Headroom at the gated peak: 7.70 CPU and 18.750 GiB. The `api` profile line is gone because no service
+carries that profile now. Plan 003 named 19.40 CPU / 32.375 GiB for the peak with the `fetch` and
+`build` profiles together; the script reports each profile alone, and that figure was computed before
+phase 000 retired `lake-ddl` and `lake-metrics`. The summary comment at the end of `docker-compose.yml`
+carries the same sums.
+
+### Outcome addendum (2026-11-27, lake-init at 256M)
+
+`lake-init` (a one-shot) goes from 128M to 256M, its CPU limit unchanged. Since phase 002 it also
+creates one MinIO user and policy per engine (ADR-054), and at 128M the MinIO client was killed by
+the kernel in one of three CI runs of the same tree (`mc admin policy attach`, exit by SIGKILL
+inside `docker/lake/init-lake.sh`). The limit was too small for the work, so the limit moves; the
+throwaway lake (`scripts/lib/throwaway-lake.sh`) runs it under the same 256m. It adds 0.125 GiB at
+the bootstrap peak only; steady state is unchanged. `python3 scripts/check-budget.py`:
+
+```
+steady default         19 services   15.80 CPU   27.750 GiB
+bootstrap default      23 services   17.30 CPU   29.375 GiB
+bootstrap build        24 services   18.30 CPU   30.875 GiB
+bootstrap fetch        24 services   17.80 CPU   29.875 GiB
+bootstrap hot-gold     24 services   21.30 CPU   37.375 GiB
+bootstrap tools        24 services   17.55 CPU   29.625 GiB
+PASS: bootstrap default within 25 CPU / 48 GiB; limits, pins and loopback ports hold across 8 Dockerfiles and 96 scripts and workflows
+```
+
+Headroom at the gated peak: 7.70 CPU and 18.625 GiB. The figures in the addendum above this one are
+what the script printed before this change.

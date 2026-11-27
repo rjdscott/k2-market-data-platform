@@ -20,7 +20,7 @@ dev-up: ## Bring the stack up the safe way (override, rebuild, recreate mount ho
 health: ## Is it up: every service healthy, a message on every venue in the last 2 min, the book switch, the backup (the lake checks SKIP until phase 004)
 	bash scripts/health.sh
 
-backup:  ## Dump the catalog and Airflow databases to K2_BACKUP_DIR (default ~/k2-backup); the lake table copy SKIPs until phase 002; read-only against the stack
+backup:  ## Dump the catalog and Airflow databases, then copy the live release's backup set (restore tables at their ref, landings, the releases root) in tools with the backup key, to K2_BACKUP_DIR/runs/<UTC>; read-only against the stack
 	bash scripts/backup-lake.sh
 
 # The owner runs this, once, from the main checkout: the unit runs the script from
@@ -45,7 +45,7 @@ logs:  ## Tail all service logs
 ps:  ## Show service status
 	docker compose ps
 
-test: test-python test-rust test-clickhouse test-trino test-dbt test-notebooks test-k2gen test-airflow  ## Run all unit tests
+test: test-python test-rust test-clickhouse test-trino test-dbt test-notebooks test-k2gen test-airflow test-connectors test-api test-platform  ## Run all unit tests
 
 # One recipe line per gate, not prerequisites: recipe lines run in order and
 # stop at the first failure even under `make -j`, where prerequisites would not
@@ -99,7 +99,7 @@ test-clickhouse:  ## gold schema semantics on a throwaway clickhouse:24.3 (OHLCV
 test-trino:  ## The rules suite on a throwaway lake (Trino over TLS, Lakekeeper, MinIO), no stack: a release compiled from fixtures starts, each role sees exactly its policy, the base is fenced, a negative control fails
 	bash scripts/trino-rules-test.sh
 
-test-dbt:  ## dbt/ with no stack and no Trino: sqlfluff lint, dbt parse and compile, the manifest check (scripts/dbt-test.sh); the build on a throwaway Trino SKIPs until phase 002 brings a model
+test-dbt:  ## dbt/: sqlfluff lint, dbt parse and compile, the manifest check, then each compiled product built with its tests on a throwaway lake and its results table read back (scripts/dbt-test.sh; needs Docker, about 75 s)
 	bash scripts/dbt-test.sh
 
 test-rust:  ## Rust capture unit tests (runs in rust:1.100.0-bookworm; no local cargo needed)
@@ -150,7 +150,7 @@ check-alerts:  ## promtool: syntax-check every rule file and run the alert unit 
 
 # platform/k2gen is checked with the ruff and mypy pinned in its own lock, as CI's contracts job does.
 lint:  ## Ruff over docker/lake, the Airflow image tests, the gate scripts and other scripts/ Python, and the tests; ruff and mypy (strict) over platform/k2gen
-	uv run --no-project --with ruff==0.17.6 ruff check docker/lake docker/airflow scripts/screenshots scripts/check_docs.py scripts/check-budget.py scripts/check-env.py scripts/make-synthetic-fixtures.py scripts/principal-secret.py scripts/deploy.py scripts/access_verify.py scripts/trino_rules_test.py scripts/trino_rules_c1_test.py scripts/verify docker/tools tests
+	uv run --no-project --with ruff==0.17.6 ruff check docker/lake docker/airflow scripts/screenshots scripts/check_docs.py scripts/check-budget.py scripts/check-env.py scripts/make-synthetic-fixtures.py scripts/principal-secret.py scripts/engine-keys.py scripts/backup_lake.py scripts/deploy.py scripts/access_verify.py scripts/trino_rules_test.py scripts/trino_rules_c1_test.py scripts/verify docker/tools docker/fetch docker/dbt-runner platform/runs platform/catalog-site domains tests
 	cd platform/k2gen && uv run --locked -q ruff check . && uv run --locked -q mypy
 
 # Stood down, not deleted: the old lake ingest, the tables these gates read and
@@ -177,7 +177,7 @@ screenshots:  ## Capture every dashboard and console into docs/images/dashboards
 	AIRFLOW_PASSWORD=$$(docker exec k2-airflow-api-server cat /opt/airflow/simple_auth_manager_passwords.json.generated \
 	  | python3 -c 'import json, sys; print(json.load(sys.stdin)["admin"])') && export AIRFLOW_PASSWORD && \
 	docker run --rm --network host --ipc=host --user $$(id -u):$$(id -g) -e HOME=/tmp \
-	  -e GRAFANA_PASSWORD -e MINIO_ROOT_USER -e MINIO_ROOT_PASSWORD -e AIRFLOW_PASSWORD \
+	  -e GRAFANA_PASSWORD -e AIRFLOW_PASSWORD \
 	  -e K2_AIRFLOW_PORT -e K2_GIT_SHA -v "$(CURDIR)":/repo -w /repo k2-screenshots:1.65.2 \
 	  python3 scripts/screenshots/capture.py $(if $(ONLY),--only $(ONLY),)
 

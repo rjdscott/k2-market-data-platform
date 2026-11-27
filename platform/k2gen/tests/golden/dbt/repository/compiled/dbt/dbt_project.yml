@@ -10,7 +10,7 @@
 #   contract enforced: each model's columns and types are its ODCS contract's (_models.yml).
 #   populate_cache false: dbt looks up only the relations a node needs; a builder sees no other
 #     product's namespaces, so listing every schema of the project would fail.
-#   on-run-end k2_results: every test of the run, one row each (a stub until phase 002).
+#   on-run-end k2_results: every test of the run, one row each, into <fence>__base.dq_test_results.
 # Each product folder is built into <domain>_build.<fence>__base, as dbt_<fence>, the only
 # principal that writes there; macros/k2_naming.sql takes the schema as written.
 name: k2
@@ -40,13 +40,31 @@ models:
     +on_schema_change: append_new_columns
     +contract:
       enforced: true
+    fx_reference:
+      ecb_fx_rates:
+        +database: fx_reference_build
+        +schema: ecb_fx_rates__base
     governance:
       access_canary:
         +database: governance_build
         +schema: access_canary__base
+      quality_results:
+        +database: governance_build
+        +schema: quality_results__base
+    reference_data:
+      calendars:
+        +database: reference_data_build
+        +schema: calendars__base
+      currency_master:
+        +database: reference_data_build
+        +schema: currency_master__base
 seeds:
   k2:
     governance:
       access_canary:
         +database: governance_build
         +schema: access_canary__base
+    reference_data:
+      calendars:
+        +database: reference_data_build
+        +schema: calendars__base

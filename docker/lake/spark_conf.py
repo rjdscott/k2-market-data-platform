@@ -129,12 +129,32 @@ KAFKA_BROKERS = os.environ.get("K2_BROKERS", "redpanda:9092")
 DRIVER_MEMORY = os.environ.get("K2_LAKE_DRIVER_MEMORY", "1536m")
 
 
-def lake_session(app_name: str, driver_memory: str = DRIVER_MEMORY) -> SparkSession:
-    """Spark session wired to the Lakekeeper REST catalog over MinIO."""
-    access_key = os.environ["MINIO_ROOT_USER"]
-    secret_key = os.environ["MINIO_ROOT_PASSWORD"]
+# The engine key a session signs with, by the NAMES of its two variables: Spark's own unless a
+# caller names another (expire.py names the maintenance key). Each engine's MinIO user holds only
+# its policy (docker/lake/minio/policies/), and with remote signing off that key is what MinIO checks.
+SPARK_KEY = ("K2_SPARK_S3_ACCESS_KEY", "K2_SPARK_S3_SECRET_KEY")
+BUILD_SUFFIX = "_build"  # k2gen model.build_catalog: <domain>_build writes warehouse <domain>
 
-    return (
+
+def warehouse_of(catalog: str) -> str:
+    """The warehouse a Spark catalog opens: `lake` the lake's own, `<domain>_build` the domain's."""
+    if catalog == CATALOG:
+        return WAREHOUSE
+    if catalog.endswith(BUILD_SUFFIX) and len(catalog) > len(BUILD_SUFFIX):
+        return catalog.removesuffix(BUILD_SUFFIX)
+    raise ValueError(f"{catalog!r} is neither {CATALOG!r} nor a <domain>{BUILD_SUFFIX} catalog")
+
+
+def lake_session(app_name: str, driver_memory: str = DRIVER_MEMORY, key: tuple[str, str] = SPARK_KEY,
+                 catalogs: list[str] | None = None) -> SparkSession:
+    """Spark session wired to the Lakekeeper REST catalog over MinIO: one Iceberg catalog per name
+    in `catalogs` (default the `lake` catalog alone), each over its warehouse (warehouse_of), each
+    signing with the pair whose variable names `key` gives. The values go into the session's conf
+    only, which the image redacts (tests/test_spark_redaction.py), and are never printed."""
+    access_key, secret_key = os.environ[key[0]], os.environ[key[1]]
+    names = catalogs or [CATALOG]
+
+    builder = (
         SparkSession.builder.appName(app_name)
         # Read by pyspark BEFORE it launches the gateway JVM, so this really is
         # the heap and not just a reported value: with 1536m set here the driver
@@ -144,17 +164,22 @@ def lake_session(app_name: str, driver_memory: str = DRIVER_MEMORY) -> SparkSess
             "spark.sql.extensions",
             "org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions",
         )
-        .config(f"spark.sql.catalog.{CATALOG}", "org.apache.iceberg.spark.SparkCatalog")
-        .config(f"spark.sql.catalog.{CATALOG}.type", "rest")
-        .config(f"spark.sql.catalog.{CATALOG}.uri", CATALOG_URI)
-        .config(f"spark.sql.catalog.{CATALOG}.warehouse", WAREHOUSE)
-        .config(f"spark.sql.catalog.{CATALOG}.io-impl", "org.apache.iceberg.aws.s3.S3FileIO")
-        .config(f"spark.sql.catalog.{CATALOG}.s3.endpoint", S3_ENDPOINT)
-        .config(f"spark.sql.catalog.{CATALOG}.s3.path-style-access", S3_PATH_STYLE)
-        .config(f"spark.sql.catalog.{CATALOG}.s3.access-key-id", access_key)
-        .config(f"spark.sql.catalog.{CATALOG}.s3.secret-access-key", secret_key)
-        .config(f"spark.sql.catalog.{CATALOG}.s3.region", S3_REGION)
-        .config("spark.sql.defaultCatalog", CATALOG)
+    )
+    for name in names:
+        builder = (
+            builder.config(f"spark.sql.catalog.{name}", "org.apache.iceberg.spark.SparkCatalog")
+            .config(f"spark.sql.catalog.{name}.type", "rest")
+            .config(f"spark.sql.catalog.{name}.uri", CATALOG_URI)
+            .config(f"spark.sql.catalog.{name}.warehouse", warehouse_of(name))
+            .config(f"spark.sql.catalog.{name}.io-impl", "org.apache.iceberg.aws.s3.S3FileIO")
+            .config(f"spark.sql.catalog.{name}.s3.endpoint", S3_ENDPOINT)
+            .config(f"spark.sql.catalog.{name}.s3.path-style-access", S3_PATH_STYLE)
+            .config(f"spark.sql.catalog.{name}.s3.access-key-id", access_key)
+            .config(f"spark.sql.catalog.{name}.s3.secret-access-key", secret_key)
+            .config(f"spark.sql.catalog.{name}.s3.region", S3_REGION)
+        )
+    return (
+        builder.config("spark.sql.defaultCatalog", CATALOG if CATALOG in names else names[0])
         # Pinned, not inherited from the image's TZ. The archived maintenance
         # job showed why: its expiry built `older_than => TIMESTAMP '...'` from
         # a UTC datetime, which Spark interprets in the session zone, while its

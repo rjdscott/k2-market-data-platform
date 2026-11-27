@@ -1,0 +1,1 @@
+SELECT "code", "numeric_code", "name", "minor_units", "is_fund" FROM "reference_data"."currency_master__base"."currency" FOR VERSION AS OF 'audited' WHERE EXISTS (SELECT 1 FROM "reference_data"."currency_master__base"."currency$refs" WHERE "name" = 'audited' AND "type" = 'TAG')

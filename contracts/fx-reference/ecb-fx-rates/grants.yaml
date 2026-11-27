@@ -1,0 +1,6 @@
+# The first reader outside fx-reference-team (step W2-9), after the owner recorded the ECB's terms
+# in the product file (ADR-055 part 5). Only gold_eur_rates_daily offers a role: silver_rates and
+# bronze stay owner-only.
+grants:
+  - principal: p.analyst-a
+    role: full_reader

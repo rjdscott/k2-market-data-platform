@@ -131,6 +131,13 @@ time and the final status. It holds no storage key and is never on `k2-catalog`.
 | 20 | refused under ADR-036 part 3 (host, redirect, address, size); the message names scheme and host only | nothing |
 | 30 | parse failed; the bytes are kept and land, and the batch fails at bronze | `raw.<ext>`, `fetch.json` |
 
+Added 2026-11-27: after a successful parse, fetch also writes `audits.json`,
+`{"audits": [{"name", "passed", "failures", "detail"}]}`, one entry per parser audit the bronze
+tables declare (`def <audit>(rows: list[dict]) -> list[str]`, in the parser module, run in fetch);
+the Spark audit task reads it into `audit_checks`, and a declared audit with no entry fails.
+
+Added 2026-11-27: fetch runs on `k2-egress` alone, a compose network no other service joins (its kind in `oneshots.json` names it, and only fetch may), and sees only `/spool/<dagId>` of the spool volume.
+
 Any other exit is a task error. The Spark task recomputes the sha256 from `raw.<ext>`, refuses a
 mismatch, writes the object by conditional PUT to `model.landing_key`, and adds one row to
 `lake.<fence>.landing_files` (`model.PLATFORM_TABLES`).
@@ -148,6 +155,9 @@ k2-dbt build --release <id> --product <domain>.<product> --run-id <dag_id>/<run_
   `/run/k2-secrets/tls/ca.pem`, read by the wrapper alone. The dbt subprocess's environment
   carries only the builder's credentials, as `dbt/profiles.yml` names them; dbt's `target/` is
   `/spool/<dagId>/<runId>/dbt/`.
+  Changed 2026-11-27: dbt's target and logs are under `/tmp` in the container (`/tmp/k2-dbt`,
+  the one-shot's tmpfs, `docker/dbt-runner/k2_dbt.py`), never the spool, which `dbt-runner` does
+  not mount.
 - Its vars to dbt: `k2_inputs`, `{"<fence>/<table>": {"snapshot": <integer id>}}` for every input
   (`dbt/macros/k2_input.sql` refuses a missing, null or non-integer id at parse), and
   `k2_run_id`, which the results hook writes on every test row beside dbt's `invocation_id`.

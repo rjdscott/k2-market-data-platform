@@ -43,3 +43,8 @@ principals:
     kind: person
     owner: platform-team
     description: A made-up reader holding public_reader, row-scoped to region north, on the access canary.
+  # Lab readers of real products, each granted in its product's grants.yaml.
+  - id: p.analyst-a
+    kind: person
+    owner: platform-team
+    description: A named analyst reader used by the phase 003 REST checks; holds full_reader on ECB gold.

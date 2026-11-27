@@ -1,0 +1,23 @@
+{
+  "build": {
+    "engine": "dbt",
+    "outputs": [
+      "governance_build.quality_results__base.test_results"
+    ],
+    "publisher": "pub_quality_results",
+    "selector": "quality_results",
+    "writer": "dbt_quality_results"
+  },
+  "dagId": "quality_results",
+  "domain": "governance",
+  "fence": "quality_results",
+  "inputs": [],
+  "maintain": {
+    "cron": "53 5 * * *"
+  },
+  "product": "governance.quality-results",
+  "schedule": {
+    "cron": "50 * * * *"
+  },
+  "status": "active"
+}

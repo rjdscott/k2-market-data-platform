@@ -1,17 +1,22 @@
 {
   "catalogs": [
     {
-      "user": "svc\\.platform",
+      "user": "pub_ecb_fx_rates",
+      "catalog": "fx_reference",
+      "allow": "all"
+    },
+    {
+      "user": "dbt_ecb_fx_rates|pub_ecb_fx_rates|svc\\.platform",
       "catalog": "fx_reference_build",
       "allow": "all"
     },
     {
-      "user": "pub_access_canary",
+      "user": "pub_access_canary|pub_quality_results",
       "catalog": "governance",
       "allow": "all"
     },
     {
-      "user": "dbt_access_canary|pub_access_canary|svc\\.platform|svc\\.runs",
+      "user": "dbt_access_canary|dbt_quality_results|pub_access_canary|pub_quality_results|svc\\.platform|svc\\.runs",
       "catalog": "governance_build",
       "allow": "all"
     },
@@ -26,22 +31,27 @@
       "allow": "all"
     },
     {
-      "user": "svc\\.platform",
+      "user": "pub_calendars|pub_currency_master",
+      "catalog": "reference_data",
+      "allow": "all"
+    },
+    {
+      "user": "dbt_calendars|dbt_currency_master|pub_calendars|pub_currency_master|svc\\.platform",
       "catalog": "reference_data_build",
       "allow": "all"
     },
     {
-      "user": "svc\\.platform",
+      "user": "dbt_quality_results|svc\\.api|svc\\.catalog|svc\\.platform|svc\\.runs",
       "catalog": "fx_reference",
       "allow": "read-only"
     },
     {
-      "user": "svc\\.api|svc\\.catalog|svc\\.platform|svc\\.runs",
+      "user": "dbt_quality_results|svc\\.api|svc\\.catalog|svc\\.platform|svc\\.runs",
       "catalog": "governance",
       "allow": "read-only"
     },
     {
-      "user": "svc\\.platform",
+      "user": "dbt_currency_master|dbt_ecb_fx_rates|svc\\.api|svc\\.catalog|svc\\.platform|svc\\.runs",
       "catalog": "lake",
       "allow": "read-only"
     },
@@ -56,13 +66,18 @@
       "allow": "read-only"
     },
     {
-      "user": "svc\\.platform",
+      "user": "dbt_ecb_fx_rates|dbt_quality_results|svc\\.api|svc\\.catalog|svc\\.platform|svc\\.runs",
       "catalog": "reference_data",
       "allow": "read-only"
     },
     {
-      "user": "dbt_access_canary|svc\\.platform",
+      "user": "dbt_access_canary|dbt_calendars|dbt_currency_master|dbt_ecb_fx_rates|dbt_quality_results|svc\\.platform",
       "catalog": "system",
+      "allow": "read-only"
+    },
+    {
+      "group": "ecb_fx_rates__full_reader",
+      "catalog": "fx_reference",
       "allow": "read-only"
     },
     {
@@ -71,7 +86,12 @@
       "allow": "read-only"
     },
     {
-      "group": "access_canary__delayed_reader|access_canary__full_reader|access_canary__public_reader",
+      "group": "calendars__full_reader",
+      "catalog": "reference_data",
+      "allow": "read-only"
+    },
+    {
+      "group": "access_canary__delayed_reader|access_canary__full_reader|access_canary__public_reader|calendars__full_reader|ecb_fx_rates__full_reader",
       "catalog": "system",
       "allow": "read-only"
     },
@@ -82,6 +102,18 @@
   ],
   "schemas": [
     {
+      "user": "dbt_ecb_fx_rates",
+      "catalog": "fx_reference_build",
+      "schema": "ecb_fx_rates__base",
+      "owner": true
+    },
+    {
+      "user": "pub_ecb_fx_rates",
+      "catalog": "fx_reference_build",
+      "schema": "ecb_fx_rates",
+      "owner": true
+    },
+    {
       "user": "dbt_access_canary",
       "catalog": "governance_build",
       "schema": "access_canary__base",
@@ -91,6 +123,42 @@
       "user": "pub_access_canary",
       "catalog": "governance_build",
       "schema": "access_canary",
+      "owner": true
+    },
+    {
+      "user": "dbt_quality_results",
+      "catalog": "governance_build",
+      "schema": "quality_results__base",
+      "owner": true
+    },
+    {
+      "user": "pub_quality_results",
+      "catalog": "governance_build",
+      "schema": "quality_results",
+      "owner": true
+    },
+    {
+      "user": "dbt_calendars",
+      "catalog": "reference_data_build",
+      "schema": "calendars__base",
+      "owner": true
+    },
+    {
+      "user": "pub_calendars",
+      "catalog": "reference_data_build",
+      "schema": "calendars",
+      "owner": true
+    },
+    {
+      "user": "dbt_currency_master",
+      "catalog": "reference_data_build",
+      "schema": "currency_master__base",
+      "owner": true
+    },
+    {
+      "user": "pub_currency_master",
+      "catalog": "reference_data_build",
+      "schema": "currency_master",
       "owner": true
     },
     {
@@ -110,14 +178,30 @@
     },
     {
       "user": "svc\\.platform",
-      "catalog": "governance_build",
-      "schema": "access_canary__base",
+      "catalog": "fx_reference_build",
+      "schema": "ecb_fx_rates__base",
       "privileges": [
         "SELECT"
       ]
     },
     {
-      "user": "dbt_access_canary",
+      "user": "svc\\.platform",
+      "catalog": "governance_build",
+      "schema": "access_canary__base|quality_results__base",
+      "privileges": [
+        "SELECT"
+      ]
+    },
+    {
+      "user": "svc\\.platform",
+      "catalog": "reference_data_build",
+      "schema": "calendars__base|currency_master__base",
+      "privileges": [
+        "SELECT"
+      ]
+    },
+    {
+      "user": "dbt_access_canary|dbt_calendars|dbt_currency_master|dbt_ecb_fx_rates|dbt_quality_results",
       "catalog": "system",
       "schema": "metadata",
       "table": "analyze_properties|catalogs|column_properties|materialized_view_properties|materialized_views|schema_properties|table_comments|table_properties",
@@ -126,7 +210,7 @@
       ]
     },
     {
-      "group": "access_canary__delayed_reader|access_canary__full_reader|access_canary__public_reader",
+      "group": "access_canary__delayed_reader|access_canary__full_reader|access_canary__public_reader|calendars__full_reader|ecb_fx_rates__full_reader",
       "catalog": "system",
       "schema": "jdbc",
       "table": "attributes|catalogs|columns|procedure_columns|procedures|pseudo_columns|schemas|super_tables|super_types|table_types|tables|types|udts",
@@ -135,12 +219,62 @@
       ]
     },
     {
-      "group": "access_canary__delayed_reader|access_canary__full_reader|access_canary__public_reader",
+      "group": "access_canary__delayed_reader|access_canary__full_reader|access_canary__public_reader|calendars__full_reader|ecb_fx_rates__full_reader",
       "catalog": "system",
       "schema": "metadata",
       "table": "analyze_properties|catalogs|column_properties|materialized_view_properties|materialized_views|schema_properties|table_comments|table_properties",
       "privileges": [
         "SELECT"
+      ]
+    },
+    {
+      "user": "dbt_ecb_fx_rates",
+      "catalog": "fx_reference_build",
+      "schema": "ecb_fx_rates__base",
+      "privileges": [
+        "SELECT",
+        "INSERT",
+        "DELETE",
+        "UPDATE",
+        "OWNERSHIP"
+      ]
+    },
+    {
+      "user": "dbt_ecb_fx_rates",
+      "catalog": "lake",
+      "schema": "ecb_fx_rates",
+      "table": "bronze_daily",
+      "privileges": [
+        "SELECT"
+      ]
+    },
+    {
+      "user": "dbt_ecb_fx_rates",
+      "catalog": "reference_data",
+      "schema": "calendars__base",
+      "table": "target_days",
+      "privileges": [
+        "SELECT"
+      ]
+    },
+    {
+      "user": "pub_ecb_fx_rates",
+      "catalog": "fx_reference_build",
+      "schema": "ecb_fx_rates",
+      "table": "gold_eur_rates_daily|silver_rates",
+      "privileges": [
+        "SELECT",
+        "OWNERSHIP"
+      ]
+    },
+    {
+      "user": "pub_ecb_fx_rates",
+      "catalog": "fx_reference",
+      "schema": "ecb_fx_rates__base",
+      "table": "gold_eur_rates_daily|gold_eur_rates_daily\\$refs|silver_rates|silver_rates\\$refs",
+      "privileges": [
+        "SELECT",
+        "GRANT_SELECT"
       ]
     },
     {
@@ -176,6 +310,156 @@
       ]
     },
     {
+      "user": "dbt_quality_results",
+      "catalog": "governance_build",
+      "schema": "quality_results__base",
+      "privileges": [
+        "SELECT",
+        "INSERT",
+        "DELETE",
+        "UPDATE",
+        "OWNERSHIP"
+      ]
+    },
+    {
+      "user": "dbt_quality_results",
+      "catalog": "fx_reference",
+      "schema": "ecb_fx_rates__base",
+      "table": "dq_test_results",
+      "privileges": [
+        "SELECT"
+      ]
+    },
+    {
+      "user": "dbt_quality_results",
+      "catalog": "governance",
+      "schema": "access_canary__base",
+      "table": "dq_test_results",
+      "privileges": [
+        "SELECT"
+      ]
+    },
+    {
+      "user": "dbt_quality_results",
+      "catalog": "governance",
+      "schema": "quality_results__base",
+      "table": "dq_test_results",
+      "privileges": [
+        "SELECT"
+      ]
+    },
+    {
+      "user": "dbt_quality_results",
+      "catalog": "reference_data",
+      "schema": "calendars__base",
+      "table": "dq_test_results",
+      "privileges": [
+        "SELECT"
+      ]
+    },
+    {
+      "user": "dbt_quality_results",
+      "catalog": "reference_data",
+      "schema": "currency_master__base",
+      "table": "dq_test_results",
+      "privileges": [
+        "SELECT"
+      ]
+    },
+    {
+      "user": "pub_quality_results",
+      "catalog": "governance_build",
+      "schema": "quality_results",
+      "table": "test_results",
+      "privileges": [
+        "SELECT",
+        "OWNERSHIP"
+      ]
+    },
+    {
+      "user": "pub_quality_results",
+      "catalog": "governance",
+      "schema": "quality_results__base",
+      "table": "test_results|test_results\\$refs",
+      "privileges": [
+        "SELECT",
+        "GRANT_SELECT"
+      ]
+    },
+    {
+      "user": "dbt_calendars",
+      "catalog": "reference_data_build",
+      "schema": "calendars__base",
+      "privileges": [
+        "SELECT",
+        "INSERT",
+        "DELETE",
+        "UPDATE",
+        "OWNERSHIP"
+      ]
+    },
+    {
+      "user": "pub_calendars",
+      "catalog": "reference_data_build",
+      "schema": "calendars",
+      "table": "target_days",
+      "privileges": [
+        "SELECT",
+        "OWNERSHIP"
+      ]
+    },
+    {
+      "user": "pub_calendars",
+      "catalog": "reference_data",
+      "schema": "calendars__base",
+      "table": "target_days|target_days\\$refs",
+      "privileges": [
+        "SELECT",
+        "GRANT_SELECT"
+      ]
+    },
+    {
+      "user": "dbt_currency_master",
+      "catalog": "reference_data_build",
+      "schema": "currency_master__base",
+      "privileges": [
+        "SELECT",
+        "INSERT",
+        "DELETE",
+        "UPDATE",
+        "OWNERSHIP"
+      ]
+    },
+    {
+      "user": "dbt_currency_master",
+      "catalog": "lake",
+      "schema": "currency_master",
+      "table": "bronze_currencies",
+      "privileges": [
+        "SELECT"
+      ]
+    },
+    {
+      "user": "pub_currency_master",
+      "catalog": "reference_data_build",
+      "schema": "currency_master",
+      "table": "currency",
+      "privileges": [
+        "SELECT",
+        "OWNERSHIP"
+      ]
+    },
+    {
+      "user": "pub_currency_master",
+      "catalog": "reference_data",
+      "schema": "currency_master__base",
+      "table": "currency|currency\\$refs",
+      "privileges": [
+        "SELECT",
+        "GRANT_SELECT"
+      ]
+    },
+    {
       "user": "svc\\.platform",
       "catalog": "governance_build",
       "schema": "run_records",
@@ -205,10 +489,91 @@
       ]
     },
     {
+      "user": "svc\\.catalog",
+      "catalog": "governance",
+      "schema": "quality_results",
+      "table": "test_results",
+      "privileges": [
+        "SELECT"
+      ]
+    },
+    {
+      "user": "svc\\.api|svc\\.catalog|svc\\.platform|svc\\.runs",
+      "catalog": "lake",
+      "schema": "ecb_fx_rates",
+      "table": "bronze_daily\\$refs",
+      "privileges": [
+        "SELECT"
+      ]
+    },
+    {
+      "user": "svc\\.api|svc\\.catalog|svc\\.platform|svc\\.runs",
+      "catalog": "fx_reference",
+      "schema": "ecb_fx_rates__base",
+      "table": "gold_eur_rates_daily\\$refs",
+      "privileges": [
+        "SELECT"
+      ]
+    },
+    {
+      "user": "svc\\.api|svc\\.catalog|svc\\.platform|svc\\.runs",
+      "catalog": "fx_reference",
+      "schema": "ecb_fx_rates__base",
+      "table": "silver_rates\\$refs",
+      "privileges": [
+        "SELECT"
+      ]
+    },
+    {
       "user": "svc\\.api|svc\\.catalog|svc\\.platform|svc\\.runs",
       "catalog": "governance",
       "schema": "access_canary__base",
       "table": "events\\$refs",
+      "privileges": [
+        "SELECT"
+      ]
+    },
+    {
+      "user": "svc\\.api|svc\\.catalog|svc\\.platform|svc\\.runs",
+      "catalog": "governance",
+      "schema": "quality_results__base",
+      "table": "test_results\\$refs",
+      "privileges": [
+        "SELECT"
+      ]
+    },
+    {
+      "user": "svc\\.api|svc\\.catalog|svc\\.platform|svc\\.runs",
+      "catalog": "reference_data",
+      "schema": "calendars__base",
+      "table": "target_days\\$refs",
+      "privileges": [
+        "SELECT"
+      ]
+    },
+    {
+      "user": "svc\\.api|svc\\.catalog|svc\\.platform|svc\\.runs",
+      "catalog": "lake",
+      "schema": "currency_master",
+      "table": "bronze_currencies\\$refs",
+      "privileges": [
+        "SELECT"
+      ]
+    },
+    {
+      "user": "svc\\.api|svc\\.catalog|svc\\.platform|svc\\.runs",
+      "catalog": "reference_data",
+      "schema": "currency_master__base",
+      "table": "currency\\$refs",
+      "privileges": [
+        "SELECT"
+      ]
+    },
+    {
+      "group": "ecb_fx_rates__full_reader",
+      "catalog": "fx_reference",
+      "schema": "ecb_fx_rates",
+      "table": "gold_eur_rates_daily",
       "privileges": [
         "SELECT"
       ]
@@ -247,11 +612,20 @@
         "SELECT"
       ],
       "filter": "(\"region\" IN ('north'))"
+    },
+    {
+      "group": "calendars__full_reader",
+      "catalog": "reference_data",
+      "schema": "calendars",
+      "table": "target_days",
+      "privileges": [
+        "SELECT"
+      ]
     }
   ],
   "system_session_properties": [
     {
-      "user": "dbt_access_canary|pub_access_canary|svc\\.catalog|svc\\.platform|svc\\.runs",
+      "user": "dbt_access_canary|dbt_calendars|dbt_currency_master|dbt_ecb_fx_rates|dbt_quality_results|pub_access_canary|pub_calendars|pub_currency_master|pub_ecb_fx_rates|pub_quality_results|svc\\.catalog|svc\\.platform|svc\\.runs",
       "allow": true
     }
   ],
@@ -261,7 +635,7 @@
       "allow": true
     },
     {
-      "user": "dbt_access_canary|pub_access_canary|svc\\.catalog|svc\\.runs",
+      "user": "dbt_access_canary|dbt_calendars|dbt_currency_master|dbt_ecb_fx_rates|dbt_quality_results|pub_access_canary|pub_calendars|pub_currency_master|pub_ecb_fx_rates|pub_quality_results|svc\\.catalog|svc\\.runs",
       "property": "statistics_enabled",
       "allow": true
     }
@@ -276,7 +650,7 @@
       ]
     },
     {
-      "user": "dbt_access_canary|k2_release_000000000000|p\\.canary\\-delayed|p\\.canary\\-full|p\\.canary\\-scoped|pub_access_canary|svc\\.api|svc\\.catalog|svc\\.runs",
+      "user": "dbt_access_canary|dbt_calendars|dbt_currency_master|dbt_ecb_fx_rates|dbt_quality_results|k2_release_000000000000|p\\.analyst\\-a|p\\.canary\\-delayed|p\\.canary\\-full|p\\.canary\\-scoped|pub_access_canary|pub_calendars|pub_currency_master|pub_ecb_fx_rates|pub_quality_results|svc\\.api|svc\\.catalog|svc\\.runs",
       "allow": [
         "execute"
       ]
@@ -285,7 +659,7 @@
   "impersonation": [
     {
       "original_user": "svc\\.api",
-      "new_user": "p\\.canary\\-delayed|p\\.canary\\-full|p\\.canary\\-scoped",
+      "new_user": "p\\.analyst\\-a|p\\.canary\\-delayed|p\\.canary\\-full|p\\.canary\\-scoped",
       "allow": true
     }
   ],

@@ -1,0 +1,261 @@
+{
+  "id": "sensor-net.station-readings",
+  "name": "station-readings",
+  "domain": "sensor-net",
+  "version": "1.0.0",
+  "status": "active",
+  "type": "sourceAligned",
+  "owner": "sensor-team",
+  "purpose": "Synthetic station readings, one typed row per reading, landed as the made-up feed sent them.",
+  "limitations": "Synthetic; no real station or measurement.",
+  "terms": {
+    "redistribution": "allowed",
+    "attribution": "Source: a synthetic feed"
+  },
+  "licence": "https://data.example.org/terms",
+  "keywords": [
+    "synthetic",
+    "weather"
+  ],
+  "issued": "2026-01-01T00:00:00Z",
+  "periodicity": "15 * * * *",
+  "productFile": "documents/contracts/sensor-net/station-readings/product.odps.yaml",
+  "support": [
+    {
+      "channel": "sensor-team-requests",
+      "url": "mailto:sensor-team@example.org",
+      "tool": "email",
+      "scope": "issues",
+      "description": "Questions and access requests, answered by the made-up sensor team."
+    }
+  ],
+  "links": [
+    {
+      "type": "licence",
+      "url": "https://data.example.org/terms"
+    }
+  ],
+  "inputs": [],
+  "outputs": [
+    {
+      "contractId": "sensor-net.station-readings.bronze_readings",
+      "relation": "lake.station_readings.bronze_readings",
+      "build": "connector",
+      "testedRef": "main",
+      "contractFile": "documents/contracts/sensor-net/station-readings/bronze_readings.odcs.yaml",
+      "layer": "bronze",
+      "version": "1.0.0",
+      "purpose": "One row per line of a landed file, typed as the synthetic feed wrote it.",
+      "columns": [
+        {
+          "name": "station_id",
+          "type": "varchar",
+          "required": true,
+          "primaryKey": true,
+          "description": "The made-up station's code.",
+          "logicalType": "string",
+          "primaryKeyPosition": 1
+        },
+        {
+          "name": "read_at",
+          "type": "timestamp(6) with time zone",
+          "required": true,
+          "primaryKey": true,
+          "description": "When the station took the reading.",
+          "time": "event",
+          "primaryKeyPosition": 2
+        },
+        {
+          "name": "value_text",
+          "type": "varchar",
+          "required": true,
+          "primaryKey": false,
+          "description": "The reading as the file wrote it."
+        },
+        {
+          "name": "region",
+          "type": "varchar",
+          "required": false,
+          "primaryKey": false,
+          "description": "The station's region."
+        },
+        {
+          "name": "operator_note",
+          "type": "varchar",
+          "required": false,
+          "primaryKey": false,
+          "description": "Free text the made-up operator attached."
+        },
+        {
+          "name": "source_file_sha256",
+          "type": "varchar",
+          "required": true,
+          "primaryKey": true,
+          "description": "The landed file's sha256.",
+          "primaryKeyPosition": 3
+        }
+      ],
+      "retentionDays": 7,
+      "quality": [
+        {
+          "name": "value_parses",
+          "type": "custom",
+          "description": "Every value_text parses as a decimal."
+        }
+      ],
+      "roles": [],
+      "readers": [],
+      "dbtDocs": null
+    },
+    {
+      "contractId": "sensor-net.station-readings.silver_readings",
+      "relation": "sensor_net.station_readings.silver_readings",
+      "build": "dbt",
+      "testedRef": "audited",
+      "contractFile": "documents/contracts/sensor-net/station-readings/silver_readings.odcs.yaml",
+      "layer": "silver",
+      "version": "1.0.0",
+      "purpose": "One row per station and reading time, the value as a decimal.",
+      "columns": [
+        {
+          "name": "station_id",
+          "type": "varchar",
+          "required": true,
+          "primaryKey": true,
+          "description": "The made-up station's code.",
+          "primaryKeyPosition": 1
+        },
+        {
+          "name": "read_at",
+          "type": "timestamp(6) with time zone",
+          "required": true,
+          "primaryKey": true,
+          "description": "When the station took the reading.",
+          "time": "event",
+          "primaryKeyPosition": 2
+        },
+        {
+          "name": "value",
+          "type": "decimal(12,3)",
+          "required": true,
+          "primaryKey": false,
+          "description": "The reading.",
+          "unit": "degree Celsius"
+        },
+        {
+          "name": "region",
+          "type": "varchar",
+          "required": true,
+          "primaryKey": true,
+          "description": "The station's region.",
+          "primaryKeyPosition": 3
+        },
+        {
+          "name": "operator_note",
+          "type": "varchar",
+          "required": false,
+          "primaryKey": false,
+          "description": "Free text the made-up operator attached."
+        }
+      ],
+      "partitioning": [
+        "day(read_at)",
+        "region"
+      ],
+      "retentionDays": 7,
+      "sla": [
+        {
+          "property": "latency",
+          "value": 90,
+          "unit": "min",
+          "element": "silver_readings.read_at"
+        }
+      ],
+      "quality": [
+        {
+          "name": "readings_built",
+          "type": "library",
+          "description": "A build holds at least one reading.",
+          "metric": "rowCount"
+        },
+        {
+          "name": "one_reading_per_key",
+          "type": "library",
+          "description": "No two rows share a station and a reading time.",
+          "metric": "duplicateValues"
+        },
+        {
+          "name": "values_in_range",
+          "type": "sql",
+          "description": "Every made-up reading lies between -90 and 60 degrees Celsius."
+        }
+      ],
+      "roles": [
+        {
+          "role": "full_reader",
+          "inWords": "every row and column"
+        },
+        {
+          "role": "delayed_reader",
+          "policies": {
+            "delay": {
+              "column": "read_at",
+              "minutes": 20
+            },
+            "mask": [
+              "operator_note"
+            ],
+            "rowScope": {
+              "column": "region",
+              "values": [
+                "north",
+                "south"
+              ]
+            }
+          },
+          "inWords": "only rows whose region is north or south and whose read_at is at least 20 minutes old; operator_note read as null",
+          "approvers": "sensor-team"
+        }
+      ],
+      "readers": [
+        {
+          "principal": "p.analyst-full",
+          "role": "full_reader"
+        },
+        {
+          "principal": "p.analyst-delayed",
+          "role": "delayed_reader"
+        }
+      ],
+      "dbtDocs": "dbt-docs/#!/model/model.k2.station_readings__silver_readings"
+    }
+  ],
+  "examples": [
+    {
+      "description": "The newest reading per station.",
+      "sql": "SELECT station_id, max(read_at) FROM sensor_net.station_readings.silver_readings GROUP BY 1"
+    }
+  ],
+  "joinKeys": [],
+  "lineage": {
+    "nodes": [
+      {
+        "id": "sensor-net.station-readings.bronze_readings",
+        "product": "sensor-net.station-readings",
+        "relation": "lake.station_readings.bronze_readings"
+      },
+      {
+        "id": "sensor-net.station-readings.silver_readings",
+        "product": "sensor-net.station-readings",
+        "relation": "sensor_net.station_readings.silver_readings"
+      }
+    ],
+    "edges": [
+      {
+        "from": "sensor-net.station-readings.bronze_readings",
+        "to": "sensor-net.station-readings.silver_readings"
+      }
+    ]
+  },
+  "tag": "v3.0.0-alpha.3-rc.1"
+}

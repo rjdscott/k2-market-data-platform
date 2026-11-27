@@ -274,3 +274,97 @@ guarded view never compared equal (`catalog_drift.tokens` now drops exactly the 
 cannot change a meaning); `identity.sh` read only `--etc-dir <path>`, not A1's `--etc-dir=<path>`; the
 access suite did not read people's passwords where the throwaway lake now files them (handled in
 deploy's own call path, its owner fixing the reader).
+
+## Outcome (2026-11-27, phases 002 and 003: the run path behind the pointers)
+
+The decision stands. With product pipelines, run code and `k2-api` behind the pointers, the sequence in
+`scripts/deploy.py` changed in seven ways, each held by a test in `tests/test_deploy.py` against a fake
+stack and the rehearsal (`make deploy-rehearsal`; `FAST=1` is the one `make spine-e2e` runs):
+
+1. **A release carries the run code.** `platform/<repository path>` holds the DAG folder
+   (`docker/airflow/dags/`), the Spark scripts with `lake-init`'s script and MinIO policies
+   (`docker/lake/`), the alert rules, the parsers (`domains/`), the run-records client and the catalog
+   site generator (`model.PLATFORM_CODE`). Airflow reads its DAG folder, Prometheus its rules, and
+   `k2-api` everything through their pointers; a DAG run pins its release once, at `resolve`, so a deploy
+   mid-run leaves the run on its release. Prometheus is sent `SIGHUP` at the swap.
+2. **The drain is real.** Consequences called it a SKIP until DAGs existed. When Trino restarts or a DAG's
+   task list or code changes (`drain_need`), the DAGs affected are paused, their names written to
+   `<releases root>/deploy-paused.json` first, and their running tasks waited for, polled every 10 s up to
+   300 s (`DRAIN_WAIT_S`, half of the 10-minute deploy in the revisit triggers). Still running then
+   refuses the deploy, exit 2, and unpauses them, unless `ALLOW_RUNNING=1`, recorded as the step
+   `allow-running`. No scheduler, or no DAG, is recorded and the deploy goes on. Deploy unpauses exactly
+   what it paused once one release runs again; on exit 3 they stay paused until a rerun or `make
+   rollback` reaches done. `make rollback` does not drain: it is the way out of a bad release, and
+   waiting on that release's runs would hold it there.
+3. **`lake-init` runs the release's own script.** Its compose entrypoint is
+   `/k2/releases/${K2_LAKE_INIT_RELEASE:-pointers/trino}/platform/docker/lake/init-lake.sh`, and deploy
+   sets `K2_LAKE_INIT_RELEASE` and `K2_STORAGE_PLAN` to the target, so the storage policies applied are
+   the tag's, not the checkout's. A target that carries no such script (a release before this phase)
+   skips `lake-init` with a visible line: its warehouses exist and it never had scoped users.
+4. **`remove-<service>`.** A running service that the target declares only behind a profile is stopped
+   and removed after the swap, one record per service. This is what a rollback to a release before phase
+   003 needs, where `k2-api` was a profiled stub: without it `k2-api` kept running and verify failed on its
+   image, exit 3.
+5. **Networks are created at recreate.** Compose makes a network only for a service it starts, and
+   `k2-egress` has no compose-started member (Airflow starts `fetch` with `docker run`), so deploy creates
+   every network the release declares that is missing, with compose's own labels so a later `up` adopts it.
+6. **Preflight names every missing secret.** Every secret file the target's services mount, the build
+   principals' and publishers' password files, and those the deploy's own SQL logs in with are checked
+   before anything changes; each missing one is named with the `make` command that writes it. Before
+   this, three service password files could be absent and the deploy failed after the warehouses had
+   already changed.
+7. **`site`, after done.** The release's catalog site (`k2site.py`, in `tools` as `svc.catalog`) and dbt
+   docs (`k2-dbt docs`, which opens no connection) are written to the `k2-site` volume that `k2-api`
+   serves. A failure is recorded as step `site` and said; it never fails or rolls back the deploy. It runs
+   after a rollback too, so the site describes what is live; `make site` reruns it and `make site-install`
+   schedules it daily.
+
+Verify also asks `k2-api` which release it serves (`GET /v1/release`), and the live access suite runs in
+`tools` with each engine's storage key passed by name for that run
+([ADR-054](ADR-054-a-storage-key-per-engine-with-catalog-signing-off.md)). A ddl failure on a rerun whose
+earlier attempt went past the one-shots leaves the paused DAGs paused, since the pointers may already
+name the target.
+
+**Not yet verified:** a rollback of the live stack from this phase's release to `v3.0.0-alpha.3.2`
+by `make rollback` (tested against a fake stack only; the one live rollback to it, deploy's own at 08:34
+UTC below, ended in exit 3); a release that changes only a MinIO policy reaches MinIO only when
+`lake-init` next runs, and the plan runs it only when its compose definition or image changes.
+
+The first deploy of a release that added products failed on the live stack on 2026-11-27, at
+`views-narrow`: the step queried a new product's view as its publisher, under the old rules, which name
+neither the view nor its publisher. The rollback's verify then exited 3 on two counts: the failed
+attempt's own namespaces, which its additive DDL had created and nothing undoes, and four catalog fence
+rows. The first two are fixed. A view the release
+being moved from does not declare is left to widen once the target's rules are loaded, and the drift check
+reports what a release deployed or attempted since the live one created as `LEFT` lines, not `DRIFT`, so
+that rollback exits 1. The deploy rehearsal now has a release that adds a product, forced to fail first
+and then deployed (`scripts/verify/deploy_rehearsal.py`, section 7b). No rehearsal release had ever added
+a product before, which is why it was first seen on the live stack.
+
+The four fence rows are not fixed. Deploy runs the checkout's `scripts/verify/catalog-fence.sh` over the
+checkout's `tests/access/expectations.yaml`, whose rows expect MinIO's host ports refused and `fetch` on
+`k2-egress`; `v3.0.0-alpha.3.2` publishes MinIO on `127.0.0.1:9000` and `:9001` and declares no
+`k2-egress`, so its verify printed `FAIL host -> 127.0.0.1:9000 connected, expected refused`, the same for
+`:9001`, and `FAIL fetch -> lakekeeper:8181 network fetch absent: nothing was dialled` with its `minio:9000`
+twin. A rollback to a release before phase 002 still exits 3 there; a rollback between two releases of
+this phase does not meet it.
+
+**The deploys of 2026-11-27 on the live stack** (UTC; each deploy's own lines):
+
+- 08:33, `make deploy RELEASE=v3.0.0-alpha.4-rc.1-7d00791fc1fe ALLOW_STATEFUL=minio`, from
+  `v3.0.0-alpha.3.2-bae18019daef`: `views-narrow FAILED after 0.1 s` (the case above), then
+  `rolling back to v3.0.0-alpha.3.2-bae18019daef`; the rollback's swap, recreate (15.0 s) and rules
+  passed, `rollback-verify FAILED after 7.7 s` on the drift check and the fence, and the deploy ended
+  `exit 3: the rollback failed too: page the owner`. The pointers named `v3.0.0-alpha.3.2` again.
+- 09:58 to 10:01, `make deploy RELEASE=v3.0.0-alpha.4-rc.2-e2dcf759de67 ALLOW_STATEFUL=minio`: the plan
+  said `(also undoing attempts v3.0.0-alpha.4-rc.1-7d00791fc1fe)`, `views-narrow ok` left each new view to
+  `views-widen` as fixed above, eight services were recreated in 80.3 s, verify passed with
+  `catalog-fence: 10 PASS, 0 FAIL`, and the deploy ended `is live and verified`, exit 0 in 166 s. MinIO's
+  host ports were closed after it.
+- 10:50 to 10:51, `make deploy RELEASE=v3.0.0-alpha.4-rc.3-48ad71fba732`, no `ALLOW_STATEFUL`: nothing
+  to recreate, and the first drain that met real DAGs: `drained access_canary, calendars,
+  currency_master, ecb_fx_rates, quality_results (the DAG code moved since
+  v3.0.0-alpha.4-rc.2-e2dcf759de67) in 11 s; paused access_canary, calendars, ecb_fx_rates`, and after
+  `is live and verified`, `unpaused access_canary, calendars, ecb_fx_rates: the DAGs deploy paused`. The
+  two DAGs the operator had paused stayed paused. Exit 0 in 56 s. `make release-verify` then passed with
+  `access-verify LIVE=1 passed: {'PASS': 82, 'FAIL': 0, 'SKIP': 30}` and `catalog-fence: 10 PASS, 0 FAIL`.

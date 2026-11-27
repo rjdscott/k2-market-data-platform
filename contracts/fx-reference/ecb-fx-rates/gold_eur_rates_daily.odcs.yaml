@@ -1,0 +1,71 @@
+apiVersion: v3.2.0
+kind: DataContract
+id: fx-reference.ecb-fx-rates.gold_eur_rates_daily
+name: gold_eur_rates_daily
+version: 1.1.0
+domain: fx-reference
+description:
+  purpose: >-
+    One row per TARGET day and currency, from the currency's first published fixing to the newest
+    fixing of any currency: the day's rate, or the last published one carried for at most five
+    TARGET days when the day has none, with when the rate could first be known.
+  limitations: >-
+    A carried rate is this product's change to the ECB's data, not an ECB fixing: is_carried and
+    carried_days state it on every row, as the ECB's terms require of modified data (the
+    product's terms). Reuse cites the ECB as the source and keeps those two columns.
+team:
+  name: fx-reference-team
+schema:
+  - id: gold_eur_rates_daily
+    name: gold_eur_rates_daily
+    physicalName: ecb_fx_rates.gold_eur_rates_daily
+    physicalType: table
+    properties:
+      - name: rate_date
+        physicalType: date
+        required: true
+        primaryKey: true
+        primaryKeyPosition: 1
+        description: A TARGET day (reference-data.calendars.target_days, is_target_day); no weekend or TARGET holiday has a row.
+        customProperties:
+          - property: time
+            value: event
+      - name: currency
+        physicalType: varchar
+        required: true
+        primaryKey: true
+        primaryKeyPosition: 2
+        description: The quoted currency's ISO 4217 code; the base is always the euro.
+      - name: rate
+        physicalType: decimal(20,10)
+        description: >-
+          Units of the currency per one euro (quote units per euro), the ECB's reference fixing,
+          not a market close. The day's own fixing, or when the day has none the last published
+          one carried for up to five TARGET days; null once the last fixing is more than five
+          TARGET days old.
+      - name: is_carried
+        physicalType: boolean
+        required: true
+        description: True when rate is an earlier day's fixing carried to this day (1 to 5 TARGET days); false on a published day and when rate is null.
+      - name: carried_days
+        physicalType: integer
+        description: >-
+          TARGET days since the currency's last published fixing: 0 on a published day, 1 to 5
+          while carried, 6 or more when rate is null. A weekend counts no days.
+      - name: rate_available_at
+        physicalType: timestamp(6) with time zone
+        description: >-
+          When the rate could first be used, in UTC: 16:00 Frankfurt time (CET, or CEST in summer)
+          on rate_date, the ECB's usual publication time. A convention, not the measured
+          publication time; a carried rate counts from the day it is carried to, once that day's
+          fixing failed to appear. Null when rate is null.
+roles:
+  - role: full_reader  # every row and column, no policy: the first non-owner reader (grants.yaml)
+    access: read
+customProperties:
+  - property: layer
+    value: gold
+  - property: build
+    value: dbt
+  - property: backup
+    value: rebuild  # rebuilt from silver and the calendar

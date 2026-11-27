@@ -4,6 +4,7 @@ on a throwaway compose project, never the live stack.
 
     make deploy-rehearsal [KEEP=1]            the deploy chain on the release-shaped stack
     make deploy-rehearsal CUTOVER=1 [KEEP=1]  the one-time cutover from today's stack shape, and back
+    make deploy-rehearsal FAST=1 [KEEP=1]     sections 1 to 3, kills after swap and recreate only: merge points
 
 Under a new directory in $HOME (Docker Desktop shares only the home directory) it builds a scratch git
 repository holding this checkout's code and the repository's own documents (contracts/,
@@ -24,7 +25,9 @@ as phase 002's wrapper will (access_verify.py stage) and release-verify with S20
 S13's identity.sh; a planted view the drift check names; a rules-only release that restarts nothing; a
 stand-in's new image recreating only it; a forced mismatch restoring R-1, images included, exit 1;
 `make rollback`, also with Trino stopped; a release dropping a masked column, a reader polling every 50 ms throughout; a SIGKILL
-after each step, then a rerun; two deploys at once; the backup-set refusal (review M4) on a real table.
+after each step, then a rerun; a release adding a product R1 was cut without (quality-results), first
+with a forced mismatch (exit 1, its namespaces LEFT, a plant beside them still DRIFT), then for real
+(FAST too); two deploys at once; the backup-set refusal (review M4) on a real table.
 The cutover run starts from TODAY's shape (Trino on HTTP from the checkout's etc, Lakekeeper on the
 shared network with a host port, a stand-in capture), follows docs/runbooks/first-cutover-to-releases.md,
 measures each service's downtime, proves the capture untouched, then rolls the whole cutover back.
@@ -67,6 +70,9 @@ k2tools = _load("k2tools", REPO / "docker/tools/k2tools.py")
 ps = _load("principal_secret", REPO / "scripts/principal-secret.py")
 
 PROJECT = "k2-rehearsal"
+FAST = os.environ.get("FAST") == "1" and os.environ.get("CUTOVER") != "1"  # merge points; the full chain before a tag
+FAST_SKIPS = ("4 (one image), 5 (forced mismatch, rollback with Trino stopped), 6 (masked column dropped), "
+              "7's kills after 12 of its 14 steps and inside the automatic rollback, 8 (two deploys at once), 9 (M4)")
 BASE = Path.home() / f"s19-rehearsal-{os.getpid()}"
 CLONE, ROOT, SECRETS, WORK = BASE / "repo", BASE / "releases", BASE / "secrets", BASE / "work"
 CANARY = "contracts/governance/access-canary"
@@ -74,16 +80,23 @@ EVENTS, PRODUCT = f"{CANARY}/events.odcs.yaml", f"{CANARY}/product.odps.yaml"
 MODEL_SQL, EXPECT = f"{CANARY}/models/events.sql", "tests/access/expectations.yaml"
 VIEW = "governance.access_canary.events"
 RUN_RECORD = "governance_build.run_records.run_record"
+# A dbt-only product nothing reads: R1 is cut without it and section 7b brings it back, so one release
+# of the chain ADDS a product (its builder and publisher unknown to the live rules until the swap).
+ADDED, ADDED_VIEW = "contracts/governance/quality-results", "governance.quality_results.test_results"
+ADDED_PRINCIPALS = ("dbt_quality_results", "pub_quality_results")
+ADDED_NAMESPACES = ("governance.quality_results", "governance.quality_results__base")
 RESULTS: list[tuple[str, bool, str]] = []
 CODE = ("platform/k2gen/k2gen", "platform/k2gen/pyproject.toml", "platform/k2gen/uv.lock", "platform/runs",
         "contracts", "dbt", "docker/tools", "scripts/deploy.py", "scripts/principal-secret.py",
-        "scripts/tls.sh", "scripts/check-env.py", "scripts/backup-lake.sh", "scripts/lib", "scripts/access_verify.py", "scripts/verify", "tests/access", "mk")
+        "scripts/tls.sh", "scripts/check-env.py", "scripts/backup-lake.sh", "scripts/lib", "scripts/access_verify.py", "scripts/verify", "tests/access", "mk",
+        "docker/lake", "scripts/engine-keys.py", ".env.example", "docker/spark", "services/k2-api")  # lake-init's script and policies; make engine-keys and the placeholders it replaces; Spark's image; k2-api's, which a lake builds when a row runs via REST
 
 COMPOSE = """\
 # The rehearsal's compose file, release-shaped (scripts/verify/deploy_rehearsal.py): what S22 makes live.
 networks:
   k2-net: {}
   k2-catalog: {}
+  k2-egress: {}  # fetch's alone (no service here joins it): deploy creates it, and the fetch probe rows dial from it
 volumes:
   pg: {}
   s3: {}
@@ -139,8 +152,8 @@ services:
     command: ["/usr/lib/trino/bin/launcher", "run", "--etc-dir=/k2/releases/pointers/trino/compiled/trino/etc"]
     environment:
       K2_TRINO_SHARED_SECRET: "${K2_TRINO_SHARED_SECRET}"
-      K2_TRINO_S3_ACCESS_KEY: "${MINIO_ROOT_USER}"
-      K2_TRINO_S3_SECRET_KEY: "${MINIO_ROOT_PASSWORD}"
+      K2_TRINO_S3_ACCESS_KEY: "${K2_TRINO_S3_ACCESS_KEY:?make engine-keys}"  # its own MinIO user, made by lake_setup
+      K2_TRINO_S3_SECRET_KEY: "${K2_TRINO_S3_SECRET_KEY:?make engine-keys}"
     networks: [k2-net, k2-catalog]
     ports: ["127.0.0.1:${K2_TRINO_PORT}:8443"]
     volumes:
@@ -168,6 +181,20 @@ services:
     volumes: [*releases-ro]
     restart: unless-stopped
     deploy: {resources: {limits: {cpus: '0.1', memory: 32M}}}
+  spark-iceberg:  # warehouse k2's writer: deploy's ddl step runs spark-sql in it, as on the live stack
+    build: {context: ., dockerfile: docker/spark/Dockerfile}  # make release builds it from the tag, as live (layer cache: no COPY)
+    image: SPARK_IMAGE
+    command: ["sleep", "infinity"]  # no History Server here: the drivers deploy starts by docker exec are the point
+    environment:
+      K2_SPARK_S3_ACCESS_KEY: "${K2_SPARK_S3_ACCESS_KEY:?make engine-keys}"
+      K2_SPARK_S3_SECRET_KEY: "${K2_SPARK_S3_SECRET_KEY:?make engine-keys}"
+      AWS_ACCESS_KEY_ID: "${K2_SPARK_S3_ACCESS_KEY:?make engine-keys}"  # deploy's spark-sql takes S3FileIO's default chain
+      AWS_SECRET_ACCESS_KEY: "${K2_SPARK_S3_SECRET_KEY:?make engine-keys}"
+      AWS_REGION: us-east-1
+    networks: [k2-net, k2-catalog]
+    volumes: [*releases-ro]
+    restart: unless-stopped
+    deploy: {resources: {limits: {cpus: '1.0', memory: 1536M}}}  # scripts/verify/storage-keys.sh's Spark limits
   capture-binance:  # a stand-in capture: deploy and the cutover must never restart it
     image: alpine@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc
     command: ["sleep", "infinity"]
@@ -190,6 +217,7 @@ configs:
 """
 ALPINE_A = "alpine@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc"  # alpine:3.20, local
 ALPINE_B = "alpine:3"  # pinned by make release to its local digest; another image id than A
+SPARK = re.search(r"image: *(k2-spark-iceberg:\S+)", (REPO / "docker-compose.yml").read_text())[1]  # type: ignore[index]  # the stack's pin
 
 
 def sh(*argv: str, check: bool = True, env: dict[str, str] | None = None, cwd: Path | None = None,
@@ -291,18 +319,18 @@ def scratch_repo(compose_text: str) -> None:
     (CLONE / "Makefile").write_text("include mk/*.mk\n")
     (CLONE / "docker-compose.yml").write_text(compose_text)
     prom_rules(1)
-    (CLONE / ".gitignore").write_text(".env\n.venv/\n__pycache__/\n")
+    (CLONE / ".gitignore").write_text(".env*\n!.env.example\n.venv/\n__pycache__/\n")  # .env and engine-keys' backups
     sh("git", "init", "-q", "-b", "main", str(CLONE))
     sh("git", "-C", str(CLONE), "config", "user.name", "Rehearsal Operator")
     sh("git", "-C", str(CLONE), "config", "user.email", "rehearsal@example.org")
 
 
-def real_secrets() -> None:
+def real_secrets(skip: tuple[str, ...] = ()) -> None:
     """The CA and Trino's certificate by scripts/tls.sh; each service principal's password by
-    `make password TO_FILE=1`; the canary's people by principal-secret.py's own locked write."""
+    `make password TO_FILE=1`; the canary's people by principal-secret.py's own locked write.
+    `skip`: principals of a product the scratch tree does not hold yet (its password comes with it)."""
     sh("bash", str(CLONE / "scripts/tls.sh"), "init", env=env())
-    doc = (CLONE / "contracts/access/principals.yaml").read_text()
-    ids = re.findall(r"^  - id: (\S+)$", doc, re.M)
+    ids = sorted(set(ps.known()[0]) - set(skip))  # principal-secret.py's own: the declared ones, and each dbt product's builder and publisher
     for pid in ids:
         if pid.startswith("p."):
             secret = secrets.token_urlsafe(32)
@@ -323,37 +351,25 @@ def dotenv() -> None:
                    "K2_TRINO_SHARED_SECRET": secrets.token_urlsafe(32)})
     (CLONE / ".env").write_text("".join(f"{k}={v}\n" for k, v in DOTENV.items()))
     os.chmod(CLONE / ".env", 0o600)
+    # Each engine's own MinIO pair by the operator's command; lake_setup makes their users.
+    make("engine-keys")
+    ek = _load("engine_keys", CLONE / "scripts/engine-keys.py")
+    DOTENV.update({n: v for n, v in ek.values((CLONE / ".env").read_text()).items() if n not in DOTENV})
 
 
-LAKE_SETUP = '''
-import json, os, sys, urllib.request
-def call(m, u, b=None):
-    r = urllib.request.Request(u, data=None if b is None else json.dumps(b).encode(), method=m, headers={"Content-Type": "application/json"})
-    try:
-        with urllib.request.urlopen(r, timeout=30) as x: return x.status
-    except urllib.error.HTTPError as e: return e.code
-lk = sys.argv[1]
-print("bootstrap", call("POST", f"{lk}/management/v1/bootstrap", {"accept-terms-of-use": True}))
-for w in sys.argv[2:]:
-    body = {"warehouse-name": w, "project-id": "00000000-0000-0000-0000-000000000000",
-            "storage-profile": {"type": "s3", "bucket": "lake", "key-prefix": w, "endpoint": "http://minio:9000",
-                                "region": "local-01", "path-style-access": True, "flavor": "s3-compat", "sts-enabled": False,
-                                "remote-signing-enabled": False},
-            "storage-credential": {"type": "s3", "credential-type": "access-key",
-                                   "aws-access-key-id": os.environ["MINIO_ROOT_USER"], "aws-secret-access-key": os.environ["MINIO_ROOT_PASSWORD"]}}
-    print("warehouse", w, call("POST", f"{lk}/management/v1/warehouse", body))
-'''
-
-
-def lake_setup(release: str, network: str, lakekeeper: str = "http://lakekeeper:8181") -> None:
-    """What lake-init does: the bucket, the catalog's bootstrap, every warehouse of the storage plan."""
-    c = compose("ps", "-q", "minio").stdout.strip()
-    sh("docker", "exec", c, "sh", "-c", 'MC_HOST_l="http://$MINIO_ROOT_USER:$MINIO_ROOT_PASSWORD@localhost:9000" mc mb --ignore-existing l/lake')
-    plan = json.loads((ROOT / release / model.STORAGE_PLAN).read_text())
-    tools = json.loads((ROOT / release / "manifest.json").read_text())["images"]["tools"]
-    print(sh("docker", "run", "--rm", "-i", "--network", network, "--memory", "128m", "-e", "MINIO_ROOT_USER",
-             "-e", "MINIO_ROOT_PASSWORD", tools, "python3", "-", lakekeeper, *[w["name"] for w in plan["warehouses"]],
-             input=LAKE_SETUP, env=env()).stdout.strip().replace("\n", "; "))
+def lake_setup(release: str, network: str) -> None:
+    """lake-init, run as compose runs it: the real docker/lake/init-lake.sh in the MinIO image on the catalog's
+    network, the release's storage plan, the root pair and every engine's pair by name. The live layout follows:
+    buckets k2-lake and the landing bucket, every warehouse at warehouse/<name> with remote signing off, one
+    MinIO user and policy per engine, so Trino signs with its own key."""
+    ek = _load("engine_keys", CLONE / "scripts/engine-keys.py")
+    names = ["MINIO_ROOT_USER", "MINIO_ROOT_PASSWORD", *(n for e in ek.ENGINES for n in ek.pair_names(e))]
+    minio = re.search(r"ghcr\.io/rjdscott/minio@sha256:[0-9a-f]{64}", COMPOSE)[0]  # type: ignore[index]
+    done = sh("docker", "run", "--rm", "--network", network, "--memory", "128m", "--cpus", "0.25",
+              "-v", f"{CLONE / 'docker/lake'}:/init:ro", "-v", f"{ROOT}:/k2/releases:ro",
+              "-e", f"K2_STORAGE_PLAN=/k2/releases/{release}/{model.STORAGE_PLAN}", *(a for n in names for a in ("-e", n)),
+              "--entrypoint", "/bin/bash", minio, "/init/init-lake.sh", env=env())
+    print(f"rehearsal: lake-init: {done.stdout.strip().splitlines()[-1]}")
 
 
 def publish(release: str) -> str:
@@ -448,14 +464,15 @@ def emitters(old: bool) -> None:
 
 
 def rehearse() -> int:
-    scratch_repo(COMPOSE.replace("STANDIN_IMAGE", ALPINE_A))
+    scratch_repo(COMPOSE.replace("STANDIN_IMAGE", ALPINE_A).replace("SPARK_IMAGE", SPARK))
     emitters(old=True)
+    added(False)
     dotenv()
-    real_secrets()
+    real_secrets(skip=ADDED_PRINCIPALS)
     t0 = time.monotonic()
-    r1 = cut("v0.0.1-rehearsal.1", "R1: the repository's own documents, the reader view in its old shape")
+    r1 = cut("v0.0.1-rehearsal.1", "R1: the repository's own documents but quality-results, the reader view in its old shape")
     check("make release compiles R1 at a scratch tag", (ROOT / r1 / "manifest.json").is_file(), f"{r1} in {time.monotonic() - t0:.0f} s")
-    compose("up", "-d", "--wait", "prefect-db", "minio", "lakekeeper", "capture-binance")  # running already, as live
+    compose("up", "-d", "--wait", "prefect-db", "minio", "lakekeeper", "spark-iceberg", "capture-binance")  # running already, as live
     lake_setup(r1, f"{PROJECT}_k2-catalog")
     capture = started()["capture-binance"]
 
@@ -552,51 +569,55 @@ def rehearse() -> int:
           f"guarded after R2: {guarded}; {shape.polls} polls, {shape.errors} errors, shapes {shape.shapes}; "
           + "; ".join(x.strip()[:120] for x in (back.stderr + again.stderr).splitlines() if "shape" in x))
 
-    # 4. the stand-in's image only
-    edit("docker-compose.yml", ALPINE_A, ALPINE_B, 1)
-    r3 = cut("v0.0.1-rehearsal.3", "R3: the stand-in's image")
-    before = started()
-    out = make("deploy", f"RELEASE={r3}", check=False)
-    after = started()
-    moved = sorted(s for s in after if before.get(s) != after[s])
-    check("R3 recreates only the stand-in", code(out) == 0 and moved == ["standin"], f"recreated {moved}")
-    img3 = after["standin"].split()[1]
+    if not FAST:
+        # 4. the stand-in's image only
+        edit("docker-compose.yml", ALPINE_A, ALPINE_B, 1)
+        r3 = cut("v0.0.1-rehearsal.3", "R3: the stand-in's image")
+        before = started()
+        out = make("deploy", f"RELEASE={r3}", check=False)
+        after = started()
+        moved = sorted(s for s in after if before.get(s) != after[s])
+        check("R3 recreates only the stand-in", code(out) == 0 and moved == ["standin"], f"recreated {moved}")
+        img3 = after["standin"].split()[1]
 
-    # 5. a forced mismatch: back to R3, images included, exit 1
-    edit("docker-compose.yml", ALPINE_B, ALPINE_A, 1)
-    r4 = cut("v0.0.1-rehearsal.4", "R4: the stand-in back, deployed with a forced mismatch")
-    out = make("deploy", f"RELEASE={r4}", fault="verify-mismatch", check=False)
-    failed = [r for r in records(40) if r["outcome"] == "failed" and r["release"] == r4]
-    check("a forced mismatch restores R3, its image too, exit 1, the reason recorded",
-          code(out) == 1 and live_release() == r3 and started()["standin"].split()[1] == img3
-          and bool(failed) and "verify-mismatch" in failed[-1].get("reason", ""), (failed[-1].get("reason", "") if failed else "")[:120])
-    out = make("rollback", check=False)
-    check("make rollback returns to R2, the stand-in on R2's image", code(out) == 0 and live_release() == r2
-          and started()["standin"].split()[1] != img3)
-    make("deploy", f"RELEASE={r3}")
-    compose("stop", "trino")  # Trino down under the live release (review R1 H2): the rollback swaps first
-    out = make("rollback", check=False)
-    check("with Trino stopped, make rollback moves the pointers and recreates first, exit 0",
-          code(out) == 0 and live_release() == r2 and "Trino does not answer" in out.stderr,
-          next((x.strip()[:160] for x in out.stderr.splitlines() if "FAILED" in x), ""))
-    make("deploy", f"RELEASE={r3}")
+        # 5. a forced mismatch: back to R3, images included, exit 1
+        edit("docker-compose.yml", ALPINE_B, ALPINE_A, 1)
+        r4 = cut("v0.0.1-rehearsal.4", "R4: the stand-in back, deployed with a forced mismatch")
+        out = make("deploy", f"RELEASE={r4}", fault="verify-mismatch", check=False)
+        failed = [r for r in records(40) if r["outcome"] == "failed" and r["release"] == r4]
+        check("a forced mismatch restores R3, its image too, exit 1, the reason recorded",
+              code(out) == 1 and live_release() == r3 and started()["standin"].split()[1] == img3
+              and bool(failed) and "verify-mismatch" in failed[-1].get("reason", ""), (failed[-1].get("reason", "") if failed else "")[:120])
+        out = make("rollback", check=False)
+        check("make rollback returns to R2, the stand-in on R2's image", code(out) == 0 and live_release() == r2
+              and started()["standin"].split()[1] != img3)
+        make("deploy", f"RELEASE={r3}")
+        compose("stop", "trino")  # Trino down under the live release (review R1 H2): the rollback swaps first
+        out = make("rollback", check=False)
+        check("with Trino stopped, make rollback moves the pointers and recreates first, exit 0",
+              code(out) == 0 and live_release() == r2 and "Trino does not answer" in out.stderr,
+              next((x.strip()[:160] for x in out.stderr.splitlines() if "FAILED" in x), ""))
+        make("deploy", f"RELEASE={r3}")
 
-    # 6. the masked column dropped, read every 50 ms throughout
-    drop_note()
-    r5 = cut("v0.0.1-rehearsal.5", "R5: note dropped from the canary, its mask with it; the stand-in on A")
-    poller = Poller()
-    poller.start()
-    time.sleep(1)
-    out = make("deploy", f"RELEASE={r5}", check=False)
-    time.sleep(1)
-    cols = [c[0] for c in q("p.canary-full", f"SELECT * FROM {VIEW}")["columns"]]
-    check("R5 deploys and the view no longer has note", code(out) == 0 and "note" not in cols, f"columns {cols}")
-    check("R5: the delayed reader never saw a note", not poller.leaks and poller.polls > 20,
-          f"{poller.polls} polls, {poller.errors} errors, shapes {poller.shapes}")
+        # 6. the masked column dropped, read every 50 ms throughout
+        drop_note()
+        r5 = cut("v0.0.1-rehearsal.5", "R5: note dropped from the canary, its mask with it; the stand-in on A")
+        poller = Poller()
+        poller.start()
+        time.sleep(1)
+        out = make("deploy", f"RELEASE={r5}", check=False)
+        time.sleep(1)
+        cols = [c[0] for c in q("p.canary-full", f"SELECT * FROM {VIEW}")["columns"]]
+        check("R5 deploys and the view no longer has note", code(out) == 0 and "note" not in cols, f"columns {cols}")
+        check("R5: the delayed reader never saw a note", not poller.leaks and poller.polls > 20,
+              f"{poller.polls} polls, {poller.errors} errors, shapes {poller.shapes}")
 
     # 7. a SIGKILL after each step, then a rerun, alternating R3 and R5, the reader still polling
-    steps = ("preflight", "images", "plan", "ddl", "views-narrow", "canary", "swap", "recreate", "rules-loaded",
+    steps = ("preflight", "images", "plan", "drain", "ddl", "views-narrow", "canary", "swap", "recreate", "rules-loaded",
              "ddl-late", "views-widen", "verify", "done")
+    if FAST:  # no R3 to R5, R2 live: two kills, back to R1 (the old view shape) and forward, a reader polling
+        steps, r3, r5, poller = ("swap", "recreate"), r1, r2, Poller()
+        poller.start()
     target, other, bad = r3, r5, []
     for s in steps:
         killed = make("deploy", f"RELEASE={target}", fault=f"kill:{s}", check=False)
@@ -607,38 +628,84 @@ def rehearse() -> int:
             bad.append(f"{s}: kill {code(killed)}, rerun {code(rerun)}, verify {code(verified)}")
         target, other = other, target
     check(f"a kill after each of the {len(steps)} steps, then a rerun, converges and verifies", not bad, "; ".join(bad))
-    make("deploy", f"RELEASE={target}", fault="verify-mismatch,kill:rollback-swap", check=False)
-    out = make("rollback", check=False)
-    check("a kill inside the automatic rollback, then make rollback, converges", code(out) == 0 and live_release() == other
-          and code(make("release-verify", check=False)) == 0)
+    if not FAST:
+        make("deploy", f"RELEASE={target}", fault="verify-mismatch,kill:rollback-swap", check=False)
+        out = make("rollback", check=False)
+        check("a kill inside the automatic rollback, then make rollback, converges", code(out) == 0 and live_release() == other
+              and code(make("release-verify", check=False)) == 0)
     poller.stop.set()
     poller.join()
     check("through every kill and rerun the delayed reader never saw a note", not poller.leaks,
           f"{poller.polls} polls, {poller.errors} errors, shapes {poller.shapes}")
 
-    # 8. two deploys at once
-    first = subprocess.Popen(["make", "-s", "-C", str(CLONE), "deploy", f"RELEASE={other}"], env=env(),
-                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-    time.sleep(4)
-    second = make("deploy", f"RELEASE={other}", check=False)
-    _, err = first.communicate()
-    check("two deploys at once: the second refused at the lock (exit 2), the first exits 0",
-          code(second) == 2 and "another deploy holds" in second.stderr and code(subprocess.CompletedProcess([], 0, "", err)) == 0)
+    # 7b. a release that adds a product: its builder and publisher are unknown to the live rules until the
+    # swap, and its ddl (namespaces) stays behind a rollback, which drops nothing (the live failure of alpha.4-rc.1)
+    added(True)
+    for pid in ADDED_PRINCIPALS:  # the operator's step before deploying a new product (preflight requires them)
+        make("password", f"PRINCIPAL={pid}", "TO_FILE=1")
+    r8 = cut("v0.0.1-rehearsal.8", "R8: the quality-results product back")
+    was = live_release()
+    out = make("deploy", f"RELEASE={r8}", fault="verify-mismatch", check=False)
+    check("a release adding a product, verify forced to fail, rolls back with exit 1 (not 3)",
+          code(out) == 1 and live_release() == was,
+          next((x.strip()[:220] for x in out.stderr.splitlines() if "FAILED" in x and "verify-mismatch" not in x), ""))
+    out = make("release-verify", check=False)
+    left = [x.strip() for x in out.stderr.splitlines() if x.strip().startswith("LEFT namespace")]
+    check("release-verify on the rolled-back stack exits 0, the product's namespaces LEFT, not DRIFT",
+          code(out) == 0 and all(any(f"LEFT namespace {n}:" in x for x in left) for n in ADDED_NAMESPACES),
+          " | ".join(left)[:300] or next((x.strip()[:220] for x in out.stderr.splitlines() if "DRIFT" in x), ""))
+    q("dbt_access_canary", "CREATE TABLE governance_build.access_canary__base.planted (x integer)")
+    out = make("release-verify", check=False)
+    check("beside them, a table planted in a live namespace is still DRIFT",
+          code(out) == 1 and "DRIFT table governance.access_canary__base.planted" in out.stderr)
+    q("dbt_access_canary", "DROP TABLE governance_build.access_canary__base.planted")
+    out = make("deploy", f"RELEASE={r8}", check=False)
+    check("then R8 deploys: its view new in the plan, never read as its publisher before the swap, drift clean",
+          code(out) == 0 and f"new in this release: {ADDED_VIEW}" in out.stderr and "catalog drift check clean" in out.stderr,
+          next((x.strip()[:220] for x in out.stderr.splitlines() if "FAILED" in x or "new in this release" in x), ""))
 
-    # 9. the backup-set refusal (review M4) on a real table: restore, then rebuild while the table holds rows
-    edit(EVENTS, "  - property: backup\n    value: rebuild", "  - property: backup\n    value: restore")
-    bump("3.0.0", "3.0.1")
-    r6 = cut("v0.0.1-rehearsal.6", "R6: the canary's events kept by restore")
-    out6 = make("deploy", f"RELEASE={r6}", check=False)
-    edit(EVENTS, "  - property: backup\n    value: restore", "  - property: backup\n    value: rebuild")
-    bump("3.0.1", "3.0.2")
-    r7 = cut("v0.0.1-rehearsal.7", "R7: back to rebuild while the table still holds its rows")
-    out7 = make("deploy", f"RELEASE={r7}", check=False)
-    check("M4: a release dropping a restore entry while the table holds rows is refused, naming make drop",
-          code(out6) == 0 and code(out7) == 2 and "make drop TARGET" in out7.stderr and live_release() == r6,
-          next((x.strip()[:220] for x in out7.stderr.splitlines() if "REFUSED" in x), ""))
+    if not FAST:
+        # 8. two deploys at once
+        first = subprocess.Popen(["make", "-s", "-C", str(CLONE), "deploy", f"RELEASE={other}"], env=env(),
+                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        time.sleep(4)
+        second = make("deploy", f"RELEASE={other}", check=False)
+        _, err = first.communicate()
+        check("two deploys at once: the second refused at the lock (exit 2), the first exits 0",
+              code(second) == 2 and "another deploy holds" in second.stderr and code(subprocess.CompletedProcess([], 0, "", err)) == 0)
+
+        # 9. the backup-set refusal (review M4) on a real table: restore, then rebuild while the table holds rows
+        edit(EVENTS, "  - property: backup\n    value: rebuild", "  - property: backup\n    value: restore")
+        bump("3.0.0", "3.0.1")
+        r6 = cut("v0.0.1-rehearsal.6", "R6: the canary's events kept by restore")
+        out6 = make("deploy", f"RELEASE={r6}", check=False)
+        edit(EVENTS, "  - property: backup\n    value: restore", "  - property: backup\n    value: rebuild")
+        bump("3.0.1", "3.0.2")
+        r7 = cut("v0.0.1-rehearsal.7", "R7: back to rebuild while the table still holds its rows")
+        out7 = make("deploy", f"RELEASE={r7}", check=False)
+        check("M4: a release dropping a restore entry while the table holds rows is refused, naming make drop",
+              code(out6) == 0 and code(out7) == 2 and "make drop TARGET" in out7.stderr and live_release() == r6,
+              next((x.strip()[:220] for x in out7.stderr.splitlines() if "REFUSED" in x), ""))
     check("the stand-in capture was never restarted by any of it", started()["capture-binance"] == capture)
     return summary()
+
+
+ADDED_ROWS: list[str] = []  # (the line after them, then its access rows), while the product is out
+
+
+def added(present: bool) -> None:
+    """quality-results out of the scratch tree, its access rows with it, or back as the repository has
+    it, the rows where they were (the file has moved since: sections 3 and 6 edit it)."""
+    if present:
+        shutil.copytree(REPO / ADDED, CLONE / ADDED)
+        edit(EXPECT, ADDED_ROWS[0], "".join(ADDED_ROWS[1:]) + ADDED_ROWS[0], 1)
+        return
+    shutil.rmtree(CLONE / ADDED)
+    lines = (CLONE / EXPECT).read_text().splitlines(keepends=True)
+    rows = [i for i, x in enumerate(lines) if "quality_results" in x]
+    assert rows and rows == list(range(rows[0], rows[-1] + 1)), f"{EXPECT}: the product's rows are not one block"
+    ADDED_ROWS[:] = [lines[rows[-1] + 1], *(lines[i] for i in rows)]
+    (CLONE / EXPECT).write_text("".join(x for i, x in enumerate(lines) if i not in rows))
 
 
 def drop_note() -> None:
@@ -656,6 +723,8 @@ def drop_note() -> None:
 
 def summary() -> int:
     print("\n".join(f"{'PASS' if ok else 'FAIL'}  {name}  {detail}" for name, ok, detail in RESULTS))
+    if FAST:
+        print(f"rehearsal: FAST=1: skipped {FAST_SKIPS}; run the full one before a tag")
     return 0 if all(ok for _, ok, _ in RESULTS) else 1
 
 

@@ -5,6 +5,7 @@ the docker inspect of Lakekeeper and of k2-catalog's members with fixed output, 
 verdict logic runs. The real expectations file's probe rows are parsed by the same loader.
 """
 
+import json
 import os
 import subprocess
 from pathlib import Path
@@ -25,7 +26,7 @@ def fake(tmp_path, name, body):
     return str(f)
 
 
-def run(tmp_path, expect="refused", rc=1, origin="k2-net", lakekeeper=FENCED, members=MEMBERS, rows=None):
+def run(tmp_path, expect="refused", rc=1, origin="k2-net", lakekeeper=FENCED, members=MEMBERS, rows=None, images=None):
     if rows is None:
         rows = tmp_path / "rows.yaml"
         rows.write_text(f'expectations:\n  - {{probe: {{from: {origin}, target: "lakekeeper:8181"}}, expect: {expect}}}\n'
@@ -34,9 +35,14 @@ def run(tmp_path, expect="refused", rc=1, origin="k2-net", lakekeeper=FENCED, me
     (tmp_path / "members.out").write_text(members or "")
     inspect = fake(tmp_path, "inspect.sh", f'case "$1:{bool(lakekeeper)}:{bool(members)}" in\n'
                    '  lakekeeper:True:*|members:*:True) cat "$(dirname "$0")/$1.out" ;;\n  *) exit 1 ;;\nesac')
+    if images is not None:  # the live release's oneshots.json, where the airflow pointer leads
+        live = tmp_path / "releases/pointers/airflow/compiled/oneshots.json"
+        live.parent.mkdir(parents=True)
+        live.write_text(json.dumps({"oneshots": {k: {"image": v} for k, v in images.items()}}))
     return subprocess.run(["bash", str(SCRIPT), str(rows)], capture_output=True, text=True,
                           env={**os.environ, "K2_FENCE_DIAL": fake(tmp_path, "dial.sh", f"exit {rc}"),
-                               "K2_FENCE_INSPECT": inspect, "K2_COMPOSE_PROJECT": "k2"})
+                               "K2_FENCE_INSPECT": inspect, "K2_COMPOSE_PROJECT": "k2",
+                               "K2_RELEASES": str(tmp_path / "releases")})
 
 
 def probe_lines(r):
@@ -51,6 +57,8 @@ def probe_lines(r):
     ("refused", 125, "FAIL", "could not start (docker exit 125)"),
     ("refused", 126, "FAIL", "could not start (docker exit 126)"),
     ("refused", 127, "FAIL", "could not start (docker exit 127)"), ("open", 125, "FAIL", "could not start"),
+    # a host port only another compose project publishes (the live stack beside a rehearsal) is not this stack's
+    ("refused", 6, "PASS", "publishes that port, not"), ("open", 6, "FAIL", "publishes that port, expected open"),
 ])
 def test_a_row_passes_only_when_the_dial_matches_its_expectation(tmp_path, expect, rc, verdict, says):
     r = run(tmp_path, expect, rc)
@@ -82,8 +90,63 @@ def test_a_breached_structure_fails_and_unresolvable_is_then_no_evidence(tmp_pat
     assert r.returncode == 1
 
 
+IMAGES = {"dbt-runner": "dbt-runner:5a6b7c8d9e0f", "fetch": "fetch:4008294739ab", "tools": "tools:0a1b2c3d4e5f"}
+DBT_ONESHOT = "/k2-dbt-runner-ecb_fx_rates-1 / k2/dbt-runner dbt-runner:5a6b7c8d9e0f"
+
+
+@pytest.mark.parametrize("images", [IMAGES, None], ids=["image checked", "no live release"])
+def test_a_labelled_dbt_runner_one_shot_of_this_project_is_admitted(tmp_path, images):
+    """The live failure of 2026-11-27: the operator's dbt-runner, started by `docker run` with no
+    compose labels, was counted an intruder. Labelled by the operator, it is one of the stack's own."""
+    r = run(tmp_path, members=MEMBERS + DBT_ONESHOT + "\n", images=images)
+    (line,) = [x for x in r.stdout.splitlines() if " holds " in x]
+    assert line.startswith("PASS structure k2_k2-catalog holds only") and "1 one-shots admitted" in line, r.stdout
+    assert ("images as the live release" if images else "images unchecked") in line and r.returncode == 0
+
+
+@pytest.mark.parametrize("member", [
+    "/k2-fetch-currency_master-1 / k2/fetch fetch:4008294739ab",  # fetch is egress only: never on the catalog
+    "/k2-dbt-runner-ecb_fx_rates-1 / other/dbt-runner dbt-runner:5a6b7c8d9e0f",  # another project's
+    "/evil / k2/dbt-runner dbt-runner:5a6b7c8d9e0f",  # the right labels, not the operator's name
+    "/k2-dbt-runner-ecb_fx_rates / k2/dbt-runner dbt-runner:5a6b7c8d9e0f",  # no try number
+    "/k2-tools-ecb_fx_rates-1 / k2/dbt-runner dbt-runner:5a6b7c8d9e0f",  # a name of another kind
+    "/k2-dbt-runner-ecb_fx_rates-1 / / dbt-runner:5a6b7c8d9e0f",  # no labels: the shape before the operator set them
+    "/k2-dbt-runner-ecb_fx_rates-1 /",  # the old inspect format, no labels
+    "/k2-dbt-runner-ecb_fx_rates-1 / k2/dbt-runner alpine:3",  # not the image the live release gives the kind
+    "/k2-lakekeeper-x-1 / k2/lakekeeper alpine:3",  # an allowed service, but no one-shot kind of the release
+    "/k2-dbt-runner-x-1 other/x k2/dbt-runner dbt-runner:5a6b7c8d9e0f",  # compose labels: a service, judged as one
+])
+def test_anything_else_off_the_list_still_fails_the_structure(tmp_path, member):
+    r = run(tmp_path, "refused", 3, members=MEMBERS + member + "\n", images=IMAGES)
+    name = member.split()[0].lstrip("/")
+    assert any(x.startswith("FAIL structure") and f"off catalog-fence-allow.txt: {name}=" in x
+               for x in r.stdout.splitlines()), r.stdout
+    assert r.returncode == 1
+
+
 def test_an_origin_with_no_network_is_a_failure_not_a_pass(tmp_path):
-    assert probe_lines(run(tmp_path, "refused", 5, origin="fetch"))[0].startswith("FAIL fetch ->")
+    assert probe_lines(run(tmp_path, "refused", 5, origin="tools"))[0].startswith("FAIL tools ->")
+
+
+def test_a_fetch_row_is_dialled_from_k2_egress_the_network_fetch_runs_on(tmp_path):
+    """The real dial, with `docker` faked on PATH: a `fetch` row starts its probe container on
+    <project>_k2-egress (F5/R7), and a name that does not resolve there is refused."""
+    log = tmp_path / "docker.log"
+    bin_ = tmp_path / "bin"
+    bin_.mkdir()
+    fake(bin_, "docker", f'echo "$*" >> {log}\ncase "$1" in run) echo "nc: bad address \'lakekeeper\'"; exit 1 ;; esac\nexit 0')
+    rows = tmp_path / "rows.yaml"
+    rows.write_text('expectations:\n  - {probe: {from: fetch, target: "lakekeeper:8181"}, expect: refused}\n')
+    (tmp_path / "lakekeeper.out").write_text(FENCED)
+    (tmp_path / "members.out").write_text(MEMBERS)
+    inspect = fake(tmp_path, "inspect.sh", 'cat "$(dirname "$0")/$1.out"')
+    r = subprocess.run(["bash", str(SCRIPT), str(rows)], capture_output=True, text=True,
+                       env={**os.environ, "PATH": f"{bin_}:{os.environ['PATH']}", "K2_FENCE_INSPECT": inspect,
+                            "K2_COMPOSE_PROJECT": "k2"})
+    calls = log.read_text().splitlines()
+    assert "network inspect k2_k2-egress" in calls, calls
+    assert [c for c in calls if c.startswith("run ")][0].split("--network ")[1].split()[0] == "k2_k2-egress", calls
+    assert probe_lines(r) == ["PASS fetch -> lakekeeper:8181 refused (name does not resolve on fetch)"], r.stdout
 
 
 def test_no_probe_rows_is_not_a_pass(tmp_path):

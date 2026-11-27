@@ -132,8 +132,11 @@ def test_each_repository_product_compiles_to_its_golden() -> None:
     golden_entries = shared_entries(kept)
     for key, entry in shared_entries(emitted).items():
         assert golden_entries.get(key) == entry, key
-    # the macros are the repository's, so they are the good set's too
-    assert {p: t for p, t in emitted.items() if "/macros/" in p} == {p: t for p, t in goldens(GOLDEN).items() if "/macros/" in p}
+    # the macros are the repository's, so they are the good set's too, but the union's, which lists the set's writers
+    union = f"{dbt.ROOT}/macros/k2_test_results.sql"
+    assert {p: t for p, t in emitted.items() if "/macros/" in p and p != union} == {
+        p: t for p, t in goldens(GOLDEN).items() if "/macros/" in p and p != union}
+    assert emitted[union] == kept[union]
 
 
 def test_the_canary_seed_is_named_as_a_model_is_and_built_beside_its_table() -> None:
@@ -300,6 +303,26 @@ def test_each_quality_rule_becomes_a_test_or_is_refused() -> None:
             dbt.emit(replaced(m, station.id, tables=tables))
 
 
+def test_the_results_union_has_one_guarded_branch_per_writer_and_is_its_contract() -> None:
+    m = loaded(repository())
+    macro = dbt.emit(m)[f"{dbt.ROOT}/macros/k2_test_results.sql"]
+    branches = re.findall(r"k2_test_results_exist\('(\w+)', '(\w+)'\) %\}\nunion all\nselect '([\w.-]+)' as \"product_id\", "
+                          r".* from (\S+) where \"writer\" = '(\w+)'\n", macro)
+    assert [b[2] for b in branches] == [p.id for p in model.test_results_writers(m)] and len(branches) == 5
+    for catalog, schema, pid, relation, writer in branches:
+        p = product(m, pid)
+        base = model.base_relation(p.domain, p.name, model.TEST_RESULTS)
+        assert (relation, writer, f"{catalog}.{schema}.{model.TEST_RESULTS}") == (model.quote_relation(base), model.builder(p.name), base)
+    first = macro.split("{%- if")[0]
+    assert all(f'cast(null as {c.type}) as "{c.name}"' in first for c in model.TEST_RESULTS_TABLE.columns) and "where false" in first
+    retired = replaced(m, "governance.access-canary", status="retired")
+    assert "governance.access-canary" not in dbt.emit(retired)[f"{dbt.ROOT}/macros/k2_test_results.sql"]
+    (table,) = product(m, model.QUALITY_RESULTS).tables  # the contract is the union's columns, name for name and type for type
+    assert [(c.name, c.physical_type) for c in table.columns] == [
+        ("product_id", "varchar"), *((c.name, c.type) for c in model.TEST_RESULTS_TABLE.columns)]
+    assert "k2_test_results()" in product(m, model.QUALITY_RESULTS).models["test_results.sql"]
+
+
 def test_the_output_is_deterministic() -> None:
     documents = good()
     first = dbt.emit(loaded(documents))
@@ -328,29 +351,39 @@ PROFILE = f"""k2:
 PROOF_MACRO = "{% macro is_incremental() %}{{ return(var('proof_incremental', false)) }}{% endmacro %}\n"
 
 
-def run_dbt(tmp: Path, *args: str) -> str:
+def run_dbt(tmp: Path, *args: str, ok: bool = True) -> str:
     env = {k: v for k, v in os.environ.items() if k != "VIRTUAL_ENV"}
     out = subprocess.run(["uv", "run", "--locked", "dbt", *args, "--project-dir", str(tmp / "tree" / dbt.ROOT),
                           "--profiles-dir", str(tmp), "--target-path", str(tmp / "target"), "--log-path", str(tmp / "logs"),
                           "--no-partial-parse"], cwd=model.REPO / "dbt", env=env, capture_output=True, text=True)
-    assert out.returncode == 0, f"dbt {' '.join(args)}:\n{out.stdout}\n{out.stderr}"
+    assert (out.returncode == 0) == ok, f"dbt {' '.join(args)} exited {out.returncode}:\n{out.stdout}\n{out.stderr}"
     return out.stdout
 
 
-@pytest.mark.skipif(os.environ.get("K2_DBT_PROOF") != "1", reason="the dbt proof runs under make test-dbt-tree (K2_DBT_PROOF=1)")
-@pytest.mark.parametrize("name", ["good", "repository"])
-def test_dbt_parses_compiles_and_selects_the_tree(tmp_path: Path, name: str) -> None:
+def proof_tree(tmp: Path, m: Model) -> None:
+    """The model's tree under tmp/tree, with the proof profile and is_incremental; nothing may listen."""
     try:
         subprocess.run(["bash", "-c", f"exec 3<>/dev/tcp/127.0.0.1/{PROOF_PORT}"], check=True, capture_output=True)
         pytest.fail(f"something listens on 127.0.0.1:{PROOF_PORT}, and the proof must reach no warehouse")
     except subprocess.CalledProcessError:
         pass
-    m = loaded(repository() if name == "repository" else good())
     for path, text in dbt.emit(m).items():
-        (tmp_path / "tree" / path).parent.mkdir(parents=True, exist_ok=True)
-        (tmp_path / "tree" / path).write_text(text)
-    (tmp_path / "profiles.yml").write_text(PROFILE)
-    (tmp_path / "tree" / dbt.ROOT / "macros" / "proof_is_incremental.sql").write_text(PROOF_MACRO)
+        (tmp / "tree" / path).parent.mkdir(parents=True, exist_ok=True)
+        (tmp / "tree" / path).write_text(text)
+    (tmp / "profiles.yml").write_text(PROFILE)
+    (tmp / "tree" / dbt.ROOT / "macros" / "proof_is_incremental.sql").write_text(PROOF_MACRO)
+
+
+def pin_key(contract_id: str) -> str:
+    _, producer, table = contract_id.split(".")
+    return f"{model.fence(producer)}/{table}"
+
+
+@pytest.mark.skipif(os.environ.get("K2_DBT_PROOF") != "1", reason="the dbt proof runs under make test-dbt-tree (K2_DBT_PROOF=1)")
+@pytest.mark.parametrize("name", ["good", "repository"])
+def test_dbt_parses_compiles_and_selects_the_tree(tmp_path: Path, name: str) -> None:
+    m = loaded(repository() if name == "repository" else good())
+    proof_tree(tmp_path, m)
 
     out = run_dbt(tmp_path, "parse")
     assert "WARNING" not in out, out
@@ -366,8 +399,7 @@ def test_dbt_parses_compiles_and_selects_the_tree(tmp_path: Path, name: str) -> 
             node = manifest["nodes"][f"seed.k2.{model.dbt_model(p.name, s.removesuffix('.csv'))}"]
             assert f"{node['database']}.{node['schema']}.{node['alias']}" == model.build_relation(p.domain, p.name, s.removesuffix(".csv"))
 
-    pins = {f"{model.fence(port.contract_id.split('.')[1])}/{port.contract_id.split('.')[2]}": {"snapshot": 42}
-            for p in m.products for port in p.input_ports}
+    pins = {pin_key(port.contract_id): {"snapshot": 42} for p in m.products for port in p.input_ports}
     compiled = {}
     for incremental in (False, True):
         target = tmp_path / "target"
@@ -376,10 +408,16 @@ def test_dbt_parses_compiles_and_selects_the_tree(tmp_path: Path, name: str) -> 
         compiled[incremental] = {p.relative_to(target).as_posix(): p.read_text() for p in (target / "compiled").rglob("*.sql")}
     for p, t in built:
         sql = compiled[False][f"compiled/k2/models/{model.fence(p.domain)}/{model.fence(p.name)}/{model.dbt_model(p.name, t.name)}.sql"]
-        for port in p.input_ports:
+        for port in p.input_ports:  # each port a model names through k2_input is read pinned; a model need not read every port
+            _, producer, table = port.contract_id.split(".")
+            if f"k2_input('{model.fence(producer)}', '{table}')" not in str(p.models[f"{t.name}.sql"]):
+                continue
             assert f"{model.quote_relation(model.base_relation(*port.contract_id.split('.')))} FOR VERSION AS OF BIGINT '42'" in sql
         if model.model_config(p.models[f"{t.name}.sql"]).get("materialized") == "incremental":
             assert compiled[True][f"compiled/k2/models/{model.fence(p.domain)}/{model.fence(p.name)}/{model.dbt_model(p.name, t.name)}.sql"] != sql
+        if "k2_test_results()" in str(p.models[f"{t.name}.sql"]):  # compile renders every writer's branch
+            assert all(model.quote_relation(model.base_relation(q.domain, q.name, model.TEST_RESULTS)) in sql
+                       for q in model.test_results_writers(m)), sql
     foreign = [sql for s, sql in compiled[False].items() if "/k2_input_relationships_" in s]
     assert len(foreign) == (1 if name == "good" else 0)  # daily-load's station_id into its input
     assert all("FOR VERSION AS OF BIGINT '42'" in sql for sql in foreign)  # the foreign-key test reads the pinned snapshot too
@@ -396,14 +434,39 @@ def test_dbt_parses_compiles_and_selects_the_tree(tmp_path: Path, name: str) -> 
         assert set(listed.split()) == want, listed
 
 
+@pytest.mark.skipif(os.environ.get("K2_DBT_PROOF") != "1", reason="the dbt proof runs under make test-dbt-tree (K2_DBT_PROOF=1)")
+@pytest.mark.parametrize("name", ["good", "repository"])
+def test_parse_with_k2_inputs_for_one_product_only(tmp_path: Path, name: str) -> None:
+    # The wrapper's vars (docker/dbt-runner/k2_dbt.py dbt_argv): the selected product's pins only, {}
+    # for a product with no input. dbt parses every product's models for any --selector, so another
+    # product's k2_input must not raise at parse; it compiles only the selected nodes, so a selected
+    # model whose input has no pin still fails, at compile, before any SQL reaches a warehouse.
+    m = loaded(repository() if name == "repository" else good())
+    proof_tree(tmp_path, m)
+    built = [p for p in m.products if any(t.build.kind == "dbt" for t in p.tables) or p.seeds]
+    read = [(p, port) for p in built for port in p.input_ports
+            if any("k2_input('{}', '{}')".format(*pin_key(port.contract_id).split("/")) in str(sql) for sql in p.models.values())]
+    assert read, "a product in the set reads an input through k2_input, or this proves nothing"
+    assert [p for p in built if not p.input_ports], "a product in the set has no input, the wrapper's {} case"
+    for p in built:
+        own = {pin_key(port.contract_id): {"snapshot": 42} for port in p.input_ports}
+        run_dbt(tmp_path, "compile", "--selector", model.dag_id(p.name), "--exclude", "resource_type:operation",
+                "--vars", json.dumps({"k2_inputs": own}))
+    for p, port in read:
+        others = {pin_key(q.contract_id): {"snapshot": 42} for q in p.input_ports if q is not port}
+        out = run_dbt(tmp_path, "compile", "--selector", model.dag_id(p.name), "--exclude", "resource_type:operation",
+                      "--vars", json.dumps({"k2_inputs": others}), ok=False)
+        assert f"k2_input: k2_inputs is set but has no entry {pin_key(port.contract_id)}" in out, out
+
+
 def regenerate(root: Path) -> None:
     for out, documents in ((GOLDEN, good()), (REPOSITORY, repository(root))):
         tree = dbt.emit(loaded(documents))
         if out == REPOSITORY and not product_files(tree):
             continue
         for path, text in tree.items():
-            if out == REPOSITORY and "/macros/" in path:
-                continue  # the repository's macros are the good set's, compared there
+            if out == REPOSITORY and "/macros/" in path and not path.endswith("/k2_test_results.sql"):
+                continue  # the repository's macros are the good set's, compared there; the union lists its own writers
             (out / path).parent.mkdir(parents=True, exist_ok=True)
             (out / path).write_text(text)
 

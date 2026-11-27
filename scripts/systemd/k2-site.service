@@ -1,0 +1,14 @@
+# The daily regeneration of the catalog site and the dbt docs for the live release (make site;
+# deploy also runs both after each deploy and rollback), so the catalog's run-time facts stay
+# fresh between deploys. A user unit: `make site-install` writes it to ~/.config/systemd/user
+# with @K2_ROOT@ set to the checkout it ran from. The env file is loaded as an operator loads it
+# for make deploy (K2_RELEASES, K2_SECRETS, K2_COMPOSE_PROJECT), and uv is found in ~/.local/bin.
+[Unit]
+Description=K2 daily catalog site and dbt docs of the live release
+Documentation=file://@K2_ROOT@/docs/runbooks/deploy-a-release.md
+
+[Service]
+Type=oneshot
+WorkingDirectory=@K2_ROOT@
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/usr/bin/env bash -c 'set -a && . ./.env && set +a && exec make -s site'

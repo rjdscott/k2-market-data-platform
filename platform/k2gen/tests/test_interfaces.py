@@ -504,8 +504,8 @@ def test_no_release_file_has_a_place_for_a_secret() -> None:
 
 
 def test_the_platform_tables_are_well_formed() -> None:
-    assert set(model.PLATFORM_TABLES) == model.RESERVED_TABLE_NAMES
-    for name, table in model.PLATFORM_TABLES.items():
+    assert {*model.PLATFORM_TABLES, model.TEST_RESULTS} == model.RESERVED_TABLE_NAMES
+    for name, table in {**model.PLATFORM_TABLES, model.TEST_RESULTS: model.TEST_RESULTS_TABLE}.items():
         names = [c.name for c in table.columns]
         assert table.name == name and len(names) == len(set(names))
         for column in table.columns:
@@ -513,6 +513,16 @@ def test_the_platform_tables_are_well_formed() -> None:
             assert model.physical_type_problem(column.type) is None, column
             assert column.comment, column
         assert all(re.fullmatch(r"day\((\w+)\)", p) and re.fullmatch(r"day\((\w+)\)", p).group(1) in names for p in table.partitioning)  # type: ignore[union-attr]
+
+
+def test_the_results_table_is_the_one_the_hook_creates() -> None:
+    # dbt/macros/k2_results.sql's CREATE TABLE, column for column: the union (emit/dbt.py) reads these names.
+    hook = (model.REPO / "dbt" / "macros" / "k2_results.sql").read_text()
+    created = re.search(r"'create table if not exists ' ~ table ~ ' \((.*?)\) '\s*~ \"comment", hook, re.S)
+    assert created, "k2_results.sql no longer creates its table in one statement"
+    columns = [c.strip().split(" ", 1) for c in re.sub(r"'\s*~\s*'", "", created[1]).split(", ")]
+    assert [(n, t) for n, t in columns] == [(c.name, c.type) for c in model.TEST_RESULTS_TABLE.columns]
+    assert f".{model.TEST_RESULTS}'" in hook
 
 
 def test_the_gate_amendments_are_in_the_principal_lists() -> None:
