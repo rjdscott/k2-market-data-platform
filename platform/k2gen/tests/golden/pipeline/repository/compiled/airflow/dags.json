@@ -65,6 +65,24 @@
       ]
     },
     {
+      "dagId": "kraken_instruments",
+      "pipeline": "compiled/products/market-capture.kraken-instruments/pipeline.json",
+      "product": "market-capture.kraken-instruments",
+      "schedule": "17 * * * *",
+      "status": "active",
+      "tasks": [
+        "resolve",
+        "fetch",
+        "load",
+        "audit",
+        "publish",
+        "build",
+        "expire",
+        "record",
+        "maintain"
+      ]
+    },
+    {
       "dagId": "quality_results",
       "pipeline": "compiled/products/governance.quality-results/pipeline.json",
       "product": "governance.quality-results",

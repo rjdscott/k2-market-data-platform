@@ -1,0 +1,64 @@
+{
+  "bronze": [
+    {
+      "audits": [],
+      "branch": "audit",
+      "checks": "lake.kraken_instruments.audit_checks",
+      "decimal": [],
+      "key": [
+        "pair_code",
+        "ws_name",
+        "base",
+        "quote",
+        "tick_size",
+        "pair_decimals",
+        "lot_decimals",
+        "order_min",
+        "status",
+        "fetched_at",
+        "source_file_sha256"
+      ],
+      "patterns": {},
+      "table": "lake.kraken_instruments.bronze_pairs",
+      "values": []
+    }
+  ],
+  "build": {
+    "engine": "dbt",
+    "outputs": [
+      "market_capture_build.kraken_instruments__base.silver_listing"
+    ],
+    "publisher": "pub_kraken_instruments",
+    "selector": "kraken_instruments",
+    "writer": "dbt_kraken_instruments"
+  },
+  "connector": {
+    "allowHosts": [
+      "api.kraken.com"
+    ],
+    "kind": "public-api",
+    "minIntervalS": 1,
+    "pagination": "none",
+    "parser": "kraken_asset_pairs",
+    "records": "result",
+    "url": "https://api.kraken.com/0/public/AssetPairs"
+  },
+  "dagId": "kraken_instruments",
+  "domain": "market-capture",
+  "fence": "kraken_instruments",
+  "inputs": [],
+  "landing": {
+    "bucket": "k2-landing",
+    "log": "lake.kraken_instruments.landing_files",
+    "prefix": "market-capture/kraken-instruments/"
+  },
+  "maintain": {
+    "cron": "52 5 * * *"
+  },
+  "product": "market-capture.kraken-instruments",
+  "schedule": {
+    "cron": "17 * * * *",
+    "timeoutMinutes": 10
+  },
+  "status": "active"
+}

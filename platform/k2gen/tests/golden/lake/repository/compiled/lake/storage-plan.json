@@ -3,6 +3,7 @@
     "bucket": "k2-landing",
     "prefixes": [
       "fx-reference/ecb-fx-rates/",
+      "market-capture/kraken-instruments/",
       "reference-data/currency-master/"
     ]
   },
@@ -30,7 +31,8 @@
       "name": "k2",
       "namespaces": [
         "currency_master",
-        "ecb_fx_rates"
+        "ecb_fx_rates",
+        "kraken_instruments"
       ],
       "remoteSigningEnabled": false
     },
@@ -41,7 +43,10 @@
     },
     {
       "name": "market_capture",
-      "namespaces": [],
+      "namespaces": [
+        "kraken_instruments",
+        "kraken_instruments__base"
+      ],
       "remoteSigningEnabled": false
     },
     {

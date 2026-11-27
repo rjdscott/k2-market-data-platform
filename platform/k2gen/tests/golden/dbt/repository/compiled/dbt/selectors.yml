@@ -18,6 +18,12 @@ selectors:
   definition:
     method: fqn
     value: k2.governance.quality_results
+- name: kraken_instruments
+  description: 'market-capture.kraken-instruments: its seeds and models, with their tests and unit tests; built as dbt_kraken_instruments
+    (the wrapper''s dbt build --selector).'
+  definition:
+    method: fqn
+    value: k2.market_capture.kraken_instruments
 - name: calendars
   description: 'reference-data.calendars: its seeds and models, with their tests and unit tests; built as dbt_calendars (the
     wrapper''s dbt build --selector).'
