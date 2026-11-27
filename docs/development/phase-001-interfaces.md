@@ -399,6 +399,18 @@ the landing's resume point and bronze's staged-through point, and without it the
 again from the log start, or stages again from offset 0, duplicating both. W1-9 builds it and W0-4c
 proves the resume after a compaction and an expiry.
 
+2026-11-28 (W0-4c, `bash scripts/verify/kafka-path.sh <release> c`, on the throwaway, each pass
+`maintain.py` as the factory's task runs it): `--compact` is skipped, its reason in the result,
+while bronze's `audit` holds an unpublished batch, which then publishes; with 53 small files on each
+table (seeded by 50 runs, `COMPACT_MIN_FILES` unchanged) it writes one `replace` snapshot per table
+carrying `k2.job` `maintenance` and no `k2.kafka-offsets`, every row as before. The default pass's
+continuity check, expiry and `remove_orphan_files` run, deleting no live file: the listing the
+maintenance key makes serves `s3://`, so Iceberg 1.8.1's own listing through Hadoop's FileSystem is
+never needed. Expiry with every snapshot past retention keeps, on each table, main's head and the
+newest connector snapshot under it (`retain_last` 2); the next run starts at that snapshot's end
+offsets and lands and stages each record once. Iceberg's `remove_orphan_files` itself refuses an
+`older_than` under 24 hours before now, the same floor as `ORPHAN_FLOOR`.
+
 **What k2gen compiles for a Kafka product (W1-2).** In `pipeline.json`: `connector` as the product
 file declares it (`kind` `kafka`, `brokers`, `registry`, `topic`, `envelope` `{format, contract}`,
 `filter` `{field, in}` when it filters, `payload`, `startFrom`, `maxOffsetsPerPartition`);
