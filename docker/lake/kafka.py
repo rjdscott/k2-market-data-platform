@@ -15,7 +15,8 @@ land   reads the pinned range from the topic once to count and once to write. Ev
        or nothing commits, with the end offsets, the batch's starts and every accepted gap so far
        (cumulative: the previous connector commit's and any this run accepts) in that one commit's
        summary. A retry plans from that commit, so it lands only what is new.
-stage  takes, per partition, every landing row after the offset bronze has staged through up to the
+stage  takes, per partition, every landing row after the offset bronze has staged through (for a
+       partition bronze never staged, from the landing's first offset in it, never 0) up to the
        landing's newest end offsets, read from the landing at one snapshot and never from the
        topic, so whatever earlier runs landed and did not stage is picked up exactly once. Each
        frame's envelope is decoded with the writer schema its schema id names (fetched from the
@@ -230,17 +231,30 @@ def range_sql(ranges: dict) -> tuple[str, dict]:
     return " OR ".join(terms), args
 
 
-def stage_ranges(through: dict, landed: dict) -> dict:
+def stage_ranges(through: dict, landed: dict, firsts: dict) -> dict:
     """`{partition: (start, end)}` of the landing not yet in bronze: from the offset bronze has
-    staged through (exclusive; none staged: 0) to the landing's end offsets. Empty when level.
-    Refused when bronze is past the landing on a partition (a landing restored older than its
-    bronze): restaging would skip or double it."""
+    staged through (exclusive) to the landing's end offsets. A partition bronze has never staged
+    starts at the landing's first offset in it (`firsts`, `{partition: offset}`), never at 0: the
+    first run, and a partition added since, land from the log start. One the landing holds no row
+    of has nothing to stage. Empty when level. Refused when bronze is past the landing on a
+    partition (a landing restored older than its bronze): restaging would skip or double it."""
     [(topic, ends)] = landed.items()
-    starts = through.get(topic, {})
-    ahead = sorted(p for p, s in starts.items() if s > ends.get(p, 0))
+    starts = {**{p: firsts.get(p, e) for p, e in ends.items()}, **through.get(topic, {})}
+    ahead = sorted(p for p, s in through.get(topic, {}).items() if s > ends.get(p, 0))
     if ahead:
         raise C.Refused(f"bronze is past the landing on {topic} partitions {ahead}; nothing staged")
-    return {p: (starts.get(p, 0), e) for p, e in ends.items() if e > starts.get(p, 0)}
+    return {p: (starts[p], e) for p, e in ends.items() if e > starts[p]}
+
+
+def ranges_of(lake, landing: str, snapshot: int, through: dict, ends: dict) -> dict:
+    """stage_ranges over the landing at `snapshot`. The first offset of a partition bronze has no
+    through-offset for is the landing's minimum `kafka_offset` in it, read from its rows: they are
+    never expired (Retention), where the landing commit that recorded the batch's start
+    (KAFKA_STARTS) may be. The land step held that commit's read to its planned span, first offset
+    at its start, so the minimum is that start."""
+    [(topic, parts)] = ends.items()
+    new = sorted(p for p in parts if p not in through.get(topic, {}))
+    return stage_ranges(through, ends, lake.firsts(landing, snapshot, new) if new else {})
 
 
 def stage_account(topic: str, ranges: dict, found: list) -> dict:
@@ -424,7 +438,7 @@ def stage(run: C.Run, lake) -> tuple[int, dict]:
     through = O.decode(last_staged[O.KAFKA_OFFSETS]) if last_staged else {}
     ends = O.decode(last_landed[O.KAFKA_OFFSETS])
     try:
-        ranges = stage_ranges(through, ends)
+        ranges = ranges_of(lake, landing, head, through, ends)
         if not ranges:
             print(f"load: {table} is level with {landing}; nothing staged")
             return C.EXIT_OK, result
@@ -467,15 +481,14 @@ def audit_results(run: C.Run, lake, refs: dict) -> list[tuple[str, bool, str]]:
     table, landing, head = bronze["table"], run.pipeline["landing"]["table"], refs[C.AUDIT]
     batch = lake.summary_of(table, head)
     before = newest(lake.history(table)[1])
-    after = O.decode(batch[O.KAFKA_OFFSETS])
+    after, src = O.decode(batch[O.KAFKA_OFFSETS]), int(batch[O.SRC_SNAPSHOT_ID])
     [topic] = after
-    ranges = stage_ranges(O.decode(before[O.KAFKA_OFFSETS]) if before else {}, after)
+    ranges = ranges_of(lake, landing, src, O.decode(before[O.KAFKA_OFFSETS]) if before else {}, after)
     staged = lake.offset_counts(table, head, ranges)
-    failing, listed = lake.unparsed(landing, int(batch[O.SRC_SNAPSHOT_ID]), table, head, ranges,
-                                    keep_sql(run.pipeline["connector"].get("filter")))
+    failing, listed = lake.unparsed(landing, src, table, head, ranges, keep_sql(run.pipeline["connector"].get("filter")))
     return [
         ("accounting", *accounting(topic, ranges, accepted_losses(lake.history(landing)[1], topic),
-                                   lake.offset_counts(landing, int(batch[O.SRC_SNAPSHOT_ID]), ranges), staged,
+                                   lake.offset_counts(landing, src, ranges), staged,
                                    O.decode(batch[KAFKA_SKIPPED]).get(topic, {}), int(batch.get("added-records") or 0))),
         ("parses", *parses(topic, sum(n for _, n, *_ in staged), failing, listed)),
         ("keys_unique", *keys_unique(staged, lake.offset_counts(table, refs.get("main"), ranges))),
@@ -641,6 +654,14 @@ class SparkLanding(C.SparkLake):
         found = self._sql(f"SELECT `summary` FROM {C.rel(table)}.`snapshots` WHERE `snapshot_id` = :s",
                           s=C.snapshot_id(snapshot))
         return dict(found[0][0] or {}) if found else {}
+
+    def firsts(self, table: str, snapshot: int, partitions: list) -> dict:
+        """`{partition: min(kafka_offset)}` of `table` at `snapshot` over `partitions`, those it holds
+        a row of. ponytail: a scan of those partitions, run only on a partition's first stage."""
+        marks = ", ".join(f":p{i}" for i in range(len(partitions)))
+        return dict(self._sql(f"SELECT `kafka_partition`, min(`kafka_offset`) FROM {C.rel(table)} VERSION AS OF "
+                              f"{C.snapshot_id(snapshot)} WHERE `kafka_partition` IN ({marks}) GROUP BY `kafka_partition`",
+                              **{f"p{i}": int(p) for i, p in enumerate(partitions)}))
 
     def offset_counts(self, table: str, snapshot, ranges: dict) -> list:
         """`[(partition, rows, offsets, first, last)]` of `table` at `snapshot` in `ranges`."""

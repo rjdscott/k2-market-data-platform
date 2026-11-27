@@ -303,6 +303,15 @@ nothing stages. The descriptions of `kafkaConnector` and its `filter` in `k2-v2.
 say the filter decides what lands; the next step to edit that file's descriptions brings them to
 this.
 
+2026-11-28 (review finding D1): a partition bronze has no through-offset for (the product's first
+stage, or a partition added since) starts at the landing's first offset in it, its minimum
+`kafka_offset` read from the landing's rows, never at 0. The landing lands from the log start
+(`startFrom: earliest-retained`), so a range from 0 planned rows that were never there and the first
+audit on a trimmed topic failed for good. The rows are the source because they are never expired;
+the landing commit whose `k2.kafka-starts` recorded that start may be. The audit's accounting plans
+from the same start, and Retention's "stages again from offset 0" reads "from the landing's first
+offset".
+
 **Bronze.** A Kafka product has one bronze table (`kafka.py` stages into exactly one), staged from the landing
 by offset, never by run id, so a retry, or a kill between the landing commit and the stage, stages
 nothing twice and leaves no hole. Its columns are exactly the landing's nine, by name and type, as

@@ -596,12 +596,12 @@ def claim(name: str, rp: Path) -> bool:
             bad.append(f"load exit {rc(rp, 'b4.load')}, k2.kafka-gaps {newest.get('k2.kafka-gaps')}, want {want}")
         if gaps != sorted((int(p), ends[int(p)], o, o - ends[int(p)]) for p, o in trims.items()):
             bad.append(f"load's offsetGaps {gaps}")
-        seen = {}
+        seen, first = {}, {int(p): o for p, o in f1["topic"]["earliest"][topic].items()}  # b1's: claim 6's trim
         for p, o in f["landing"]["main"]:
             seen.setdefault(p, []).append(o)
         for p, end in topic_ends(f)[topic].items():
             lo = trims.get(str(p))
-            want_offsets = list(range(ends.get(p, 0))) + list(range(lo if lo is not None else ends.get(p, 0), end))
+            want_offsets = list(range(first.get(p, 0), ends.get(p, 0))) + list(range(lo if lo is not None else ends.get(p, 0), end))
             if sorted(seen.get(p, [])) != want_offsets:
                 bad.append(f"partition {p}: landing {len(seen.get(p, []))} offsets, want {len(want_offsets)}")
         if offsets_of(newest) != topic_ends(f):
@@ -634,6 +634,25 @@ def claim(name: str, rp: Path) -> bool:
         return say(4, "after one further clean run the newest landing commit still carries the gap", bad,
                    f"b5 landed {result(rp, 'b5.load').get('landed')} in landing commit {after[0]}, which carries "
                    f"k2.kafka-gaps {gaps}, as b4's did; its audit and publish exit 0")
+    if name == "first-trimmed":  # b6
+        f, trims, r = load_json(rp, "facts-b1.json"), load_json(rp, "trims0.json"), result(rp, "b1.load")
+        [(topic, earliest)] = f["topic"]["earliest"].items()
+        bad = [] if trims else ["nothing was trimmed before the first run"]
+        if any(earliest.get(p) != o for p, o in trims.items()):
+            bad.append(f"log starts {earliest}, trimmed to {trims}")
+        if any(rc(rp, f"b1.{t}") != "0" for t in ("load", "audit", "publish")):
+            bad.append(f"b1 exits {[rc(rp, f'b1.{t}') for t in ('load', 'audit', 'publish')]}: "
+                       f"{(rp / 'b1.audit.out').read_text().strip()[-300:]}")
+        if {int(p): o for p, o in (r.get("starts") or {}).get(topic, {}).items()} != {int(p): o for p, o in earliest.items()}:
+            bad.append(f"b1 started at {r.get('starts')}, the log starts {earliest}")
+        bad += every_frame_once(f) + bronze_is_trades(f) + through_is_landing(f)
+        rows = [c for c in f["checks"] if c[0] == "kafka_fixture/b1"]
+        if sorted((c[2], c[3]) for c in rows) != [("accounting", True), ("keys_unique", True), ("parses", True)]:
+            bad.append(f"audit_checks {[(c[2], c[3], c[4]) for c in rows]}")
+        acc = next((c[4] for c in rows if c[2] == "accounting"), "")
+        return say(6, "a topic trimmed before the product's first run loads, audits and publishes cleanly", bad,
+                   f"log starts {earliest}; b1 landed {r.get('landed')} from them, staged {r.get('rows')}, accounting: "
+                   f"{acc}; publish moved main; every offset from each log start once, bronze main = the trades")
     raise SystemExit(f"kafka_path_probe.py: no claim {name}")
 
 

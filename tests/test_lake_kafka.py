@@ -228,6 +228,13 @@ class Lake:
                 if r["kafka_partition"] in ranges
                 and ranges[r["kafka_partition"]][0] <= r["kafka_offset"] < ranges[r["kafka_partition"]][1]]
 
+    def firsts(self, table, snapshot, partitions):
+        found = {}
+        for r in self.snaps[snapshot]["rows"]:
+            if r["kafka_partition"] in partitions:
+                found[r["kafka_partition"]] = min(found.get(r["kafka_partition"], r["kafka_offset"]), r["kafka_offset"])
+        return found
+
     def offset_counts(self, table, snapshot, ranges):
         found = {}
         for r in self._in(snapshot, ranges):
@@ -508,8 +515,62 @@ def test_a_retry_of_a_staged_batch_stages_nothing_twice():
 
 def test_bronze_past_the_landing_is_refused():
     with pytest.raises(C.Refused, match=r"partitions \[1\]"):
-        K.stage_ranges({TOPIC: {0: 3, 1: 9}}, {TOPIC: {0: 5, 1: 4}})
-    assert K.stage_ranges({TOPIC: {0: 3}}, {TOPIC: {0: 5, 1: 4}}) == {0: (3, 5), 1: (0, 4)}
+        K.stage_ranges({TOPIC: {0: 3, 1: 9}}, {TOPIC: {0: 5, 1: 4}}, {})
+    assert K.stage_ranges({TOPIC: {0: 3}}, {TOPIC: {0: 5, 1: 4}}, {1: 0}) == {0: (3, 5), 1: (0, 4)}
+
+
+def test_a_partition_bronze_never_staged_starts_at_the_landings_first_offset_never_0():
+    assert K.stage_ranges({TOPIC: {0: 3}}, {TOPIC: {0: 5, 1: 9, 2: 7}}, {1: 6}) == {0: (3, 5), 1: (6, 9)}
+    assert K.stage_ranges({}, {TOPIC: {0: 5}}, {0: 2}) == {0: (2, 5)}  # 2 holds no landing row: nothing
+
+
+def trimmed(partitions, produced, log_start):
+    """A topic whose every partition holds `produced` records, those below `log_start` evicted."""
+    topic = Topic(partitions)
+    for p in range(partitions):
+        topic.produce(p, *["trade", "heartbeat"] * (produced // 2))
+        topic.evict(p, log_start)
+    return topic
+
+
+def test_a_topic_trimmed_before_the_first_run_lands_audits_and_publishes_from_its_log_start():
+    topic, lake = trimmed(2, 8, 5), Lake()
+    code, result = K.load(ctx(1), topic, lake)
+    assert code == C.EXIT_OK and result["starts"] == {TOPIC: {0: 5, 1: 5}} and result["landed"] == 6
+    assert offsets_of(lake.rows(BRONZE, "audit")) == [(0, 6), (1, 6)]  # the trades, from the log start
+    code, checks = audited(lake, 1)
+    assert code == C.EXIT_OK and checks["accounting"] == (True, "2 staged + 4 skipped = 6 landed over 2 partitions")
+    lake.publish()
+    topic.produce(0, "trade")
+    K.load(ctx(2), topic, lake)  # the next resumes at the through-offsets, as every later run
+    assert audited(lake, 2)[0] == C.EXIT_OK and offsets_of(lake.rows(BRONZE, "audit")) == [(0, 6), (0, 8), (1, 6)]
+
+
+def test_a_partition_added_later_with_its_log_start_above_0_stages_from_it():
+    topic, lake = Topic(partitions=1), Lake()
+    topic.produce(0, "trade")
+    K.load(ctx(1), topic, lake)
+    K.audit(ctx(1), None, lake)
+    lake.publish()
+    topic.records[1], topic.log_start[1] = {}, 0  # partition 1 added, and trimmed before any run read it
+    topic.produce(1, *["trade"] * 6)
+    topic.evict(1, 4)
+    K.load(ctx(2), topic, lake)
+    code, checks = audited(lake, 2)
+    assert code == C.EXIT_OK and checks["accounting"] == (True, "2 staged + 0 skipped = 2 landed over 1 partitions")
+    assert offsets_of(lake.rows(BRONZE, "audit")) == [(0, 0), (1, 4), (1, 5)]
+
+
+def test_an_accept_data_loss_run_that_is_bronzes_first_stage_plans_from_the_landings_first_offset():
+    topic, lake = trimmed(1, 4, 2), Lake()  # log start 2
+    K.land(ctx(1, accept=True), topic, lake)  # the first run, the flag a no-op on it; killed before its stage
+    topic.produce(0, "trade", "trade", "trade")
+    topic.evict(0, 6)  # 4 and 5 gone before they landed
+    code, result = K.load(ctx(2, accept=True), topic, lake)
+    assert code == C.EXIT_OK and result["offsetGaps"][0]["committed"] == 4
+    code, checks = audited(lake, 2)
+    assert code == C.EXIT_OK and checks["accounting"] == (True, "2 staged + 1 skipped = 3 landed over 1 partitions")
+    assert offsets_of(lake.rows(BRONZE, "audit")) == [(0, 2), (0, 6)]
 
 
 def test_the_stage_refuses_a_row_neither_kept_nor_skipped_or_outside_its_range():

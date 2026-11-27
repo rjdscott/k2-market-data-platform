@@ -43,6 +43,9 @@
 #   3 the audit's accounting passes with the gap excluded, and publish moves main
 #   4 after one further clean run the newest landing commit still carries the gap (cumulative)
 #   5 bronze main still carries the decoded envelope as seeded (a's claim 10's rule)
+#   6 the topic trimmed BEFORE the product's first run (b1; every partition of two records or more
+#     halfway): b1 lands from each log start, every offset once, and its audit and publish pass
+#     (claims 1 to 5 build on that lake: the landing starts at those log starts, not at 0)
 # group c (W0-4c), each maintain pass maintain.py exactly as the factory's task runs it; the
 # thresholds met by seeding small files (COMPACT_MIN_FILES has no override): `kafka_path_probe.py
 # cycles`, 50 runs of three trade frames in one Spark application, kafka.py's own tasks
@@ -64,7 +67,7 @@ set -uo pipefail
 # shellcheck source=scripts/lib/run-path-lib.sh
 . "$(dirname "$0")/../lib/run-path-lib.sh"
 GROUP=${2:-a}
-case $GROUP in a) N=10 ;; b) N=5 ;; c) N=6 ;; *) echo "kafka-path: no group $GROUP (a, b or c)" >&2; exit 2 ;; esac
+case $GROUP in a) N=10 ;; b) N=6 ;; c) N=6 ;; *) echo "kafka-path: no group $GROUP (a, b or c)" >&2; exit 2 ;; esac
 rp_start kafka-path "${1:-}" "$N"
 FX=platform/k2gen/tests/fixtures/kafka-fixture
 KF=market-capture.kafka-fixture DAG=kafka_fixture
@@ -149,7 +152,21 @@ fi
 if [ "$GROUP" = b ]; then
   TOPIC=$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["connector"]["topic"])' \
     "$STATE/releases/$ID/compiled/products/$KF/pipeline.json")
-  seed "$FULL"; run b1; facts b1
+  trim() {  # trim <json {partition: new log start}>
+    python3 -c 'import json, sys; [print(p, o) for p, o in json.load(open(sys.argv[1])).items()]' "$1" |
+      while read -r p o; do docker exec "$P-redpanda" rpk topic trim-prefix "$TOPIC" -p "$p" -o "$o" --no-confirm >> "$RP/trim.log" 2>&1; done
+    echo "$P: trimmed $(cat "$1") (partition: new log start)"
+  }
+  seed "$FULL"
+  # every partition with two records or more trimmed halfway BEFORE the product's first run: its log start above 0
+  docker exec "$P-redpanda" rpk topic describe "$TOPIC" -p > "$RP/describe0.txt"
+  python3 - "$RP/describe0.txt" > "$RP/trims0.json" <<'PY0'
+import json, sys
+hw = {x.split()[0]: int(x.split()[-1]) for x in open(sys.argv[1]) if x.split() and x.split()[0].isdigit()}
+print(json.dumps({p: h // 2 for p, h in hw.items() if h >= 2}))
+PY0
+  trim "$RP/trims0.json"
+  run b1; facts b1
   seed "$FULL"
   # every partition with records past b1's end offsets trimmed halfway into them: a hole after the resume point
   docker exec "$P-redpanda" rpk topic describe "$TOPIC" -p > "$RP/describe.txt"
@@ -160,13 +177,11 @@ f = json.load(open(sys.argv[1]))
 hw = {x.split()[0]: int(x.split()[-1]) for x in open(sys.argv[2]) if x.split() and x.split()[0].isdigit()}
 print(json.dumps({p: ends.get(p, 0) + (h - ends.get(p, 0)) // 2 for p, h in hw.items() if h - ends.get(p, 0) >= 2}))
 PY2
-  python3 -c 'import json, sys; [print(p, o) for p, o in json.load(open(sys.argv[1])).items()]' "$RP/trims.json" |
-    while read -r p o; do docker exec "$P-redpanda" rpk topic trim-prefix "$TOPIC" -p "$p" -o "$o" --no-confirm >> "$RP/trim.log" 2>&1; done
-  echo "$P: trimmed $(cat "$RP/trims.json") (partition: new log start)"
+  trim "$RP/trims.json"
   ktask b3 load; facts b3
   ktask b4 load --accept-data-loss; ktask b4 audit; ktask b4 publish; facts b4
   seed "$FULL"; run b5; facts b5
-  timings; claims below accepted gap-audit carried envelope-b
+  timings; claims below accepted gap-audit carried envelope-b first-trimmed
   finish
 fi
 
