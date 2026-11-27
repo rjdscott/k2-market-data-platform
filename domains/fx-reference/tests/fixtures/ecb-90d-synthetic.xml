@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<gesmes:Envelope xmlns:gesmes="http://www.gesmes.org/xml/2002-08-01" xmlns="http://www.ecb.int/vocabulary/2002-08-01/eurofxref">
+	<gesmes:subject>Reference rates</gesmes:subject>
+	<gesmes:Sender>
+		<gesmes:name>Synthetic</gesmes:name>
+	</gesmes:Sender>
+	<Cube>
+		<Cube time="2030-01-03">
+			<Cube currency="USD" rate="1.1000"/>
+			<Cube currency="JPY" rate="2.2000"/>
+			<Cube currency="GBP" rate="3.3000"/>
+			<Cube currency="CHF" rate="4.4000"/>
+			<Cube currency="AUD" rate="5.5000"/>
+		</Cube>
+		<Cube time="2030-01-02">
+			<Cube currency="USD" rate="1.2000"/>
+			<Cube currency="JPY" rate="2.4000"/>
+			<Cube currency="GBP" rate="3.6000"/>
+			<Cube currency="CHF" rate="4.8000"/>
+			<Cube currency="AUD" rate="6.0000"/>
+		</Cube>
+		<Cube time="2030-01-01">
+			<Cube currency="USD" rate="1.3000"/>
+			<Cube currency="JPY" rate="2.6000"/>
+			<Cube currency="GBP" rate="3.9000"/>
+			<Cube currency="CHF" rate="5.2000"/>
+			<Cube currency="AUD" rate="6.5000"/>
+		</Cube>
+	</Cube>
+</gesmes:Envelope>
