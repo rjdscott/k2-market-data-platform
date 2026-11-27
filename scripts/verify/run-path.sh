@@ -68,6 +68,11 @@
 #     column is NOT NULL in the table and Trino refuses the merge first, and no frame repeats the
 #     key): one more trade frame, the venue build fails its tests and rolls back, its audited tag
 #     unmoved; canonical-trades and candles then change nothing
+#  18 a trade frame the model cannot type (one trade without side, made here) beside a good one: on
+#     the tree's own release the build takes the good frame and claim 17's, keeps the bad one whole
+#     in silver_trade_rejected (field_missing:side, bronze's bytes), publishes degraded warning
+#     rejected_frames_zero by its name; the next build with nothing new adds and changes no row and
+#     is degraded again, since the frame still stands
 # Each chain task's wall time goes to <rp>/times and is printed as an INFO line, with the sum of
 # one five-minute cycle (kraken-trades' four tasks, canonical-trades and candles).
 #
@@ -76,7 +81,7 @@
 set -uo pipefail
 # shellcheck source=scripts/lib/run-path-lib.sh
 . "$(dirname "$0")/../lib/run-path-lib.sh"
-rp_start run-path "${1:-}" 17
+rp_start run-path "${1:-}" 18
 # claim 16's release: this tree with kraken-trades paused
 rp_fail_release "$(cat <<'PY'
 import sys
@@ -123,6 +128,18 @@ rp_image
 export K2_THROWAWAY_REDPANDA=1
 rp_lake
 rp_chain_files
+python3 - "$RP" <<'PY' || die "claim 18's frames could not be made"
+# Synthetic, in the fixture's line format, after more.jsonl's frame: a BTC/USD trade without side,
+# which silver_trade cannot type, then a good one.
+import json, sys
+from pathlib import Path
+def line(at_s, trade):
+    payload = json.dumps({"channel": "trade", "type": "update", "data": [trade]}, separators=(",", ":"))
+    return json.dumps({"recv_ts_ns": 1_000_000_000_000_000_000 + at_s * 1_000_000_000, "payload": payload}) + "\n"
+bad = {"symbol": "BTC/USD", "price": 1001.0, "qty": 0.25, "ord_type": "market", "trade_id": 5, "timestamp": "2001-09-09T01:47:30.000000Z"}
+good = {"symbol": "BTC/USD", "side": "buy", "price": 1002.0, "qty": 0.75, "ord_type": "limit", "trade_id": 6, "timestamp": "2001-09-09T01:47:31.000000Z"}
+(Path(sys.argv[1]) / "malformed.jsonl").write_text(line(50, bad) + line(51, good))
+PY
 rp_calendars  # 1
 rp_good       # 2
 rp_build      # 3
@@ -164,5 +181,8 @@ claim paused "$ID" "$IDP"          # 16
 kseed "$RP/more.jsonl"; trades kt-5 "$IDV"; probe chain-state kt-5
 build "$ID" "$CT" ct-6; build "$ID" "$CA" ca-6; probe chain-state failed
 claim venue-fail "$ID" "$IDV"     # 17
+kseed "$RP/malformed.jsonl"; trades kt-6; probe chain-state kt-6
+trades kt-7; probe chain-state kt-7
+claim rejected "$ID"               # 18
 rp_times
 finish
