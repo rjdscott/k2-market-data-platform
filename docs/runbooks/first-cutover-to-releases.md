@@ -13,13 +13,14 @@ and, if it goes wrong, moving it back to today's shape. Every later change is an
 > (`make deploy-rehearsal CUTOVER=1`, [`scripts/verify/deploy_cutover.py`](../../scripts/verify/deploy_cutover.py)):
 > compose project `k2-rehearsal` started in TODAY's shape (fixed container names `k2r-*`, one shared
 > network, Trino on plain HTTP from the checkout's `docker/trino/etc`, Lakekeeper with a host port, a
-> stand-in capture), then this procedure, then its rollback. Never on the live stack. Below, `k2-` is
-> the live container prefix and `$P` the live project name; the outputs are the rehearsal's.
+> stand-in capture), then this procedure, then its rollback; and then, the same day, section 1 on the
+> live stack. Below, `k2-` is the live container prefix and `$P` the live project name; an output block
+> says whether it is the rehearsal's or the live run's.
 
 | # | Task | MTTR target | Measured |
 |---|------|-------------|----------|
-| 1 | The cutover, from the release to verified | <15 min | 127 s for the whole rehearsal; the deploy 32 s (2026-11-27, rehearsal) |
-| 2 | Each service's outage during it | | Lakekeeper 2.2 s, Trino 10.8 s, each new service 0.1 s; MinIO, Postgres and the capture never down (2026-11-27, rehearsal) |
+| 1 | The cutover, from the release to verified | <15 min | 144 s, the live deploy from the command to verified (2026-11-27, live); 32 s on the rehearsal |
+| 2 | Each service's outage during it | | Lakekeeper 5.7 s, Trino 11.3 s, the Airflow DAG processor 22.5 s, every other recreated service 12 s or less; the captures, Redpanda, MinIO and Postgres never down (2026-11-27, live) |
 | 3 | The rollback to today's shape | <10 min | 8 s (2026-11-27, rehearsal) |
 
 ---
@@ -83,6 +84,9 @@ P=$(docker inspect k2-trino --format '{{index .Config.Labels "com.docker.compose
 make tls
 for id in svc.runs svc.catalog svc.platform svc.api dbt_access_canary pub_access_canary; do
   make password PRINCIPAL=$id TO_FILE=1; done
+#    and the Slack webhook Alertmanager mounts (the URL on stdin, never argv): deploy's preflight
+#    refuses while any secret file a recreated service mounts is missing
+make alerts-install-webhook
 # 4. .env: K2_COMPOSE_PROJECT=$P, K2_HOME=<this checkout's absolute path>, K2_TRINO_PORT=8443,
 #    K2_TRINO_SHARED_SECRET=$(openssl rand -hex 32), K2_TRINO_S3_ACCESS_KEY and K2_TRINO_S3_SECRET_KEY
 #    (MinIO's root pair until phase 002's scoped keys); then load it again
@@ -90,10 +94,13 @@ set -a && . ./.env && set +a
 # 5. the checkout at the release's tag (deploy refuses a checkout whose emitter differs), the release
 git checkout <tag>
 make release TAG=<tag>          # captures, Redpanda, MinIO, Postgres, Lakekeeper keep the images they run
-# 6. the catalog's network, and MinIO and Postgres joined to it in place: no restart
+# 6. the catalog's network, and MinIO, Postgres and the running Lakekeeper joined to it in place:
+#    no restart. Lakekeeper too, because the one-shot lake-init (on k2-catalog only) calls it at the
+#    DDL step, before the deploy recreates Lakekeeper onto that network alone
 docker network create --label com.docker.compose.project=$P --label com.docker.compose.network=k2-catalog ${P}_k2-catalog
 docker network connect --alias minio ${P}_k2-catalog k2-minio
 docker network connect --alias prefect-db ${P}_k2-catalog k2-prefect-db
+docker network connect --alias lakekeeper ${P}_k2-catalog k2-lakekeeper
 # 7. the plan, then the first deploy: Lakekeeper the one stateful service allowed to move
 make deploy RELEASE=<release id> PLAN=1
 make deploy RELEASE=<release id> ALLOW_STATEFUL=lakekeeper
@@ -122,12 +129,39 @@ cutover: the access canary is not published until phase 002.
 
 **Measured**, 2026-11-27, on the rehearsal: the cutover deploy 32 s from the command to verified (its release-time suites ran at `PLAN=1` and were kept), each service's outage as the deploy measured it from its recreate to healthy: Lakekeeper 2.2 s, Trino 10.8 s (started from the release's etc over HTTPS), the two services the release shape adds 0.1 s each; MinIO, Postgres and the stand-in capture kept their `State.StartedAt` throughout. The whole rehearsal, today's shape up to rolled back, 127 s. The live stack has more services to recreate once (Airflow's three, Spark, Grafana, cAdvisor, Alertmanager, Redpanda Console): seconds each, not measured.
 
-**Not covered by the rehearsal**: the live services the rehearsal has no copy of (Airflow, Spark,
-Grafana, cAdvisor, Alertmanager, Redpanda Console, the one-shots), each recreated once by the same
-`up -d --no-deps`; and the live canary. Until phase 002 publishes the access canary, release-verify's
-live suite is a visible SKIP (`not yet published`); once it is published, its readers are people,
-whose passwords `make password` never files, while the live suite reads them from
-`${K2_SECRETS}/principals/p.canary-*.password`: decide how those files are made before then.
+**On the live stack**, 2026-11-27 00:28 to 00:31 UTC, release `v3.0.0-alpha.3-rc.1-490b0533ff56`:
+
+```text
+  recreate, one at a time: lakekeeper, trino, airflow-api-server, airflow-dag-processor, airflow-scheduler, airflow-statsd, alertmanager, cadvisor, grafana, prometheus, redpanda-console, spark-iceberg
+  one-shots run: airflow-migrate, lake-init, lakekeeper-migrate, redpanda-init
+  one-shot airflow-migrate exited 0 in 9.3 s
+  one-shot lake-init exited 0 in 0.1 s
+  one-shot lakekeeper-migrate exited 0 in 0.2 s
+  one-shot redpanda-init exited 0 in 5.7 s
+deploy: ddl ok (20.3 s)
+deploy: swap ok (1.4 s)
+  lakekeeper recreated, healthy in 5.7 s
+  trino recreated, healthy in 11.3 s
+  airflow-dag-processor recreated, healthy in 22.5 s
+deploy: recreate ok (104.3 s)
+deploy: verify ok (5.2 s)
+deploy: v3.0.0-alpha.3-rc.1-490b0533ff56 is live and verified
+release-verify: v3.0.0-alpha.3-rc.1-490b0533ff56 everywhere
+health: PASS
+```
+
+Checked after it, by `docker inspect` and `curl`: the three captures, Redpanda, MinIO and Postgres kept
+their `State.StartedAt`; Lakekeeper has no published port and is on the catalog's network alone;
+`127.0.0.1:8088` and `127.0.0.1:18181` no longer answer; `https://localhost:8443/v1/info` answers 200
+against the local CA and a statement without a password gets 401. Alertmanager was in the plan but
+compose found nothing to change in it, so it was not restarted.
+
+**Still not covered**: the live access canary. Until phase 002 publishes it, release-verify's live
+suite is a visible SKIP (`not yet published`); once it is published, its readers are people, whose
+passwords `make password` never files, while the live suite reads them from
+`${K2_SECRETS}/principals/p.canary-*.password`: decide how those files are made before then. A fresh
+install of the release-shaped stack on an empty host is also not yet run
+([fresh install](./fresh-install.md)).
 
 ---
 
@@ -169,9 +203,10 @@ each service the cutover recreated is recreated again from today's file.
 
 ## Failure modes / incidents
 
-- None on the live stack yet.
+- 2026-11-27, live: the first `PLAN=1` was refused at preflight (`secret files missing under ${K2_SECRETS}: alertmanager/slack-webhook-url`), before any change. Alertmanager runs without the file, but deploy requires every secret file a recreated service mounts. Fixed by installing the webhook (step 3); nothing else was needed.
 
 ---
 
-**Last verified:** 2026-11-27 as a migration on the rehearsal, branch `step/s19b-deploy-integration`;
-not yet on the live stack.
+**Last verified:** 2026-11-27 on the live stack (the cutover, section 1), release
+`v3.0.0-alpha.3-rc.1-490b0533ff56`; section 2, the rollback, on the rehearsal only
+(`make deploy-rehearsal CUTOVER=1`, 8 s), never needed live.
