@@ -62,7 +62,7 @@ live() { readlink "$ROOT/pointers/$1" 2>/dev/null | sed 's|^\.\./||'; }
 plan() {
   echo "deploy-mid-run: the plan for $DAG, R-1 $(live airflow) to $TARGET"
   echo "  docker exec $SCHED airflow dags trigger $DAG -r $RUN"
-  echo "  (wait: resolve success and a later task running: airflow dags states-for-dag-run $DAG $RUN -o json)"
+  echo "  (wait: resolve success and a later task running: airflow tasks states-for-dag-run $DAG $RUN -o json)"
   echo "  make deploy RELEASE=$TARGET"
   echo "  (wait: the run ends: airflow dags list-runs $DAG -o json)"
   echo "  (read: SELECT DISTINCT release_id FROM governance.run_records.run_record WHERE run_id = '$DAG/$RUN', as svc.catalog)"
@@ -70,12 +70,12 @@ plan() {
 }
 
 task_states() {  # task_states <run>: "<task> <state>" lines
-  airflow dags states-for-dag-run "$DAG" "$1" -o json 2>/dev/null \
-    | python3 -c 'import json, sys; [print(t["task_id"], t["state"]) for t in json.load(sys.stdin)]' 2>/dev/null
+  airflow tasks states-for-dag-run "$DAG" "$1" -o json 2>/dev/null \
+    | python3 -c 'import json, sys; [print(t["task_id"], t["state"]) for t in json.loads(next((l for l in reversed(sys.stdin.read().splitlines()) if l.startswith("[")), "[]"))]' 2>/dev/null
 }
 run_state() {  # run_state <run>: the run's state, or nothing
   airflow dags list-runs "$DAG" -o json 2>/dev/null \
-    | python3 -c 'import json, sys; print(next((r["state"] for r in json.load(sys.stdin) if r["run_id"] == sys.argv[1]), ""))' "$1" 2>/dev/null
+    | python3 -c 'import json, sys; print(next((r["state"] for r in json.loads(next((l for l in reversed(sys.stdin.read().splitlines()) if l.startswith("[")), "[]")) if r["run_id"] == sys.argv[1]), ""))' "$1" 2>/dev/null
 }
 wait_end() {  # wait_end <run>: until success or failed, 60 min at most; prints the state
   local s t0=$SECONDS
@@ -106,9 +106,9 @@ if [ -z "$OLD" ] || [ "$OLD" != "$(live trino)" ]; then refuse "the airflow and 
 [ "$(docker inspect -f '{{.State.Running}}' "$SCHED" 2>/dev/null)" = true ] || refuse "$SCHED is not running"
 airflow dags list -o json 2>/dev/null | python3 -c '
 import json, sys
-d = next((x for x in json.load(sys.stdin) if x["dag_id"] == sys.argv[1]), None)
+d = next((x for x in json.loads(next((l for l in reversed(sys.stdin.read().splitlines()) if l.startswith("[")), "[]")) if x["dag_id"] == sys.argv[1]), None)
 sys.exit(0 if d and str(d["is_paused"]) == "False" else 1)' "$DAG" || refuse "DAG $DAG is not in Airflow, or is paused"
-[ -z "$(airflow dags list-runs "$DAG" --state running -o json 2>/dev/null | python3 -c 'import json, sys; print(json.load(sys.stdin) or "")' 2>/dev/null)" ] \
+[ -z "$(airflow dags list-runs "$DAG" --state running -o json 2>/dev/null | python3 -c 'import json, sys; print(json.loads(next((l for l in reversed(sys.stdin.read().splitlines()) if l.startswith("[")), "[]")) or "")' 2>/dev/null)" ] \
   || refuse "DAG $DAG has a run in progress"
 say "make deploy RELEASE=$TARGET PLAN=1"
 make -s deploy RELEASE="$TARGET" PLAN=1 > "$W/plan.log" 2>&1 || { cat "$W/plan.log" >&2; refuse "PLAN=1 failed"; }

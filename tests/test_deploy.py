@@ -1382,3 +1382,24 @@ sys.exit(f"fake docker: no answer for {A}")
         assert {("ops_insight", "daily_load"), ("ops_insight", "daily_load__base")} <= left["namespaces"]
         assert ("ops_insight", "daily_load__base", "gold_daily_load") in left["tables"]
         assert left["views"][("ops_insight", "daily_load", "gold_daily_load")] == "pub_daily_load"
+
+    def test_the_drift_check_waits_for_a_running_builds_own_relations_and_for_nothing_else(monkeypatch: pytest.MonkeyPatch) -> None:
+        """scripts/chaos/deploy-mid-run.sh, 2026-11-27: a deploy beside a running build saw dbt's
+        `silver_rates__dbt_tmp` as drift and rolled back. It now runs the check again; any other
+        difference, or one that stays, still fails."""
+        tmp = "DRIFT view k2.ns__base.silver_rates__dbt_tmp: the release declares no such view (it claims owner None)"
+        bak = "DRIFT table k2.ns__base.gold__dbt_backup: in k2, and the release declares no such table"
+        other = "DRIFT view k2.ns__base.extra: the release declares no such view (it claims owner None)"
+        assert deploy.in_flight([tmp, bak])
+        assert not deploy.in_flight([]) and not deploy.in_flight([tmp, other])
+        # "pending" ends s20_checks after its drift half: the live suite is not this test's
+        answers = [{"exit": 1, "doc": {"differences": [tmp]}, "text": tmp}, {"exit": 0, "doc": {"pending": ["p"]}, "text": ""}]
+        monkeypatch.setattr(deploy, "drift", lambda ctx, rel: answers.pop(0))
+        monkeypatch.setattr(deploy.time, "sleep", lambda s: None)
+        monkeypatch.setattr(deploy, "BUILD_WAIT", 20)
+        lines, wrong = deploy.s20_checks(None, None)  # type: ignore[arg-type]
+        assert not answers and not wrong and any("waited 10 s" in x for x in lines), (lines, wrong)
+        stuck = {"exit": 1, "doc": {"differences": [tmp], "pending": ["p"]}, "text": tmp}
+        monkeypatch.setattr(deploy, "drift", lambda ctx, rel: stuck)
+        lines, wrong = deploy.s20_checks(None, None)  # type: ignore[arg-type]
+        assert any("drift check exit 1" in w for w in wrong) and any("waited 20 s" in x for x in lines), (lines, wrong)

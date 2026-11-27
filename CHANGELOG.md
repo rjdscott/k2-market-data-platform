@@ -13,6 +13,22 @@ layouts and commands, without notice. `3.0.0` is reserved for the release gate t
 
 ## [Unreleased]
 
+## [3.0.0-alpha.5.1] - 2026-11-27
+
+### Fixed
+
+- A deploy that does not drain no longer fails beside a running product build: the drift check at
+  verify read dbt's `<model>__dbt_tmp` relation as drift and the deploy rolled back
+  (`scripts/chaos/deploy-mid-run.sh` on the live stack, `2 PASS, 2 FAIL`). The check is run again, for
+  300 s at most, while every difference is such a relation; one that stays is still drift. The script
+  then printed `4 PASS, 0 FAIL in 105 s`.
+- `scripts/chaos/deploy-mid-run.sh` reads Airflow's JSON past its log lines and asks the `tasks`
+  command group for a run's task states.
+
+### Added
+
+- The "landed" lines of phases 002 and 003 in their plan files.
+
 ## [3.0.0-alpha.5] - 2026-11-27
 
 Phase 003 of the unified product platform plan, "serving and teaching": `k2-api` serves the product
@@ -432,7 +448,10 @@ v3 lake-first stack (tag `v3-phase-e`).
 - The plan's later phases (P4 to P7) are not done, so the contracts, marts and gates
   may still change.
 
-[Unreleased]: https://github.com/rjdscott/k2-market-data-platform/compare/v3.0.0-alpha.3...HEAD
+[Unreleased]: https://github.com/rjdscott/k2-market-data-platform/compare/v3.0.0-alpha.5.1...HEAD
+[3.0.0-alpha.5.1]: https://github.com/rjdscott/k2-market-data-platform/compare/v3.0.0-alpha.5...v3.0.0-alpha.5.1
+[3.0.0-alpha.5]: https://github.com/rjdscott/k2-market-data-platform/compare/v3.0.0-alpha.4...v3.0.0-alpha.5
+[3.0.0-alpha.4]: https://github.com/rjdscott/k2-market-data-platform/compare/v3.0.0-alpha.3...v3.0.0-alpha.4
 [3.0.0-alpha.3]: https://github.com/rjdscott/k2-market-data-platform/compare/v3.0.0-alpha.2...v3.0.0-alpha.3
 [3.0.0-alpha.2]: https://github.com/rjdscott/k2-market-data-platform/compare/v3.0.0-alpha.1...v3.0.0-alpha.2
 [3.0.0-alpha.1]: https://github.com/rjdscott/k2-market-data-platform/releases/tag/v3.0.0-alpha.1
