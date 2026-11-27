@@ -16,7 +16,7 @@
       "allow": "all"
     },
     {
-      "user": "dbt_access_canary|dbt_quality_results|pub_access_canary|pub_quality_results|svc\\.platform|svc\\.runs",
+      "user": "dbt_access_canary|dbt_quality_results|pub_access_canary|pub_quality_results|svc\\.operator|svc\\.platform|svc\\.runs",
       "catalog": "governance_build",
       "allow": "all"
     },
@@ -56,7 +56,7 @@
       "allow": "read-only"
     },
     {
-      "user": "dbt_quality_results|svc\\.api|svc\\.catalog|svc\\.platform|svc\\.runs",
+      "user": "dbt_quality_results|svc\\.api|svc\\.catalog|svc\\.operator|svc\\.platform|svc\\.runs",
       "catalog": "governance",
       "allow": "read-only"
     },
@@ -863,17 +863,16 @@
       ]
     },
     {
-      "user": "svc\\.runs",
+      "user": "svc\\.operator",
       "catalog": "governance_build",
       "schema": "run_records",
       "table": "holds",
       "privileges": [
-        "SELECT",
         "INSERT"
       ]
     },
     {
-      "user": "svc\\.catalog",
+      "user": "svc\\.catalog|svc\\.operator|svc\\.platform|svc\\.runs",
       "catalog": "governance",
       "schema": "run_records",
       "table": "holds",
@@ -1329,7 +1328,7 @@
       ]
     },
     {
-      "user": "dbt_access_canary|dbt_calendars|dbt_candles|dbt_canonical_trades|dbt_currency_master|dbt_ecb_fx_rates|dbt_kraken_instruments|dbt_kraken_trades|dbt_quality_results|dbt_security_master|k2_release_000000000000|p\\.analyst\\-a|p\\.canary\\-delayed|p\\.canary\\-full|p\\.canary\\-scoped|pub_access_canary|pub_calendars|pub_candles|pub_canonical_trades|pub_currency_master|pub_ecb_fx_rates|pub_kraken_instruments|pub_kraken_trades|pub_quality_results|pub_security_master|svc\\.api|svc\\.catalog|svc\\.partner\\-dashboard|svc\\.runs",
+      "user": "dbt_access_canary|dbt_calendars|dbt_candles|dbt_canonical_trades|dbt_currency_master|dbt_ecb_fx_rates|dbt_kraken_instruments|dbt_kraken_trades|dbt_quality_results|dbt_security_master|k2_release_000000000000|p\\.analyst\\-a|p\\.canary\\-delayed|p\\.canary\\-full|p\\.canary\\-scoped|pub_access_canary|pub_calendars|pub_candles|pub_canonical_trades|pub_currency_master|pub_ecb_fx_rates|pub_kraken_instruments|pub_kraken_trades|pub_quality_results|pub_security_master|svc\\.api|svc\\.catalog|svc\\.operator|svc\\.partner\\-dashboard|svc\\.runs",
       "allow": [
         "execute"
       ]

@@ -21,6 +21,13 @@ principals:
     kind: service
     owner: platform-team
     description: k2-api's one Trino identity, which runs every data request as its caller.
+  # The one exception: the operator's own login, from the host alone. Its password file is mounted
+  # into no service and no one-shot (tests/test_hold.py), so nothing holding svc.runs's password,
+  # a DAG, a one-shot or a dbt model, can end or forge a hold.
+  - id: svc.operator
+    kind: service
+    owner: platform-team
+    description: Appends the holds and their releases through governance_build (make hold, make unhold, the rebuild and restore locks), INSERT on that one table alone; reads them read-only through governance.
   # The access canary's builder and publisher (model.builder, model.publisher).
   - id: dbt_access_canary
     kind: service

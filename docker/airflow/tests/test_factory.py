@@ -775,7 +775,7 @@ class Holds(unittest.TestCase):
         self.assertIn("sensor-net.station-readings is held (operator hold by owner at 2026-11-28 01:02:03+00:00): "
                       "listing rebuilt by hand", str(e.exception))
         statement, params = self.cur.execute.call_args.args
-        self.assertIn("FROM governance_build.run_records.holds", statement)
+        self.assertIn("FROM governance.run_records.holds", statement)  # the reader catalog (review A4)
         self.assertEqual(params, ["sensor-net.station-readings"])
 
     def test_no_open_hold_pins_the_release(self):

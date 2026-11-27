@@ -4,11 +4,14 @@
   make hold PRODUCT=<domain/name | domain.name | name> REASON="<text>"
   make unhold PRODUCT=<...>
 
-Runs on the host, as scripts/chaos/deploy-mid-run.sh reads the run records: over TLS on
-localhost:${K2_TRINO_PORT:-8443} as svc.runs, its password read from
-${K2_SECRETS:-~/k2-secrets}/principals/svc.runs.password by k2runs.connect, never printed and never
-an argument. (Inside the tools one-shot it would need a new mount of that file.) The DAG is paused
-and unpaused with `docker exec k2-airflow-scheduler airflow dags pause|unpause <dag> -y`.
+Runs on the host alone: over TLS on localhost:${K2_TRINO_PORT:-8443} as svc.operator, the holds'
+one writer (k2gen.model.HOLDS_WRITER: INSERT on the holds and nothing else, its reads through the
+read-only reader catalog), its password read from ${K2_SECRETS:-~/k2-secrets}/principals/svc.operator.password
+by k2runs.connect, never printed and never an argument. The operator makes that file once, with
+`make password PRINCIPAL=svc.operator TO_FILE=1`; no service or one-shot mounts it (tests/test_hold.py),
+so nothing holding svc.runs's password, which every dbt-runner one-shot and the scheduler hold, can
+write a hold. Without it the command refuses, naming that make line. The DAG is paused and unpaused
+with `docker exec k2-airflow-scheduler airflow dags pause|unpause <dag> -y`.
 
 The hold row is written FIRST and is the truth: a held product's DAG refuses to run in its resolve
 task anyway, so a failed pause leaves the hold and exits 1. An unhold writes the release row, then
@@ -30,6 +33,7 @@ import k2runs  # noqa: E402
 
 SCHEDULER = "k2-airflow-scheduler"
 MAX_REASON = 200
+WRITER = "svc.operator"  # k2gen.model.HOLDS_WRITER; the rules name it alone as the holds' writer
 
 
 class Refused(Exception):
@@ -98,6 +102,15 @@ def do_unhold(conn: Any, product: str, dag: str, by: str, unpause: Callable[[str
     return 0
 
 
+def password_file(secrets: Path) -> Path:
+    """The writer's password file (k2gen.model.password_file), or a refusal naming how to make it."""
+    path = secrets / "principals" / f"{WRITER}.password"
+    if not path.is_file():
+        raise Refused(f"no password file for {WRITER} at {path}: the operator makes it once with "
+                      f"`make password PRINCIPAL={WRITER} TO_FILE=1` (host-held: no container mounts it)")
+    return path
+
+
 def airflow_argv(verb: str, dag: str) -> list[str]:
     return ["docker", "exec", SCHEDULER, "airflow", "dags", verb, dag, "-y"]
 
@@ -126,9 +139,8 @@ def main(argv: list[str]) -> int:
         reason = check_reason(argv[2] if len(argv) > 2 else "") if verb == "hold" else ""
         product, dag = resolve(arg, live_dags(Path(env.get("K2_RELEASES") or Path.home() / "k2-releases")))
         secrets = Path(env.get("K2_SECRETS") or Path.home() / "k2-secrets")
-        conn = k2runs.connect(host="localhost", port=int(env.get("K2_TRINO_PORT", "8443")), user="svc.runs",
-                              password_file=str(secrets / "principals" / "svc.runs.password"),
-                              ca=str(secrets / "tls" / "ca.pem"))
+        conn = k2runs.connect(host="localhost", port=int(env.get("K2_TRINO_PORT", "8443")), user=WRITER,
+                              password_file=str(password_file(secrets)), ca=str(secrets / "tls" / "ca.pem"))
         by = getpass.getuser()
         if verb == "hold":
             return do_hold(conn, product, dag, reason, by, lambda d: airflow("pause", d))

@@ -1,9 +1,11 @@
 """The one run-records client (phase 001 interface A6, contracts/schema/run-record.schema.json).
 
 record() appends one row to governance_build.run_records.run_record as svc.runs; newest_audited()
-reads the newest `audited` row of a table. hold(), release() and held() write and read the holds
-(platform/runs/holds.sql, step I-7), also as svc.runs. Dependency: trino only. The password is read from its
-file at each connect() and never held, logged or put in an error message.
+reads the newest `audited` row of a table. hold() and release() append to the holds
+(platform/runs/holds.sql, step I-7) as svc.operator, from the host alone (scripts/hold.py); held()
+reads them as whoever calls it (svc.runs in a DAG's resolve, svc.platform in deploy), through the
+read-only reader catalog. Dependency: trino only. The password is read from its file at each
+connect() and never held, logged or put in an error message.
 """
 from __future__ import annotations
 
@@ -92,12 +94,16 @@ def newest_audited(conn: Any, table: str) -> int | None:
     return int(rows[0][0]) if rows else None
 
 
-HOLDS = "governance_build.run_records.holds"
+HOLDS = "governance_build.run_records.holds"  # written: INSERT by svc.operator, and by nobody else
+# Read: every read of the holds, the writes' own conditions included, goes through the reader catalog,
+# read-only at the connector. SELECT in `governance_build` would be the right to roll the table back
+# (ALTER TABLE ... EXECUTE rollback_to_snapshot, spike (e)), which ends a hold with no row written.
+HOLDS_READ = "governance.run_records.holds"
 HOLD_KINDS = ("operator", "rebuild", "restore")  # make hold; make rebuild's and make restore's per-product lock
 # The columns of platform/runs/holds.sql, in order.
 HOLD_COLUMNS = ("product_id", "kind", "reason", "held_by", "held_at", "released_at", "released_by")
 # An open hold: a hold row (released_at null) that no release row of its product, kind and held_at follows.
-_OPEN = (f"h.released_at IS NULL AND NOT EXISTS (SELECT 1 FROM {HOLDS} r WHERE r.product_id = h.product_id "
+_OPEN = (f"h.released_at IS NULL AND NOT EXISTS (SELECT 1 FROM {HOLDS_READ} r WHERE r.product_id = h.product_id "
          "AND r.kind = h.kind AND r.held_at = h.held_at AND r.released_at IS NOT NULL)")
 # Each write is one statement that inserts only when the state allows it, so a hold never opens
 # twice and a release never ends what is not held; the row count says which.
@@ -105,10 +111,10 @@ _OPEN = (f"h.released_at IS NULL AND NOT EXISTS (SELECT 1 FROM {HOLDS} r WHERE r
 # (Iceberg appends do not conflict). One operator per host; add a compare-and-set on the table's
 # snapshot if two writers ever hold at once.
 HOLD = (f"INSERT INTO {HOLDS} ({', '.join(HOLD_COLUMNS)}) SELECT ?, ?, ?, ?, ?, CAST(NULL AS timestamp(6) with time zone), "
-        f"CAST(NULL AS varchar) WHERE NOT EXISTS (SELECT 1 FROM {HOLDS} h WHERE h.product_id = ? AND h.kind = ? AND {_OPEN})")
+        f"CAST(NULL AS varchar) WHERE NOT EXISTS (SELECT 1 FROM {HOLDS_READ} h WHERE h.product_id = ? AND h.kind = ? AND {_OPEN})")
 RELEASE = (f"INSERT INTO {HOLDS} ({', '.join(HOLD_COLUMNS)}) SELECT h.product_id, h.kind, h.reason, h.held_by, h.held_at, ?, ? "
-           f"FROM {HOLDS} h WHERE h.product_id = ? AND h.kind = ? AND {_OPEN}")
-HELD = (f"SELECT {', '.join(HOLD_COLUMNS)} FROM {HOLDS} h WHERE h.product_id = ? AND {_OPEN} "
+           f"FROM {HOLDS_READ} h WHERE h.product_id = ? AND h.kind = ? AND {_OPEN}")
+HELD = (f"SELECT {', '.join(HOLD_COLUMNS)} FROM {HOLDS_READ} h WHERE h.product_id = ? AND {_OPEN} "
         "ORDER BY h.held_at DESC LIMIT 1")
 
 
@@ -130,8 +136,9 @@ def _hold_args(product: str, kind: str, by: str) -> None:
 
 
 def hold(conn: Any, product: str, reason: str, by: str, kind: str = "operator", at: datetime | None = None) -> None:
-    """Open a hold of `kind` on `product` (<domain>.<product>). Refused, before any call, without a
-    reason; refused by the table when one of that kind is open already."""
+    """Open a hold of `kind` on `product` (<domain>.<product>), on a connection as svc.operator, the
+    holds' one writer. Refused, before any call, without a reason; refused by the table when one of
+    that kind is open already."""
     _hold_args(product, kind, by)
     if not reason or not reason.strip():
         raise HoldError("a hold carries its reason")
@@ -143,8 +150,8 @@ def hold(conn: Any, product: str, reason: str, by: str, kind: str = "operator", 
 
 
 def release(conn: Any, product: str, by: str, kind: str = "operator", at: datetime | None = None) -> None:
-    """End the open hold of `kind` on `product` by appending its release row. An operator's release
-    never ends a rebuild's or a restore's lock, nor they an operator's hold."""
+    """End the open hold of `kind` on `product` by appending its release row, as svc.operator. An
+    operator's release never ends a rebuild's or a restore's lock, nor they an operator's hold."""
     _hold_args(product, kind, by)
     at = _utc(at) or datetime.now(timezone.utc)
     cur = conn.cursor()
