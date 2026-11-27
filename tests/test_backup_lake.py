@@ -460,3 +460,10 @@ def test_verify_mode_reads_the_live_backup_set(stack, done):
     (stack / "releases/rel-1/compiled/lake/backup-set.json").write_text(json.dumps(live))
     out = run(stack, "--verify")
     assert out.returncode == 1 and "k2.x.y: a restore table" in out.stderr
+
+
+def test_a_gzip_metadata_file_is_read_as_json():
+    """Spark and Trino write `<v>.gz.metadata.json` on this stack: the first live backup met one (2026-11-27)."""
+    import gzip
+    doc = b'{"current-snapshot-id": 7}'
+    assert bl.plain(gzip.compress(doc)) == doc and bl.plain(doc) == doc

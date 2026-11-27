@@ -35,6 +35,7 @@ by name, sent only in a signed header (scripts/access_verify.py's sigv4), and ne
 from __future__ import annotations
 
 import argparse
+import gzip
 import hashlib
 import json
 import os
@@ -188,6 +189,13 @@ def split(uri: str) -> tuple[str, str]:
     return bucket, key
 
 
+def plain(data: bytes) -> bytes:
+    """A table's metadata file as JSON bytes. Iceberg writes `<v>.gz.metadata.json` when the table's
+    write.metadata.compression-codec is gzip (the tables this stack's engines make are), so the
+    gzip magic decides, not the name."""
+    return gzip.decompress(data) if data[:2] == b"\x1f\x8b" else data
+
+
 def snapshot_files(meta: dict[str, Any], ref: str, read: Callable[[str], bytes]) -> tuple[int | None, list[tuple[str, int | None]]]:
     """(the snapshot id at `ref`, every file reading the table at it needs, with its size when the
     metadata gives one). (None, []) for a table with no snapshot at the ref yet."""
@@ -224,7 +232,7 @@ def plan(backup_set: dict[str, Any], locate: Callable[[str], tuple[str, str]], r
             loc, meta_uri = locate(e["table"])
             loc = loc.rstrip("/")
             split(loc + "/x")
-            sid, files = snapshot_files(json.loads(read(meta_uri)), e["ref"], read)
+            sid, files = snapshot_files(json.loads(plain(read(meta_uri))), e["ref"], read)
             files = [(meta_uri, None), *files]
             for uri, _ in files:
                 split(uri)
