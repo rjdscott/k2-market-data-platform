@@ -1,0 +1,20 @@
+# dbt unit tests: each runs one model's SQL on the rows written here instead of its real inputs,
+# and compares the result with the expected rows. They prove the logic, not the data.
+unit_tests:
+  - name: currency_is_one_row_per_code_across_files
+    model: currency_master__currency  # the dbt name, <fence>__<table> (k2gen.model.dbt_model)
+    description: >-
+      EUR is in two landed files with the same values and comes out once; a fund (CLF) and a code
+      with no minor units (XTS, the code ISO reserves for testing) keep their flags.
+    given:
+      - input: source('currency_master', 'bronze_currencies')
+        rows:
+          - {code: EUR, numeric_code: "978", name: Euro, minor_units: 2, is_fund: false, source_file_sha256: aa}
+          - {code: EUR, numeric_code: "978", name: Euro, minor_units: 2, is_fund: false, source_file_sha256: bb}
+          - {code: CLF, numeric_code: "990", name: Unidad de Fomento, minor_units: 4, is_fund: true, source_file_sha256: bb}
+          - {code: XTS, numeric_code: "963", name: Testing code, minor_units: null, is_fund: false, source_file_sha256: bb}
+    expect:
+      rows:
+        - {code: EUR, numeric_code: "978", name: Euro, minor_units: 2, is_fund: false}
+        - {code: CLF, numeric_code: "990", name: Unidad de Fomento, minor_units: 4, is_fund: true}
+        - {code: XTS, numeric_code: "963", name: Testing code, minor_units: null, is_fund: false}

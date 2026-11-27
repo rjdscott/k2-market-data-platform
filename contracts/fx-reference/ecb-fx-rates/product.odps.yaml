@@ -1,0 +1,84 @@
+# The ECB's euro foreign exchange reference rates: the 90-day file fetched every TARGET weekday
+# after publication, landed verbatim, parsed in the fetch container by
+# domains/fx-reference/parsers/ecb_fx.py, published to bronze after its audit, then typed and
+# keyed (silver_rates) and laid out on TARGET days (gold_eur_rates_daily) by dbt.
+apiVersion: v1.1.0
+kind: DataProduct
+id: fx-reference.ecb-fx-rates
+name: ecb-fx-rates
+version: 1.0.0
+status: active
+domain: fx-reference
+type: sourceAligned
+description:
+  purpose: >-
+    The euro foreign exchange reference rates the European Central Bank publishes each TARGET
+    day: how many units of each currency one euro is worth at the daily fixing, as published,
+    typed, and laid out one row per TARGET day and currency.
+  limitations: >-
+    A reference fixing, not a market close or a tradable price, published at about 16:00 CET on
+    each TARGET day.
+    The 90-day file holds the last 90 days only, so history starts at the first file landed.
+    The ECB's terms of reuse are linked below but not yet recorded as terms here: the owner
+    confirms them against the terms page before any grant outside the owning team (k2gen check
+    refuses such a grant while no terms are recorded). A published rate that a later file
+    changes fails the bronze audit (values_unchanged), which holds every later file until
+    someone looks.
+  usage: >-
+    Read fx_reference.ecb_fx_rates.gold_eur_rates_daily for one row per TARGET day and currency,
+    a missing fixing carried from the last published one for at most five TARGET days
+    (is_carried, carried_days); join on rate_available_at, not rate_date, to use a rate only once
+    it was published. silver_rates holds the fixings exactly as published, one per day and currency.
+team:
+  name: fx-reference-team
+authoritativeDefinitions:
+  - type: licence
+    url: https://www.ecb.europa.eu/home/disclaimer/html/index.en.html
+    description: >-
+      The ECB's disclaimer and copyright page, which states its terms of reuse; to be confirmed by
+      the owner against the terms page before any non-owner grant.
+inputPorts:
+  - name: target_days
+    version: 1.0.0
+    contractId: reference-data.calendars.target_days
+    customProperties:
+      - property: required
+        value: true  # gold lays rates out on TARGET days: no tested calendar, no build (wrapper exit 4)
+      - property: maxLagMinutes
+        value: null  # the calendar changes only with a release
+outputPorts:
+  - name: bronze_daily
+    version: 1.0.0
+    contractId: fx-reference.ecb-fx-rates.bronze_daily
+  - name: silver_rates
+    version: 1.0.0
+    contractId: fx-reference.ecb-fx-rates.silver_rates
+    inputContracts:  # a sibling, not an input port: the catalog's lineage edge bronze to silver
+      - id: fx-reference.ecb-fx-rates.bronze_daily
+        version: 1.0.0
+  - name: gold_eur_rates_daily
+    version: 1.0.0
+    contractId: fx-reference.ecb-fx-rates.gold_eur_rates_daily
+    inputContracts:
+      - id: fx-reference.ecb-fx-rates.silver_rates
+        version: 1.0.0
+      - id: reference-data.calendars.target_days
+        version: 1.0.0
+customProperties:
+  - property: connector
+    value:
+      kind: https-file
+      url: "https://www.ecb.europa.eu/stats/eurofxref/eurofxref-hist-90d.xml"
+      allowHosts: [www.ecb.europa.eu]
+      format: xml
+      parser: ecb_fx
+  - property: schedule
+    value:
+      # Weekdays at 15:30 UTC: after the 16:00 CET publication in winter (15:00 UTC) and in summer
+      # (14:00 UTC). An unchanged file adds nothing (fetch exits 10 on the same sha256). No timeout
+      # yet: step W2-17 sets it from 20 measured runs.
+      cron: "30 15 * * 1-5"
+  - property: examples
+    value:
+      - description: The euro in US dollars on each TARGET day, with whether the rate was carried.
+        sql: "SELECT rate_date, rate, is_carried FROM fx_reference.ecb_fx_rates.gold_eur_rates_daily WHERE currency = 'USD' ORDER BY rate_date"

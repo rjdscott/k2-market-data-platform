@@ -1,0 +1,1 @@
+SELECT "calendar_date", "is_target_day", "closing_reason" FROM "reference_data"."calendars__base"."target_days" FOR VERSION AS OF 'audited' WHERE EXISTS (SELECT 1 FROM "reference_data"."calendars__base"."target_days$refs" WHERE "name" = 'audited' AND "type" = 'TAG')

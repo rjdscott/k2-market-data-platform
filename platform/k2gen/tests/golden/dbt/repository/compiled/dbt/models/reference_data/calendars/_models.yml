@@ -1,0 +1,40 @@
+# Compiled by k2gen (platform/k2gen/k2gen/emit/dbt.py) from the release's documents. Never edit it: change the documents.
+version: 2
+models:
+- name: calendars__target_days
+  description: One row per calendar day from 1 January 2025 to 31 December 2027, marked open or closed for TARGET. TARGET
+    closes on Saturdays, Sundays, New Year's Day, Good Friday, Easter Monday, 1 May, 25 December and 26 December; every other
+    day it is open.
+  config:
+    alias: target_days
+    meta:
+      k2:
+        contract: reference-data.calendars.target_days
+        reader: reference_data.calendars.target_days
+  columns:
+  - name: calendar_date
+    description: The calendar day, one row each.
+    data_type: date
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+    - unique
+  - name: is_target_day
+    description: True when TARGET is open that day (a weekday that is not a closing day in the seed), the days the ECB publishes
+      reference rates; false on a weekend or a closing day.
+    data_type: boolean
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  - name: closing_reason
+    description: 'Why TARGET is closed: Saturday, Sunday, or the holiday''s name from the seed (Good Friday, Labour Day, ...).
+      Null on a day TARGET is open. A holiday falling on a weekend reads as the weekend day, since the seed lists only the
+      holidays that fall on weekdays.'
+    data_type: varchar
+seeds:
+- name: calendars__target_closing_days
+  description: The synthetic seed contracts/reference-data/calendars/seeds/target_closing_days.csv.
+  config:
+    alias: target_closing_days

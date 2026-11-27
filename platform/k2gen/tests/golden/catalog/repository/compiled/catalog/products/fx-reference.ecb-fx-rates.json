@@ -1,0 +1,252 @@
+{
+  "id": "fx-reference.ecb-fx-rates",
+  "name": "ecb-fx-rates",
+  "domain": "fx-reference",
+  "version": "1.0.0",
+  "status": "active",
+  "type": "sourceAligned",
+  "owner": "fx-reference-team",
+  "purpose": "The euro foreign exchange reference rates the European Central Bank publishes each TARGET day: how many units of each currency one euro is worth at the daily fixing, as published, typed, and laid out one row per TARGET day and currency.",
+  "limitations": "A reference fixing, not a market close or a tradable price, published at about 16:00 CET on each TARGET day. The 90-day file holds the last 90 days only, so history starts at the first file landed. The ECB's terms of reuse are linked below but not yet recorded as terms here: the owner confirms them against the terms page before any grant outside the owning team (k2gen check refuses such a grant while no terms are recorded). A published rate that a later file changes fails the bronze audit (values_unchanged), which holds every later file until someone looks.",
+  "usage": "Read fx_reference.ecb_fx_rates.gold_eur_rates_daily for one row per TARGET day and currency, a missing fixing carried from the last published one for at most five TARGET days (is_carried, carried_days); join on rate_available_at, not rate_date, to use a rate only once it was published. silver_rates holds the fixings exactly as published, one per day and currency.",
+  "licence": "https://www.ecb.europa.eu/home/disclaimer/html/index.en.html",
+  "issued": "2026-01-01T00:00:00Z",
+  "periodicity": "30 15 * * 1-5",
+  "productFile": "documents/contracts/fx-reference/ecb-fx-rates/product.odps.yaml",
+  "links": [
+    {
+      "type": "licence",
+      "url": "https://www.ecb.europa.eu/home/disclaimer/html/index.en.html",
+      "description": "The ECB's disclaimer and copyright page, which states its terms of reuse; to be confirmed by the owner against the terms page before any non-owner grant."
+    }
+  ],
+  "inputs": [
+    {
+      "contractId": "reference-data.calendars.target_days",
+      "version": "1.0.0",
+      "relation": "reference_data.calendars.target_days",
+      "required": true,
+      "maxLagMinutes": null
+    }
+  ],
+  "outputs": [
+    {
+      "contractId": "fx-reference.ecb-fx-rates.bronze_daily",
+      "relation": "lake.ecb_fx_rates.bronze_daily",
+      "build": "connector",
+      "testedRef": "main",
+      "contractFile": "documents/contracts/fx-reference/ecb-fx-rates/bronze_daily.odcs.yaml",
+      "layer": "bronze",
+      "version": "1.0.0",
+      "purpose": "One row per fixing date and currency of one landed 90-day file, the rate the string the ECB published. Each landed file adds its own rows, so a date appears once per file that holds it.",
+      "columns": [
+        {
+          "name": "rate_date",
+          "type": "date",
+          "required": true,
+          "primaryKey": true,
+          "description": "The fixing's date (the file's Cube time), a TARGET day.",
+          "time": "event",
+          "primaryKeyPosition": 1
+        },
+        {
+          "name": "currency",
+          "type": "varchar",
+          "required": true,
+          "primaryKey": true,
+          "description": "The quoted currency's ISO 4217 code (USD); the base is always the euro.",
+          "logicalType": "string",
+          "primaryKeyPosition": 2
+        },
+        {
+          "name": "rate",
+          "type": "varchar",
+          "required": true,
+          "primaryKey": false,
+          "description": "Units of the currency per one euro, the string exactly as published, such as 1.5000; typed in silver."
+        },
+        {
+          "name": "source_file_sha256",
+          "type": "varchar",
+          "required": true,
+          "primaryKey": true,
+          "description": "The landed file's sha256, set by the connector on every row (its lineage).",
+          "primaryKeyPosition": 3
+        }
+      ],
+      "retentionDays": null,
+      "quality": [
+        {
+          "name": "rate_positive",
+          "type": "custom",
+          "description": "Every rate is above zero (domains/fx-reference/parsers/ecb_fx.py)."
+        },
+        {
+          "name": "no_future_date",
+          "type": "custom",
+          "description": "No fixing is dated after the fetch's day in UTC (domains/fx-reference/parsers/ecb_fx.py)."
+        }
+      ],
+      "roles": [],
+      "readers": [],
+      "dbtDocs": null
+    },
+    {
+      "contractId": "fx-reference.ecb-fx-rates.gold_eur_rates_daily",
+      "relation": "fx_reference.ecb_fx_rates.gold_eur_rates_daily",
+      "build": "dbt",
+      "testedRef": "audited",
+      "contractFile": "documents/contracts/fx-reference/ecb-fx-rates/gold_eur_rates_daily.odcs.yaml",
+      "layer": "gold",
+      "version": "1.0.0",
+      "purpose": "One row per TARGET day and currency, from the currency's first published fixing to the newest fixing of any currency: the day's rate, or the last published one carried for at most five TARGET days when the day has none, with when the rate could first be known.",
+      "columns": [
+        {
+          "name": "rate_date",
+          "type": "date",
+          "required": true,
+          "primaryKey": true,
+          "description": "A TARGET day (reference-data.calendars.target_days, is_target_day); no weekend or TARGET holiday has a row.",
+          "time": "event",
+          "primaryKeyPosition": 1
+        },
+        {
+          "name": "currency",
+          "type": "varchar",
+          "required": true,
+          "primaryKey": true,
+          "description": "The quoted currency's ISO 4217 code; the base is always the euro.",
+          "primaryKeyPosition": 2
+        },
+        {
+          "name": "rate",
+          "type": "decimal(20,10)",
+          "required": false,
+          "primaryKey": false,
+          "description": "Units of the currency per one euro (quote units per euro), the ECB's reference fixing, not a market close. The day's own fixing, or when the day has none the last published one carried for up to five TARGET days; null once the last fixing is more than five TARGET days old."
+        },
+        {
+          "name": "is_carried",
+          "type": "boolean",
+          "required": true,
+          "primaryKey": false,
+          "description": "True when rate is an earlier day's fixing carried to this day (1 to 5 TARGET days); false on a published day and when rate is null."
+        },
+        {
+          "name": "carried_days",
+          "type": "integer",
+          "required": false,
+          "primaryKey": false,
+          "description": "TARGET days since the currency's last published fixing: 0 on a published day, 1 to 5 while carried, 6 or more when rate is null. A weekend counts no days."
+        },
+        {
+          "name": "rate_available_at",
+          "type": "timestamp(6) with time zone",
+          "required": false,
+          "primaryKey": false,
+          "description": "When the rate could first be used, in UTC: 16:00 Frankfurt time (CET, or CEST in summer) on rate_date, the ECB's usual publication time. A convention, not the measured publication time; a carried rate counts from the day it is carried to, once that day's fixing failed to appear. Null when rate is null."
+        }
+      ],
+      "retentionDays": null,
+      "roles": [],
+      "readers": [],
+      "dbtDocs": "dbt-docs/#!/model/model.k2.ecb_fx_rates__gold_eur_rates_daily"
+    },
+    {
+      "contractId": "fx-reference.ecb-fx-rates.silver_rates",
+      "relation": "fx_reference.ecb_fx_rates.silver_rates",
+      "build": "dbt",
+      "testedRef": "audited",
+      "contractFile": "documents/contracts/fx-reference/ecb-fx-rates/silver_rates.odcs.yaml",
+      "layer": "silver",
+      "version": "1.0.0",
+      "purpose": "One row per fixing date and currency, the rate as an exact decimal: each fixing once, however many landed files repeat it, taken from the newest file that holds it.",
+      "columns": [
+        {
+          "name": "rate_date",
+          "type": "date",
+          "required": true,
+          "primaryKey": true,
+          "description": "The fixing's date, a TARGET day. The partition source (year), so it is in the key: an incremental merge's unique key holds every partition source column.",
+          "time": "event",
+          "primaryKeyPosition": 1
+        },
+        {
+          "name": "currency",
+          "type": "varchar",
+          "required": true,
+          "primaryKey": true,
+          "description": "The quoted currency's ISO 4217 code; the base is always the euro.",
+          "primaryKeyPosition": 2
+        },
+        {
+          "name": "rate",
+          "type": "decimal(20,10)",
+          "required": true,
+          "primaryKey": false,
+          "description": "Units of the currency per one euro, the published string cast exactly to a decimal (1.5000 is 1.5); a reference fixing, not a market close."
+        },
+        {
+          "name": "source_file_sha256",
+          "type": "varchar",
+          "required": true,
+          "primaryKey": false,
+          "description": "The landed file the rate was taken from, the newest one holding this date and currency."
+        }
+      ],
+      "partitioning": [
+        "year(rate_date)"
+      ],
+      "retentionDays": null,
+      "roles": [],
+      "readers": [],
+      "dbtDocs": "dbt-docs/#!/model/model.k2.ecb_fx_rates__silver_rates"
+    }
+  ],
+  "examples": [
+    {
+      "description": "The euro in US dollars on each TARGET day, with whether the rate was carried.",
+      "sql": "SELECT rate_date, rate, is_carried FROM fx_reference.ecb_fx_rates.gold_eur_rates_daily WHERE currency = 'USD' ORDER BY rate_date"
+    }
+  ],
+  "joinKeys": [],
+  "lineage": {
+    "nodes": [
+      {
+        "id": "reference-data.calendars.target_days",
+        "product": "reference-data.calendars",
+        "relation": "reference_data.calendars.target_days"
+      },
+      {
+        "id": "fx-reference.ecb-fx-rates.bronze_daily",
+        "product": "fx-reference.ecb-fx-rates",
+        "relation": "lake.ecb_fx_rates.bronze_daily"
+      },
+      {
+        "id": "fx-reference.ecb-fx-rates.gold_eur_rates_daily",
+        "product": "fx-reference.ecb-fx-rates",
+        "relation": "fx_reference.ecb_fx_rates.gold_eur_rates_daily"
+      },
+      {
+        "id": "fx-reference.ecb-fx-rates.silver_rates",
+        "product": "fx-reference.ecb-fx-rates",
+        "relation": "fx_reference.ecb_fx_rates.silver_rates"
+      }
+    ],
+    "edges": [
+      {
+        "from": "fx-reference.ecb-fx-rates.bronze_daily",
+        "to": "fx-reference.ecb-fx-rates.silver_rates"
+      },
+      {
+        "from": "fx-reference.ecb-fx-rates.silver_rates",
+        "to": "fx-reference.ecb-fx-rates.gold_eur_rates_daily"
+      },
+      {
+        "from": "reference-data.calendars.target_days",
+        "to": "fx-reference.ecb-fx-rates.gold_eur_rates_daily"
+      }
+    ]
+  },
+  "tag": "v3.0.0-alpha.3-rc.1"
+}

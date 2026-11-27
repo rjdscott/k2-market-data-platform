@@ -1,0 +1,68 @@
+{
+  "id": "reference-data.calendars",
+  "name": "calendars",
+  "domain": "reference-data",
+  "version": "1.0.0",
+  "status": "active",
+  "type": "sourceAligned",
+  "owner": "reference-data-team",
+  "purpose": "The TARGET calendar: one row per calendar day, each marked open or closed for TARGET, the euro payment system, whose open days are the days the ECB publishes its euro reference rates. Read by fx-reference.ecb-fx-rates to lay out its daily rates on TARGET days.",
+  "limitations": "Covers the seed's years only, 2025 to 2027: the table runs from the seed's first closing day (1 January 2025) to 31 December of its last year, and holds no row after it. A person extends seeds/target_closing_days.csv before 2028. TARGET's own published calendar is the authority; a closing day it announces outside its usual rule (none so far) is added to the seed by hand.",
+  "usage": "Join on calendar_date; filter is_target_day to keep the days TARGET is open. closing_reason says why a day is closed: Saturday, Sunday or the holiday's name.",
+  "issued": "2026-01-01T00:00:00Z",
+  "periodicity": "0 4 * * *",
+  "productFile": "documents/contracts/reference-data/calendars/product.odps.yaml",
+  "inputs": [],
+  "outputs": [
+    {
+      "contractId": "reference-data.calendars.target_days",
+      "relation": "reference_data.calendars.target_days",
+      "build": "dbt",
+      "testedRef": "audited",
+      "contractFile": "documents/contracts/reference-data/calendars/target_days.odcs.yaml",
+      "layer": "gold",
+      "version": "1.0.0",
+      "purpose": "One row per calendar day from 1 January 2025 to 31 December 2027, marked open or closed for TARGET. TARGET closes on Saturdays, Sundays, New Year's Day, Good Friday, Easter Monday, 1 May, 25 December and 26 December; every other day it is open.",
+      "columns": [
+        {
+          "name": "calendar_date",
+          "type": "date",
+          "required": true,
+          "primaryKey": true,
+          "description": "The calendar day, one row each.",
+          "primaryKeyPosition": 1
+        },
+        {
+          "name": "is_target_day",
+          "type": "boolean",
+          "required": true,
+          "primaryKey": false,
+          "description": "True when TARGET is open that day (a weekday that is not a closing day in the seed), the days the ECB publishes reference rates; false on a weekend or a closing day."
+        },
+        {
+          "name": "closing_reason",
+          "type": "varchar",
+          "required": false,
+          "primaryKey": false,
+          "description": "Why TARGET is closed: Saturday, Sunday, or the holiday's name from the seed (Good Friday, Labour Day, ...). Null on a day TARGET is open. A holiday falling on a weekend reads as the weekend day, since the seed lists only the holidays that fall on weekdays."
+        }
+      ],
+      "retentionDays": null,
+      "roles": [],
+      "readers": [],
+      "dbtDocs": "dbt-docs/#!/model/model.k2.calendars__target_days"
+    }
+  ],
+  "joinKeys": [],
+  "lineage": {
+    "nodes": [
+      {
+        "id": "reference-data.calendars.target_days",
+        "product": "reference-data.calendars",
+        "relation": "reference_data.calendars.target_days"
+      }
+    ],
+    "edges": []
+  },
+  "tag": "v3.0.0-alpha.3-rc.1"
+}
