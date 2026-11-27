@@ -17,9 +17,13 @@ land   reads the pinned range from the topic once to count and once to write. Ev
        summary. A retry plans from that commit, so it lands only what is new.
 stage  takes, per partition, every landing row after the offset bronze has staged through up to the
        landing's newest end offsets, read from the landing at one snapshot and never from the
-       topic, so whatever earlier runs landed and did not stage is picked up exactly once. The
-       filter keeps its records for bronze's `audit` branch and counts the rest; kept plus skipped
-       must equal the rows read. The bronze commit records the through-offsets (the landing's end
+       topic, so whatever earlier runs landed and did not stage is picked up exactly once. Each
+       frame's envelope is decoded with the writer schema its schema id names (fetched from the
+       registry by id), and bronze takes the decoded envelope, never the frame's bytes: the
+       frame's offset key and timestamp, its schema id, then each of bronze's envelope columns by
+       name from the decoded record (project_sql), and the landing batch's lineage. The filter
+       keeps its records for bronze's `audit` branch and counts the rest; kept plus skipped must
+       equal the rows read. The bronze commit records the through-offsets (the landing's end
        offsets: trailing skipped records advance them too), the landing snapshot it read and the
        skipped counts. While `audit` holds another unpublished batch it is refused, after the
        landing has committed (bronze publishes in order; a blocked bronze never blocks the landing).
@@ -29,9 +33,13 @@ audit  checks the batch at `audit`'s head over the range it staged (main's throu
        accounting   per partition the landing, at the snapshot the stage read, holds every offset
                     of the range but those an accepted loss records, once each; staged plus
                     skipped equals that count; the commit added only rows of its range.
-       parses       every staged frame is Confluent-framed with an id the registry serves as
-                    RawMessage, its body reads, and the filter keeps it; a failure names
-                    partition and offset, at most LISTED of them, never a byte of the frame.
+       parses       every staged frame, read again from the landing at the snapshot the stage
+                    read, is Confluent-framed with an id the registry serves as RawMessage, its
+                    body reads, its writer schema has each of bronze's envelope columns by name
+                    and of a type that reads as the column's (problems), and the filter keeps
+                    it; a failure names partition and offset and any column, at most LISTED of
+                    them, never a byte of the frame. So a column the stage wrote NULL because
+                    the record lacks it never publishes as a silent null.
        keys_unique  (kafka_partition, kafka_offset) once within the batch, and none on main.
        A run whose batch staged nothing passes each, saying so.
 
@@ -60,6 +68,12 @@ KEPT = "k2_kept"  # the filter's verdict on a landing row (a column of the stage
 LANDING_SOURCE = (("kafka_partition", "partition"), ("kafka_offset", "offset"),
                   ("kafka_timestamp", "timestamp"), ("record_key", "key"), ("record_value", "value"))
 LANDING_RUN = ("batch_id", "landed_at", "run_id", "release_id")
+# Bronze's columns (I-1, 2026-11-28): these, then the envelope's columns by field name, then
+# LANDING_RUN. k2gen's connectors.kafka-bronze-shape holds a contract to it; record_key and
+# record_value stay in the landing, which bronze is rebuilt from.
+BRONZE_LEAD = ("kafka_partition", "kafka_offset", "kafka_timestamp", "schema_id")
+# Avro's promotions that the bronze column's type also takes without loss (Spark simpleString names)
+WIDENS = {("int", "bigint"), ("float", "double")}
 CHECKS = ("accounting", "parses", "keys_unique")  # a Kafka batch's audit_checks names: what publish requires
 DETAIL_MAX = 1000  # model.PLATFORM_TABLES["audit_checks"]: detail, at most 1000 characters
 LISTED = 10  # frames a parses failure names
@@ -178,6 +192,34 @@ def decoded_sql(fields: list[str], envelope: str = "envelope") -> str:
     return f"CASE WHEN {nulls} THEN NULL ELSE {e} END"
 
 
+def envelope_columns(columns: dict) -> dict:
+    """Bronze's envelope columns `{name: type}` of its `{name: type}`: all but BRONZE_LEAD and LANDING_RUN."""
+    return {n: t for n, t in columns.items() if n not in BRONZE_LEAD and n not in LANDING_RUN}
+
+
+def compatible(found, want: str) -> bool:
+    """Whether a decoded field of type `found` (None: the record has no such field) reads as a
+    bronze column of type `want`, both Spark simpleString names."""
+    return found == want or (found, want) in WIDENS
+
+
+def problems(decoded: dict, columns: dict) -> list[str]:
+    """Each envelope column of bronze (`columns`, envelope_columns) the writer schema's decoded
+    record (`decoded`, `{field: type}`) lacks or holds as a type that does not read as it."""
+    return [f"has no field {n}, which bronze's column {n} takes" if n not in decoded else
+            f"has field {n} as {decoded[n]}, which bronze's column {n} ({t}) does not take"
+            for n, t in columns.items() if not compatible(decoded.get(n), t)]
+
+
+def project_sql(decoded: dict, columns: dict, envelope: str = "envelope") -> list[str]:
+    """Bronze's envelope columns as Spark SQL over the decoded struct, by name: a compatible field
+    cast to its column's type, any other NULL, which parses then fails (problems). `decoded` empty
+    (a frame unframed or of an id that is no RawMessage) makes every column NULL."""
+    e = C.name(envelope)
+    return [f"CAST({e}.{C.name(n)} AS {t}) AS {C.name(n)}" if compatible(decoded.get(n), t) else
+            f"CAST(NULL AS {t}) AS {C.name(n)}" for n, t in columns.items()]
+
+
 def range_sql(ranges: dict) -> tuple[str, dict]:
     """`(where, args)` selecting the landing's rows in `{partition: (start, end)}`, end exclusive;
     the values bound as Spark named parameters."""
@@ -272,17 +314,20 @@ def accounting(topic: str, ranges: dict, lost: dict, landed: list, staged: list,
                   f"{want_all} landed over {len(ranges)} partitions")
 
 
-def unparsed_reason(schema_id, registered: bool, decoded: bool) -> str:
-    """Why a staged frame fails parses, from facts about it alone: never a byte of it."""
+def unparsed_reason(schema_id, registered: bool, decoded: bool, problem: str | None = None) -> str:
+    """Why a staged frame fails parses, from facts about it alone: never a byte of it. `problem` is
+    its writer schema's problems() joined, or None."""
     if schema_id is None:
         return "not Confluent-framed"
     if not registered:
         return f"schema id {int(schema_id)} is not a registered {ENVELOPE}"
-    return f"its body does not read as {ENVELOPE}" if not decoded else "the filter does not keep it"
+    if not decoded:
+        return f"its body does not read as {ENVELOPE}"
+    return f"its writer schema {int(schema_id)} {problem}" if problem else "the filter does not keep it"
 
 
 def parses(topic: str, frames: int, failing: int, listed: list) -> tuple[bool, str]:
-    """`listed` is the first `[(partition, offset, schema id, registered, decoded)]` of the
+    """`listed` is the first `[(partition, offset, schema id, registered, decoded, problem)]` of the
     `failing` frames, by partition and offset."""
     if not failing:
         return True, f"{frames} frames parse"
@@ -357,7 +402,7 @@ def land(run: C.Run, source, lake) -> tuple[int, dict]:
 
 def stage(run: C.Run, lake) -> tuple[int, dict]:
     """Stages the landing's rows past bronze's through-offsets on bronze's `audit` branch."""
-    # ponytail: one bronze table per Kafka product, the record as landed; a second needs a router.
+    # ponytail: one bronze table per Kafka product, its envelope decoded; a second needs a router.
     [bronze] = run.pipeline["bronze"]
     landing, table = run.pipeline["landing"]["table"], bronze["table"]
     refs = lake.refs(table)
@@ -383,7 +428,7 @@ def stage(run: C.Run, lake) -> tuple[int, dict]:
         if not ranges:
             print(f"load: {table} is level with {landing}; nothing staged")
             return C.EXIT_OK, result
-        frames = lake.landed(landing, head, ranges, keep_sql(run.pipeline["connector"].get("filter")))
+        frames = lake.landed(landing, head, ranges, keep_sql(run.pipeline["connector"].get("filter")), table)
         [topic] = ends
         skipped = stage_account(topic, ranges, lake.stage_counts(frames))
     except C.Refused as e:
@@ -426,7 +471,8 @@ def audit_results(run: C.Run, lake, refs: dict) -> list[tuple[str, bool, str]]:
     [topic] = after
     ranges = stage_ranges(O.decode(before[O.KAFKA_OFFSETS]) if before else {}, after)
     staged = lake.offset_counts(table, head, ranges)
-    failing, listed = lake.unparsed(table, head, ranges, keep_sql(run.pipeline["connector"].get("filter")))
+    failing, listed = lake.unparsed(landing, int(batch[O.SRC_SNAPSHOT_ID]), table, head, ranges,
+                                    keep_sql(run.pipeline["connector"].get("filter")))
     return [
         ("accounting", *accounting(topic, ranges, accepted_losses(lake.history(landing)[1], topic),
                                    lake.offset_counts(landing, int(batch[O.SRC_SNAPSHOT_ID]), ranges), staged,
@@ -512,29 +558,50 @@ class SparkLanding(C.SparkLake):
         self._write(frames.select(*cols).select(*[F.col(f.name).cast(f.dataType) for f in schema.fields]),
                     C.rel(table), props)
 
-    def landed(self, landing: str, snapshot: int, ranges: dict, keep: str):
-        """The landing's rows in `ranges` at `snapshot` with KEPT, the envelope decoded once per
-        writer schema id (a body that does not read decodes to null, decoded_sql, and is kept, as is
-        a record unframed or of an id the registry does not serve; see keep_sql)."""
+    def envelopes(self, frames) -> dict:
+        """`{schema id: writer schema}` of the ids among `frames`' `schema_id` that the registry
+        serves as RawMessage, each fetched by id (catalog.fetch_schema), so a writer schema with a
+        field added still reads; an id it does not serve, or serves as another record, is left out."""
         from catalog import UnresolvableSchema, fetch_schema
+
+        out = {}
+        for (sid,) in frames.select("schema_id").where("schema_id IS NOT NULL").distinct().collect():
+            try:
+                schema = fetch_schema(sid, self.registry)
+            except UnresolvableSchema as e:
+                print(f"load: {e}; its records are not decoded")
+                continue
+            if is_envelope(schema):
+                out[sid] = schema
+        return out
+
+    def _framed(self, table: str, snapshot: int, ranges: dict, columns: str = "*"):
         from pyspark.sql import functions as F
 
         import wire
 
         where, args = range_sql(ranges)
-        raw = self.spark.sql(f"SELECT * FROM {C.rel(landing)} VERSION AS OF {C.snapshot_id(snapshot)} WHERE {where}",
-                             args).withColumn("k2_schema_id", F.expr(wire.schema_id_guarded_expr("record_value")))
-        schemas = {}
-        for (sid,) in raw.select("k2_schema_id").where("k2_schema_id IS NOT NULL").distinct().collect():
-            try:
-                schemas[sid] = fetch_schema(sid, self.registry)
-            except UnresolvableSchema as e:
-                print(f"load: {e}; its records go to bronze undecoded")
-        out = raw.where(F.col("k2_schema_id").isNull() | ~F.col("k2_schema_id").isin(list(schemas)))
-        out = out.withColumn(KEPT, F.lit(True))
+        return self.spark.sql(f"SELECT {columns} FROM {C.rel(table)} VERSION AS OF {C.snapshot_id(snapshot)} "
+                              f"WHERE {where}", args).withColumn("schema_id", F.expr(wire.schema_id_guarded_expr("record_value")))
+
+    def landed(self, landing: str, snapshot: int, ranges: dict, keep: str, bronze: str):
+        """The landing's rows in `ranges` at `snapshot` with KEPT, `schema_id` and bronze's
+        envelope columns (project_sql), each frame decoded by its writer schema id. A body that
+        does not read decodes to null (decoded_sql) and is kept with its columns null, as is a
+        record unframed or of an id the registry does not serve as RawMessage (keep_sql): parses
+        fails each."""
+        from pyspark.sql import functions as F
+
+        columns = envelope_columns({f.name: f.dataType.simpleString() for f in self.spark.table(C.rel(bronze)).schema})
+        raw = self._framed(landing, snapshot, ranges)
+        schemas = self.envelopes(raw)
+        out = (raw.where(F.col("schema_id").isNull() | ~F.col("schema_id").isin(list(schemas)))
+               .withColumn(KEPT, F.lit(True)).selectExpr("*", *project_sql({}, columns)))
         for sid, schema in sorted(schemas.items()):
-            out = out.unionByName(SparkLanding._decoded(raw.where(F.col("k2_schema_id") == sid), schema)
-                                  .withColumn(KEPT, F.expr(keep)).drop("envelope"))
+            decoded = SparkLanding._decoded(raw.where(F.col("schema_id") == sid), schema)
+            fields = {f.name: f.dataType.simpleString() for f in decoded.schema["envelope"].dataType.fields}
+            out = out.unionByName(decoded.withColumn(KEPT, F.expr(keep))
+                                  .selectExpr("*", *project_sql(fields, columns)).drop("envelope"))
         return out
 
     @staticmethod
@@ -562,8 +629,8 @@ class SparkLanding(C.SparkLake):
     def stage_rows(self, table: str, frames, props: dict) -> int:
         from pyspark.sql import functions as F
 
-        # ponytail: bronze holds the landing's columns as landed, by name; decoded envelope
-        # columns, if bronze's contract gains any, are computed here.
+        # by name: the landing's offset key, timestamp and lineage, landed()'s schema_id and envelope
+        # columns; record_key and record_value are left in the landing
         self._write(frames.where(F.col(KEPT)).select(*self.columns(table)),
                     f"{C.rel(table)}.{C.name('branch_' + C.AUDIT)}", props)
         head = self.refs(table)[C.AUDIT]
@@ -584,38 +651,34 @@ class SparkLanding(C.SparkLake):
                          f"max(`kafka_offset`) FROM {C.rel(table)} VERSION AS OF {C.snapshot_id(snapshot)} "
                          f"WHERE {where} GROUP BY `kafka_partition`", **args)
 
-    def unparsed(self, table: str, snapshot: int, ranges: dict, keep: str) -> tuple[int, list]:
-        """How many frames of `ranges` at `snapshot` fail parses, and the first LISTED by partition
-        and offset as `(partition, offset, schema id, registered, decoded)`: only the facts, never
-        the bytes. A body that does not read decodes to null (decoded_sql), and fails."""
-        from catalog import UnresolvableSchema, fetch_schema
+    def unparsed(self, landing: str, src: int, table: str, snapshot: int, ranges: dict, keep: str) -> tuple[int, list]:
+        """How many frames of `ranges` in `table` at `snapshot` fail parses, each read again from
+        `landing` at `src`, the snapshot the stage read, and the first LISTED by partition and
+        offset as `(partition, offset, schema id, registered, decoded, problem)`: only the facts,
+        never the bytes. A body that does not read decodes to null (decoded_sql), and fails."""
         from pyspark.sql import functions as F
-
-        import wire
 
         if not ranges:
             return 0, []
         where, args = range_sql(ranges)
-        raw = self.spark.sql(f"SELECT `kafka_partition`, `kafka_offset`, `record_value` FROM {C.rel(table)} "
-                             f"VERSION AS OF {C.snapshot_id(snapshot)} WHERE {where}", args
-                             ).withColumn("k2_schema_id", F.expr(wire.schema_id_guarded_expr("record_value")))
-        envelopes = {}
-        for (sid,) in raw.select("k2_schema_id").where("k2_schema_id IS NOT NULL").distinct().collect():
-            try:
-                schema = fetch_schema(sid, self.registry)
-            except UnresolvableSchema:
-                continue
-            if is_envelope(schema):
-                envelopes[sid] = schema
-        cols = ["kafka_partition", "kafka_offset", "k2_schema_id"]
-        facts = (raw.where(F.col("k2_schema_id").isNull() | ~F.col("k2_schema_id").isin(list(envelopes)))
+        staged = self.spark.sql(f"SELECT `kafka_partition`, `kafka_offset` FROM {C.rel(table)} VERSION AS OF "
+                                f"{C.snapshot_id(snapshot)} WHERE {where}", args).distinct()
+        raw = self._framed(landing, src, ranges, "`kafka_partition`, `kafka_offset`, `record_value`").join(
+            staged, ["kafka_partition", "kafka_offset"], "left_semi")
+        columns = envelope_columns({f.name: f.dataType.simpleString() for f in self.spark.table(C.rel(table)).schema})
+        envelopes = self.envelopes(raw)
+        cols = ["kafka_partition", "kafka_offset", "schema_id"]
+        facts = (raw.where(F.col("schema_id").isNull() | ~F.col("schema_id").isin(list(envelopes)))
                  .select(*cols, F.lit(False).alias("registered"), F.lit(False).alias("decoded"),
-                         F.lit(False).alias("kept")))
+                         F.lit(None).cast("string").alias("problem"), F.lit(False).alias("kept")))
         for sid, schema in sorted(envelopes.items()):
-            decoded = self._decoded(raw.where(F.col("k2_schema_id") == sid), schema)
+            decoded = self._decoded(raw.where(F.col("schema_id") == sid), schema)
+            fields = {f.name: f.dataType.simpleString() for f in decoded.schema["envelope"].dataType.fields}
+            problem = ", and ".join(problems(fields, columns)) or None
             facts = facts.unionByName(decoded.select(*cols, F.lit(True).alias("registered"),
                                                      F.col("envelope").isNotNull().alias("decoded"),
+                                                     F.lit(problem).cast("string").alias("problem"),
                                                      F.coalesce(F.expr(keep), F.lit(False)).alias("kept")))
-        bad = facts.where(~(F.col("registered") & F.col("decoded") & F.col("kept")))
-        listed = [tuple(r)[:5] for r in bad.orderBy("kafka_partition", "kafka_offset").limit(LISTED).collect()]
+        bad = facts.where(~(F.col("registered") & F.col("decoded") & F.col("kept") & F.col("problem").isNull()))
+        listed = [tuple(r)[:6] for r in bad.orderBy("kafka_partition", "kafka_offset").limit(LISTED).collect()]
         return bad.count(), listed
