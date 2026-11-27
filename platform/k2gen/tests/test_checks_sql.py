@@ -152,6 +152,12 @@ CAUGHT = {
         "{{ config(materialized='table', post_hook='delete from sensor_net_build.station_readings__base.silver_readings') }}",
         "{{ config(materialized='table', post_hook='insert into daily_load__base.gold_daily_load select 1') }}",
         "{% do run_query('insert into sensor_net_build.station_readings__base.silver_readings select 1') %}",
+        # the product's own tables but the hook's model: written after their tests ran (review F3)
+        "{{ config(materialized='table', post_hook='insert into ops_insight_build.daily_load__base.gold_daily_load select 1') }}",
+        "{{ config(materialized='table', post_hook='delete from ops_insight_build.daily_load__base.dq_test_results') }}",
+        "{{ config(materialized='table', pre_hook=\"merge into {{ ref('daily_load__silver_load') }} t using (select 1 x) s on true when matched then delete\") }}",
+        "{% call statement('s') %}update {{ ref('daily_load__silver_load') }} set x = 1{% endcall %}select 1",
+        "{% do run_query('delete from ' ~ ref('daily_load__silver_load')) %}",
     ],
     "sql.config-key": [
         "{{ config(materialized='table', properties={'location': \"'s3://elsewhere/'\"}) }}",
@@ -177,7 +183,6 @@ def test_an_evasion_is_caught(code: str, text: str) -> None:
     "{{ config(materialized='ephemeral') }}select 1",
     "{{ config(materialized='incremental', incremental_strategy='merge', unique_key='id', on_schema_change='fail') }}select 1",
     "{{ config(materialized='table', post_hook=\"delete from {{ this }} where load_date < current_date - interval '400' day\") }}",
-    "{{ config(materialized='table', post_hook='insert into ops_insight_build.daily_load__base.gold_daily_load select 1') }}",
     "{% set rows = run_query('select max(load_date) from ' ~ this) %}select 1",
     "{% call statement('m', fetch_result=True) %}select max(load_date) from {{ this }}{% endcall %}select 1",
     "select * from {{ ref('daily_load__gold_daily_load') }}",
