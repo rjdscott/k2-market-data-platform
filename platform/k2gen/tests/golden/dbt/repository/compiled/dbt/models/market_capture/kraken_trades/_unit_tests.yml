@@ -104,10 +104,11 @@ unit_tests:
           union all select 'kraken', 'QQQ/ZZZ', 'i-qqq', timestamp '1970-01-01 00:00:00 UTC', timestamp '9999-12-31 23:59:59 UTC', timestamp '2026-01-06 00:00:00 UTC'
     expect:
       rows:
-        - {kafka_offset: 9, trade_ordinal: 1, venue_symbol: AAA/ZZZ, trade_id: 5, is_duplicate: false}
+        # every expected row names the same columns: dbt unions them, one select per row
+        - {kafka_offset: 9, trade_ordinal: 1, venue_symbol: AAA/ZZZ, trade_id: 5, is_duplicate: false, instrument_id: i-aaa}
         - {kafka_offset: 9, trade_ordinal: 2, venue_symbol: QQQ/ZZZ, trade_id: 1, is_duplicate: false, instrument_id: i-qqq}
-        - {kafka_offset: 10, trade_ordinal: 1, venue_symbol: AAA/ZZZ, trade_id: 5, is_duplicate: true}
-        - {kafka_offset: 11, trade_ordinal: 1, venue_symbol: AAA/ZZZ, trade_id: 6, is_duplicate: false}
+        - {kafka_offset: 10, trade_ordinal: 1, venue_symbol: AAA/ZZZ, trade_id: 5, is_duplicate: true, instrument_id: i-aaa}
+        - {kafka_offset: 11, trade_ordinal: 1, venue_symbol: AAA/ZZZ, trade_id: 6, is_duplicate: false, instrument_id: i-aaa}
 
   - name: silver_trade_takes_a_released_frame_once
     model: kraken_trades__silver_trade

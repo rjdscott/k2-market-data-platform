@@ -22,6 +22,9 @@ What the phase 002 DAG factory reads, and nothing it decides at run time:
   stages its one bronze table from it, keyed (kafka_partition, kafka_offset), its values the
   record's timestamp, its writer schema id and the decoded envelope's columns, no fetch task. A public-api connector runs the fetch one-shot
   on k2-egress as a file kind does, pagination none only (k2gen check connectors.*).
+- A product's `refresh` property is copied as `refresh`, the product whose DAG a degraded build
+  starts (W1-6); k2gen check refresh.* (checks/refresh.py) has held it to an upstream, scheduled,
+  one-hop target of a product that can be degraded.
 - A one-shot kind with no image in --images is left out with a line on stderr: phase 001 builds
   only tools; fetch and dbt-runner arrive in phase 002.
 """
@@ -139,6 +142,8 @@ def product_pipeline(model: Model, p: Product) -> dict[str, Any]:
     if outputs := [build_relation(p.domain, p.name, t.name) for t in p.tables if t.build.kind == "dbt"]:
         doc["build"] = {"engine": "dbt", "selector": dag_id(p.name), "writer": builder(p.name),
                         "publisher": publisher(p.name), "outputs": outputs}
+    if p.refresh:  # the factory's refresh task (W1-6); k2gen check refresh.* holds the target
+        doc["refresh"] = p.refresh
     return doc
 
 
