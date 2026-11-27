@@ -1,0 +1,12 @@
+# Daily at 05:15 UTC, after the 04:30 backup (k2-backup.timer), so the two never run their Docker
+# jobs at once. Persistent: a run missed while the host was off or logged out happens at the next
+# login.
+[Unit]
+Description=K2 catalog site and dbt docs, daily at 05:15 UTC
+
+[Timer]
+OnCalendar=*-*-* 05:15:00 UTC
+Persistent=true
+
+[Install]
+WantedBy=timers.target

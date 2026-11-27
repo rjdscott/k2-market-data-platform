@@ -106,6 +106,8 @@ if A[:2] == ["image", "inspect"]:
     print(S["images"][ref]); sys.exit(0)
 if A[0] == "pull":
     S["images"][A[-1]] = "sha256:" + A[-1][-64:]; save(); log("pull", A[-1]); sys.exit(0)
+if A[0] == "run":  # the dbt docs one-shot, by plain docker run
+    log("run", *A[1:]); sys.exit(S.get("run_rc", 0))
 if A[0] == "kill":
     log("kill", A[2]); sys.exit(0)
 if A[0] == "exec":
@@ -157,7 +159,10 @@ if rest[0] == "rm":
     S["containers"] = [c for c in S["containers"] if c["service"] != rest[-1]]
     save(); sys.exit(0)
 if rest[0] == "run":
-    argv = rest[rest.index("k2tools") + 1:]
+    i = rest.index("tools")
+    if rest[i + 1] != "k2tools":  # another entry in tools: the catalog site's python3
+        log("tools-run", *rest[i + 1:]); sys.exit(S.get("tools_rc", 0))
+    argv = rest[i + 2:]
     if argv[0] in ("swap", "pointers"):
         log("tools", *argv)
         out = subprocess.run([sys.executable, E["K2TOOLS"], *argv], env={**E, "K2_RELEASES_MOUNT": E["FAKE_ROOT"]},
@@ -409,7 +414,7 @@ sys.exit(f"fake docker: no answer for {A}")
         assert (p.recreate, p.oneshots, p.trino_restart, p.ddl) == ([], [], False, [])
         assert world.deploy(r2) == 0
         assert world.ups() == [] and os.readlink(world.root / "pointers/trino") == f"../{r2.id}"
-        assert [r["step"] for r in records(world)][-1] == "done"
+        assert [r["step"] for r in records(world)][-2:] == ["done", "site"]
 
     def test_one_image_changed_recreates_only_its_service(world: World) -> None:
         r1 = world.release()
@@ -428,7 +433,7 @@ sys.exit(f"fake docker: no answer for {A}")
         assert world.image_of("standin") == "sha256:" + "a" * 64  # R-1's image, not only its configuration
         assert os.readlink(world.root / "pointers/trino") == f"../{r1.id}"
         steps = [(r["step"], r["outcome"]) for r in records(world)]
-        assert ("verify", "failed") in steps and steps[-1] == ("rollback-done", "ok")
+        assert ("verify", "failed") in steps and steps[-2:] == [("rollback-done", "ok"), ("rollback-site", "ok")]
         assert deploy.standing(records(world))[0][-1] == r1.id
 
     def test_rollback_goes_back_to_the_previous_good_release(world: World) -> None:
@@ -923,7 +928,7 @@ sys.exit(f"fake docker: no answer for {A}")
         assert "k2-api" not in {c["service"] for c in world.read()["containers"]}
         steps = [(r["step"], r["outcome"]) for r in records(world)]
         assert steps.index(("rollback-swap", "ok")) < steps.index(("rollback-remove-k2-api", "ok")) < steps.index(("rollback-recreate", "ok"))
-        assert steps[-1] == ("rollback-done", "ok") and os.readlink(world.root / "pointers/k2-api") == f"../{r_old.id}"
+        assert steps[-2] == ("rollback-done", "ok") and os.readlink(world.root / "pointers/k2-api") == f"../{r_old.id}"
 
     def test_a_rollback_across_a_migrating_one_shot_image_verifies(world: World) -> None:
         """alpha.3.2 to this branch moves k2-airflow's image, so airflow-migrate reruns on the new one; a
@@ -935,7 +940,7 @@ sys.exit(f"fake docker: no answer for {A}")
         assert world.deploy(r2) == 0 and world.image_of("airflow-migrate") == "sha256:" + "b" * 64
         with deploy.lock(world.root):
             assert deploy.rollback(world.ctx) == 0
-        assert world.image_of("airflow-migrate") == "sha256:" + "b" * 64 and records(world)[-1]["step"] == "rollback-done"
+        assert world.image_of("airflow-migrate") == "sha256:" + "b" * 64 and records(world)[-2]["step"] == "rollback-done"
 
     @pytest.mark.parametrize("says, ok", [(None, True), ("v0.0.0-other-0123456789ab", False), ("down", False)])
     def test_verify_asks_k2_api_which_release_it_serves(world: World, says: str | None, ok: bool) -> None:
@@ -1041,6 +1046,48 @@ sys.exit(f"fake docker: no answer for {A}")
         assert "a-value-of-this-test" not in str(e.value) and world.ups() == []
         assert deploy.live_key_names(world.release()) == []  # no storage-key row: nothing asked
 
+    # --- the sites after each deploy and rollback (W3-12) ------------------------------
+
+    DBT_RUNNER = "dbt-runner:" + "3" * 12
+
+    def site_release(world: World, standin: str = "alpine:3.20") -> Any:
+        doc = compose_doc(standin=standin) | {"volumes": {"k2-site": {}}}
+        return world.release(compose=doc, over={"platform/catalog-site/k2site.py": b"print('k2site: wrote /site/catalog/current')\n"},
+                             images={"dbt-runner": DBT_RUNNER} | ({"standin": B} if standin != "alpine:3.20" else {}))
+
+    def test_the_sites_run_after_done_on_a_deploy_and_a_rollback_and_a_failure_never_fails_either(world: World) -> None:
+        s = world.read()
+        world.write(s | {"images": s["images"] | {DBT_RUNNER: "sha256:" + "3" * 12 + "0" * 52}})
+        r1 = site_release(world)
+        world.live(r1)
+        s = world.read()  # dbt-runner is profiled: Airflow starts it per run, never compose
+        world.write(s | {"containers": [c for c in s["containers"] if c["service"] != "dbt-runner"]})
+        r2 = site_release(world, standin="alpine:3")
+        assert deploy.DBT_PROJECT in r2.manifest.files and deploy.CATALOG_SITE in r2.manifest.files
+        assert world.deploy(r2) == 0
+        t = world.timeline()
+        where = f"/k2/releases/{r2.id}"
+        assert ["tools-run", "python3", f"{where}/{deploy.CATALOG_SITE}", "--release", where, "--out", "/site/catalog"] in t
+        assert ["run", "--rm", "--network", "none", "--read-only", "--tmpfs", "/tmp:rw,noexec,nosuid,size=64m", "--cap-drop", "ALL",
+                "--security-opt", "no-new-privileges:true", "--pids-limit", "256", "--cpus", "0.5", "--memory", "768m",
+                "--user", f"{os.getuid()}:{os.getgid()}", "-v", f"{world.root}:/k2/releases:ro", "-v", "k2_k2-site:/site",
+                DBT_RUNNER, "k2-dbt", "docs", "--release", r2.id, "--out", "/site/dbt-docs"] in t
+        steps = [(r["step"], r["outcome"]) for r in records(world)]
+        assert steps[-2:] == [("done", "ok"), ("site", "ok")] and deploy.standing(records(world))[1] == []
+        world.write(world.read() | {"run_rc": 1})  # the dbt docs fail: the rollback still ends at exit 0
+        said: list[str] = []
+        world.ctx.say = said.append
+        with deploy.lock(world.root):
+            assert deploy.rollback(world.ctx) == 0
+        last = records(world)[-1]
+        assert (last["step"], last["outcome"]) == ("rollback-site", "failed") and "dbt docs:" in last["reason"]
+        assert any(x.startswith("deploy: site: failed") and "stays live and verified" in x for x in said), said
+        assert deploy.standing(records(world)) == ([r1.id, r2.id, r1.id], [])  # a site moves no release
+        assert deploy.sites(world.ctx, world.release()) == ["SKIP sites: " + world.release().id
+                                                            + "'s compose has no k2-site volume (a release before phase 003)"]
+        made = subprocess.run(["make", "-s", "-f", "mk/run.mk", "site", "DEPLOY=echo"], cwd=ROOT, capture_output=True, text=True)
+        assert made.stdout.strip() == "site", made.stdout + made.stderr
+
     # --- the drain (W1-6, ADR-058) ------------------------------------------------------
 
     CODE = "docker/airflow/dags/factory.py"  # in a release at platform/docker/airflow/dags/factory.py
@@ -1115,7 +1162,7 @@ sys.exit(f"fake docker: no answer for {A}")
         world.ctx.allow_running = True
         assert world.deploy(r2) == 0 and world.paused() == {SR: False, DL: False}
         steps = [r["step"] for r in records(world)]
-        assert steps[steps.index("allow-running") + 1] == "drain" and steps[-1] == "done"
+        assert steps[steps.index("allow-running") + 1] == "drain" and steps[-2:] == ["done", "site"]
 
     def test_the_paused_set_is_written_before_the_first_pause_and_a_rerun_after_a_kill_unpauses_it(
             world: World, monkeypatch: pytest.MonkeyPatch) -> None:

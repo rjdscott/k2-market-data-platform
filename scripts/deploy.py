@@ -6,6 +6,7 @@
     make release-verify                                        ask every part which release it runs
     make rollback                                              back to the previous good release
     make release-status                                        pointers, the good release, the log
+    make site                                                  the catalog site and dbt docs of the live release
     make release-diff RELEASE=<id> [FROM=<id>]                 k2gen diff, from the good release
 
 Procedures: docs/runbooks/deploy-a-release.md and docs/runbooks/roll-back-a-release.md.
@@ -57,6 +58,9 @@ first failure:
                  drift check in tools, the live access suite (S20) and the catalog fence's probes
                  (scripts/verify/catalog-fence.sh); `make release-verify` adds S13's identity.sh
 10 done          the other canaries' lines removed; the release is the good one
+   site          the release's catalog site and dbt docs into the k2-site volume k2-api serves; a failure is
+                 recorded (step site, failed) and said, and never fails or rolls back the deploy; after a
+                 rollback too, so the site describes what is live
 
 A failure at step 5 or later rolls back on its own: the same steps toward the previous release from
 this one (recorded as rollback-<step>), then exit 1; exit 3 if that fails too. Exit 2 is a refusal
@@ -125,7 +129,11 @@ API_TRIES, API_WAIT_S = 5, 2.0  # k2-api reads its pointer at every request; the
 DISK_FLOOR_GIB = 2.0  # free at the releases root; a release is a few MiB, a pulled image is not
 MEM_FLOOR_GIB = 2.0  # MemAvailable on the host: a recreate starts a container before the old one's memory returns
 DONE = ("done", "rollback-done")
-UNCHANGING = ("preflight", "images", "plan", "backup", "drain", "allow-running")  # steps that move no release
+UNCHANGING = ("preflight", "images", "plan", "backup", "drain", "allow-running",  # steps that move no release
+              "site", "rollback-site")  # the sites, after done: never an unfinished attempt
+SITE_VOLUME = "k2-site"  # compose's volume the sites go into and k2-api serves (<project>_k2-site)
+CATALOG_SITE = f"{model.PLATFORM_DIR}/platform/catalog-site/k2site.py"  # the release's own generator (W3-9)
+DBT_PROJECT = "compiled/dbt/dbt_project.yml"  # what `k2-dbt docs` renders
 # The drain (ADR-058). The ADR names no bound; its revisit trigger is a deploy over 10 minutes, so the
 # drain may take half of that.
 DRAIN_WAIT_S = 300
@@ -1378,6 +1386,52 @@ def identity(ctx: Ctx) -> list[str]:
     return [f"identity.sh: {sum(1 for x in done.stdout.splitlines() if x.startswith('PASS'))} PASS, exit 0"]
 
 
+# --- the sites (W3-11, W3-12) --------------------------------------------------------------
+
+
+def sites(ctx: Ctx, rel: Release, strict: bool = False) -> list[str]:
+    """The release's catalog site (its own k2site.py in a tools one-shot, as svc.catalog) and its dbt docs
+    (`k2-dbt docs` in its dbt-runner image, no network, no secret), each into the k2-site volume k2-api
+    serves read-only. A release without one, or without the volume (before phase 003), skips it. Raises
+    Failed naming each that failed; the caller never lets that fail a deploy."""
+    if SITE_VOLUME not in ((yaml.safe_load((rel.root / model.RELEASE_COMPOSE).read_bytes()) or {}).get("volumes") or {}):
+        return [f"SKIP sites: {rel.id}'s compose has no {SITE_VOLUME} volume (a release before phase 003)"]
+    out, failed, where = [], [], f"{model.RELEASES_MOUNT}/{rel.id}"
+    if CATALOG_SITE in rel.manifest.files:
+        try:
+            said = tools(ctx, rel, f"{where}/{CATALOG_SITE}", "--release", where, "--out", "/site/catalog",
+                         *(["--strict"] if strict else []), entry="python3").strip()
+            out.append(f"catalog site: {said.splitlines()[-1] if said else 'written'}")
+        except Failed as e:
+            failed.append(f"catalog site: {e}")
+    else:
+        out.append(f"SKIP catalog site: {rel.id} carries no {CATALOG_SITE}")
+    if DBT_PROJECT in rel.manifest.files and "dbt-runner" in rel.manifest.images:
+        try:
+            said = run("docker", "run", "--rm", "--network", "none", "--read-only", "--tmpfs", "/tmp:rw,noexec,nosuid,size=64m",
+                       "--cap-drop", "ALL", "--security-opt", "no-new-privileges:true", "--pids-limit", "256", "--cpus", "0.5",
+                       "--memory", "768m", "--user", f"{os.getuid()}:{os.getgid()}", "-v", f"{ctx.root}:{model.RELEASES_MOUNT}:ro",
+                       "-v", f"{ctx.project}_{SITE_VOLUME}:/site", rel.manifest.images["dbt-runner"],
+                       "k2-dbt", "docs", "--release", rel.id, "--out", "/site/dbt-docs").stdout.strip()
+            out.append(f"dbt docs: {said.splitlines()[-1] if said else 'written'}")
+        except Failed as e:
+            failed.append(f"dbt docs: {e}")
+    else:
+        out.append(f"SKIP dbt docs: {rel.id} has no {DBT_PROJECT} or no dbt-runner image")
+    if failed:
+        raise Failed("; ".join(failed + out))
+    return out
+
+
+def site_step(ctx: Ctx, t: Release, frm: str | None, prefix: str) -> None:
+    """After done: the sites describe what is live. A failure is recorded (step site, failed, its reason)
+    and said, never raised: the release stays live and verified."""
+    try:
+        step(ctx, t, frm, prefix + "site", set(services(t)), lambda: sites(ctx, t))
+    except Exception as e:
+        ctx.say(f"deploy: site: failed {e}. {t.id} stays live and verified; the site is the one before: `make site` reruns it")
+
+
 # --- the sequence ------------------------------------------------------------------------
 
 
@@ -1465,6 +1519,7 @@ def converge(ctx: Ctx, p: Plan, frm: str | None, prefix: str = "", trino_down: b
     step(ctx, t, frm, prefix + "views-widen", svc, lambda: sync_views(ctx, p, "widen"))
     step(ctx, t, frm, prefix + "verify", svc, lambda: verify(ctx, t, old))
     step(ctx, t, frm, prefix + "done", svc, lambda: [f"removed canary {g}" for g in canary_prune(ctx, canary)] or ["no other canary"])
+    site_step(ctx, t, frm, prefix)
 
 
 def resolve(ctx: Ctx) -> tuple[Release | None, list[str]]:
@@ -1636,6 +1691,17 @@ def verify_live(ctx: Ctx) -> int:
     for line in [*verify(ctx, good, previous), *identity(ctx)]:  # identity.sh only here: it writes a probe line
         ctx.say(f"  {line}")
     ctx.say(f"release-verify: {good.id} everywhere")
+    return EXIT_OK
+
+
+def site(ctx: Ctx) -> int:
+    """`make site`: both sites for the live release, the catalog's facts required (--strict)."""
+    good, _ = resolve(ctx)
+    if good is None:
+        raise Refused("no release is deployed under this root")
+    for line in sites(ctx, good, strict=True):
+        ctx.say(f"  {line}")
+    ctx.say(f"site: {good.id}")
     return EXIT_OK
 
 
@@ -1813,6 +1879,7 @@ def _main(argv: list[str] | None) -> int:
     d.add_argument("--plan", action="store_true")
     d.add_argument("--allow-stateful", default="")
     sub.add_parser("verify")
+    sub.add_parser("site")
     rb = sub.add_parser("rollback")
     rb.add_argument("--allow-stateful", default="")
     sub.add_parser("status")
@@ -1848,6 +1915,8 @@ def _main(argv: list[str] | None) -> int:
                     return EXIT_OK
                 if args.cmd == "verify":
                     return verify_live(ctx)
+                if args.cmd == "site":
+                    return site(ctx)
                 if args.cmd in ("deploy", "rollback"):
                     ctx.allow_stateful = {s for s in args.allow_stateful.split(",") if s}
                 if args.cmd == "rollback":
