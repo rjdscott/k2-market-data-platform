@@ -26,6 +26,7 @@ A deploy that fails verification rolls itself back; that case is section 6 of
 | 3 | A rollback failed (exit 3) | <15 min | not induced: the steps below are the same commands as 1 and 2 |
 | 4 | A first deploy failed (exit 3, nothing to go back to) | <15 min | not induced on the rehearsal |
 | 5 | A migration ran forward: restore the database's dump | <15 min | the restore commands ran on a throwaway Postgres from compose's pinned image (2026-11-27); not induced on a stack |
+| 6 | A rollback to a release before phase 002 | <5 min | not yet measured: not run on the live stack |
 
 ---
 
@@ -45,7 +46,11 @@ interrupted deploy it restores the good release instead, and after an interrupte
 pointers move and the services are recreated first, Trino among them on the good release's etc and rules,
 and the views are synced right after; a view that cannot be synced then fails the rollback (exit 3) and the
 message names it. A release deployed with `ALLOW_STATEFUL=<service>` is rolled back with the same
-`make rollback ALLOW_STATEFUL=<service>`. A rollback runs the good release's images: never run
+`make rollback ALLOW_STATEFUL=<service>`. A service that runs from the current release's default set and
+that the good release puts behind a profile is stopped and removed (`rollback-remove-<service>`), so verify
+expects none of it. After `rollback-done` the sites are regenerated for the good release (`rollback-site`,
+which never fails the rollback, [deploy-a-release.md](./deploy-a-release.md) section 8), and the DAGs a
+deploy paused are unpaused. A rollback runs no drain and no one-shot (lake-init, the migrations). A rollback runs the good release's images: never run
 `docker image prune -a` (or `docker system prune -a`, or Docker Desktop's clean-up) on this host; if one is
 gone, `make release-status` names it with the fix (a registry image: `docker pull <ref>`; a local build:
 `make release TAG=<its tag>` and deploy that release instead, since a rebuild has another image id).
@@ -205,10 +210,47 @@ changed: the restore brought back its rows and owner and removed the table added
 
 ---
 
+## 6. A rollback to a release before phase 002
+
+**Symptom**, the release of phase 002 or 003 is to be undone, back to one cut before it, for example
+`v3.0.0-alpha.3.2`.
+
+**Detection**, manual.
+
+**Expected behaviour**, the rollback moves what deploy moves and nothing else. From `scripts/deploy.py`,
+`docker/lake/init-lake.sh` and the two compose files:
+
+| What | After the rollback |
+|---|---|
+| MinIO | the older compose publishes `127.0.0.1:9000` and `9001` again, a change to a service deploy never recreates. Without `ALLOW_STATEFUL=minio` the plan refuses it inside the rollback, so `make rollback` prints `deploy: ROLLBACK FAILED: the release changes minio, which deploy never recreates (A1); ...` and exits 3 with nothing changed yet; run it again with the flag. A deploy run with `ALLOW_STATEFUL=minio` rolls itself back with the same flag |
+| k2-api | in the default set now, behind profile `api` in the older release: stopped and removed (`rollback-remove-k2-api`); nothing serves `/v1`, `/catalog/` or `/dbt-docs/` |
+| lake-init | not run: the older release carries no `platform/docker/lake/init-lake.sh`, and the plan says so (`not recreated: lake-init: ... not run, its warehouses already exist`) |
+| MinIO users and policies, one per engine | stay: lake-init creates and updates, never deletes, and nothing of the older release removes them. Its compose gives Spark the root pair and Trino `K2_TRINO_S3_*`, which `make engine-keys` made Trino's own scoped key |
+| Remote signing on the warehouses | stays off: nothing turns it back on |
+| Airflow pools `lake_spark`, `fetch`, `dbt` | stay, rows in Airflow's database that no migration removes; the older compose mounts the checkout's `docker/airflow/dags`, where the factory builds no DAG (it builds only from a release), so the product DAGs leave the scheduler and their run history stays in the database |
+| Volumes `k2-spool`, `k2-site` | stay with their contents: no recreate removes a volume. The site step prints `SKIP sites: <id>'s compose has no k2-site volume (a release before phase 003)` |
+| Network `k2-egress` | stays, with no member: deploy creates networks and never removes one |
+| Lake tables this phase created (bronze, `landing_files`, `audit_checks`, the products' bases, the run records) | stay in the catalog; the older rules name none, so no reader reaches them through Trino |
+
+**Recovery**
+
+```bash
+make release-status
+make rollback ALLOW_STATEFUL=minio
+make release-verify
+```
+
+Moving forward again is an ordinary deploy of the newer release, `ALLOW_STATEFUL=minio` included, since its
+MinIO definition differs once more.
+
+**Measured**, not yet measured: no rollback across phase 002 has run on the live stack.
+
+---
+
 ## Failure modes / incidents
 
 - None on a live stack yet: the live stack has deployed one release (the cutover), and no rollback has run there.
 
 ---
 
-**Last verified:** 2026-11-27 against the rehearsal, branch `step/s19-deploy`; a rollback is not yet run on the live stack (it has one deployed release, the cutover's, so there is nothing to go back to yet).
+**Last verified:** 2026-11-27 against the rehearsal, branch `step/s19-deploy`; a rollback is not yet run on the live stack (it has one deployed release, the cutover's, so there is nothing to go back to yet). The removal of a profiled service, `rollback-site` and section 6: not yet: first run after the deploy of this release.

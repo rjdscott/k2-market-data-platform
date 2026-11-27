@@ -149,8 +149,10 @@ as it stood is in git history, and the lake recovery it pointed to is archived a
 ## 5. MinIO unavailable
 
 **Symptom**, `make health` step (1) lists `minio` unhealthy; Trino and Lakekeeper calls that touch
-storage fail, and so do `make backup` and `make drop`. Capture and Redpanda are unaffected. No
-job writes the lake until phase 002, so nothing is lost.
+storage fail, and so do `make backup` and `make drop`. Capture and Redpanda are unaffected. Since
+phase 002 a product DAG's task that touches storage while MinIO is down fails, and its run with it
+([airflow-scheduling.md](./airflow-scheduling.md) section 2); the landed files and bronze `main` it had
+not yet moved are as before, so nothing published is lost.
 
 **Detection**, manual: `make health` step (1). There is no MinIO exporter, and the lake alerts
 that would have followed retired with the v3 lake.
@@ -162,7 +164,8 @@ down until started.
 
 ```bash
 docker compose start minio
-curl -fsS localhost:9000/minio/health/live && echo OK
+# MinIO publishes no host port since phase 002, so ask it from inside its own container
+docker exec k2-minio curl -fsS localhost:9000/minio/health/live && echo OK
 ```
 
 **Measured**, ~5 s to restore, against the v2 offload. The hot tier gained 2 rows during a

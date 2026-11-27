@@ -1,7 +1,8 @@
 # Runbook: Bring the stack up from a fresh clone
 
-Zero images, zero volumes, to a running stack: the captures writing to Redpanda, an empty
-lake catalog, and Airflow with no DAG. The v3 lake ingest pipeline that filled every lake layer
+Zero images, zero volumes, to a running stack: the captures writing to Redpanda, a lake catalog
+holding the tables a deploy creates and no rows, Airflow with one DAG per product of the release, and
+k2-api on `127.0.0.1:8095`. The v3 lake ingest pipeline that filled every lake layer
 within 15 minutes of a fresh install is retired and archived in
 [`legacy/v3-lake-ingest/`](../../legacy/v3-lake-ingest/)
 ([ADR-056](../adr/ADR-056-unified-data-product-platform.md)); data reaches the lake again from
@@ -15,9 +16,12 @@ restoring from the host copy ([lake-backup-and-restore.md](./lake-backup-and-res
 > [chapter 21](../architecture/21-releases-and-deploy.md)): Trino reads its whole etc from a release
 > through `/k2/releases/pointers/trino/compiled/trino/etc` and serves HTTPS only, with password
 > logins under a local CA ([ADR-060](../adr/ADR-060-trino-logins-by-password-over-tls-under-a-local-ca.md));
-> `lake-init` reads the warehouses from that release's `compiled/lake/storage-plan.json`; Lakekeeper
+> `lake-init` runs that release's own `platform/docker/lake/init-lake.sh` and reads the warehouses
+> from its `compiled/lake/storage-plan.json`, making one MinIO user per engine (phase 002: each
+> engine signs with its own key, which `make engine-keys` writes into `.env`); Lakekeeper
 > is on the network `k2-catalog` only, with no host port
-> ([ADR-059](../adr/ADR-059-access-rules-compiled-default-deny-over-two-catalogs-per-domain.md) part 7).
+> ([ADR-059](../adr/ADR-059-access-rules-compiled-default-deny-over-two-catalogs-per-domain.md) part 7),
+> and MinIO publishes none either.
 > So a fresh clone can no longer `docker compose up` straight away: it needs the release
 > variables in `.env`, the local CA, the service passwords, the catalog's network, a release and
 > a first deploy. The sequence below takes each of those lines from
@@ -35,12 +39,13 @@ restoring from the host copy ([lake-backup-and-restore.md](./lake-backup-and-res
 
 ## Prerequisites
 
-- A Docker engine with **at least 29 GiB of memory** so every declared limit is honoured,
-  including the 28.688 GiB bootstrap peak while the one-shots run
-  ([docker-resources.md](../operations/docker-resources.md), which says how the figure was
+- A Docker engine with **at least 31 GiB of memory** so every declared limit is honoured,
+  including the 29.250 GiB bootstrap peak while the one-shots run, 30.750 GiB while a dbt-runner
+  one-shot (profile `build`) runs beside it (`python3 scripts/check-budget.py`, 2026-11-27;
+  [docker-resources.md](../operations/docker-resources.md) says how the figure is
   computed). ClickHouse is paused behind the
   compose profile `hot-gold` ([ADR-057](../adr/ADR-057-clickhouse-hot-tier-paused-during-platform-build.md)) and a fresh install does not start it; with
-  that profile running the peak is 36.688 GiB, so 37 GiB.
+  that profile running the peak is 37.250 GiB, so 38 GiB.
   Measured usage on a fresh install is far lower (~4.5 GiB RSS total; largest single
   container ClickHouse at 1.13 GiB, on 2026-08-28, when it still started).
 - **Any core count.** `.env.example` ships `K2_CAPTURE_CPUSET=` and `K2_HEAVY_CPUSET=`
@@ -50,11 +55,13 @@ restoring from the host copy ([lake-backup-and-restore.md](./lake-backup-and-res
   the host does not have fails the container at start with `invalid argument`. The compose
   default uses `-` and not `:-`, so an explicit empty value wins over `12-14`.
   See [`.env.example`](../../.env.example) for the full note.
-- **The published ports free on `127.0.0.1`**: 3000, 4040, 8080, 8081, 8090, 8123, 8443,
-  9000, 9001, 9002, 9090, 9092, 9093, 9363, 9644, 15432, 18080 and 19092 (the `ports:` of
+- **The published ports free on `127.0.0.1`**: 3000, 4040, 8080, 8081, 8090, 8095, 8123, 8443,
+  9002, 9090, 9092, 9093, 9363, 9644, 15432, 18080 and 19092 (the `ports:` of
   `docker-compose.yml`; 8123, 9002 and 9363 only under `hot-gold`). Lakekeeper publishes none
-  since 2026-11-27. `K2_AIRFLOW_PORT` (8090) and `K2_TRINO_PORT` (8443, HTTPS) in `.env` move
-  two of them; `K2_AIRFLOW_PORT` also moves the base URL Airflow's UI builds its links from,
+  since 2026-11-27, and MinIO none since phase 002 (9000 and 9001 are gone: the object store and
+  its console answer only inside the containers' networks). `K2_AIRFLOW_PORT` (8090),
+  `K2_API_PORT` (8095, k2-api) and `K2_TRINO_PORT` (8443, HTTPS) in `.env` move
+  three of them; `K2_AIRFLOW_PORT` also moves the base URL Airflow's UI builds its links from,
   so change the variable, not the mapping alone.
 - **On Docker Desktop, a host with RAM to spare beyond the VM.** The VM grows to its whole
   memory setting within hours, so host RAM must exceed that setting plus everything else the
@@ -68,7 +75,8 @@ restoring from the host copy ([lake-backup-and-restore.md](./lake-backup-and-res
 - **Roughly 4 GB of image space** for the three built images: `k2-capture` 54.1 MB,
   `k2-airflow` 1.72 GB and `k2-spark-iceberg` 2.06 GB (`docker images`, 2026-11-26; the Spark
   image was 6.47 GB on its old base), on top of the upstream pulls (~5.3 GB on 2026-08-28,
-  before Airflow, cAdvisor and Trino joined).
+  before Airflow, cAdvisor and Trino joined). `make release` also builds `tools`, `fetch`,
+  `dbt-runner` and `k2-api` from the tag; their sizes are not yet measured.
 
 ## Command sequence
 
@@ -81,14 +89,21 @@ cp .env.example .env            # set every change-me value: openssl rand -hex 2
                                 # LAKEKEEPER_ENCRYPTION_KEY: openssl rand -base64 32
 # .env, the release block: K2_COMPOSE_PROJECT=<the project compose gives this checkout: its
 #   directory name>, K2_HOME=<this checkout's absolute path>, K2_TRINO_PORT=8443,
-#   K2_TRINO_SHARED_SECRET=$(openssl rand -hex 32), K2_TRINO_S3_ACCESS_KEY and K2_TRINO_S3_SECRET_KEY
-#   (MinIO's root pair until phase 002's scoped keys)
-set -a && . ./.env && set +a
+#   K2_TRINO_SHARED_SECRET=$(openssl rand -hex 32)
+make engine-keys                # each engine's MinIO pair (spark, trino, maintenance, backup, tools) and
+                                # K2_RUN_UID/GID into .env, mode 600; prints names, never a value
+set -a && . ./.env && set +a    # deploy passes the storage-key names to the live access suite from here
 python3 scripts/check-env.py    # what `make up` runs first: names each placeholder left, never its value
-# secrets, outside the checkout (docs/runbooks/tls-and-passwords.md)
+# secrets, outside the checkout (docs/runbooks/tls-and-passwords.md): deploy's preflight names any
+# file still missing with the command that writes it (deploy-a-release.md section 5)
 make tls
-for id in svc.runs svc.catalog svc.platform svc.api dbt_access_canary pub_access_canary; do
+for id in svc.runs svc.catalog svc.platform svc.api \
+  dbt_access_canary pub_access_canary dbt_calendars pub_calendars dbt_currency_master pub_currency_master \
+  dbt_ecb_fx_rates pub_ecb_fx_rates dbt_quality_results pub_quality_results \
+  p.canary-full p.canary-delayed p.canary-scoped; do
   make password PRINCIPAL=$id TO_FILE=1; done
+make alerts-install-webhook     # Alertmanager's Slack URL, on stdin (where-an-alert-goes.md)
+make api-key PRINCIPAL=<a reader> # k2-api's keys.json; the key is printed once (create-or-rotate-a-principal.md)
 # the catalog's network, labelled so compose adopts it
 P=$K2_COMPOSE_PROJECT
 docker network create --label com.docker.compose.project=$P --label com.docker.compose.network=k2-catalog ${P}_k2-catalog
@@ -97,12 +112,15 @@ make release TAG=<tag>          # prints the release id; the first run builds th
 make deploy RELEASE=<release id> PLAN=1
 make deploy RELEASE=<release id>
 make release-verify
+make site-install               # the catalog site and dbt docs, daily at 05:15 UTC (deploy writes them too)
 make health                     # every service healthy, every venue delivering to Redpanda in the last 2 min
 docker exec k2-redpanda rpk topic consume market.crypto.v3.trades.binance --num 1
 ```
 
 `make up` alone (`scripts/check-env.py`, then `docker compose up -d`) no longer brings up a
-fresh clone: compose stops on an unset `K2_TRINO_*` value, the releases root it mounts is never
+fresh clone: compose stops on an unset `K2_TRINO_*` value or engine key (`required variable
+K2_SPARK_S3_ACCESS_KEY is missing a value: set K2_SPARK_S3_ACCESS_KEY in .env (make engine-keys)`,
+from `docker compose config` on this branch), the releases root it mounts is never
 created by compose, and Trino and `lake-init` read through a pointer that only a deploy sets. A
 first deploy on a stack that is not yet running is the step least proven here: deploy's own
 first-deploy path expects the services to be running already from the checkout's compose
@@ -167,11 +185,14 @@ the 18 ever report `healthy`; `spark-iceberg` has no healthcheck defined and sta
 it agrees with the healthchecks and `restart: "no"` in the compose file, which no longer has
 those two. `alertmanager` joined the compose file after that reading: its row is from the
 throwaway copy `make alert-test-standin` runs, `Up (healthy)` with no webhook installed, and
-not yet from the live stack.
+not yet from the live stack. `k2-api` joined the default set in phase 003, with a healthcheck in
+the compose file, so the counts are now 23, 19 and 18; its row is from the compose file, not yet
+from a stack. The one-shots `tools`, `fetch` and `dbt-runner` start per job (deploy, a DAG task)
+and are removed after it, so they are not in the table.
 
 | State | Count | Containers |
 |---|---|---|
-| `Up (healthy)` | 17 | `redpanda`, `redpanda-console`, `minio`, `prometheus`, `alertmanager`, `grafana`, `cadvisor`, `prefect-db`, `lakekeeper`, `trino`, `capture-binance`, `capture-kraken`, `capture-coinbase`, `airflow-api-server`, `airflow-scheduler`, `airflow-dag-processor`, `airflow-statsd` |
+| `Up (healthy)` | 18 | `redpanda`, `redpanda-console`, `minio`, `prometheus`, `alertmanager`, `grafana`, `cadvisor`, `prefect-db`, `lakekeeper`, `trino`, `capture-binance`, `capture-kraken`, `capture-coinbase`, `airflow-api-server`, `airflow-scheduler`, `airflow-dag-processor`, `airflow-statsd`, `k2-api` |
 | `Up`, no healthcheck | 1 | `spark-iceberg` |
 | `Exited (0)` | 4 | `lakekeeper-migrate`, `redpanda-init`, `lake-init`, `airflow-migrate` |
 
@@ -231,4 +252,6 @@ images. The lost time is the ~10 min of the first attempt, not the recovery.
 ~9.5 min build figure moves).
 
 **Last verified:** 2026-08-28 against a fresh clone on a 28-core host, Docker Desktop VM
-40 GB / 28 CPU.
+40 GB / 28 CPU. The phase 002 and 003 lines (`make engine-keys`, the password loop, the webhook and
+API key, `make site-install`, the ports without MinIO's, k2-api in the healthy table): not yet: first run
+after the deploy of this release.

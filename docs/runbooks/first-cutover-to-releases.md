@@ -89,7 +89,8 @@ for id in svc.runs svc.catalog svc.platform svc.api dbt_access_canary pub_access
 make alerts-install-webhook
 # 4. .env: K2_COMPOSE_PROJECT=$P, K2_HOME=<this checkout's absolute path>, K2_TRINO_PORT=8443,
 #    K2_TRINO_SHARED_SECRET=$(openssl rand -hex 32), K2_TRINO_S3_ACCESS_KEY and K2_TRINO_S3_SECRET_KEY
-#    (MinIO's root pair until phase 002's scoped keys); then load it again
+#    (MinIO's root pair until phase 002's scoped keys; from a tag of phase 002 on, `make engine-keys`
+#    writes every engine's pair instead, section 3); then load it again
 set -a && . ./.env && set +a
 # 5. the checkout at the release's tag, clean: deploy does not check it, and the checkout's tree is what
 #    every relative bind mount and every script deploy calls reads; then the release
@@ -158,9 +159,9 @@ against the local CA and a statement without a password gets 401. Alertmanager w
 compose found nothing to change in it, so it was not restarted.
 
 **Still not covered**: the live access canary. Until phase 002 publishes it, release-verify's live
-suite is a visible SKIP (`not yet published`); once it is published, its readers are people, whose
-passwords `make password` never files, while the live suite reads them from
-`${K2_SECRETS}/principals/p.canary-*.password`: decide how those files are made before then. A fresh
+suite is a visible SKIP (`not yet published`). Its readers are test principals, granted on the canary
+and nothing else, so `make password PRINCIPAL=p.canary-<name> TO_FILE=1` files their passwords
+([verify-access-after-a-release.md](./verify-access-after-a-release.md) section 2). A fresh
 install of the release-shaped stack on an empty host is also not yet run
 ([fresh install](./fresh-install.md)).
 
@@ -202,6 +203,62 @@ each service the cutover recreated is recreated again from today's file.
 
 ---
 
+## 3. From a tag of phase 002 or later
+
+**Symptom**, section 1's steps are run from a tag of phase 002 or later: on another host, on a rehearsal,
+or after a rollback to the shape before releases.
+
+**Detection**, `docker compose config -q` refuses the release's compose until every engine's key is set:
+`error while interpolating services.spark-iceberg.environment.AWS_ACCESS_KEY_ID: required variable
+K2_SPARK_S3_ACCESS_KEY is missing a value: set K2_SPARK_S3_ACCESS_KEY in .env (make engine-keys)`
+(printed by `docker compose --env-file /dev/null config -q` on this branch).
+
+**Expected behaviour**, three things differ from section 1:
+
+- **Each engine has its own MinIO key** (spark, trino, maintenance, backup, tools; fetch holds none).
+  `make engine-keys` writes each missing pair, and `K2_RUN_UID` and `K2_RUN_GID` (the host user the
+  one-shots that mount secrets run as), into `.env` at mode 600 after a copy to `.env.bak-<UTC time>`,
+  printing names only. A pair that still holds the root user or password, as Trino's did in section 1's
+  step 4, is replaced. `ROTATE=<engine>` gives an engine a new secret under the same access key. A new
+  pair reaches MinIO only when lake-init runs again, which the deploy does.
+- **lake-init runs the release's own `platform/docker/lake/init-lake.sh`** (compose's entrypoint
+  `/k2/releases/${K2_LAKE_INIT_RELEASE:-pointers/trino}/platform/docker/lake/init-lake.sh`, which deploy
+  sets to the target). It refuses before any change unless every engine's pair is set and none is the
+  root's, then makes the bucket, the warehouses of the storage plan with remote signing off (so an
+  engine's own key is the one MinIO checks), and one MinIO user and policy per engine (5 steps, its last
+  line `✓ lake ready: ...`).
+- **More secret files.** Deploy's preflight lists every missing one with the command that writes it
+  ([deploy-a-release.md](./deploy-a-release.md) section 5): besides the CA, Trino's certificate,
+  `password.db` and the Slack webhook, a password file for `svc.runs`, `svc.catalog`, `svc.platform` and
+  `svc.api`, and for the builder `dbt_<fence>` and publisher `pub_<fence>` of every product that builds;
+  `api/keys.json` for k2-api (`make api-key`). MinIO publishes no host port: `127.0.0.1:9000` and
+  `127.0.0.1:9001` (its console) are gone, and the first deploy from a release that published them needs
+  `ALLOW_STATEFUL=minio`.
+
+**Recovery**
+
+```bash
+make engine-keys                 # names only; a second run writes nothing
+set -a && . ./.env && set +a     # deploy passes the storage-key names to the live suite from here
+make deploy RELEASE=<release id> PLAN=1
+```
+
+```text
+engine-keys: wrote K2_BACKUP_S3_ACCESS_KEY
+...
+engine-keys: wrote K2_RUN_GID
+engine-keys: 12 names written to <dir>/env (mode 600); the old file is <dir>/env.bak-20261127T064448474585Z
+engine-keys: nothing to write, every name in <dir>/env is set
+```
+
+Those lines are from `python3 scripts/engine-keys.py --env-file <dir>/env` run twice on a copy of
+`.env.example` in a scratch directory, 2026-11-27, nothing started.
+
+**Measured**, not yet measured on a stack: the first deploy of a release of this phase runs lake-init with
+the scoped users.
+
+---
+
 ## Failure modes / incidents
 
 - 2026-11-27, live: the first `PLAN=1` was refused at preflight (`secret files missing under ${K2_SECRETS}: alertmanager/slack-webhook-url`), before any change. Alertmanager runs without the file, but deploy requires every secret file a recreated service mounts. Fixed by installing the webhook (step 3); nothing else was needed.
@@ -210,4 +267,6 @@ each service the cutover recreated is recreated again from today's file.
 
 **Last verified:** 2026-11-27 on the live stack (the cutover, section 1), release
 `v3.0.0-alpha.3-rc.1-490b0533ff56`; section 2, the rollback, on the rehearsal only
-(`make deploy-rehearsal CUTOVER=1`, 8 s), never needed live.
+(`make deploy-rehearsal CUTOVER=1`, 8 s), never needed live. Section 3: `make engine-keys` run on a
+scratch copy of `.env.example` and the compose refusal rendered, 2026-11-27; on a stack, not yet: first run
+after the deploy of this release.
