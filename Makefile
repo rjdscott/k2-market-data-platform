@@ -20,7 +20,7 @@ dev-up: ## Bring the stack up the safe way (override, rebuild, recreate mount ho
 health: ## Is it up: every service healthy, a message on every venue in the last 2 min, the book switch, the backup (the lake checks SKIP until phase 004)
 	bash scripts/health.sh
 
-backup:  ## Dump the catalog and Airflow databases to K2_BACKUP_DIR (default ~/k2-backup); the lake table copy SKIPs until phase 002; read-only against the stack
+backup:  ## Dump the catalog and Airflow databases, then copy the live release's backup set (restore tables at their ref, landings, the releases root) in tools with the backup key, to K2_BACKUP_DIR/runs/<UTC>; read-only against the stack
 	bash scripts/backup-lake.sh
 
 # The owner runs this, once, from the main checkout: the unit runs the script from
@@ -150,7 +150,7 @@ check-alerts:  ## promtool: syntax-check every rule file and run the alert unit 
 
 # platform/k2gen is checked with the ruff and mypy pinned in its own lock, as CI's contracts job does.
 lint:  ## Ruff over docker/lake, the Airflow image tests, the gate scripts and other scripts/ Python, and the tests; ruff and mypy (strict) over platform/k2gen
-	uv run --no-project --with ruff==0.17.6 ruff check docker/lake docker/airflow scripts/screenshots scripts/check_docs.py scripts/check-budget.py scripts/check-env.py scripts/make-synthetic-fixtures.py scripts/principal-secret.py scripts/engine-keys.py scripts/deploy.py scripts/access_verify.py scripts/trino_rules_test.py scripts/trino_rules_c1_test.py scripts/verify docker/tools docker/fetch docker/dbt-runner platform/runs tests
+	uv run --no-project --with ruff==0.17.6 ruff check docker/lake docker/airflow scripts/screenshots scripts/check_docs.py scripts/check-budget.py scripts/check-env.py scripts/make-synthetic-fixtures.py scripts/principal-secret.py scripts/engine-keys.py scripts/backup_lake.py scripts/deploy.py scripts/access_verify.py scripts/trino_rules_test.py scripts/trino_rules_c1_test.py scripts/verify docker/tools docker/fetch docker/dbt-runner platform/runs tests
 	cd platform/k2gen && uv run --locked -q ruff check . && uv run --locked -q mypy
 
 # Stood down, not deleted: the old lake ingest, the tables these gates read and
