@@ -15,9 +15,20 @@ load     recomputes the raw file's sha256 and size and refuses a mismatch with f
          s3://k2-landing/<domain>/<product>/<fetch day, UTC>/<sha256>.<ext> (k2gen model.landing_key),
          so a landed object is never overwritten (the same bytes there: already landed; other
          bytes: refused); adds one row to lake.<fence>.landing_files. A file whose parse failed
-         lands too: the landing is the record of what arrived.
+         lands too: the landing is the record of what arrived, and nothing is staged. Then it
+         appends rows.jsonl to the bronze table's one fixed branch `audit`, every row's
+         source_file_sha256 set and the commit tagged k2.batch-id. While `audit` holds another
+         batch `main` does not, this one is refused (bronze publishes in order: a failed batch
+         blocks the next, never its landing). A retry stages nothing twice, and bytes already
+         published stage no row.
+audit    checks the batch at `audit`'s head, scoped to its rows (source_file_sha256 = its sha256),
+         never the whole branch: parses (rows.jsonl there, each row exactly the table's columns),
+         non_empty, row_count (the parser's count), keys_unique, in_domain:<column> per declared
+         pattern, values_unchanged (no published key with other values), and the parser's
+         declared audits; one audit_checks row each, at that snapshot.
 
-Exits: 0 done; 1 a task error; 2 refused (a sha256 or size mismatch, other bytes under the key).
+Exits: 0 done (audit: every check passed); 1 a task error; 2 refused (a sha256 or size mismatch,
+other bytes under the key, `audit` holding another unpublished batch); 3 the batch failed its audit.
 The last line on stdout is the task's result as JSON, {"exit": <n>, ...}, for the DAG's record
 task, which writes the run record (this task writes none).
 
@@ -53,7 +64,7 @@ LANDING_COLUMNS = ("object_key", "sha256", "bytes", "url", "final_url", "http_st
                    "landed_at", "parsed", "batch_id", "run_id", "release_id")  # model.PLATFORM_TABLES
 CHECK_COLUMNS = ("table_name", "batch_id", "snapshot_id", "check_name", "passed", "detail", "checked_at",
                  "run_id", "release_id")
-EXIT_OK, EXIT_ERROR, EXIT_REFUSED = 0, 1, 2
+EXIT_OK, EXIT_ERROR, EXIT_REFUSED, EXIT_FAILED = 0, 1, 2, 3
 S3_ENDPOINT = os.environ.get("K2_S3_ENDPOINT", "http://minio:9000")  # as spark_conf.py reads them
 S3_REGION = os.environ.get("K2_S3_REGION", "local-01")
 KEY_ENV = ("K2_SPARK_S3_ACCESS_KEY", "K2_SPARK_S3_SECRET_KEY")
@@ -101,6 +112,24 @@ class Run:
     def raw(self) -> Path:
         return self.entry / f"raw.{self.pipeline['connector']['format']}"
 
+    @property
+    def bronze(self) -> dict:
+        # ponytail: one bronze table per file product, since rows.jsonl is one list of rows; a
+        # parser that feeds two tables needs the rows tagged by table first.
+        [bronze] = self.pipeline["bronze"]
+        return bronze
+
+    def lines(self) -> list[str] | None:
+        """rows.jsonl's lines, or None when fetch's parse failed (exit 30)."""
+        path = self.entry / "rows.jsonl"
+        return path.read_text(encoding="utf-8").splitlines() if path.exists() else None
+
+    def spooled(self) -> tuple[dict, bytes, str]:
+        """fetch.json, the raw bytes and their verified sha256."""
+        record = json.loads((self.entry / "fetch.json").read_text())
+        data = self.raw.read_bytes()
+        return record, data, verify(record, data)
+
 
 def verify(record: dict, data: bytes) -> str:
     """The bytes' sha256, refused unless it and their size are what fetch.json recorded."""
@@ -136,19 +165,83 @@ def now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def snapshot_id(value) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(f"{value!r} is not a snapshot id")
+    return value
+
+
+def business_key(bronze: dict) -> list[str]:
+    """The key without the lineage column: what a row is across files."""
+    return [c for c in bronze["key"] if c != LINEAGE]
+
+
+def check_names(bronze: dict) -> list[str]:
+    """Every check a batch must pass, in the order they run: what publish requires."""
+    values = ["values_unchanged"] if bronze["values"] and business_key(bronze) else []
+    return ["parses", "non_empty", "row_count", "keys_unique",
+            *(f"in_domain:{c}" for c in sorted(bronze["patterns"])), *values, *bronze["audits"]]
+
+
+def check_sql(bronze: dict, snapshot, sha: str, parsed: int) -> list[tuple[str, str, dict, int]]:
+    """`(check, sql, args, wanted)` for each declared check that runs in SQL: the query returns
+    one count, which must equal `wanted`. Every query reads the batch's rows alone (lineage =
+    the batch's sha256) at the one snapshot audited, never the whole branch (SPIKE-RUNCOST F12).
+    Names come from the pipeline through name() and rel(); values only as bound parameters."""
+    t, lin = rel(bronze["table"]), name(LINEAGE)
+    at = f"VERSION AS OF {snapshot_id(snapshot)}"
+    src = f"{t} {at} WHERE {lin} = :sha"
+    keys = ", ".join(name(c) for c in bronze["key"])
+    out = [("row_count", f"SELECT count(*) FROM {src}", {"sha": sha}, parsed),
+           ("keys_unique", f"SELECT count(*) FROM (SELECT 1 FROM {src} GROUP BY {keys} HAVING count(*) > 1)",
+            {"sha": sha}, 0)]
+    for column in sorted(bronze["patterns"]):
+        c = name(column)
+        out.append((f"in_domain:{column}",
+                    f"SELECT count(*) FROM {src} AND {c} IS NOT NULL AND NOT (CAST({c} AS STRING) RLIKE :pattern)",
+                    {"sha": sha, "pattern": f"^(?:{bronze['patterns'][column]})$"}, 0))
+    if "values_unchanged" in check_names(bronze):
+        # ponytail: the other side, `o`, is every published row sharing a key, which Spark reads by
+        # scanning the table at the snapshot; partition bronze on the key's date when it grows.
+        on = " AND ".join(f"b.{name(c)} = o.{name(c)}" for c in business_key(bronze))
+        same = " AND ".join(f"b.{name(c)} <=> o.{name(c)}" for c in bronze["values"])
+        out.append(("values_unchanged",
+                    f"SELECT count(*) FROM {t} {at} AS b JOIN {t} {at} AS o ON {on} "
+                    f"WHERE b.{lin} = :sha AND o.{lin} <> :sha AND NOT ({same})", {"sha": sha}, 0))
+    return out
+
+
+def shape_problems(lines: list[str], columns: list[str]) -> list[str]:
+    """Rows that are not exactly the table's columns (the lineage column aside): Spark's JSON
+    reader would drop an extra field and null a missing one without a word."""
+    want, problems = sorted(c for c in columns if c != LINEAGE), []
+    for n, line in enumerate(lines):
+        row = json.loads(line)
+        if not isinstance(row, dict) or sorted(row) != want:
+            problems.append(f"row {n} has columns {sorted(row) if isinstance(row, dict) else type(row).__name__}")
+    return problems
+
+
+def pending_batch(lake, table: str, refs: dict) -> str | None:
+    """The batch `audit` holds that `main` does not, or None."""
+    head = refs.get(AUDIT)
+    if head is None or lake.published(table, head):
+        return None
+    return lake.batch_of(table, head) or "an untagged commit"
+
+
 # --- The tasks: pure flows over a store and a lake --------------------------------------------
 
 
 def load(run: Run, store, lake) -> tuple[int, dict]:
-    """Lands the spooled file and logs it in landing_files."""
-    record = json.loads((run.entry / "fetch.json").read_text())
-    data = run.raw.read_bytes()
+    """Lands the spooled file and logs it in landing_files, then stages its rows on `audit`."""
     try:
-        sha = verify(record, data)
+        record, data, sha = run.spooled()
     except Refused as e:
         print(f"load refused: {e}; nothing landed", file=sys.stderr)
         return EXIT_REFUSED, {}
-    parsed = (run.entry / "rows.jsonl").exists()
+    lines = run.lines()
+    parsed = lines is not None
     key = object_key(run.pipeline, record, sha)
     uri = f"s3://{LANDING_BUCKET}/{key}"
     try:
@@ -164,7 +257,88 @@ def load(run: Run, store, lake) -> tuple[int, dict]:
                "batch_id": run.run_id, "run_id": run.run_id, "release_id": run.release}
         lake.append(log, [row], summary(run, sha))
     print(f"load: {'landed' if wrote else 'already landed'} {uri}, {len(data)} bytes, parsed {parsed}")
-    return EXIT_OK, {"objectKey": uri, "bytes": len(data)}
+    landed = {"objectKey": uri, "bytes": len(data), "rows": 0}
+    if not parsed:
+        print("load: the parse failed, so nothing is staged; the audit fails the batch")
+        return EXIT_OK, landed
+    return stage(run, lake, lines, sha, landed)
+
+
+def stage(run: Run, lake, lines: list[str], sha: str, result: dict) -> tuple[int, dict]:
+    """Appends the batch's rows to `audit` unless another batch waits there unpublished (it
+    blocks this one: bronze publishes in order), this batch is staged already (a retry), or its
+    bytes are published already (the same file again)."""
+    table = run.bronze["table"]
+    refs = lake.refs(table)
+    result = {**result, "table": table, "snapshotBefore": refs.get(AUDIT)}
+    pending = pending_batch(lake, table, refs)
+    if pending == run.run_id:
+        print(f"load: batch {run.run_id} is on {AUDIT} already (snapshot {refs[AUDIT]}); nothing staged")
+        return EXIT_OK, result
+    if pending is not None:
+        print(f"load refused: {AUDIT} of {table} holds batch {pending}, unpublished; this batch waits "
+              f"behind it (its file is landed)", file=sys.stderr)
+        return EXIT_REFUSED, result
+    if lake.published_rows(table, sha):
+        print(f"load: {sha} is published in {table} already; nothing staged")
+        return EXIT_OK, result
+    if AUDIT not in refs:
+        lake.create_branch(table)
+    elif refs[AUDIT] != refs.get("main"):  # behind main, which maintenance moved on
+        lake.reset_branch(table, refs["main"])
+    if lines:
+        lake.append_rows(table, lines, sha, summary(run, sha))
+    after = lake.refs(table).get(AUDIT)
+    print(f"load: {len(lines)} rows staged on {AUDIT} of {table}, snapshot {after}")
+    return EXIT_OK, {**result, "rows": len(lines), "snapshotAfter": after}
+
+
+def audit(run: Run, store, lake) -> tuple[int, dict]:
+    """Runs every check of the batch at `audit`'s head and records each in audit_checks."""
+    _, _, sha = run.spooled()
+    bronze, lines = run.bronze, run.lines()
+    table = bronze["table"]
+    refs = lake.refs(table)
+    pending = pending_batch(lake, table, refs)
+    if pending not in (None, run.run_id):
+        print(f"audit refused: {AUDIT} of {table} holds batch {pending}, not this one", file=sys.stderr)
+        return EXIT_REFUSED, {"table": table}
+    head = refs.get(AUDIT, refs.get("main"))
+    results = audit_results(bronze, lines, lake, head, sha)
+    at = now()
+    rows = [{"table_name": table, "batch_id": run.run_id, "snapshot_id": head, "check_name": check,
+             "passed": passed, "detail": detail[:1000], "checked_at": at, "run_id": run.run_id,
+             "release_id": run.release} for check, passed, detail in results]
+    lake.append(bronze["checks"], rows, summary(run, sha))
+    for check, passed, detail in results:
+        print(f"  {'pass' if passed else 'FAIL'}  {check:<24} {detail}")
+    failed = [c for c, passed, _ in results if not passed]
+    print(f"audit: batch {run.run_id} at {AUDIT} snapshot {head}: "
+          f"{'FAILED ' + ', '.join(failed) + '; main not moved' if failed else 'passed'}")
+    return (EXIT_FAILED if failed else EXIT_OK), {"table": table, "snapshot": head, "failed": failed}
+
+
+def audit_results(bronze: dict, lines: list[str] | None, lake, head, sha: str) -> list[tuple[str, bool, str]]:
+    """`(check, passed, detail)` in check_names order; a batch that did not parse has one row."""
+    if lines is None:
+        return [("parses", False, "fetch could not parse the file; its bytes are landed")]
+    problems = shape_problems(lines, lake.columns(bronze["table"]))
+    if problems:
+        return [("parses", False, f"{len(problems)} rows: " + "; ".join(problems[:5]))]
+    out = [("parses", True, f"{len(lines)} rows"),
+           ("non_empty", bool(lines), "" if lines else "the file holds no rows")]
+    if head is None:
+        out += [(c, False, f"no snapshot on {AUDIT} to check") for c in check_names(bronze)[2:]]
+        return out
+    for check, text, args, wanted in check_sql(bronze, head, sha, len(lines)):
+        got = lake.count(check, text, args)
+        detail = (f"{got} rows on {AUDIT}, the parser wrote {wanted}" if check == "row_count"
+                  else f"{got} rows fail it" if got else "")
+        out.append((check, got == wanted, detail))
+    # The parser's own audit functions are product code, which runs in the fetch container, never
+    # here with a storage key: until fetch hands their results over, each fails the batch.
+    out += [(a, False, "not run: a parser audit has no runner in the Spark task") for a in bronze["audits"]]
+    return out
 
 
 def summary(run: Run, sha: str) -> dict:
@@ -239,10 +413,58 @@ class SparkLake:
     def append(self, table: str, records: list, props: dict) -> None:
         schema = self.spark.table(rel(table)).schema
         frame = self.spark.createDataFrame([tuple(r[f.name] for f in schema) for r in records], schema=schema)
-        writer = frame.writeTo(rel(table))
+        self._write(frame, rel(table), props)
+
+    @staticmethod
+    def _write(frame, target: str, props: dict) -> None:
+        writer = frame.writeTo(target)
         for k, v in props.items():
             writer = writer.option(f"snapshot-property.{k}", v)
         writer.append()
+
+    def refs(self, table: str) -> dict:
+        return dict(self._sql(f"SELECT `name`, `snapshot_id` FROM {rel(table)}.`refs`"))
+
+    def published(self, table: str, snapshot: int) -> bool:
+        """Whether `snapshot` is main's or one of its ancestors."""
+        return bool(self._sql(f"SELECT 1 FROM {rel(table)}.`history` WHERE `snapshot_id` = :s "
+                              "AND `is_current_ancestor` LIMIT 1", s=snapshot_id(snapshot)))
+
+    def batch_of(self, table: str, snapshot: int) -> str | None:
+        found = self._sql(f"SELECT `summary`['k2.batch-id'] FROM {rel(table)}.`snapshots` "
+                          "WHERE `snapshot_id` = :s", s=snapshot_id(snapshot))
+        return found[0][0] if found else None
+
+    def published_rows(self, table: str, sha: str) -> int:
+        return self._sql(f"SELECT count(*) FROM {rel(table)} WHERE {name(LINEAGE)} = :sha", sha=sha)[0][0]
+
+    def columns(self, table: str) -> list[str]:
+        return [f.name for f in self.spark.table(rel(table)).schema.fields]
+
+    def create_branch(self, table: str) -> None:
+        self.spark.sql(f"ALTER TABLE {rel(table)} CREATE BRANCH IF NOT EXISTS {name(AUDIT)}")
+
+    def reset_branch(self, table: str, snapshot: int) -> None:
+        self.spark.sql(f"ALTER TABLE {rel(table)} REPLACE BRANCH {name(AUDIT)} AS OF VERSION {snapshot_id(snapshot)}")
+
+    def append_rows(self, table: str, lines: list[str], sha: str, props: dict) -> None:
+        """rows.jsonl onto `audit`, read by Spark's JSON reader against the table's own types
+        (FAILFAST: a value that does not read as its column's type fails the task, nothing
+        written), with the lineage column set to the batch's sha256."""
+        from pyspark.sql import functions as F
+        from pyspark.sql.types import StructType
+
+        schema = self.spark.table(rel(table)).schema
+        body = StructType([f for f in schema.fields if f.name != LINEAGE])
+        # ponytail: the rows pass through the driver, bounded by fetch's 64 MiB cap.
+        frame = (self.spark.read.schema(body).option("mode", "FAILFAST")
+                 .json(self.spark.sparkContext.parallelize(lines, 1))
+                 .withColumn(LINEAGE, F.lit(sha))
+                 .select(*[F.col(f.name).cast(f.dataType) for f in schema.fields]))
+        self._write(frame, f"{rel(table)}.{name('branch_' + AUDIT)}", props)
+
+    def count(self, check: str, text: str, args: dict) -> int:
+        return self._sql(text, **args)[0][0]
 
 
 def parse_args(argv: list[str] | None, read_pipeline) -> tuple[str, Run]:
@@ -263,7 +485,7 @@ def parse_args(argv: list[str] | None, read_pipeline) -> tuple[str, Run]:
     return a.task, Run(release=a.release, product=a.product, run_id=a.run_id, pipeline=pipeline)
 
 
-TASKS = {"load": load}
+TASKS = {"load": load, "audit": audit}
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -274,6 +496,9 @@ def main(argv: list[str] | None = None) -> int:
     code, result = EXIT_ERROR, {}
     try:
         code, result = TASKS[task](run, Landing(), SparkLake(spark))
+    except Refused as e:
+        print(f"{task} refused: {e}", file=sys.stderr)
+        code = EXIT_REFUSED
     finally:
         spark.stop()
         print(json.dumps({"exit": code, "task": task, "batchId": run.run_id, **result}))

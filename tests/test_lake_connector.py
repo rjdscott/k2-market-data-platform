@@ -8,8 +8,10 @@ scripts/verify/connector-wap.sh (W1-12). Values are synthetic.
 """
 
 import ast
+import copy
 import hashlib
 import json
+import re
 import types
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -121,9 +123,19 @@ class FakeLake:
         rows = [{**json.loads(line), model.LINEAGE_COLUMN: sha} for line in lines]
         self.refs_["audit"] = self._commit(self.rows.get(self.refs_.get("audit"), []), rows, props["k2.batch-id"])
 
-    def query(self, text, args):
-        self.sql.append((text, args))
-        return [(self.answers.get(text.split(" ", 2)[1], 0),)]
+    def columns(self, table):
+        return [*ROWS[0], model.LINEAGE_COLUMN]
+
+    def count(self, check, text, args):
+        """A check's problem count: as set in `answers`; else row_count counts the batch's rows at
+        the snapshot the SQL names, and every other check finds nothing."""
+        self.sql.append((check, text, args))
+        if check in self.answers:
+            return self.answers[check]
+        if check == "row_count":
+            snapshot = int(re.search(r"VERSION AS OF (\d+) ", text)[1])
+            return sum(r[model.LINEAGE_COLUMN] == args["sha"] for r in self.rows[snapshot])
+        return 0
 
     def checks_of(self, checks, table, batch, snapshot):
         return [(r["check_name"], r["passed"], r["checked_at"]) for r in self.tables[checks]
@@ -249,3 +261,162 @@ def test_arguments_are_plain_names(pipeline, spool):
                  ["load", "--release", RELEASE, "--product", PRODUCT, "--run-id", "other_dag/r1"]):
         with pytest.raises(SystemExit):
             C.parse_args(argv, lambda product: pipeline)
+
+
+# --- W1-10: load onto `audit`, and the batch's audits ----------------------------------------
+
+OTHER = "station_readings/scheduled__2026-11-27T14:15:00+00:00"
+
+
+def staged(lake):
+    """The rows on `audit` that `main` does not hold."""
+    return lake.rows.get(lake.refs_.get("audit"), [])[len(lake.rows.get(lake.refs_.get("main"), [])):]
+
+
+def test_load_stages_the_rows_on_audit_tagged_with_the_batch(pipeline, spool):
+    spool()
+    store, lake = Store(), FakeLake()
+    code, result = C.load(ctx(pipeline), store, lake)
+    assert code == C.EXIT_OK and result["rows"] == 1
+    assert ("create_branch", None) in lake.calls and lake.refs_.get("main") is None
+    head = lake.refs_["audit"]
+    assert lake.batch[head] == RUN and staged(lake) == [{**ROWS[0], model.LINEAGE_COLUMN: SHA}]
+
+
+def test_a_retry_of_load_stages_nothing_twice(pipeline, spool):
+    spool()
+    store, lake = Store(), FakeLake()
+    C.load(ctx(pipeline), store, lake)
+    head = lake.refs_["audit"]
+    assert C.load(ctx(pipeline), store, lake)[0] == C.EXIT_OK
+    assert lake.refs_["audit"] == head and len(staged(lake)) == 1
+
+
+def test_an_unpublished_batch_on_audit_blocks_the_next_but_not_its_landing(pipeline, spool):
+    spool()
+    store, lake = Store(), FakeLake()
+    lake.publish_main([], "station_readings/first")
+    lake.refs_["audit"] = lake._commit([], [{"station_id": "s-9"}], OTHER)  # failed its audit, kept
+    code, _ = C.load(ctx(pipeline), store, lake)
+    assert code == C.EXIT_REFUSED
+    assert len(store.objects) == 1 and len(lake.tables[LOG]) == 1  # landed and logged all the same
+    assert lake.batch[lake.refs_["audit"]] == OTHER  # nothing appended behind the failed batch
+
+
+def test_the_same_bytes_already_published_load_no_row(pipeline, spool):
+    spool()
+    store, lake = Store(), FakeLake()
+    lake.publish_main([{**ROWS[0], model.LINEAGE_COLUMN: SHA}], OTHER)
+    head = lake.refs_["audit"]
+    code, result = C.load(ctx(pipeline), store, lake)
+    assert code == C.EXIT_OK and result["rows"] == 0 and lake.refs_["audit"] == head
+
+
+def test_an_audit_branch_behind_main_is_reset_to_main_before_staging(pipeline, spool):
+    spool()
+    store, lake = Store(), FakeLake()
+    lake.publish_main([], OTHER)
+    behind = lake.refs_["audit"]
+    lake.publish_main([], "maintenance")  # main moved on (compaction), audit left behind
+    lake.refs_["audit"] = behind
+    assert C.load(ctx(pipeline), store, lake)[0] == C.EXIT_OK
+    assert ("reset_branch", lake.refs_["main"]) in lake.calls and len(staged(lake)) == 1
+
+
+def test_a_parse_failed_batch_lands_loads_nothing_and_fails_its_audit(pipeline, spool):
+    spool(rows=None)
+    store, lake = Store(), FakeLake()
+    assert C.load(ctx(pipeline), store, lake)[0] == C.EXIT_OK
+    assert lake.refs_.get("audit") is None and len(store.objects) == 1
+    assert C.audit(ctx(pipeline), store, lake)[0] == C.EXIT_FAILED
+    [row] = lake.tables[CHECKS]
+    assert (row["check_name"], row["passed"], row["batch_id"], row["table_name"]) == ("parses", False, RUN, TABLE)
+    assert list(row) == list(C.CHECK_COLUMNS) and lake.sql == []
+
+
+def test_a_batch_that_passes_records_every_check_at_the_audit_head(pipeline, spool):
+    spool()
+    pipeline["bronze"][0]["audits"] = []  # parser audits are refused below
+    store, lake = Store(), FakeLake()
+    C.load(ctx(pipeline), store, lake)
+    assert C.audit(ctx(pipeline), store, lake)[0] == C.EXIT_OK
+    rows = lake.tables[CHECKS]
+    assert [r["check_name"] for r in rows] == C.check_names(pipeline["bronze"][0])
+    assert {r["snapshot_id"] for r in rows} == {lake.refs_["audit"]} and all(r["passed"] for r in rows)
+
+
+def test_a_row_count_short_of_the_parsers_fails_the_audit(pipeline, spool):
+    spool()
+    pipeline["bronze"][0]["audits"] = []
+    store, lake = Store(), FakeLake()
+    C.load(ctx(pipeline), store, lake)
+    lake.answers["row_count"] = 0
+    assert C.audit(ctx(pipeline), store, lake)[0] == C.EXIT_FAILED
+    [failed] = [r for r in lake.tables[CHECKS] if not r["passed"]]
+    assert failed["check_name"] == "row_count" and "parser wrote 1" in failed["detail"]
+
+
+def test_a_row_whose_columns_are_not_the_tables_fails_parses(pipeline, spool):
+    spool(rows=[{**ROWS[0], "extra": 1}])
+    store, lake = Store(), FakeLake()
+    C.load(ctx(pipeline), store, lake)
+    assert C.audit(ctx(pipeline), store, lake)[0] == C.EXIT_FAILED
+    assert lake.tables[CHECKS][0]["check_name"] == "parses" and not lake.tables[CHECKS][0]["passed"]
+
+
+def test_a_parser_audit_the_spark_task_cannot_run_fails_closed(pipeline, spool):
+    spool()
+    store, lake = Store(), FakeLake()
+    C.load(ctx(pipeline), store, lake)
+    assert C.audit(ctx(pipeline), store, lake)[0] == C.EXIT_FAILED
+    [failed] = [r for r in lake.tables[CHECKS] if not r["passed"]]
+    assert failed["check_name"] == "value_parses"
+
+
+def test_each_declared_check_renders_batch_scoped_sql(pipeline):
+    bronze = pipeline["bronze"][0]
+    src = ("`lake`.`station_readings`.`bronze_readings` VERSION AS OF 7 "
+           "WHERE `source_file_sha256` = :sha")
+    got = {n: (text, args, want) for n, text, args, want in C.check_sql(bronze, 7, SHA, 3)}
+    assert got == {
+        "row_count": (f"SELECT count(*) FROM {src}", {"sha": SHA}, 3),
+        "keys_unique": (f"SELECT count(*) FROM (SELECT 1 FROM {src} "
+                        "GROUP BY `station_id`, `read_at`, `source_file_sha256` HAVING count(*) > 1)", {"sha": SHA}, 0),
+        "in_domain:station_id": (f"SELECT count(*) FROM {src} AND `station_id` IS NOT NULL "
+                                 "AND NOT (CAST(`station_id` AS STRING) RLIKE :pattern)",
+                                 {"sha": SHA, "pattern": "^(?:^s-[0-9]+$)$"}, 0),
+        "values_unchanged": (
+            "SELECT count(*) FROM `lake`.`station_readings`.`bronze_readings` VERSION AS OF 7 AS b "
+            "JOIN `lake`.`station_readings`.`bronze_readings` VERSION AS OF 7 AS o "
+            "ON b.`station_id` = o.`station_id` AND b.`read_at` = o.`read_at` "
+            "WHERE b.`source_file_sha256` = :sha AND o.`source_file_sha256` <> :sha "
+            "AND NOT (b.`value_text` <=> o.`value_text` AND b.`region` <=> o.`region` "
+            "AND b.`operator_note` <=> o.`operator_note`)", {"sha": SHA}, 0),
+    }
+    assert all(":sha" in text and "VERSION AS OF 7" in text for text, _, _ in got.values())
+
+
+@pytest.mark.parametrize("field,value", [
+    ("key", ["station_id`) OR 1=1 --"]),
+    ("values", ["current_user()"]),
+    ("patterns", {"x` = 1 OR `y": "^a$"}),
+    ("table", "lake.station_readings.bronze_readings; DROP TABLE x"),
+])
+def test_an_identifier_injection_in_the_pipeline_is_refused(pipeline, field, value):
+    bronze = copy.deepcopy(pipeline["bronze"][0])
+    bronze[field] = value
+    with pytest.raises(ValueError):
+        C.check_sql(bronze, 7, SHA, 1)
+
+
+def test_a_snapshot_must_be_an_integer(pipeline):
+    for bad in ("7 OR 1=1", True, None):
+        with pytest.raises(ValueError):
+            C.check_sql(pipeline["bronze"][0], bad, SHA, 1)
+
+
+def test_a_check_value_is_bound_never_spliced(pipeline):
+    bronze = copy.deepcopy(pipeline["bronze"][0])
+    bronze["patterns"] = {"station_id": "x') OR ('1'='1"}
+    [(_, text, args, _)] = [c for c in C.check_sql(bronze, 7, SHA, 1) if c[0].startswith("in_domain")]
+    assert "OR ('1'" not in text and args["pattern"] == "^(?:x') OR ('1'='1)$"
