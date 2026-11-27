@@ -13,8 +13,9 @@ layouts and commands, without notice. `3.0.0` is reserved for the release gate t
 
 ## [Unreleased]
 
-Phase 001 of the unified product platform plan, "the release and rules spine", to be tagged
-`3.0.0-alpha.3`: the platform runs only sealed releases compiled from documents, and Trino
+## [3.0.0-alpha.3] - 2026-11-27
+
+Phase 001 of the unified product platform plan, "the release and rules spine": the platform runs only sealed releases compiled from documents, and Trino
 decides who sees what by rules compiled from them, behind passwords over TLS. No product
 pipeline runs yet; the run spine (phase 002) brings the first.
 
@@ -56,6 +57,13 @@ pipeline runs yet; the run spine (phase 002) brings the first.
   the tested-data marker check and the catalog drift check.
 - Alertmanager, delivering every alert to one Slack channel through a webhook kept as a local
   secret.
+- `make spine-e2e`, the release and rules spine end to end from a scratch clone, run at merge
+  points; `make catalog-fence`, which checks on the running stack that the catalog publishes
+  no port, sits on its own network and shares it only with the listed services, and which
+  every `release-verify` runs.
+- CI compiles every pull request: `k2gen check`, a trial release and `k2gen diff` against the
+  newest tag in the job summary, the emitted dbt trees, the rules suite and the access suite
+  on a throwaway lake, and a test that holds the compose file to the catalog's allow-list.
 - Architecture chapters 21 (releases and deploy) and 22 (access and identity); runbooks to
   deploy, roll back, verify access, manage TLS and passwords, and create or rotate a principal.
 
@@ -66,20 +74,38 @@ pipeline runs yet; the run spine (phase 002) brings the first.
 - Trino listens only on HTTPS and its Web UI is off; every client connects by name, verifies
   the local CA and logs in with its own password.
 
+- The live stack was cut over to releases on 2026-11-27 (`docs/runbooks/first-cutover-to-releases.md`):
+  the captures, Redpanda, MinIO and Postgres were not restarted.
+- Generated files left git: `make generate`, `make new-product`, the old generator and
+  validator, `docs/products/`, `docker/lake/generated/` and `docker/trino/etc/` are removed. A
+  release is the only generated output.
+- `lake-init` creates the warehouses of the release's storage plan.
+- A deploy dumps a database before a one-shot migrates it, refuses when the image a rollback
+  would need is gone, and rolls back with Trino down.
+
 ### Fixed
 
 - A capture whose connect never returns is abandoned after a bound and retried, and a capture
   that delivers nothing for ten minutes exits to be restarted: on 2026-11-26 the Coinbase
   capture sat in its connect for 80 minutes with nothing logged.
 
+- `scripts/principal-secret.py` no longer fails when two runs create the secrets directory at
+  once.
+
 ### Security
 
-- No credential, and no hash of one, is in git, a document or a release; a release records
-  only in its deploy record, as the checksum of each secret file the deploy used.
+- No credential, and no hash of one, is in git, a document or a release; a deploy record
+  names each secret file the deploy used by presence, mode and size, never by content or
+  digest.
 - Readers cannot reach a dbt output's untested rows, its base table, its metadata tables or
   time travel; the catalog service has no host port and is reachable only from the
   platform's own services. Delay and row-scope policies suit trusted readers only: a delayed
   or scoped reader can infer value ranges of hidden rows (ADR-061, Outcome).
+- The Docker socket is inside the catalog's trust boundary: the Airflow scheduler and cAdvisor
+  hold it, and a network fence does not stop a service that can start containers (ADR-059,
+  Outcome of 2026-11-27).
+- The pinned MinIO image is no longer published by its vendor; the stack runs a mirrored copy
+  pinned by digest. <!-- VERIFY: the mirror reference, once pushed -->
 
 ## [3.0.0-alpha.2] - 2026-11-26
 
@@ -217,6 +243,7 @@ v3 lake-first stack (tag `v3-phase-e`).
 - The plan's later phases (P4 to P7) are not done, so the contracts, marts and gates
   may still change.
 
-[Unreleased]: https://github.com/rjdscott/k2-market-data-platform/compare/v3.0.0-alpha.2...HEAD
+[Unreleased]: https://github.com/rjdscott/k2-market-data-platform/compare/v3.0.0-alpha.3...HEAD
+[3.0.0-alpha.3]: https://github.com/rjdscott/k2-market-data-platform/compare/v3.0.0-alpha.2...v3.0.0-alpha.3
 [3.0.0-alpha.2]: https://github.com/rjdscott/k2-market-data-platform/compare/v3.0.0-alpha.1...v3.0.0-alpha.2
 [3.0.0-alpha.1]: https://github.com/rjdscott/k2-market-data-platform/releases/tag/v3.0.0-alpha.1
