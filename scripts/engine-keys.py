@@ -14,8 +14,16 @@ An access key is k2-<engine>-<8 hex>, distinct from every other engine's and the
 secret is 40 characters of secrets.token_urlsafe. Before a change the file is copied to
 <file>.bak-<UTC time>, mode 600; the new file is written beside it at mode 600 and renamed over it
 (no compose service bind-mounts the env file, so a rename strands no container's view of it).
-Prints the names it wrote, never a value; a second run writes nothing. A new pair reaches MinIO
-only when lake-init runs again (`make deploy` runs it, or `docker compose up lake-init`).
+Prints the names it wrote, never a value; a second run writes nothing.
+
+A written pair reaches MinIO only when lake-init runs again, and a deploy runs it only when its
+release changes lake-init, so a rotation is three steps: this, then `make lake-init` (lake-init on
+the live release, as deploy runs it: MinIO takes the new secret and the old one stops working), then
+the services that hold the engine's secret recreated so they read the new one, which
+`make lake-init RECREATE="<service> ..."` does through the release (HOLDERS: trino for trino,
+spark-iceberg for spark and maintenance; backup and tools are passed theirs per run). Until lake-init
+reruns MinIO keeps the old secret, and a holder recreated first is refused. The last lines printed
+name the command. A first deploy runs lake-init itself.
 """
 
 import argparse
@@ -33,6 +41,23 @@ LINE = re.compile(r"^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=(.*)$")
 
 def pair_names(engine: str) -> tuple[str, str]:
     return f"K2_{engine.upper()}_S3_ACCESS_KEY", f"K2_{engine.upper()}_S3_SECRET_KEY"
+
+
+def holders(compose: str) -> dict[str, list[str]]:
+    """engine -> the long-running services compose hands its secret, lake-init aside: those a
+    rotation must recreate. ponytail: a text scan of the top-level service keys, no YAML parser."""
+    out: dict[str, set[str]] = {e: set() for e in ENGINES}
+    service = None
+    for line in compose.splitlines():
+        if m := re.match(r"^  ([a-z0-9][a-z0-9-]*):\s*$", line):
+            service = m[1]
+        for e in ENGINES:
+            if service not in (None, "lake-init") and "${" + pair_names(e)[1] in line:
+                out[e].add(service)
+    return {e: sorted(s) for e, s in out.items()}
+
+
+HOLDERS = holders((ROOT / "docker-compose.yml").read_text())
 
 
 def values(text: str) -> dict[str, str]:
@@ -95,7 +120,8 @@ def write_600(path: Path, data: str) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    ap = argparse.ArgumentParser(description=__doc__.split("\n")[0], epilog=__doc__.split("\n\n")[-1],
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--env-file", default=str(ROOT / ".env"))
     ap.add_argument("--rotate", default="", help="engines whose secret is replaced, comma-separated")
     a = ap.parse_args(argv)
@@ -123,6 +149,13 @@ def main(argv: list[str] | None = None) -> int:
     for name in new:
         print(f"engine-keys: wrote {name}")
     print(f"engine-keys: {len(new)} names written to {path} (mode 600); the old file is {backup}")
+    engines = [e for e in ENGINES if any(n in new for n in pair_names(e))]
+    if engines:
+        held = " ".join(sorted({s for e in engines for s in HOLDERS[e]}))
+        command = f'make lake-init RECREATE="{held}"' if held else "make lake-init"
+        print(f"engine-keys: next, on a deployed stack: {command} (lake-init gives MinIO the new secret"
+              f"{', then ' + held + ' recreated to read it' if held else ''}); until then MinIO keeps the old"
+              " secret. A first deploy runs lake-init itself.")
     return 0
 
 
