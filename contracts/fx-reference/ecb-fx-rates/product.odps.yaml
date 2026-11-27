@@ -6,7 +6,7 @@ apiVersion: v1.1.0
 kind: DataProduct
 id: fx-reference.ecb-fx-rates
 name: ecb-fx-rates
-version: 1.1.0
+version: 1.1.1
 status: active
 domain: fx-reference
 type: sourceAligned
@@ -87,9 +87,14 @@ customProperties:
   - property: schedule
     value:
       # Weekdays at 15:30 UTC: after the 16:00 CET publication in winter (15:00 UTC) and in summer
-      # (14:00 UTC). An unchanged file adds nothing (fetch exits 10 on the same sha256). No timeout
-      # yet: step W2-17 sets it from 20 measured runs.
+      # (14:00 UTC). An unchanged file adds nothing (fetch exits 10 on the same sha256).
+      # The timeout (the run's dagrun_timeout and the fetch's execution_timeout): factor 5 on the
+      # largest run measured, 121.7 s, is 608.5 s, rounded to 10 minutes (600 s, 4.9 times that
+      # run). That run carried a new file end to end (n = 1); the largest of 20 triggered runs on
+      # an unchanged file was 34.8 s. Measured on the live stack:
+      # docs/benchmarks/2026-11-27-ecb-fx-run-times.md.
       cron: "30 15 * * 1-5"
+      timeoutMinutes: 10
   - property: terms
     value:
       # The ECB's terms page (licence link above), read 2026-11-27: reuse and redistribution are

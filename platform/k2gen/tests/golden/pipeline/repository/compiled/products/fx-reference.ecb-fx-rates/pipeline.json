@@ -62,7 +62,8 @@
   },
   "product": "fx-reference.ecb-fx-rates",
   "schedule": {
-    "cron": "30 15 * * 1-5"
+    "cron": "30 15 * * 1-5",
+    "timeoutMinutes": 10
   },
   "status": "active"
 }
