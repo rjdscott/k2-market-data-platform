@@ -36,6 +36,7 @@ models:
     - not_null
   data_tests:
   - k2_quality:
+      name: kind_is_known
       arguments:
         query: select count(*) from ${table} where kind <> 'fiat' and kind <> 'stablecoin' and kind <> 'crypto'
         holds: metric_value = 0
@@ -134,26 +135,31 @@ models:
         - instrument_id
         - valid_from
   - k2_quality:
+      name: versions_do_not_overlap
       arguments:
         query: select count(*) from (select valid_to, lead(valid_from) over (partition by venue, instrument_id order by valid_from)
           as next_from from ${table}) as v where next_from < valid_to
         holds: metric_value = 0
   - k2_quality:
+      name: versions_leave_no_gap
       arguments:
         query: select count(*) from (select valid_to, lead(valid_from) over (partition by venue, instrument_id order by valid_from)
           as next_from from ${table}) as v where valid_to < next_from
         holds: metric_value = 0
   - k2_quality:
+      name: one_open_row_per_key
       arguments:
         query: select count(*) from (select venue, instrument_id from ${table} group by venue, instrument_id having count_if(valid_to
           = timestamp '9999-12-31 23:59:59 UTC') <> 1) as k
         holds: metric_value = 0
   - k2_quality:
+      name: first_version_opens_1970
       arguments:
         query: select count(*) from (select venue, instrument_id from ${table} group by venue, instrument_id having min(valid_from)
           <> timestamp '1970-01-01 00:00:00 UTC') as k
         holds: metric_value = 0
   - k2_quality:
+      name: intervals_not_empty
       arguments:
         query: select count(*) from ${table} where valid_from >= valid_to
         holds: metric_value = 0
@@ -227,26 +233,31 @@ models:
         - venue_symbol
         - valid_from
   - k2_quality:
+      name: versions_do_not_overlap
       arguments:
         query: select count(*) from (select valid_to, lead(valid_from) over (partition by venue, venue_symbol order by valid_from)
           as next_from from ${table}) as v where next_from < valid_to
         holds: metric_value = 0
   - k2_quality:
+      name: versions_leave_no_gap
       arguments:
         query: select count(*) from (select valid_to, lead(valid_from) over (partition by venue, venue_symbol order by valid_from)
           as next_from from ${table}) as v where valid_to < next_from
         holds: metric_value = 0
   - k2_quality:
+      name: one_open_row_per_key
       arguments:
         query: select count(*) from (select venue, venue_symbol from ${table} group by venue, venue_symbol having count_if(valid_to
           = timestamp '9999-12-31 23:59:59 UTC') <> 1) as k
         holds: metric_value = 0
   - k2_quality:
+      name: first_version_opens_1970
       arguments:
         query: select count(*) from (select venue, venue_symbol from ${table} group by venue, venue_symbol having min(valid_from)
           <> timestamp '1970-01-01 00:00:00 UTC') as k
         holds: metric_value = 0
   - k2_quality:
+      name: intervals_not_empty
       arguments:
         query: select count(*) from ${table} where valid_to <= valid_from
         holds: metric_value = 0
@@ -400,6 +411,7 @@ models:
         - pair_code
         - claimed_from
   - k2_quality:
+      name: no_claim_held
       arguments:
         query: select count(*) from ${table} where held_reason is not null
         holds: metric_value = 0

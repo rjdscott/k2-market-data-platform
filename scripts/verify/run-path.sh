@@ -54,7 +54,7 @@
 #     silver_trade one row per trade of the fixture's trade frames, each instrument resolved, one
 #     trade's decimals exact, none a duplicate; silver_trade_unresolved empty
 #  13 a frame for a symbol the listing lacks: held, not in silver_trade, the build degraded naming
-#     its warn test, k2runs.state degraded; a second listing naming it, instruments and security
+#     its warn rule, unresolved_rows_zero, k2runs.state degraded; a second listing naming it, instruments and security
 #     master again: the next trades build takes it into silver_trade once, held empty, complete
 #  14 canonical-trades one row per silver_trade row, no conn_id column; candles' 1m bucket of the
 #     fixture's minute equal to the probe's own arithmetic over the frames, the day's 1d row, and

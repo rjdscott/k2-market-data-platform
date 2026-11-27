@@ -255,6 +255,7 @@ models:
         - kafka_offset
         - trade_ordinal
   - k2_quality:
+      name: unresolved_rows_zero
       arguments:
         query: select count(*) from ${table}
         holds: metric_value = 0

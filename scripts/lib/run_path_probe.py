@@ -694,10 +694,10 @@ elif cmd == "claim":  # claim <name> [release ids]: one PASS or FAIL line; exit 
                 (state_of(KT, "kraken_trades/kt-2") == "degraded", f"k2runs.state through kt-2 {state_of(KT, 'kraken_trades/kt-2')!r}"),
                 (len(held_rows) == 1 == len(rows(h, "unresolved")) and not in_silver(h) and len(rows(h, "silver_trade")) == n1,
                  f"after kt-2: held {[(x['venue_symbol'], x['trade_id']) for x in rows(h, 'unresolved')]}, silver {len(rows(h, 'silver_trade'))} rows"),
-                # dbt names the test by its arguments, not the rule's name: the one k2_quality test on the
-                # held table is its one warn rule, unresolved_rows_zero (silver_trade_unresolved.odcs.yaml)
+                # the test carries its rule's name (k2gen's dbt emitter): the held table's one warn rule,
+                # unresolved_rows_zero (silver_trade_unresolved.odcs.yaml)
                 (x2.get("degraded") is True and len(x2.get("warned", [])) == 1
-                 and x2["warned"][0].startswith("test.k2.k2_quality_kraken_trades__silver_trade_unresolved_"),
+                 and x2["warned"][0].startswith("test.k2.unresolved_rows_zero."),
                  f"kt-2's XCom {x2}"),
                 (bool(degraded) and all(json.loads(x["detail"] or "{}").get("degraded") is True for x in degraded),
                  f"kt-2's audited rows {[(x['table'], x['detail']) for x in degraded]}"),
