@@ -73,9 +73,7 @@ jobs:
 
       # The code a release carries beside its documents, and the parsers: fakes only, no stack.
       - name: Platform code and parsers (make test-platform, domains/)
-        run: |
-          make test-platform
-          uv run --no-project --with pytest==9.2.0 pytest domains -q
+        run: make test-platform && uv run --no-project --with pytest==9.2.0 pytest domains -q
 
   contracts:
     name: Contracts (k2gen)
