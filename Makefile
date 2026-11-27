@@ -96,7 +96,7 @@ test-airflow:  ## Every test under docker/airflow/tests (today the image's dbt a
 test-clickhouse:  ## gold schema semantics on a throwaway clickhouse:24.3 (OHLCV regression, FINAL dedup, BBO math, quant user)
 	bash scripts/clickhouse-schema-test.sh
 
-test-trino:  ## Trino on a throwaway trinodb/trino, no stack: etc/ starts, catalog lake refuses every commit (table procedures too), only a domain's writer changes its tables with SQL statements
+test-trino:  ## The rules suite on a throwaway lake (Trino over TLS, Lakekeeper, MinIO), no stack: a release compiled from fixtures starts, each role sees exactly its policy, the base is fenced, a negative control fails
 	bash scripts/trino-rules-test.sh
 
 test-dbt:  ## dbt/ with no stack and no Trino: sqlfluff lint, dbt parse and compile, the manifest check (scripts/dbt-test.sh); the build on a throwaway Trino SKIPs until phase 002 brings a model
