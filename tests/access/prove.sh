@@ -8,6 +8,8 @@
 # 1. The lake staged as the release describes it (access_verify.py stage).
 # 2. access-verify passes every row (scope release) but the probe rows, which it skips for the probe
 #    reason alone: catalog-fence.sh runs them on the stack (prove.py release).
+# 2b. Each `via: rest` row's REST leg through the lake's k2-api, what Trino saw of it, a refused
+#    impersonation, and every leg failing on a key k2-api does not know (prove.py rest).
 # 3. Negative control: one reader rule loosened in the running copy of the rules; access-verify
 #    fails exactly that role's read rows, and passes again once the rule is restored.
 # 4. The live scope on this lake: exactly the rows the runner's own rule (av.legs) skips on live skip; a missing canary
@@ -53,6 +55,7 @@ bash "$L" up "$P" "$REL"
 py scripts/access_verify.py stage --release "/work/releases/$ID" --env /work/env.json
 
 expect 0 'release scope: exit 0' py tests/access/prove.py release
+expect 0 'rest: PASS' py tests/access/prove.py rest
 chmod u+w "$(bash "$L" state "$P")/releases/$ID/compiled/trino/rules.json"  # the lake's running copy, from the host
 expect 0 'negative control: access-verify exit 1' py tests/access/prove.py negative
 expect 0 '0 FAIL' av

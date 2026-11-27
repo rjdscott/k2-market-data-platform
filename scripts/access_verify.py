@@ -25,6 +25,10 @@ row matching `mustNotAppear`, and at least `mustAppear.minRows` matching its `wh
 row (phase 002) sends its S3 request from this process to $K2_S3_ENDPOINT (default minio:9000, so
 it runs inside a container on the lake's network) with K2_<ENGINE>_S3_*: `refused` is 403
 AccessDenied on a bucket some key shows exists, never a connection error or a missing bucket.
+A read or denial row with `rest` in its `via` (phase 003, W3-7) is held again through k2-api at
+$K2_API_URL (default http://k2-api:8095) as its principal, with its own key from
+<K2_API_KEY_DIR>/<principal>.key: a denial is 403 forbidden and nothing else, a read 200 with
+exactly `visible` and SQL's rows (tests/access/README.md); the row prints each leg's verdict.
 
 Where the endpoint and each principal's password come from:
 - scope release (a throwaway lake, scripts/lib/throwaway-lake.sh, run in its tools container):
@@ -77,8 +81,11 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
+from collections import Counter
 from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass, field, is_dataclass
+from datetime import UTC, datetime
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -90,7 +97,8 @@ from verify import catalog_drift  # noqa: E402
 CANARY_PRODUCT = "governance.access-canary"  # contracts/governance/access-canary: exists to be tested on live
 DENIED = "PERMISSION_DENIED"  # an `expect: denied` row passes on this errorName alone
 UNSUPPORTED = "NOT_SUPPORTED"  # and an `expect: error` row on this one
-SKIP_REST = "via rest: k2-api's REST rows join in phase 003"
+API_URL = "http://k2-api:8095"  # $K2_API_URL overrides: k2-api's name on the throwaway lake's network and on k2-net
+REST_PAGE = 10_000  # k2-api's largest `limit` (openapi.yaml): a REST read asserting rows reads one page
 SKIP_PROBE = "a network probe: scripts/verify/catalog-fence.sh (step S22) runs it on the stack"
 SKIP_DRIFT = "the catalog API answers only inside k2-catalog: scripts/verify/catalog_drift.py runs there (release-verify)"
 S3_ENDPOINT = "http://minio:9000"  # $K2_S3_ENDPOINT overrides, as docker/lake/init-lake.sh and spark_conf.py read it
@@ -121,10 +129,13 @@ class Trino:
     def __init__(self, url: str, ca: str, password: Callable[[str], str]):
         self.url, self.ctx, self.password = url.rstrip("/"), ssl.create_default_context(cafile=ca), password
 
-    def run(self, user: str, sql: str, session: dict[str, str] | None = None, as_user: str | None = None) -> Answer:
+    def run(self, user: str, sql: str, session: dict[str, str] | None = None, as_user: str | None = None,
+            zone: str | None = None) -> Answer:
         auth = "Basic " + base64.b64encode(f"{user}:{self.password(user)}".encode()).decode()
         # SESSION_AUTHORIZATION lets SET SESSION AUTHORIZATION reach the impersonation rules.
         headers = {"Authorization": auth, "X-Trino-User": as_user or user, "X-Trino-Client-Capabilities": "SESSION_AUTHORIZATION"}
+        if zone:  # the session time zone, as k2-api's client sets UTC
+            headers["X-Trino-Time-Zone"] = zone
         if session:
             headers["X-Trino-Session"] = ",".join(f"{k}={urllib.parse.quote(v, safe='')}" for k, v in session.items())
         out = Answer()
@@ -165,7 +176,9 @@ def connect(env_file: Path | None) -> tuple[Trino, dict[str, Any]]:
             except KeyError as x:
                 raise NoPassword(f"{x.args[0]} ({env_file})") from None
 
-        return Trino(env["trino"], env["ca"], lake_password), env
+        # A REST row's key, mode 600, beside the people's passwords: the lake made one per principal
+        # of a `via: rest` row and gave k2-api only its sha256 (throwaway-lake.sh, api/keys.json).
+        return Trino(env["trino"], env["ca"], lake_password), env | {"apiKeys": os.environ.get("K2_API_KEY_DIR") or f"{env['secrets']}/throwaway"}
     root = Path(os.environ.get("K2_SECRETS") or Path.home() / "k2-secrets")
     url = f"https://{os.environ.get('K2_TRINO_HOST') or 'localhost'}:{os.environ.get('K2_TRINO_PORT') or 8443}"
 
@@ -175,7 +188,8 @@ def connect(env_file: Path | None) -> tuple[Trino, dict[str, Any]]:
             raise NoPassword(f"no {f}")
         return f.read_text().strip()
 
-    return Trino(url, os.environ.get("K2_TRINO_CA") or str(root / "tls/ca.pem"), live_password), {"trino": url}
+    keys = os.environ.get("K2_API_KEY_DIR") or str(root / "api")  # <principal>.key, each the operator's `make api-key`
+    return Trino(url, os.environ.get("K2_TRINO_CA") or str(root / "tls/ca.pem"), live_password), {"trino": url, "apiKeys": keys}
 
 
 # ---- storage keys (phase 002, W0-3) --------------------------------------------------------------
@@ -299,6 +313,137 @@ def storage_key(e: Any, environ: Mapping[str, str] = os.environ) -> tuple[bool, 
             return False, f"{did}; {shown}"
         did += f"; {shown}"
     return True, did
+
+
+# ---- k2-api (phase 003, W3-7) --------------------------------------------------------------------
+# A row with `via: rest` holds its expectation again through k2-api, as its principal, with that
+# principal's own key in `Authorization: Bearer`. The key is read from its file in this process and
+# sent in that header alone: never on a command line, printed or in a result.
+
+def api_key(env: dict[str, Any], principal: str) -> str | None:
+    f = Path(env["apiKeys"]) / f"{principal}.key"
+    return f.read_text().strip() if f.is_file() else None
+
+
+def rest_skip(e: Any, scope: str, env: dict[str, Any]) -> str | None:
+    """Why a REST leg does not run here: on live, a principal whose key file the operator never
+    made, as live skips a password the platform does not hold. A lake makes every key it needs,
+    so there a missing one fails the leg."""
+    if scope == "live" and api_key(env, e.principal) is None:
+        return (f"no {env['apiKeys']}/{e.principal}.key: (umask 077; make api-key PRINCIPAL={e.principal} "
+                f"> ${{K2_SECRETS}}/api/{e.principal}.key) runs it")
+    return None
+
+
+def route(release: Path, relation: str) -> tuple[str, list[str]] | None:
+    """k2-api's data route of the output whose reader relation is `relation`, and its primary key in
+    order, from the release's catalog documents (k2gen.model.CATALOG_INDEX and catalog_path, as
+    k2-api finds them); None when no output has it."""
+    for entry in json.loads((release / "compiled/catalog/index.json").read_text())["products"]:
+        doc = json.loads((release / f"compiled/catalog/products/{entry['id']}.json").read_text())
+        for out in doc["outputs"]:
+            if out["relation"] == relation:
+                domain, product = entry["id"].split(".", 1)
+                key = sorted((c.get("primaryKeyPosition", len(out["columns"]) + 1), i, c["name"])
+                             for i, c in enumerate(out["columns"]) if c["primaryKey"])
+                return f"/v1/data/{domain}/{product}/{out['contractId'].removeprefix(entry['id'] + '.')}", [k[2] for k in key]
+    return None
+
+
+def api_get(url: str, key: str, query: dict[str, str]) -> tuple[int, dict[str, Any]]:
+    """(HTTP status, JSON body) of one GET as the key's principal; status 0 when nothing answered."""
+    req = urllib.request.Request(f"{url}?{urllib.parse.urlencode(query)}", headers={"Authorization": f"Bearer {key}"})
+    try:
+        with urllib.request.urlopen(req, timeout=90) as r:
+            return r.status, json.load(r)
+    except urllib.error.HTTPError as x:
+        try:
+            return x.code, json.load(x)
+        except ValueError:
+            return x.code, {}
+    except (OSError, http.client.HTTPException, ValueError) as x:
+        return 0, {"error": type(x).__name__, "message": str(getattr(x, "reason", x))}
+
+
+def said(status: int, body: dict[str, Any]) -> str:
+    if status == 0:
+        return f"k2-api did not answer ({body['error']}: {body['message'][:160]})"
+    text = f"HTTP {status} {body.get('error', '')}: {str(body.get('message', ''))[:160]}"
+    return text + ("; k2-api refused the harness's key, a fault of the harness and never a pass" if status == 401 else "")
+
+
+def norm(type_: str, v: Any) -> Any:
+    """A value in one form whichever leg read it: SQL (Trino's JSON, session zone UTC) or REST
+    (k2-api's: a decimal its exact string, a time ISO 8601 in UTC, a bigint a JSON number)."""
+    if v is None:
+        return None
+    if type_.startswith("decimal"):
+        return Decimal(str(v))
+    if type_ in ("tinyint", "smallint", "integer", "bigint"):
+        return int(v)
+    if type_ in ("real", "double"):
+        return float(v)
+    if type_.startswith("timestamp"):
+        s = str(v)
+        if type_.endswith("with time zone") and s[10:11] == " ":  # Trino's '2026-01-02 15:00:00.000000 UTC'
+            head, _, zone = s.rpartition(" ")
+            s = head + ("+00:00" if zone == "UTC" else zone)  # a named zone other than UTC fails to parse: the leg fails
+        at = datetime.fromisoformat(s)
+        return (at.astimezone(UTC) if at.tzinfo else at).isoformat(timespec="microseconds")
+    return v
+
+
+def rest_denied(api: str, path: str, key: str) -> tuple[bool, str]:
+    """A denial through k2-api: 403 forbidden, Trino having refused the caller, and nothing else. A
+    404 (no route, no reader relation, not yet published) is no refusal: the relation must exist and be refused."""
+    status, body = api_get(api + path, key, {"limit": "1"})
+    if (status, body.get("error")) == (403, "forbidden"):
+        return True, f"GET {path}: 403 forbidden"
+    return False, f"expected 403 forbidden, GET {path}: {said(status, body)}" + \
+        ("; a 404 is no refusal: the relation must exist and be refused" if status == 404 else "")
+
+
+def rest_read(trino: Any, e: Any, api: str, path: str, pk: list[str], key: str) -> tuple[bool, str]:
+    """A read through k2-api, against the same read over SQL as the same principal in session zone
+    UTC. A row asserting rows: one page of every row, equal to SQL's as a multiset. A columns-only
+    row: one row, asked by the primary key of the row SQL reads first (a page larger than `limit`
+    is a 422 until phase 007's cursors), equal to it. Either way 200, with exactly `visible` as its
+    columns; with no row the response states no column, so only the 200 is proven, and it says so."""
+    rel = ".".join(f'"{x}"' for x in e.table.split("."))  # the schema's relation pattern holds no quote
+    whole = asserts_rows(e)
+    try:
+        sql = trino.run(e.principal, f"SELECT * FROM {rel}" + ("" if whole else " LIMIT 1"), zone="UTC")
+    except NoPassword as x:
+        return False, f"no password for {e.principal}: {x}"
+    if sql.error:
+        return False, f"the SQL read to compare with: {sql.says()}"
+    types = dict(sql.columns)
+    query = {"limit": str(REST_PAGE if whole else 1)}
+    if sql.rows and not whole:
+        first = dict(zip(types, sql.rows[0], strict=True))
+        # A key value in the form k2-api's filter takes: a boolean in words, a zoned time ISO 8601.
+        query |= {f"filter.{c}": ("true" if first[c] else "false") if types[c] == "boolean" else
+                  str(norm(types[c], first[c]) if types[c].endswith("with time zone") else first[c])
+                  for c in pk if first.get(c) is not None}
+    status, body = api_get(api + path, key, query)
+    asked = f"GET {path}?{'&'.join(sorted(query))}"
+    if status != 200:
+        return False, f"expected 200, {asked}: {said(status, body)}"
+    rows = body.get("rows", [])
+    if not rows:
+        if sql.rows:
+            return False, f"{asked}: 200 with no row, where SQL reads {len(sql.rows)}"
+        return True, f"{asked}: 200, no row, as SQL reads none: an empty answer states no column, so only the 200 is proven"
+    shown = sorted({c for r in rows for c in r})
+    if shown != sorted(e.visible) or any(sorted(r) != shown for r in rows):
+        return False, f"{asked}: 200, columns {shown}, the row says {sorted(e.visible)}"
+    # ponytail: a tag moving between the two reads fails the row; read both at one snapshot if a live REST row ever flakes so
+    got = Counter(tuple(norm(types.get(c, ""), r[c]) for c in shown) for r in rows)
+    want = Counter(tuple(norm(types[c], v) for c, v in sorted(zip(types, row, strict=True))) for row in sql.rows)
+    if got != want:
+        return False, f"{asked}: 200, columns as visible, but its {len(rows)} row(s) and SQL's {len(sql.rows)} differ"
+    return True, f"{asked}: 200, columns {shown}; " + \
+        (f"{len(rows)} row(s) equal the SQL leg's as a multiset" if whole else "its row equals the SQL leg's row of that key")
 
 
 # ---- the release ---------------------------------------------------------------------------------
@@ -505,7 +650,7 @@ def legs(e: Any, m: Any, scope: str, env: dict[str, Any]) -> list[tuple[str, str
     if isinstance(e, model.DriftExpectation) and not catalog_uri(env):
         return [("row", SKIP_DRIFT)]
     via = getattr(e, "via", None)
-    return [(v, None if v == "sql" else SKIP_REST) for v in via] if via else [("row", None)]
+    return [(v, None if v == "sql" else rest_skip(e, scope, env)) for v in via] if via else [("row", None)]
 
 
 def verdict(trino: Trino, env: dict[str, Any], m: Any, release: Path, scope: str, e: Any) -> tuple[str, str]:
@@ -514,11 +659,24 @@ def verdict(trino: Trino, env: dict[str, Any], m: Any, release: Path, scope: str
     if why := unknown(e, m):
         return "FAIL", f"names something that does not exist: {why}"
     plan = legs(e, m, scope, env)
-    done = [("SKIP", skip) if skip else check(trino, env, m, release, e) for _, skip in plan]
+    done = [("SKIP", skip) if skip else rest(trino, env, release, e) if leg == "rest" else check(trino, env, m, release, e)
+            for leg, skip in plan]
     if len(done) == 1 and plan[0][0] != "rest":
         return done[0]
     worst = next(v for v in ("FAIL", "SKIP", "PASS") if v in {d[0] for d in done})
     return worst, "; ".join(f"{leg} {v}: {why}" for (leg, _), (v, why) in zip(plan, done, strict=True))
+
+
+def rest(trino: Trino, env: dict[str, Any], release: Path, e: Any) -> tuple[str, str]:
+    """The row's REST leg: its relation's route, as its principal with that principal's key."""
+    from k2gen import model
+    if (found := route(release, e.table)) is None:
+        return "FAIL", f"k2-api has no route for {e.table}: no output of the release's catalog has it as its relation"
+    if (key := api_key(env, e.principal)) is None:
+        return "FAIL", f"no API key {env['apiKeys']}/{e.principal}.key: the lake makes one per principal of a REST row"
+    api, (path, pk) = (os.environ.get("K2_API_URL") or API_URL).rstrip("/"), found
+    passed, why = rest_denied(api, path, key) if isinstance(e, model.DeniedExpectation) else rest_read(trino, e, api, path, pk, key)
+    return ("PASS" if passed else "FAIL"), why
 
 
 def check(trino: Trino, env: dict[str, Any], m: Any, release: Path, e: Any) -> tuple[str, str]:

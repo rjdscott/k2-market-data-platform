@@ -10,6 +10,9 @@ control and asserts how it ends, exiting 1 when the control did not behave.
     prove.py live            access-verify's live scope against this lake (K2_SECRETS laid out from the
                              lake's passwords): exactly the rows its own rule (av.legs) skips on live skip; with one
                              canary reader's password file gone, exactly that reader's rows fail
+    prove.py rest            every `via: rest` row's REST leg passes; Trino's query list shows k2-api's reads
+                             as the caller and its bound `$refs` reads as svc.api; svc.api is refused a
+                             builder by X-Trino-User; with keys k2-api does not know, every leg fails on 401
     prove.py plant <kind>    view: a definer view by REST, an undeclared name, the publisher's name
                                    forged as its owner, SQL over the base's main
                              graft: another table's snapshot added to the base by REST, the tag moved to it
@@ -158,6 +161,41 @@ def live() -> int:
     return 0 if ok and code == 1 and failed == theirs else 1
 
 
+def rest() -> int:
+    """The REST legs (W3-7) beyond their PASS lines: each run again, then what Trino saw of k2-api
+    (svc.api's password login, the caller as session user, values bound by EXECUTE IMMEDIATE, `$refs`
+    read as svc.api), a refused impersonation's error, and every leg failing on a key k2-api does not know."""
+    rows = [e for e in M.expectations if "rest" in getattr(e, "via", ())]
+    if not rows:
+        say("rest: no row runs via rest, so k2-api is not on this lake; nothing to prove")
+        return 0
+    legs = [av.rest(TRINO, ENV, RELEASE, e) for e in rows]
+    for e, (v, why) in zip(rows, legs, strict=True):
+        say(f"rest: {v} {e.principal} {'is denied' if isinstance(e, model.DeniedExpectation) else 'reads'} {e.table}: {why}")
+    seen = TRINO.ok("svc.platform", 'SELECT "user", state, error_code, query FROM system.runtime.queries '
+                                    "WHERE source = 'k2-api' ORDER BY created")
+    for user, state, error, query in seen:
+        say(f"rest: Trino ran for k2-api as {user}: {state}{' ' + str(error) if error else ''}: {' '.join(query.split())[:150]}")
+    callers = {e.principal for e in rows}
+    as_caller = [q for u, _, _, q in seen if u in callers]
+    bound_refs = [q for u, _, _, q in seen if u == "svc.api" and q.lstrip().upper().startswith("EXECUTE IMMEDIATE") and "$refs" in q]
+    builder = model.builder(P.name)
+    refused = TRINO.run("svc.api", "SELECT 1", as_user=builder)
+    say(f"rest: svc.api logged in as itself, run as {builder} by X-Trino-User: {refused.says()}")
+    wrong = Path("/work/wrong-keys")
+    wrong.mkdir(exist_ok=True)
+    for u in callers:
+        (wrong / f"{u}.key").write_text("k2_" + os.urandom(24).hex() + "\n")
+    control = [av.rest(TRINO, ENV | {"apiKeys": str(wrong)}, RELEASE, e) for e in rows]
+    shutil.rmtree(wrong)
+    say(f"rest: with keys k2-api does not know: {[v for v, _ in control]}, each {sorted({w.split(':')[0] for _, w in control})}")
+    ok = all(v == "PASS" for v, _ in legs) and as_caller and bound_refs and refused.error \
+        and all(v == "FAIL" and "HTTP 401" in w for v, w in control)
+    say(f"rest: {'PASS' if ok else 'FAIL'}: {len(legs)} leg(s); {len(as_caller)} read(s) as the caller, "
+        f"{len(bound_refs)} bound $refs read(s) as svc.api, impersonation refused {bool(refused.error)}, wrong keys fail")
+    return 0 if ok else 1
+
+
 def constant(c: model.Column) -> str:
     """A forged value of c's type that every reader policy lets through."""
     if c.physical_type in ("bigint", "integer"):
@@ -241,4 +279,4 @@ def unplant(kind: str) -> int:
 
 if __name__ == "__main__":
     cmd, *args = sys.argv[1:]
-    sys.exit({"release": release, "negative": negative, "live": live, "plant": plant, "unplant": unplant}[cmd](*args))
+    sys.exit({"release": release, "negative": negative, "live": live, "rest": rest, "plant": plant, "unplant": unplant}[cmd](*args))
