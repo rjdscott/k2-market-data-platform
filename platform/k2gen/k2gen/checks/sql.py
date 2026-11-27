@@ -31,8 +31,10 @@ with `line <n>:` where the line is known.
 - `sql.time-travel`: `FOR VERSION AS OF`, `FOR TIMESTAMP AS OF` or `table_changes` written by
   hand, in any case and spacing, comments between the words included.
 - `sql.write-outside-base`: config `database`, `schema` or `alias`, which move where dbt writes,
-  or an INSERT, DELETE, UPDATE or MERGE whose target is not `{{ this }}`, the product's own model,
-  or `<domain>_build.<fence>__base.<table>` in full.
+  or an INSERT, DELETE, UPDATE or MERGE in a hook or a statement whose target is not `{{ this }}`,
+  the model it belongs to. Another of the product's own tables is refused too, by `ref()` or in
+  full: `dbt build` runs a downstream model's hook after the upstream model's tests, so the write
+  would land on rows the publish then tags, which no test read.
 - `sql.statement-ddl`: SQL run from a model by `{% call statement %}`, `run_query()` or
   `adapter.execute()` that is not a read (SELECT, WITH, VALUES, SHOW, DESCRIBE, EXPLAIN) or a
   write as above: DDL, CALL, GRANT, SET SESSION; or SQL the lint cannot read (Jinja other than
@@ -546,8 +548,8 @@ def _statements(tokens: list[_T]) -> Iterator[list[_T]]:
 
 
 def _execute(flat: _Flat, locus: str, what: str, ctx: _Ctx) -> list[Finding]:
-    """SQL a model runs besides its SELECT: reads pass, a write must be to the product's base,
-    anything else is the locus's error (`hook` or `statement-ddl`)."""
+    """SQL a model runs besides its SELECT: reads pass, a write must be to {{ this }}, anything
+    else is the locus's error (`hook` or `statement-ddl`)."""
     tokens, out = _stokens(flat), []
     code = "hook" if locus == "hook" else "statement-ddl"
     for stmt in _statements(tokens):
@@ -570,11 +572,12 @@ def _execute(flat: _Flat, locus: str, what: str, ctx: _Ctx) -> list[Finding]:
             keyword = _DML[first.value]
             j = i + 2 if keyword and _is(_at(stmt, i + 1), "word", keyword) else i + 1
             target = _chain(stmt, j)
-            if not _own(target, flat.phs, ctx):
+            if not (len(target) == 1 and target[0].kind == "ph" and flat.phs[int(target[0].value)].kind == "this"):
                 shown = ".".join(p.value if p.kind != "ph" else flat.phs[int(p.value)].code for p in target) or "?"
                 out.append(_f(ctx, "write-outside-base", first.line,
-                              f"{what} runs {first.value.upper()} on {shown}: a product writes only its own base, "
-                              f"{ctx.build_catalog}.{ctx.base}; name the target {{{{ this }}}}"))
+                              f"{what} runs {first.value.upper()} on {shown}: it may write only {{{{ this }}}}, the model it "
+                              f"belongs to. Any other table, one of {ctx.build_catalog}.{ctx.base} included, would change "
+                              f"after its tests ran, and the publish would tag rows no test read"))
         elif not _is(first, "word", *_READ):
             out.append(_f(ctx, code, first.line, _hook_message(what, first, ctx) if locus == "hook" else
                           f"{what} runs {first.value.upper()}: a model runs only reads, and DDL, CALL, grants and session "
@@ -587,14 +590,6 @@ def _hook_message(what: str, first: _T, ctx: _Ctx) -> str:
             f"view, a tag or a grant changes what readers see, and the gate showed a reader view replaced under the wrong owner "
             f"(h1.33). A hook may only read, or write {{{{ this }}}}. This lint is one layer: the control is ownership, the builder "
             f"owning only {ctx.base} and the publisher the views (ADR-061 part 2)")
-
-
-def _own(target: list[_T], phs: list[_Ph], ctx: _Ctx) -> bool:
-    if len(target) == 1 and target[0].kind == "ph":
-        ph = phs[int(target[0].value)]
-        return ph.kind == "this" or (ph.kind == "ref" and ctx.own_ref(ph.args[-1] if ph.args else None))
-    return (len(target) == 3 and all(t.kind in ("word", "qid") for t in target)
-            and [t.value for t in target[:2]] == [ctx.build_catalog, ctx.base])
 
 
 # --- config() --------------------------------------------------------------------------------
