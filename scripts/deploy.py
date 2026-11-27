@@ -1207,10 +1207,15 @@ def verify(ctx: Ctx, target: Release, previous_canary: str | None) -> list[str]:
 
 def ensure_networks(ctx: Ctx, rel: Release) -> list[str]:
     """Every network the release's compose declares, created when missing, with the labels compose gives
-    its own (project, network key, compose's version), so a later `up` adopts it: compose makes a network
-    only for a service it starts, and fetch's k2-egress has no other member (the operator `docker run`s
-    fetch on it). Never --all-resources on `up`, which would also make the paused hot-gold volumes."""
-    out, version = [], ""
+    its own, so a later `up` adopts it: compose makes a network only for a service it starts, and fetch's
+    k2-egress has no other member (the operator `docker run`s fetch on it). Never --all-resources on
+    `up`, which would also make the paused hot-gold volumes. The version label is copied from a network
+    compose made for this project: `docker compose version --short` says 5.0.0-desktop.1 on this host
+    where compose labels 5.0.0. With none to copy it is left off, as on the hand-made live k2-catalog,
+    which compose adopts (it compares the project and network labels)."""
+    out = []
+    version = next((v for v in run("docker", "network", "ls", "--filter", f"label=com.docker.compose.project={ctx.project}",
+                                   "--format", '{{.Label "com.docker.compose.version"}}').stdout.split() if v), "")
     for key, spec in sorted((rendered(ctx, rel).get("networks") or {}).items()):
         name = spec.get("name") or f"{ctx.project}_{key}"
         if spec.get("external") or run("docker", "network", "inspect", "--format", "{{.Name}}", name, check=False).returncode == 0:
@@ -1218,10 +1223,9 @@ def ensure_networks(ctx: Ctx, rel: Release) -> list[str]:
         if set(spec) - {"name", "driver", "ipam"} or spec.get("ipam"):
             raise Failed(f"network {key} declares {sorted(set(spec) - {'name'})}: deploy creates only a plain one; "
                          f"create {name} by hand as compose would")
-        version = version or run("docker", "compose", "version", "--short").stdout.strip()
         run("docker", "network", "create", "--driver", spec.get("driver") or "bridge",
             "--label", f"com.docker.compose.project={ctx.project}", "--label", f"com.docker.compose.network={key}",
-            "--label", f"com.docker.compose.version={version}", name)
+            *(["--label", f"com.docker.compose.version={version}"] if version else []), name)
         out.append(f"network {name} created: no service compose starts uses it yet")
     return out
 

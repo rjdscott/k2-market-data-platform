@@ -141,8 +141,8 @@ if A[:2] == ["network", "create"]:
     labels = dict(A[i + 1].split("=", 1) for i, a in enumerate(A) if a == "--label")
     S.setdefault("networks", {})[A[-1]] = {"driver": A[A.index("--driver") + 1], "labels": labels}
     save(); log("network", *A[1:]); sys.exit(0)
-if A[:3] == ["compose", "version", "--short"]:
-    print("5.0.0"); sys.exit(0)
+if A[:2] == ["network", "ls"]:  # --filter label=com.docker.compose.project=k2 --format <its version label>
+    print("\n".join(n["labels"].get("com.docker.compose.version", "") for n in S.get("networks", {}).values())); sys.exit(0)
 assert A[0] == "compose", A
 files = [A[i + 1] for i, a in enumerate(A) if a == "-f"]
 pinned = json.loads(open(files[1]).read())["services"]
@@ -959,7 +959,8 @@ sys.exit(f"fake docker: no answer for {A}")
         r1 = world.release()
         world.live(r1)
         s = world.read()
-        s["networks"] = {"k2_k2-net": {"driver": "bridge", "labels": {}}}  # made by compose for running services
+        s["networks"] = {"k2_k2-catalog": {"driver": "bridge", "labels": {}},  # made by hand at the cutover, adopted
+                         "k2_k2-net": {"driver": "bridge", "labels": {"com.docker.compose.version": "5.0.0"}}}  # by compose
         s["rendered"]["networks"] = {k: {"name": f"k2_{k}", "driver": "bridge", "ipam": {}} for k in ("k2-net", "k2-egress")}
         world.write(s)
         assert world.deploy(world.release(over=policy(60))) == 0
@@ -972,6 +973,12 @@ sys.exit(f"fake docker: no answer for {A}")
         with deploy.lock(world.root):
             assert deploy.rollback(world.ctx) == 0
         assert len([e for e in world.timeline() if e[0] == "network"]) == 1  # it exists: never created twice
+        s = world.read()  # no network of the project carries compose's version: the label is left off, never guessed
+        s["networks"] = {}
+        s["rendered"]["networks"] = {"k2-net": {"name": "k2_k2-net", "driver": "bridge", "ipam": {}}}
+        world.write(s)
+        assert deploy.ensure_networks(world.ctx, r1) == ["network k2_k2-net created: no service compose starts uses it yet"]
+        assert world.read()["networks"]["k2_k2-net"]["labels"] == {"com.docker.compose.project": "k2", "com.docker.compose.network": "k2-net"}
         s = world.read()
         s["rendered"]["networks"]["odd"] = {"name": "k2_odd", "driver": "bridge", "internal": True}
         world.write(s)
