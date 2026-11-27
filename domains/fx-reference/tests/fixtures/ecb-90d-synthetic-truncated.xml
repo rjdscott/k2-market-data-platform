@@ -5,12 +5,12 @@
 		<gesmes:name>Synthetic</gesmes:name>
 	</gesmes:Sender>
 	<Cube>
-		<Cube time="2030-01-03">
+		<Cube time="2026-03-04">
 			<Cube currency="USD" rate="1.1000"/>
 			<Cube currency="JPY" rate="2.2000"/>
 			<Cube currency="GBP" rate="3.3000"/>
 			<Cube currency="CHF" rate="4.4000"/>
 			<Cube currency="AUD" rate="5.5000"/>
 		</Cube>
-		<Cube time="2030-01-02">
+		<Cube time="2026-03-03">
 			<Cube currency="USD" rate="1.2000
