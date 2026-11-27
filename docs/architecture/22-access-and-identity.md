@@ -258,7 +258,7 @@ values are bound by `EXECUTE IMMEDIATE ... USING`. In order: a `LIMIT 0` probe a
 whoever asks, see Known limits); the tested snapshot as `svc.api` (none: 404 `not_published`); the read
 as the caller; the tested snapshot again, and one more read if it moved.
 Rows are ordered by the declared key, so a REST page and the same SQL compare row for row. The page is
-`{"release", "snapshot", "rows", "next": null}`, decimals as exact strings and times in ISO 8601. Every
+`{"release", "snapshot", "rows", "next": null}`, decimals as exact strings and times in ISO 8601 <!-- counts-ok: a standard's number, not data -->. Every
 query is cancelled on Trino after 30 s.
 
 | Status | When |
