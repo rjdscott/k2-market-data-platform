@@ -31,7 +31,9 @@ name an S3 secret key pairs with, not a secret), is:
 Each engine's storage pair (K2_<ENGINE>_S3_ACCESS_KEY and _SECRET_KEY, one per policy file under
 docker/lake/minio/policies/) is refused as lake-init refuses it: unset or still the placeholder,
 equal to the root pair (the access key to MINIO_ROOT_USER, the secret to MINIO_ROOT_PASSWORD), or
-an access key another engine also has.
+an access key another engine also has. The root pair and every engine's pair hold only SAFE_SET:
+lake-init writes the root pair into a JSON body by shell interpolation, where a quote or a
+backslash breaks it, and what `openssl rand` and `make engine-keys` generate is inside the set.
 """
 
 import argparse
@@ -74,6 +76,11 @@ KNOWN = {"admin", "administrator", "password", "passw0rd", "p@ssw0rd", "changeme
          "minioadmin", "minio123", "postgres", "prefect", "airflow", "clickhouse", "grafana", "default",
          "root", "toor", "test", "guest", "letmein", "qwerty", "123456", "12345678", "1234567890"}
 FIX = "set it to `openssl rand -hex 24`"
+# Hex, base64 and secrets.token_urlsafe; nothing JSON, a URL or a shell would quote.
+SAFE = re.compile(r"[A-Za-z0-9_.~+/=-]*")
+SAFE_SET = "letters, digits and -_.~+/="
+STORAGE = ["MINIO_ROOT_USER", "MINIO_ROOT_PASSWORD",
+           *(f"K2_{e}_S3_{h}_KEY" for e in ENGINES for h in ("ACCESS", "SECRET"))]
 
 
 def check(env: dict[str, str], example: str) -> list[str]:
@@ -93,6 +100,8 @@ def check(env: dict[str, str], example: str) -> list[str]:
             problems.append(f"{name} is a known default or a value .env.example ships; {FIX}")
         elif len(value) < MIN_LENGTH:
             problems.append(f"{name} is shorter than {MIN_LENGTH} characters; {FIX}")
+    problems += [f"{n} holds a character outside {SAFE_SET}: lake-init writes the root pair into a JSON body; {FIX}"
+                 for n in STORAGE if not SAFE.fullmatch(env.get(n, ""))]
     return problems + scoped_problems(env, example)
 
 
@@ -157,7 +166,7 @@ def main() -> int:
         print(f"check-env: FAIL {where}: {p}", file=sys.stderr)
     if not problems:
         print(f"check-env: PASS {where} as compose resolves it (no secret unset, a placeholder, its user, a known default, or under {MIN_LENGTH} characters; "
-              f"each of {len(ENGINES)} engines' storage pairs set, not the root pair, not shared)")
+              f"each of {len(ENGINES)} engines' storage pairs set, not the root pair, not shared; every storage value in {SAFE_SET})")
     return 1 if problems else 0
 
 
