@@ -41,7 +41,7 @@ research/  →  adr/  →  plans/  →  audits/
 | [plans/](plans/) | Multi-phase design documents with exit criteria per phase | [README](plans/README.md) |
 | [audits/](audits/) | Point-in-time sweeps of one surface, with a findings table | [README](audits/README.md) |
 | [benchmarks/](benchmarks/) | Dated measurement snapshots. Every published number traces here | [README](benchmarks/README.md) |
-| [runbooks/](runbooks/) | 18 incident procedures, one per alert family or host failure, with measured MTTR where a failure was induced | [README](runbooks/README.md) · [template](runbooks/template.md) |
+| [runbooks/](runbooks/) | The procedures: one per alert family or host failure, and the operations a product's life needs (deploy and roll back a release, back up and restore, [onboard a file product](runbooks/onboard-a-file-product.md), a [failed file audit](runbooks/file-source-audit-failed.md), a [connector failure](runbooks/connector-failure.md)), with measured MTTR where a failure was induced | [README](runbooks/README.md) · [template](runbooks/template.md) |
 
 ## Reference
 
