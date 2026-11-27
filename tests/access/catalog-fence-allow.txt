@@ -1,0 +1,13 @@
+# The compose services allowed on network k2-catalog (ADR-059 part 7), one per line, with why.
+# Lakekeeper has no authentication, so whatever shares this network can plant a view and serve
+# untested rows. The one list: tests/test_catalog_fence_compose.py checks docker-compose.yml
+# against it, scripts/verify/catalog-fence.sh the running stack.
+lakekeeper          # the catalog itself, on this network alone
+lakekeeper-migrate  # migrates the catalog's schema in prefect-db before lakekeeper starts
+prefect-db          # Postgres, holding the catalog's database
+minio               # the lake's storage: Lakekeeper checks and purges it, and signs requests for it
+trino               # the engine every reader and builder goes through: reads and commits via the catalog
+spark-iceberg       # the lake's maintenance writer: commits through the catalog, writes to MinIO
+lake-init           # one-shot: the bucket, the catalog bootstrap and the domain warehouses
+tools               # profile tools: the operator's CLI, deploy's drift check and backups call the catalog
+dbt-runner          # profile build: the tested-tag commit goes to the catalog (A7, A13)
