@@ -2,8 +2,9 @@
 The DAG factory (docker/airflow/dags/factory.py) from k2gen's golden dags.json, with docker faked:
 the DAG ids, tasks, edges, pools, trigger rules and run limits; resolve pinning the release while the
 pointer moves; the fetch exit 10 and exit 30 paths; expire after a failed build; record after a
-failure and a skip; each Spark task's exact argv and its kill sequence; no product import; and a
-malformed entry as an import error.
+failure and a skip; each Spark task's exact argv and its kill sequence; no product import; a
+malformed entry as an import error; and, on the golden release plus a Kafka and a public-API
+product, the Kafka DAG's shape, the accept-data-loss conf and its `offset_gap` row.
 
     make test-airflow     # inside the Airflow image, no Docker daemon and no network
 """
@@ -26,6 +27,7 @@ from unittest import mock
 from airflow.dag_processing.dagbag import BundleDagBag
 from airflow.models.dagrun import DagRun
 from airflow.sdk import TriggerRule
+from airflow.sdk.api.datamodels._generated import DagRunType  # what a task's dag_run carries
 from airflow.sdk.exceptions import AirflowException, AirflowFailException, AirflowSkipException
 from airflow.ti_deps.deps.trigger_rule_dep import TriggerRuleDep
 from airflow.utils.state import State, TaskInstanceState
@@ -53,9 +55,9 @@ DBT_ONLY = ["resolve", "build", "expire", "record", "maintain"]
 TIState = namedtuple("TIState", "task_id state")
 
 
-def golden_json(path):
-    """factory.read_json with /k2/releases/<RID> served from the golden release."""
-    return json.loads(Path(str(path).replace(RP, str(GOLDEN))).read_text())
+def golden_json(path, root=GOLDEN):
+    """factory.read_json with /k2/releases/<RID> served from the golden release (or `root`)."""
+    return json.loads(Path(str(path).replace(RP, str(root))).read_text())
 
 
 class TI:
@@ -77,15 +79,15 @@ class TI:
         return self.crumbs
 
 
-def ctx(ti, when=datetime(2026, 11, 27, 2, 15, tzinfo=timezone.utc)):
-    return {"ti": ti, "dag_run": SimpleNamespace(run_after=when)}
+def ctx(ti, when=datetime(2026, 11, 27, 2, 15, tzinfo=timezone.utc), conf=None, run_type="scheduled"):
+    return {"ti": ti, "dag_run": SimpleNamespace(run_after=when, conf=conf, run_type=run_type)}
 
 
 class Docker:
     """subprocess faked for both modules: every command line in order, one exit and stdout."""
 
-    def __init__(self, lines=(), code=0):
-        self.lines, self.code, self.calls = lines, code, []
+    def __init__(self, lines=(), code=0, root=GOLDEN):
+        self.lines, self.code, self.calls, self.root = lines, code, [], root
 
     def run(self, argv, **_):
         self.calls.append(argv)
@@ -99,7 +101,7 @@ class Docker:
     def __enter__(self):
         self.patches = [mock.patch.object(m.subprocess, name, side_effect=getattr(self, attr))
                         for m in (factory, oneshot) for name, attr in (("run", "run"), ("Popen", "popen"))]
-        self.patches += [mock.patch.object(factory, "read_json", side_effect=golden_json),
+        self.patches += [mock.patch.object(factory, "read_json", side_effect=lambda p: golden_json(p, self.root)),
                          mock.patch.object(oneshot, "load_oneshots", return_value=oneshot.load_oneshots(str(GOLDEN))),
                          mock.patch.dict(os.environ, HOST)]
         for p in self.patches:
@@ -496,6 +498,222 @@ class NoProductCode(unittest.TestCase):
         self.assertEqual(len(loads), 1, "one dynamic load, in load_k2runs")
         self.assertEqual(factory.K2RUNS, "platform/platform/runs/k2runs.py")
         self.assertNotIn("domains", SOURCE.read_text().replace("never anything under `domains/`", ""))
+
+
+KAFKA, KDAG, API, ADAG = "sensor-net.trade-feed", "trade_feed", "sensor-net.pair-list", "pair_list"
+KCOMMON = ["--release", RID, "--product", KAFKA, "--run-id", f"{KDAG}/{RUN}"]
+ACCEPT = {"acceptDataLoss": True, "reason": "capture outage 2026-11-28, records gone from the log"}
+KINDS = Path(tempfile.mkdtemp())  # the golden release plus a Kafka and a public-API product
+
+
+def setUpModule():
+    """Each pipeline.json as k2gen compiles the kind (emit/pipeline.py; I-1's pipeline section) and
+    each dags.json entry with emit/pipeline.tasks()'s list (test_emit_pipeline.py holds the Kafka one)."""
+    shutil.copytree(GOLDEN / "compiled", KINDS / "compiled")
+    station = json.loads((GOLDEN / "compiled/products/sensor-net.station-readings/pipeline.json").read_text())
+    build = {**station["build"], "selector": KDAG, "writer": f"dbt_{KDAG}", "publisher": f"pub_{KDAG}",
+             "outputs": [f"sensor_net_build.{KDAG}__base.silver_trade"]}
+    kafka = {**station, "product": KAFKA, "dagId": KDAG, "fence": KDAG, "schedule": {"cron": "*/5 * * * *"}, "build": build,
+             "connector": {"kind": "kafka", "brokers": "redpanda:9092", "registry": "http://redpanda:8081",
+                           "topic": "example.trades", "envelope": {"format": "avro-confluent", "contract": f"{KAFKA}.raw_message"},
+                           "filter": {"field": "stream", "in": ["trade"]}, "payload": "json",
+                           "startFrom": "earliest-retained", "maxOffsetsPerPartition": 1000},
+             "landing": {"table": f"lake.{KDAG}.landing"},
+             "bronze": [{**station["bronze"][0], "table": f"lake.{KDAG}.bronze_trade", "key": ["kafka_partition", "kafka_offset"],
+                         "values": ["kafka_timestamp", "record_key", "record_value"], "patterns": {}, "audits": [],
+                         "checks": f"lake.{KDAG}.audit_checks"}]}
+    api = {**station, "product": API, "dagId": ADAG, "fence": ADAG, "build": {**build, "selector": ADAG},
+           "connector": {"kind": "public-api", "url": "https://api.example.org/pairs", "allowHosts": ["api.example.org"],
+                         "format": "json", "parser": "pairs_json", "pagination": "none"}}
+    dags = json.loads((KINDS / "compiled/airflow/dags.json").read_text())
+    for doc, tasks in ((kafka, ["resolve", "load", "audit", "publish", "build", "expire", "record", "maintain"]), (api, FULL)):
+        path = f"compiled/products/{doc['product']}/pipeline.json"
+        (KINDS / path).parent.mkdir(parents=True)
+        (KINDS / path).write_text(json.dumps(doc))
+        dags["dags"].append({"dagId": doc["dagId"], "product": doc["product"], "status": "active",
+                             "schedule": doc["schedule"]["cron"], "pipeline": path, "tasks": tasks})
+    (KINDS / "compiled/airflow/dags.json").write_text(json.dumps(dags))
+
+
+def tearDownModule():
+    shutil.rmtree(KINDS)
+
+
+def edges(dag):
+    return {(t.task_id, down) for t in dag.tasks for down in t.downstream_task_ids}
+
+
+class KafkaShape(unittest.TestCase):
+    def test_the_kafka_dag_has_no_fetch_and_compacts_after_maintain(self):
+        d = factory.build(KINDS)[KDAG]
+        self.assertNotIn("fetch", d.task_dict)
+        self.assertEqual(edges(d), {("resolve", "load"), ("load", "audit"), ("audit", "publish"), ("publish", "build"),
+                                    ("build", "expire"), ("expire", "record"), ("expire", "maintain"),
+                                    ("maintain", "compact"), ("compact", "record")})
+        self.assertEqual({t.task_id: t.pool for t in d.tasks},
+                         {"resolve": "default_pool", "load": "lake_spark", "audit": "lake_spark", "publish": "lake_spark",
+                          "build": "dbt", "expire": "lake_spark", "maintain": "lake_spark", "compact": "lake_spark",
+                          "record": "default_pool"})
+        self.assertEqual(d.get_task("compact").trigger_rule, TriggerRule.ALL_SUCCESS)
+        self.assertEqual({t.task_id for t in d.tasks if t.is_teardown}, {"expire", "record"})
+        tis = [TIState(t, "success") for t in d.task_dict]
+        self.assertEqual({ti.task_id for ti in DagRun._tis_for_dagrun_state(None, dag=d, tis=tis)}, {"build", "compact"})
+
+    def test_a_public_api_dag_is_the_file_kinds(self):
+        dags = factory.build(KINDS)
+        self.assertEqual(edges(dags[ADAG]), edges(dags["station_readings"]))
+        self.assertEqual(dags[ADAG].get_task("fetch").kind, "fetch")
+        with Docker(root=KINDS) as docker:
+            dags[ADAG].get_task("fetch").execute(ctx(TI(dag_id=ADAG)))
+        self.assertEqual(docker.calls[-1][-9:], ["k2-fetch", "--release", RID, "--product", API, "--run-id",
+                                                 f"{ADAG}/{RUN}", "--ds", "2026-11-27"])
+
+    def test_the_file_kind_dags_gain_no_compact(self):
+        for dag_id in ("station_readings", "daily_load"):
+            self.assertEqual(edges(factory.build(KINDS)[dag_id]), edges(factory.build(GOLDEN)[dag_id]))
+
+    def test_runs_through_the_trigger_rules(self):
+        d = factory.build(KINDS)[KDAG]
+        for outcomes, compact, run in (({}, S, "success"), ({"maintain": SK}, SK, "success"),  # maintenance not due
+                                       ({"maintain": F}, UF, "failed"), ({"audit": F}, S, "failed"),
+                                       ({"compact": F}, F, "failed")):
+            with self.subTest(outcomes=outcomes):
+                states, state = schedule(d, outcomes)
+                self.assertEqual((states["compact"], states["record"], state), (compact, S, run))
+
+    def test_compact_runs_maintains_compaction_pass(self):
+        with Docker(lines=['{"exit": 0}']) as docker:
+            factory.build(KINDS)[KDAG].get_task("compact").execute(ctx(TI(dag_id=KDAG)))
+        self.assertEqual(docker.calls, [spark(f"{LAKE}/maintain.py", *KCOMMON, "--compact")])
+
+
+class AcceptDataLoss(unittest.TestCase):
+    BAD = {"no reason": ({"acceptDataLoss": True}, "acceptDataLoss without reason"),
+           "no flag": ({"reason": "x"}, "reason without acceptDataLoss"),
+           "empty reason": ({"acceptDataLoss": True, "reason": ""}, "reason must be a non-empty string"),
+           "blank reason": ({"acceptDataLoss": True, "reason": "  "}, "reason must be a non-empty string"),
+           "reason not text": ({"acceptDataLoss": True, "reason": 7}, "reason must be a non-empty string"),
+           "long reason": ({"acceptDataLoss": True, "reason": "x" * 201}, "at most 200"),
+           "flag a string": ({"acceptDataLoss": "true", "reason": "x"}, "the JSON boolean true"),
+           "flag false": ({"acceptDataLoss": False, "reason": "x"}, "the JSON boolean true"),
+           "misspelt": ({"acceptdataloss": True, "reason": "x"}, "unknown keys ['acceptdataloss']"),
+           "another key": ({**ACCEPT, "force": True}, "unknown keys ['force']")}
+
+    def refused(self, dag_id, conf, run_type, message):
+        op = factory.build(KINDS)[dag_id].get_task("resolve")
+        with mock.patch.object(factory.os.path, "realpath") as realpath, self.assertRaises(AirflowFailException) as e:
+            op.execute(ctx(TI(dag_id=dag_id), conf=conf, run_type=run_type))
+        self.assertIn(message, str(e.exception))
+        realpath.assert_not_called()  # refused before the pointer, so before any task reads anything
+
+    def test_each_bad_conf_fails_resolve_naming_the_problem(self):
+        for case, (conf, message) in self.BAD.items():
+            with self.subTest(case=case):
+                self.refused(KDAG, conf, DagRunType.MANUAL, message)
+
+    def test_the_conf_on_a_product_that_is_not_kafka_fails_resolve(self):
+        for dag_id in ("station_readings", ADAG, "daily_load"):
+            with self.subTest(dag_id=dag_id):
+                self.refused(dag_id, ACCEPT, DagRunType.MANUAL, "for a Kafka product's DAG only")
+                self.refused(dag_id, {"force": True}, DagRunType.MANUAL, "unknown keys ['force']")
+
+    def test_only_a_manual_run_accepts_data_loss(self):
+        for run_type in DagRunType:
+            if run_type != DagRunType.MANUAL:
+                with self.subTest(run_type=run_type):
+                    self.refused(KDAG, ACCEPT, run_type, f"this run is '{run_type.value}'")
+
+    def test_the_frozen_shape_or_no_conf_passes(self):
+        for conf, run_type in ((ACCEPT, DagRunType.MANUAL), (None, DagRunType.SCHEDULED), ({}, DagRunType.SCHEDULED),
+                               ({}, DagRunType.MANUAL)):
+            with self.subTest(conf=conf, run_type=run_type), mock.patch.object(factory.os.path, "realpath", return_value=RP):
+                pin = factory.build(KINDS)[KDAG].get_task("resolve").execute(ctx(TI(dag_id=KDAG), conf=conf, run_type=run_type))
+            self.assertEqual(pin, {"release": RID, "releasePath": RP})
+
+    def test_the_flag_reaches_load_and_no_other_task(self):
+        build_result = {("build", "result"): {"exit": 0, "expire": [{"table": "t", "ids": [7]}]}}
+        d = factory.build(KINDS)[KDAG]
+        due = datetime(2026, 11, 27, 2, 10, tzinfo=timezone.utc)  # */5 with maintain at 02:07: the 02:10 run
+        for conf, run_type, flagged in ((ACCEPT, DagRunType.MANUAL, True), (None, DagRunType.SCHEDULED, False)):
+            calls = {}
+            for t in ("load", "audit", "publish", "build", "expire", "maintain", "compact"):
+                lines = ['{"exit": 0, "expire": []}'] if t == "build" else ['{"exit": 0}']
+                with Docker(lines=lines, root=KINDS) as docker:
+                    d.get_task(t).execute(ctx(TI(build_result, dag_id=KDAG), due, conf, run_type))
+                calls[t] = docker.calls[-1]
+            with self.subTest(run_type=run_type):
+                self.assertEqual(calls["load"], spark(f"{LAKE}/connector.py", "load", *KCOMMON,
+                                                      *(["--accept-data-loss"] if flagged else [])))
+                self.assertEqual([t for t, argv in calls.items() if "--accept-data-loss" in argv], ["load"] if flagged else [])
+                self.assertFalse(any(ACCEPT["reason"] in " ".join(argv) for argv in calls.values()))  # never to a task
+
+
+class OffsetGap(unittest.TestCase):
+    GAPS = [{"topic": "example.trades", "partition": 3, "committed": 120, "logStart": 180, "lost": 60},
+            {"topic": "example.trades", "partition": 7, "committed": 0, "logStart": 1, "lost": 1}]
+    CRUMBS = [{"task_id": "resolve", "state": "success"}, {"task_id": "load", "state": "success"},
+              {"task_id": "audit", "state": "success"}, {"task_id": "publish", "state": "success"},
+              {"task_id": "build", "state": "success"}, {"task_id": "expire", "state": "skipped"},
+              {"task_id": "maintain", "state": "success"}, {"task_id": "compact", "state": "success"}]
+
+    def written(self, load, conf=ACCEPT, run_type=DagRunType.MANUAL, crumbs=CRUMBS):
+        written = []
+        k2runs = SimpleNamespace(connect=lambda: "conn", record=lambda conn, **row: written.append(row))
+        ti = TI({("load", "result"): load, ("compact", "result"): {"exit": 0, "task": "maintain"}}, crumbs, dag_id=KDAG)
+        with mock.patch.object(factory, "load_k2runs", return_value=k2runs):
+            factory.build(KINDS)[KDAG].get_task("record").execute(ctx(ti, conf=conf, run_type=run_type))
+        return written
+
+    def test_the_gap_is_recorded_once_with_its_partitions_and_the_reason(self):
+        load = {"exit": 0, "task": "load", "landing": f"lake.{KDAG}.landing", "landed": 40, "offsetGaps": self.GAPS,
+                "table": f"lake.{KDAG}.bronze_trade", "rows": 30}
+        gaps = [r for r in self.written(load) if r["event"] == "offset_gap"]
+        self.assertEqual(len(gaps), 1)
+        self.assertEqual((gaps[0]["task"], gaps[0]["table_name"], gaps[0]["run_id"], gaps[0]["product_id"]),
+                         ("load", f"lake.{KDAG}.landing", f"{KDAG}/{RUN}", KAFKA))
+        self.assertEqual(json.loads(gaps[0]["detail"]),
+                         {"partitions": [{"partition": 3, "fromOffset": 120, "toOffset": 179},
+                                         {"partition": 7, "fromOffset": 0, "toOffset": 0}],
+                          "reason": ACCEPT["reason"]})
+
+    def test_a_stage_refused_after_the_landing_commit_still_records_the_gap(self):
+        load = {"exit": 2, "task": "load", "landing": f"lake.{KDAG}.landing", "offsetGaps": self.GAPS,
+                "table": f"lake.{KDAG}.bronze_trade", "rows": 0}
+        crumbs = [{**c, "state": "failed"} if c["task_id"] == "load" else c for c in self.CRUMBS[:2]]
+        self.assertEqual([(r["task"], r["event"]) for r in self.written(load, crumbs=crumbs)],
+                         [("load", "failed"), ("load", "offset_gap")])
+
+    def test_no_commit_or_no_gap_or_no_accepted_conf_records_none(self):
+        landing = f"lake.{KDAG}.landing"
+        manual, scheduled = DagRunType.MANUAL, DagRunType.SCHEDULED
+        for case, load, conf, run_type in (
+                ("refused before the commit", {"exit": 2, "landing": landing, "offsetGaps": self.GAPS}, ACCEPT, manual),
+                ("nothing below the log start", {"exit": 0, "landing": landing, "offsetGaps": []}, ACCEPT, manual),
+                ("a paused product", {"exit": 0, "landing": landing, "landed": 0}, ACCEPT, manual),
+                ("a died load", None, ACCEPT, manual),
+                ("a scheduled run", {"exit": 0, "landing": landing, "offsetGaps": self.GAPS}, None, scheduled)):
+            with self.subTest(case=case):
+                self.assertNotIn("offset_gap", [r["event"] for r in self.written(load, conf, run_type)])
+
+    def test_the_row_is_the_schemas_and_k2runs_takes_every_row(self):
+        import jsonschema  # Airflow's own dependency
+
+        schema = json.loads((REPO / "contracts/schema/run-record.schema.json").read_text())
+        gaps = [{"topic": "example.trades", "partition": p, "committed": 10**9 + p, "logStart": 10**9 + 500, "lost": 500 - p}
+                for p in range(12)]  # every partition of a 12-partition topic, ten-digit offsets
+        load = {"exit": 0, "landing": f"lake.{KDAG}.landing", "offsetGaps": gaps, "table": f"lake.{KDAG}.bronze_trade"}
+        rows = self.written(load, {**ACCEPT, "reason": "x" * factory.REASON_MAX})
+        [gap] = [r for r in rows if r["event"] == "offset_gap"]
+        jsonschema.validate(json.loads(gap["detail"]), {"$ref": "#/$defs/offsetGapDetail", "$defs": schema["$defs"]})
+        self.assertLessEqual(len(gap["detail"]), 1000)  # k2runs cuts detail there: the reason cap keeps it whole
+        self.assertEqual([r["task"] for r in rows if r["event"] == "passed"][-2:], ["maintain", "maintain"])  # compact's row
+        root = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, root)
+        (root / "platform").symlink_to(REPO)
+        k2runs, cur = factory.load_k2runs(str(root)), mock.MagicMock()
+        for row in rows:
+            k2runs.record(SimpleNamespace(cursor=lambda: cur), **row)
+        self.assertEqual(cur.execute.call_count, len(rows))
 
 
 if __name__ == "__main__":
