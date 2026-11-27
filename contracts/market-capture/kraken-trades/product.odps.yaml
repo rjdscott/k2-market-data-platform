@@ -115,9 +115,10 @@ customProperties:
       # next plans from the newest connector snapshot (ADR-022).
       cron: "*/5 * * * *"
       timeoutMinutes: 10
-  # A degraded build (unresolved_rows_zero warned: a trade's symbol resolved to nothing) starts one
-  # instruments run, so the master can learn a new pair (W1-6; k2gen check refresh.*). A build
-  # degraded by rejected_frames_zero alone starts one too, which the master does not need: the
-  # factory starts the target on any degraded build, and an unchanged listing lands nothing.
+  # A build degraded by unresolved_rows_zero (a trade's symbol resolved to nothing) starts an
+  # instruments run, so the master can learn a new pair, at most once an hour (W1-6; k2gen check
+  # refresh.*). Not rejected_frames_zero: a new listing cannot make a malformed frame typeable.
   - property: refresh
-    value: market-capture.kraken-instruments
+    value:
+      product: market-capture.kraken-instruments
+      rules: [unresolved_rows_zero]

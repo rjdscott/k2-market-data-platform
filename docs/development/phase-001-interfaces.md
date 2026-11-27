@@ -567,6 +567,16 @@ master, so a target is never a product the build does not read), naming no refre
 the product has a warn-severity dbt test, the only thing that makes a build degraded.
 `kraken-trades` declares `refresh: market-capture.kraken-instruments`.
 
+2026-11-28, bounded: the value is `{product, rules}`, the target and the warn-severity rules of the
+product whose failure the target's run can cure; `kraken-trades` declares `{product:
+market-capture.kraken-instruments, rules: [unresolved_rows_zero]}`, not `rejected_frames_zero`,
+since a new listing cannot make a malformed frame typeable. `pipeline.json`'s `refresh` is the same
+object. `refresh.never-degraded` became `refresh.rule-not-warn`: each name is a warn-severity rule
+of the product. The factory triggers only when `build`'s `warned` (`test.<project>.<rule>.<hash>`,
+each test named by its rule) names one of them, and `trigger_run_id` is `refresh__<YYYYMMDDTHH>`,
+the triggering run's hour in UTC (`run_after`), so a target starts at most once an hour whatever
+the cadence: the target fetches a public API whose owner allows a few calls an hour.
+
 ## The role order, 2026-11-28 (phases 004 and 005)
 
 A10 gains one optional field, additively: a role in `contracts/access/roles.yaml` may list the roles

@@ -53,8 +53,9 @@ each named below.
   - Each input port states `whenAbsent`: `fail` for a consumer built as a `table` model (zero rows
     would rebuild it empty), `empty` for `canonical-trades`' optional venue, which then shows
     `partial`.
-  - A degraded `kraken-trades` build starts one `kraken-instruments` run, by the product property
-    `refresh`, one hop, never waiting for it.
+  - A `kraken-trades` build degraded by `unresolved_rows_zero` starts one `kraken-instruments` run, by
+    the product property `refresh` (`{product, rules}`), one hop, never waiting for it, at most once
+    an hour: the venue's public API allows a few calls an hour.
   - A dbt output is compacted inside the wrapper after its tests, once it holds 12 delete files or 48
     small files beyond one per partition; a Kafka product's landing and bronze are compacted once a
     day in the product's own DAG with the Spark key, skipped while bronze's `audit` holds a batch.

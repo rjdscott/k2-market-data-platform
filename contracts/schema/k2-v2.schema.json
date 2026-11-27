@@ -226,7 +226,7 @@
         {"if": {"properties": {"property": {"const": "lifecycleChange"}}}, "then": {"properties": {"value": {"$ref": "#/$defs/lifecycleChange"}}}},
         {"if": {"properties": {"property": {"const": "examples"}}}, "then": {"properties": {"value": {"$ref": "#/$defs/examples"}}}},
         {"if": {"properties": {"property": {"const": "seeds"}}}, "then": {"properties": {"value": {"$ref": "#/$defs/seeds"}}}},
-        {"if": {"properties": {"property": {"const": "refresh"}}}, "then": {"properties": {"value": {"description": "The product whose DAG a degraded build of this one starts, once per run (W1-6): one the product's build depends on through its input ports, scheduled, declaring no refresh of its own (k2gen check refresh.*); pipeline.json refresh.", "$ref": "#/$defs/productId"}}}}
+        {"if": {"properties": {"property": {"const": "refresh"}}}, "then": {"properties": {"value": {"description": "The product whose DAG a build of this one degraded by one of the named warn rules starts, at most once an hour (W1-6): product, one the product's build depends on through its input ports, scheduled, declaring no refresh of its own; rules, the warn-severity rules of this product whose failure the target's run can cure (k2gen check refresh.*); pipeline.json refresh.", "type": "object", "required": ["product", "rules"], "additionalProperties": false, "properties": {"product": {"$ref": "#/$defs/productId"}, "rules": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"}}}}}}}
       ]
     },
     "seeds": {

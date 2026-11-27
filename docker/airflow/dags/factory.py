@@ -31,13 +31,14 @@ tasks (fetch comes or goes), so deploy's drain still sees every shape change:
 A public-API product runs the same fetch one-shot as a file product (fetch.py reads the kind), so
 its DAG is the file kind's.
 
-A product whose pipeline.json names a refresh target (key `refresh`, the target's product id) adds
-`build >> refresh` (W1-6, phase-001-interfaces.md, "Holds"): Airflow's TriggerDagRunOperator, skipped
-unless build's result says `degraded: true`, starting the target's DAG once per run and never waiting
-for it. A target is another product of the release whose own pipeline names no refresh target, so the
+A product whose pipeline.json names a refresh target (key `refresh`, {product, rules}: the target's
+product id and the warn rules that start it) adds `build >> refresh` (W1-6, phase-001-interfaces.md,
+"Holds"): Airflow's TriggerDagRunOperator, skipped unless build's result says `degraded: true` and its
+`warned` names one of the rules, starting the target's DAG at most once per target and hour and
+never waiting for it. A target is another product of the release whose own pipeline names no refresh target, so the
 chain is one hop; the parse refuses anything else. dags.json does not list `refresh`, so a pipeline
 that gains or loses the key changes the DAG's shape without a drain. ponytail: safe, since the task
-reads only build's result and triggers at most once per run id; list it in dags.json's tasks if a
+reads only build's result and triggers at most once per target and hour; list it in dags.json's tasks if a
 shape change must ever drain.
 
 Holds (I-7): resolve refuses a run of a held product, naming the hold, read as svc.runs through the
@@ -93,7 +94,7 @@ LAKE = "platform/docker/lake"  # the Spark scripts inside a release
 K2RUNS = "platform/platform/runs/k2runs.py"
 # k2gen's model.ddl_path for the holds, deploy's HOLDS_DDL: a release with this file has the table.
 HOLDS_DDL = "compiled/lake/ddl/trino/governance.run_records.holds.sql"
-REFRESH = "refresh"  # pipeline.json: the product whose DAG a degraded build starts (W1-6)
+REFRESH = "refresh"  # pipeline.json: {product, rules}, the DAG a build degraded by one of rules starts (W1-6)
 POOLS = {"fetch": "fetch", "build": "dbt",
          **dict.fromkeys(("load", "audit", "publish", "expire", "maintain", "compact"), "lake_spark")}
 TASKS = ("resolve", "fetch", "load", "audit", "publish", "build", "expire", "record", "maintain")
@@ -215,20 +216,29 @@ class Resolve(BaseOperator):
 
 
 class Refresh(TriggerDagRunOperator):
-    """W1-6: the refresh target's DAG started when build's result says `degraded: true`, else a skip.
-    One run per triggering run (a fixed run id, skipped when it exists), never waited for, no retry.
-    No conf, and no OpenLineage keys injected into it: the target's resolve refuses any other conf."""
+    """W1-6: the refresh target's DAG started when build's result says `degraded: true` and its
+    `warned` (test.<project>.<rule>.<hash>, the dbt emitter naming each test by its rule) names one of
+    `rules`, else a skip: a rule the target's run cannot cure (a malformed frame) starts nothing.
+    At most one run per target and hour: the fixed run id is the triggering run's hour, skipped when
+    it exists, so twelve degraded five-minute builds start one. The reason is the venue's API budget:
+    the target fetches a public API the owner allows a few calls an hour, and a symbol that stays
+    unresolved would otherwise call it every build. Never waited for, no retry. No conf, and no
+    OpenLineage keys injected into it: the target's resolve refuses any other conf."""
 
-    def __init__(self, *, target: str, **kwargs) -> None:
+    def __init__(self, *, target: str, rules: list[str], **kwargs) -> None:
         super().__init__(task_id=REFRESH, trigger_dag_id=target, skip_when_already_exists=True,
                          wait_for_completion=False, openlineage_inject_parent_info=False, retries=0, **kwargs)
+        self.rules = list(rules)
 
     def execute(self, context) -> None:
-        ti = context["ti"]
-        result = ti.xcom_pull(task_ids="build", key="result")
+        result = context["ti"].xcom_pull(task_ids="build", key="result")
         if not (isinstance(result, dict) and result.get("degraded") is True):
             raise AirflowSkipException(f"build is not degraded, so no {self.trigger_dag_id} run: {result!r}")
-        self.trigger_run_id = f"refresh__{ti.run_id}"
+        warned = {w.split(".", 2)[2].rsplit(".", 1)[0] for w in result.get("warned") or [] if isinstance(w, str) and w.count(".") >= 3}
+        if not warned & set(self.rules):
+            raise AirflowSkipException(f"no rule of {self.rules} warned ({result.get('warned')!r}), so no {self.trigger_dag_id} run")
+        hour = context["dag_run"].run_after.astimezone(timezone.utc).strftime("%Y%m%dT%H")
+        self.trigger_run_id = f"refresh__{hour}"  # per target: run ids are the target DAG's own
         return super().execute(context)
 
 
@@ -434,23 +444,27 @@ def check_entry(i: int, e: object) -> dict:
     return e
 
 
-def refresh_targets(entries: list[dict], docs: dict[str, dict]) -> dict[str, str]:
-    """{product: the DAG id its degraded build starts}, or a ValueError naming the product: a target
-    is another product of this dags.json whose own pipeline names no refresh target (one hop, no loop)."""
+def refresh_targets(entries: list[dict], docs: dict[str, dict]) -> dict[str, tuple[str, list[str]]]:
+    """{product: (the DAG id a build degraded by one of its rules starts, the rules)}, or a ValueError
+    naming the product: a target is another product of this dags.json whose own pipeline names no
+    refresh target (one hop, no loop), and the rules a non-empty list of names."""
     dag_of, out = {e["product"]: e["dagId"] for e in entries}, {}
     for product, doc in docs.items():
-        if (target := doc.get(REFRESH)) is None:
+        if (value := doc.get(REFRESH)) is None:
             continue
+        target, rules = (value.get("product"), value.get("rules")) if isinstance(value, dict) else (None, None)
+        if not (isinstance(rules, list) and rules and all(isinstance(r, str) and r for r in rules)):
+            raise ValueError(f"{product}: refresh {value!r} is not {{product, rules}} with at least one rule name")
         if target == product or target not in dag_of:
             raise ValueError(f"{product}: refresh target {target!r} is not another product of this release's dags.json")
         if REFRESH in docs[target]:
             raise ValueError(f"{product}: refresh target {target} names its own refresh target "
                              f"{docs[target][REFRESH]!r}; a refresh is one hop, so a target triggers nothing")
-        out[product] = dag_of[target]
+        out[product] = (dag_of[target], rules)
     return out
 
 
-def make_dag(e: dict, doc: dict, refresh: str | None) -> DAG:
+def make_dag(e: dict, doc: dict, refresh: tuple[str, list[str]] | None) -> DAG:
     timeout = doc["schedule"].get("timeoutMinutes")
     kafka = (doc.get("connector") or {}).get("kind") == "kafka"
     with DAG(e["dagId"], schedule=e["schedule"], start_date=START, catchup=False, max_active_runs=1,
@@ -490,7 +504,7 @@ def make_dag(e: dict, doc: dict, refresh: str | None) -> DAG:
         if refresh:  # all_success: a degraded build publishes, so build succeeded
             if "build" not in ops:
                 raise ValueError(f"{product}: a refresh target without a build task")
-            ops["build"] >> Refresh(target=refresh)
+            ops["build"] >> Refresh(target=refresh[0], rules=refresh[1])
         if "expire" in ops:
             ops["expire"].as_teardown()
         ops["record"].as_teardown()

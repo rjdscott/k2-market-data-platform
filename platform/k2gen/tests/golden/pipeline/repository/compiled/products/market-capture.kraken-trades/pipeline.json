@@ -73,7 +73,12 @@
     "cron": "4 4 * * *"
   },
   "product": "market-capture.kraken-trades",
-  "refresh": "market-capture.kraken-instruments",
+  "refresh": {
+    "product": "market-capture.kraken-instruments",
+    "rules": [
+      "unresolved_rows_zero"
+    ]
+  },
   "schedule": {
     "cron": "*/5 * * * *",
     "timeoutMinutes": 10

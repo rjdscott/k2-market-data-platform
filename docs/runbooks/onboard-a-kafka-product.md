@@ -102,7 +102,7 @@ The checks a Kafka product meets beyond a file product's:
 | `connectors.topic-claimed-twice` | another product reads the topic, or two domains list it |
 | `connectors.host-outside-stack` | a broker or the registry is not a compose service on a network of the Spark container |
 | `refresh.target-unresolved`, `-self`, `-unscheduled`, `-not-upstream`, `-chains` | the `refresh` target is not another scheduled, non-retired product upstream through input ports, or declares a refresh of its own |
-| `refresh.never-degraded` | a `refresh` on a product with no `warn`-severity test, which could never fire |
+| `refresh.rule-not-warn` | a rule `refresh.rules` names is not a `warn`-severity rule of the product, so it could never start the refresh |
 | `docs.empty-input-into-table` | an input port with `whenAbsent: empty` feeds a model that is not incremental, which would rebuild it empty |
 | `access.input-undeclared` | a model reads a `k2_input` the output port does not declare, directly or through a sibling's `ref()` |
 | `access.inherit-role` | an output offers a role its inputs do not offer, nor a role it is declared `within` (`contracts/access/roles.yaml`) |
@@ -192,9 +192,10 @@ run that hits the bound leaves a `backlog` in load's result, and the next run co
 `resolve`, `load` (land, then stage), `audit`, `publish`, `build`, `refresh` (skipped unless the build
 is degraded), `expire`, `maintain` and `compact` (once a day), `record`. A trade whose symbol the
 security master does not resolve waits in `silver_trade_unresolved`, the `warn` test
-`unresolved_rows_zero` fails, the build publishes degraded and starts one `kraken_instruments` run.
-A frame the model cannot type is kept in `silver_trade_rejected` instead, and `rejected_frames_zero`
-fails the same way (section 5a).
+`unresolved_rows_zero` fails, the build publishes degraded and starts a `kraken_instruments` run, at
+most one an hour however many builds stay degraded (the venue's API allows a few calls an hour). A
+frame the model cannot type is kept in `silver_trade_rejected` instead: `rejected_frames_zero` fails
+and the build publishes degraded, but starts no instruments run, which could not cure it (section 5a).
 
 What the first runs must confirm, and where each is read:
 
@@ -219,7 +220,8 @@ behind a failed batch: [kafka-batch-blocked.md](./kafka-batch-blocked.md).
 `warned`: a trade frame `silver_trade` cannot type (its payload not JSON, no `data` array, a trade
 lacking a field or holding one that does not cast) is in `silver_trade_rejected`, whole, with its
 `reason` and its bytes, and none of its trades is in `silver_trade`. The rest of the venue publishes,
-and the build is degraded on every run while the frame stands.
+and the build is degraded on every run while the frame stands; `refresh` is skipped, since a listing
+cannot make the frame typeable.
 
 **Recovery**, read the rows as the owning team (`kafka_partition`, `kafka_offset`, `reason`,
 `payload`) and decide whether the venue changed its format or sent one bad frame. A rejected frame is

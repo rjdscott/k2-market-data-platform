@@ -800,17 +800,20 @@ class Holds(unittest.TestCase):
                 self.assertEqual({d.get_task("resolve").product}, set(d.tags), d.dag_id)
 
 
-DEGRADED = {"exit": 0, "expire": [], "degraded": True, "warned": ["silver_trade_unresolved_rows"]}
+RULE = "unresolved_rows_zero"  # the rule KINDS' refresh names (with_refresh)
+DEGRADED = {"exit": 0, "expire": [], "degraded": True, "warned": [f"test.k2.{RULE}.3f2a9c1b0d"]}
 
 
 def with_refresh(test: unittest.TestCase, targets: dict) -> Path:
-    """KINDS with pipeline.json's `refresh` set to each {product: target}, removed after `test`."""
+    """KINDS with pipeline.json's `refresh` set to each {product: target}, started by RULE (a target
+    that is a dict is written as given), removed after `test`."""
     root = Path(tempfile.mkdtemp())
     test.addCleanup(shutil.rmtree, root)
     shutil.copytree(KINDS / "compiled", root / "compiled")
     for product, target in targets.items():
         path = root / f"compiled/products/{product}/pipeline.json"
-        path.write_text(json.dumps({**json.loads(path.read_text()), "refresh": target}))
+        value = target if isinstance(target, dict) else {"product": target, "rules": [RULE]}
+        path.write_text(json.dumps({**json.loads(path.read_text()), "refresh": value}))
     return root
 
 
@@ -831,7 +834,8 @@ class Refresh(unittest.TestCase):
 
     def test_the_repository_kraken_trades_refreshes_kraken_instruments(self):
         op = factory.build(CANARY)["kraken_trades"].get_task("refresh")
-        self.assertEqual((op.trigger_dag_id, op.upstream_task_ids), ("kraken_instruments", {"build"}))
+        # only on the unresolved symbol: a listing cannot make a malformed frame typeable
+        self.assertEqual((op.trigger_dag_id, op.upstream_task_ids, op.rules), ("kraken_instruments", {"build"}, ["unresolved_rows_zero"]))
 
     def test_a_target_adds_refresh_after_build_and_changes_nothing_else(self):
         dags = factory.build(self.release({KAFKA: API}))
@@ -849,20 +853,35 @@ class Refresh(unittest.TestCase):
             with self.subTest(result=result), self.assertRaises(AirflowSkipException):
                 op.execute(ctx(TI({("build", "result"): result}, dag_id=KDAG)))
 
-    def test_a_degraded_build_starts_one_target_run_with_the_fixed_run_id(self):
+    def test_skipped_unless_a_declared_rule_warned(self):
         op = self.op()
-        for _ in (1, 2):  # a rerun asks for the same run id, which then exists: skipped, never a second run
-            with self.assertRaises(DagRunTriggerException) as e:
-                op.execute(ctx(TI({("build", "result"): DEGRADED}, dag_id=KDAG)))
+        for warned in ([], None, ["test.k2.rejected_frames_zero.0a1b2c3d4e"], [RULE], [f"test.k2.{RULE}_x.0a1b2c3d4e"], [7]):
+            with self.subTest(warned=warned), self.assertRaises(AirflowSkipException):
+                op.execute(ctx(TI({("build", "result"): {**DEGRADED, "warned": warned}}, dag_id=KDAG)))
+        with self.assertRaises(DagRunTriggerException):  # one declared rule among others is enough
+            op.execute(ctx(TI({("build", "result"): {**DEGRADED, "warned": ["test.k2.rejected_frames_zero.0a1b2c3d4e", *DEGRADED["warned"]]}},
+                              dag_id=KDAG)))
+
+    def test_a_degraded_build_starts_one_target_run_an_hour(self):
+        op = self.op()
+        # every five-minute build of one hour asks for the same run id, which then exists: skipped, one run
+        for minute in range(0, 60, 5):
+            with self.subTest(minute=minute), self.assertRaises(DagRunTriggerException) as e:
+                op.execute(ctx(TI({("build", "result"): DEGRADED}, dag_id=KDAG), when=datetime(2026, 11, 27, 2, minute, tzinfo=timezone.utc)))
             t = e.exception
             self.assertEqual((t.trigger_dag_id, t.dag_run_id, t.skip_when_already_exists, t.wait_for_completion, t.conf),
-                             (ADAG, f"refresh__{RUN}", True, False, None))  # no conf: the target's resolve refuses one
+                             (ADAG, "refresh__20261127T02", True, False, None))  # no conf: the target's resolve refuses one
+        with self.assertRaises(DagRunTriggerException) as e:  # the next hour, the next run
+            op.execute(ctx(TI({("build", "result"): DEGRADED}, dag_id=KDAG), when=datetime(2026, 11, 27, 3, 0, tzinfo=timezone.utc)))
+        self.assertEqual(e.exception.dag_run_id, "refresh__20261127T03")
 
     def test_a_target_that_refreshes_itself_or_another_is_refused_at_parse(self):
         for targets, message in (({KAFKA: API, API: "sensor-net.station-readings"}, "names its own refresh target"),
                                  ({KAFKA: API, API: KAFKA}, "a refresh is one hop"),
                                  ({KAFKA: KAFKA}, "is not another product"),
-                                 ({KAFKA: "sensor-net.nowhere"}, "is not another product")):
+                                 ({KAFKA: "sensor-net.nowhere"}, "is not another product"),
+                                 ({KAFKA: {"product": API, "rules": []}}, "at least one rule name"),
+                                 ({KAFKA: {"product": API}}, "at least one rule name")):
             with self.subTest(targets=targets), self.assertRaises(ValueError) as e:
                 factory.build(self.release(targets))
             self.assertIn(message, str(e.exception))
