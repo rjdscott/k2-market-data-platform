@@ -19,8 +19,10 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
-sys.path[:0] = [str(Path(__file__).parent), str(ROOT / "platform" / "k2gen"), str(ROOT / "scripts" / "verify")]
+sys.path[:0] = [str(Path(__file__).parent), str(ROOT / "platform" / "k2gen"), str(ROOT / "scripts" / "verify"),
+                str(ROOT / "platform" / "runs")]
 import k2_dbt as w  # noqa: E402
+import k2runs  # noqa: E402
 from k2gen import model as k2  # noqa: E402
 from k2gen.emit import lake  # noqa: E402
 
@@ -79,6 +81,9 @@ class Fake:
         self.orphans: list[str] = []  # the builder's queries an earlier run left running
         self.kills: list[str] = []
         self.unkillable = False
+        self.input_at = datetime.now(timezone.utc) - timedelta(minutes=30)  # every input's audited commit
+        self.commit_reads: list[tuple[str, int]] = []
+        self.extra_results: list[dict] = []  # more of dbt's run_results, a warn among them
 
     # -- set-up
     def seed(self, rel=OUT, cols=V1, tagged=True, record=True):
@@ -143,6 +148,10 @@ class Fake:
 
     def running(self):
         return sorted(self.orphans)
+
+    def committed(self, rel, sid):
+        self.commit_reads.append((rel, sid))
+        return self.input_at
 
     def kill(self, query_id):
         self.kills.append(query_id)
@@ -211,6 +220,7 @@ class Fake:
             if self.rows:
                 self._snap(rel, cols, self.dbt_code == 0, insert)
             results.append({"status": self.dbt_status, "adapter_response": {"query_id": insert} if self.report_queries else {}})
+        results += self.extra_results
         self._snap("governance_build.access_canary__base.dq_test_results", {"run_id": "varchar"}, True)  # the results hook
         self.check()
         if self.after_dbt:
@@ -264,7 +274,9 @@ def events(fake, run=None):
 def test_a_pass_pins_each_input_runs_one_build_and_records_started():
     fake = Fake()
     s0 = fake.seed()
-    code, expire = w.run(ctx(), fake)
+    c = ctx()
+    fake.input_at = c.started_at - timedelta(minutes=30)
+    code, expire = w.run(c, fake)
     assert (code, expire) == (0, [])
     (argv,) = fake.dbt_calls
     assert argv[:4] == ["dbt", "build", "--selector", "access_canary"]
@@ -273,7 +285,8 @@ def test_a_pass_pins_each_input_runs_one_build_and_records_started():
     started = [r for r in fake.records if r["event"] == "started"]
     assert [(r["table_name"], r["snapshot_before"]) for r in started] == [(OUT, s0)]
     assert started[0]["inputs"] == [{"contractId": INPUT.contract, "relation": INPUT.relation, "snapshot": 7,
-                                     "state": "active", "lagMinutes": None}]
+                                     "state": "active", "lagMinutes": 30.0}]
+    assert fake.commit_reads == [(INPUT.relation, 7)]  # once per input, not per output
 
 
 def test_a_required_input_never_tested_exits_4_before_anything_is_written():
@@ -818,6 +831,130 @@ def test_a_snapshot_id_from_a_run_record_is_parsed_never_spliced():
     assert w.run(ctx(), fake) == (3, []) and fake.statements == []
 
 
+# ---- W1-7: each input's lag, a degraded publish ---------------------------------------------------
+
+def warn(name):
+    return {"unique_id": name, "status": "warn", "adapter_response": {}}
+
+
+def state(fake):
+    """k2runs.state over the fake's records, in the order written."""
+    return k2runs.state([{**r, "recorded_at": n} for n, r in enumerate(fake.records)])
+
+
+def test_a_pass_with_a_warn_publishes_degraded_in_the_xcom_and_every_audited_row():
+    fake = Fake(views=(VIEW, VIEW2))
+    fake.seed(OUT), fake.seed(OUT2)
+    fake.extra_results = [warn(f"test.k2.held_rows_zero_{n}." + "x" * 300) for n in range(7)]
+    xcom = {}
+    assert w.run(ctx(outputs=((OUT, VIEW), (OUT2, VIEW2))), fake, xcom) == (0, [])
+    names = [f"test.k2.held_rows_zero_{n}." + "x" * 300 for n in range(5)]
+    assert xcom == {"degraded": True, "warned": [n[:w.WARNED_CHARS] for n in names]}
+    audited = [r for r in fake.records if r["run_id"] == "access_canary/r1" and r["event"] == "audited"]
+    assert [r["table_name"] for r in audited] == [OUT, OUT2]
+    for r in audited:
+        assert json.loads(r["detail"]) == xcom and len(r["detail"]) <= 1000  # k2runs.record keeps 1000
+    assert not [r for r in fake.records if r["event"] == "started" and "detail" in r]
+    assert state(fake) == "degraded"
+    assert fake.tables[OUT]["tag"] == fake.tables[OUT]["main"] and fake.violations == []  # published as before
+
+
+def test_a_pass_with_no_warn_writes_what_it_wrote_before(monkeypatch, capsys):
+    fake = Fake()
+    fake.seed()
+    fake.extra_results = [{"unique_id": "test.k2.ok", "status": "pass"}, {"unique_id": "model.k2.m", "status": "success"}]
+    monkeypatch.setattr(w, "load", lambda *a: ctx())
+    monkeypatch.setattr(w, "Live", lambda c, env: fake)
+    assert w.main(["build", "--release", RELEASE, "--product", "governance.access-canary", "--run-id", "access_canary/r1"]) == 0
+    assert capsys.readouterr().out.splitlines()[-1] == '{"exit":0,"expire":[]}'
+    (audited,) = [r for r in fake.records if r["run_id"] == "access_canary/r1" and r["event"] == "audited"]
+    assert set(audited) == {"run_id", "product_id", "release_id", "task", "started_at", "event", "table_name",
+                            "snapshot_before", "snapshot_after", "dbt_invocation_id"}  # no detail, as before
+    assert state(fake) == "complete"
+
+
+@pytest.mark.parametrize("code,status,exit_code", [(1, "fail", 1), (2, "error", 2)])
+def test_a_failure_beside_a_warn_rolls_back_and_is_never_degraded(code, status, exit_code):
+    fake = Fake()
+    s0 = fake.seed()
+    fake.dbt_code, fake.dbt_status = code, status
+    fake.extra_results = [warn("test.k2.held_rows_zero")]
+    xcom = {}
+    assert w.run(ctx(), fake, xcom)[0] == exit_code
+    assert xcom == {} and fake.tables[OUT]["main"] == s0 and fake.tables[OUT]["tag"] == s0
+    assert events(fake, "access_canary/r1") == [("started", OUT), ("rolled_back", OUT)]
+    assert not [r for r in fake.records if "degraded" in str(r.get("detail"))]
+    statuses = [warn("test.k2.w"), *({"unique_id": f"test.k2.{s}", "status": s} for s in ("fail", "error", "pass", "skipped"))]
+    assert w.warned({"results": statuses}) == ["test.k2.w"] and w.warned(None) == []  # only warn is a warn
+
+
+def test_a_publish_refused_after_a_warn_is_not_degraded():
+    fake = Fake()
+    fake.seed()
+    fake.build[OUT], fake.commit_status = V2, 409
+    fake.extra_results = [warn("test.k2.held_rows_zero")]
+    xcom = {}
+    assert w.run(ctx(), fake, xcom)[0] == 3 and xcom == {}  # nothing published, nothing degraded
+
+
+def test_each_inputs_lag_is_the_run_start_minus_its_audited_commit_never_below_zero():
+    c = ctx()
+    fake = Fake()
+    fake.seed()
+    fake.input_at = c.started_at - timedelta(minutes=90, seconds=30)
+    assert w.run(c, fake)[0] == 0
+    assert [r["inputs"][0]["lagMinutes"] for r in fake.records if r["event"] == "started"] == [90.5]
+    fake.input_at = c.started_at + timedelta(minutes=5)  # published after this run started
+    assert w.run(dataclasses.replace(c, run_id="access_canary/r2"), fake)[0] == 0
+    assert [r["inputs"][0]["lagMinutes"] for r in fake.records if r["event"] == "started"][-1] == 0.0
+    assert w.lag(c.started_at, None) is None
+
+
+def test_an_optional_input_with_no_snapshot_keeps_lag_null_and_reads_no_commit_time():
+    fake = Fake()
+    fake.seed()
+    fake.inputs[INPUT.relation] = [{}]
+    assert w.run(ctx(inputs=(dataclasses.replace(INPUT, required=False),)), fake)[0] == 0
+    (started,) = [r for r in fake.records if r["event"] == "started"]
+    assert started["inputs"][0]["snapshot"] is None and started["inputs"][0]["lagMinutes"] is None
+    assert fake.commit_reads == []
+
+
+def test_the_commit_time_is_the_snapshots_own_or_before_a_compaction_its_parents():
+    def s(sid, ms, op="append", parent=None):
+        return {"snapshot-id": sid, "timestamp-ms": ms, "summary": {"operation": op}, "parent-snapshot-id": parent}
+    meta = {"snapshots": [s(1, 60_000), s(2, 120_000, "replace", 1), s(3, 180_000, "replace", 2), s(4, 240_000, "overwrite", 3),
+                          s(5, 300_000, "replace", 99), s(6, 360_000, "replace", 7), s(7, 420_000, "replace", 6)]}
+    at = lambda sid: w.commit_time(meta, sid, OUT).timestamp()  # noqa: E731
+    assert w.commit_time(meta, 1, OUT) == datetime(1970, 1, 1, 0, 1, tzinfo=timezone.utc)
+    assert (at(3), at(2), at(4)) == (60, 60, 240)  # compactions walk back to the data; a new write is its own
+    assert at(5) == 300  # its parent expired: its own time
+    assert at(6) in (360, 420)  # a parent cycle ends
+    for bad in (None, {}, meta):
+        with pytest.raises(w.Refused):
+            w.commit_time(bad, 8, OUT)
+
+
+def test_the_live_commit_time_reads_the_inputs_own_warehouse(monkeypatch):
+    opened, read = [], []
+
+    class Catalog:
+        def __init__(self, uri, warehouse):
+            opened.append(warehouse)
+
+        def table(self, ns, t):
+            read.append((ns, t))
+            return {"snapshots": [{"snapshot-id": 7, "timestamp-ms": 1_000}]}
+    monkeypatch.setattr(w.catalog_drift, "Catalog", Catalog)
+    live = object.__new__(w.Live)
+    live.ctx, live.uri, live.catalogs = ctx(), "http://lakekeeper:8181/catalog", {}
+    for rel in ("lake.kraken_trades.bronze", "fx.ecb_fx__base.rates", "fx.ecb_fx__base.rates"):
+        assert live.committed(rel, 7) == datetime(1970, 1, 1, 0, 0, 1, tzinfo=timezone.utc)
+    assert opened == ["k2", "fx"] and read == [("kraken_trades", "bronze"), ("ecb_fx__base", "rates"), ("ecb_fx__base", "rates")]
+    with pytest.raises(w.Refused):
+        live.committed('fx.a"b.c', 7)
+
+
 # ---- trust boundaries --------------------------------------------------------------------------
 
 @pytest.mark.parametrize("bad", ["a.b", 'a.b.c"; DROP TABLE x --', "A.b.c", "a.b.c$refs", "a.b." + "x" * 64, "a..c", None])
@@ -902,7 +1039,7 @@ def test_the_xcom_is_the_last_stdout_line_on_every_exit_path(monkeypatch, capsys
     monkeypatch.setattr(w, "Live", lambda c, env: None)
     for code in (0, 1, 2, 3, 4):
         expire = [{"table": OUT, "ids": [5]}] if code in (1, 2) else []
-        monkeypatch.setattr(w, "run", lambda c, io, code=code, expire=expire: (code, expire))
+        monkeypatch.setattr(w, "run", lambda c, io, xcom, code=code, expire=expire: (code, expire))
         assert w.main(["build", "--release", RELEASE, "--product", "governance.access-canary", "--run-id", "x/y"]) == code
         assert last() == {"exit": code, "expire": expire}
 

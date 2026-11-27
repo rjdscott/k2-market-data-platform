@@ -233,10 +233,15 @@ say(ok and len(w) == 1 and w[0][2] == "warn" and w[0][3] == 1 and len(h1) == 2,
 rec = st.get(runs[0], {}).get("records", [])
 print(f"INFO {runs[0]} XCom {xcom(runs[0])}; run records {[(e, t.split('.')[-1], d) for e, t, _, _, d, _ in rec]}; "
       f"dbt_invocation_id {sorted({x[5] for x in rec if x[5]})} joins dq_test_results {[(t[0][:40], t[2], t[4]) for t in w]}")
-said = json.dumps(xcom(runs[0])) + " " + " ".join(str(x[4] or "") for x in rec)
-say(bool(re.search(r"warn|degraded", said, re.I)), "(c) the wrapper's XCom or its run records say the build warned",
-    "named" if re.search(r"warn|degraded", said, re.I) else "neither does: the XCom is " + json.dumps(xcom(runs[0]))
-    + " and every run record's detail is " + str(sorted({str(x[4]) for x in rec})))
+x0 = xcom(runs[0])
+details = [x[4] for x in rec if x[0] == "audited"]
+named = x0.get("degraded") is True and bool(w) and any(w[0][0] in n for n in x0.get("warned") or [])
+rows_say = len(details) == 3 and all(d == json.dumps({"degraded": True, "warned": x0.get("warned")}, separators=(",", ":"))
+                                     for d in details)
+quiet = [r for r in runs[1:] if "degraded" in xcom(r)]  # the held rows resolved: no warn, no degraded
+say(named and rows_say and not quiet, "(c) the wrapper's XCom and each output's audited run record say the build is degraded, "
+    "naming the warn test; a later build with no warn does not",
+    f"XCom {json.dumps(x0)}; audited details {details}; degraded later: {quiet}")
 
 done = (re.findall(r"Done\. PASS=.*", text(runs[0], "err")) or ["none"])[-1]
 own = [x for x in text(runs[0], "err").splitlines() if x.startswith("k2-dbt:")]
