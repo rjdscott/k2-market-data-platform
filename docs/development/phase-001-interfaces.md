@@ -525,3 +525,57 @@ offering no role still blocks every role. Why: `silver_trade` of `kraken-trades`
 `delayed_reader` (plan 004) over `security-master`, reference data with no event time to delay,
 which offers `full_reader` alone (ADR-056 part 8: an enriched product is never less restricted
 than its inputs).
+
+## Per-product alerts, 2026-11-28 (phases 004 and 005, step I-5)
+
+Additive: one compiled file, one rule glob. Built by W1-17 in `platform/k2gen/k2gen/emit/alerts.py`.
+
+- **The file.** `compiled/prometheus/product-alerts.yml`, from the model alone: one group
+  `product:<product id>` per product with a schedule, none for a product without one. Prometheus
+  reads it through its pointer, `/k2/releases/pointers/prometheus/compiled/prometheus/*.yml`
+  (`docker/prometheus/prometheus.yml` `rule_files`, between the run code's rules and the
+  pre-phase-002 glob), reread on the SIGHUP deploy sends at each swap; `need_of` gives it nothing.
+- **The rules,** each labelled `product`, `dag_id`, `domain` and `severity`, annotated with a
+  summary, a description and `runbook: docs/runbooks/airflow-scheduling.md`:
+  `ProductRunFailed_<dag>`, a run of the DAG ended failed in the last 15 minutes (a pulse, as
+  `AirflowTaskFailed`); `ProductStale_<dag>`, no successful run within the stale window, for 2
+  minutes; `ProductRunSlow_<dag>`, the runs that succeeded within the last schedule interval took on
+  average more than 80% of `timeoutMinutes` (of the interval when the schedule has no timeout),
+  always `warning`. Severity of the other two: `critical` when one of the product's tables is
+  `gold` or `mart` (what readers query), else `warning`.
+- **The interval** is the largest gap between two firings of the cron over a week: `*/5` gives 5,
+  hourly 60, daily 1440, `30 15 * * 1-5` 4320 (Friday to Monday). A cron with a day-of-month or
+  month field is refused at compile. The stale window is three intervals, and never less than
+  one interval plus `timeoutMinutes`.
+- **What Prometheus reads,** Airflow's statsd through the airflow-statsd exporter, the only per-DAG
+  series today: `airflow_dagrun_duration_{success,failed}_{sum,count}`, Airflow's run-end timer,
+  labels `dag_id` and `run_type` (`dag_id` alone on a run failed by its `dagrun_timeout`), in
+  seconds (ADR-034 measured its quantiles live; `docker/grafana/dashboards/k2-airflow.json` reads
+  `_sum` and `_count`); and `airflow_ti_running{dag_id,task_id,queue}`, the scheduler's gauge of
+  running tries, the one name `docker/airflow/statsd-mapping.yml` maps. Each rule also reads a
+  series new within its window, as `airflow-alerts.yml` does; a series absent for the stale window
+  is stale (a DAG still paused since its creation, or no success since the exporter started).
+- **Freshness skips a product while it maintains** two ways. `maintain`, and `compact` after it in
+  a Kafka product's DAG, run inside the product's own run, which `dagrun_timeout` bounds: a stale
+  window of at least one interval plus the timeout outlasts any pass that does not fail the run.
+  And `ProductStale` is muted while `airflow_ti_running{task_id=~"maintain|compact"} > 0`, which also
+  covers a product with no timeout; its 2-minute `for` spans the end of the pass to the success.
+- **Not alertable from Prometheus today, so not built:** a product's `degraded` and `partial:
+  <inputs>` states and an audit's unresolved rows (plan 004: "unresolved rows = 0 alerts, marks the
+  page degraded"). They live in the run records (`k2runs.state`), which the catalog page reads as
+  `svc.catalog`; no Prometheus series carries them. The cheapest honest path, a later step: the
+  `record` task, which runs on every outcome and already holds the run's state, sends one statsd
+  gauge per product and state through the same exporter (a mapping with a ttl), and this emitter
+  adds a rule on it. Plan 004's alert for a degraded product stays an open item of the phase's
+  exit mapping, and so do the per-product dashboards.
+- **Ceilings.** A held product's runs fail at `resolve`, so its `ProductRunFailed` fires at each
+  run while held (silence it in Alertmanager). After an exporter restart, `increase()` near zero
+  can read the slow mean low, never high. One N for every product: a weekly one is stale after
+  three weeks.
+- **Deploy.** `prometheus.yml` is a file bind mount from the checkout, and deploy recreates only
+  the services whose compose definition or image differs (`release.changed_services`), so the
+  release that brings this glob needs `docker compose up -d --force-recreate --no-deps prometheus`
+  once by hand; a SIGHUP rereads the file the container started with.
+- **Proof** (a container job): `platform/k2gen/tests/promtool/product-alerts_test.yml`, for
+  `kraken_trades`, runs beside a scratch release's compiled file with `promtool check rules` and
+  `promtool test rules` (the commands are in its header).
