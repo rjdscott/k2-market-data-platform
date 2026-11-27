@@ -569,6 +569,35 @@
       ]
     },
     {
+      "user": "svc\\.platform",
+      "catalog": "governance_build",
+      "schema": "run_records",
+      "table": "holds",
+      "privileges": [
+        "SELECT",
+        "OWNERSHIP"
+      ]
+    },
+    {
+      "user": "svc\\.runs",
+      "catalog": "governance_build",
+      "schema": "run_records",
+      "table": "holds",
+      "privileges": [
+        "SELECT",
+        "INSERT"
+      ]
+    },
+    {
+      "user": "svc\\.catalog",
+      "catalog": "governance",
+      "schema": "run_records",
+      "table": "holds",
+      "privileges": [
+        "SELECT"
+      ]
+    },
+    {
       "user": "svc\\.catalog",
       "catalog": "governance",
       "schema": "quality_results",
@@ -636,6 +665,15 @@
       "catalog": "market_capture",
       "schema": "kraken_instruments__base",
       "table": "silver_listing\\$refs",
+      "privileges": [
+        "SELECT"
+      ]
+    },
+    {
+      "user": "svc\\.api|svc\\.catalog|svc\\.platform|svc\\.runs",
+      "catalog": "lake",
+      "schema": "kraken_trades",
+      "table": "bronze_trade\\$refs",
       "privileges": [
         "SELECT"
       ]

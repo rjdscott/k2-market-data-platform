@@ -1,0 +1,63 @@
+apiVersion: v3.2.0
+kind: DataContract
+id: market-capture.kraken-trades.bronze_trade
+name: bronze_trade
+version: 1.0.0
+domain: market-capture
+description:
+  purpose: >-
+    One row per record of the raw Kraken topic whose envelope stream is trade, the landing's
+    columns as landed (I-1): staged from lake.kraken_trades.landing by offset, so a retry or a
+    kill between the landing commit and the stage adds no row twice and leaves no hole. The
+    connector's audit (accounting, parses, keys_unique) passes before a batch publishes.
+team:
+  name: capture-team
+schema:
+  - id: bronze_trade
+    name: bronze_trade
+    physicalName: kraken_trades.bronze_trade
+    physicalType: table
+    properties:
+      - name: kafka_partition
+        physicalType: integer
+        required: true
+        primaryKey: true
+        primaryKeyPosition: 1
+        description: The topic partition; with kafka_offset, the row's lineage to the landing and the topic.
+      - name: kafka_offset
+        physicalType: bigint
+        required: true
+        primaryKey: true
+        primaryKeyPosition: 2
+        description: The record's offset in its partition.
+      - name: kafka_timestamp
+        physicalType: timestamp(6) with time zone
+        description: The record's Kafka timestamp, set when the capture produced it.
+      - name: record_key
+        physicalType: varbinary
+        description: The key's bytes as read, the envelope's symbol as the venue spells it in UTF-8; null for a frame of no single instrument.
+      - name: record_value
+        physicalType: varbinary
+        description: >-
+          The value's bytes as read and never decoded here: a Confluent-framed RawMessage
+          (schemas/avro/raw-message.avsc), the magic byte, the writer schema id, then the Avro body
+          whose payload is the venue's JSON frame.
+      - name: batch_id
+        physicalType: varchar
+        description: The landing batch that landed the record, its k2.batch-id.
+      - name: landed_at
+        physicalType: timestamp(6) with time zone
+        description: When that landing batch committed, UTC.
+      - name: run_id
+        physicalType: varchar
+        description: The run that landed the record, <dag_id>/<run_id>.
+      - name: release_id
+        physicalType: varchar
+        description: The release that run resolved at its start.
+customProperties:
+  - property: layer
+    value: bronze
+  - property: build
+    value: connector
+  - property: backup
+    value: rebuild  # restaged from the landing, which the backup set keeps as restore

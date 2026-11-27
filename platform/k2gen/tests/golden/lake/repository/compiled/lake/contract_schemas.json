@@ -285,6 +285,57 @@
     "partitioning": [],
     "sort": []
   },
+  "k2.kraken_trades.bronze_trade": {
+    "columns": [
+      {
+        "name": "kafka_partition",
+        "required": true,
+        "type": "integer"
+      },
+      {
+        "name": "kafka_offset",
+        "required": true,
+        "type": "bigint"
+      },
+      {
+        "name": "kafka_timestamp",
+        "required": false,
+        "type": "timestamp(6) with time zone"
+      },
+      {
+        "name": "record_key",
+        "required": false,
+        "type": "varbinary"
+      },
+      {
+        "name": "record_value",
+        "required": false,
+        "type": "varbinary"
+      },
+      {
+        "name": "batch_id",
+        "required": false,
+        "type": "varchar"
+      },
+      {
+        "name": "landed_at",
+        "required": false,
+        "type": "timestamp(6) with time zone"
+      },
+      {
+        "name": "run_id",
+        "required": false,
+        "type": "varchar"
+      },
+      {
+        "name": "release_id",
+        "required": false,
+        "type": "varchar"
+      }
+    ],
+    "partitioning": [],
+    "sort": []
+  },
   "market_capture.kraken_instruments__base.silver_listing": {
     "columns": [
       {

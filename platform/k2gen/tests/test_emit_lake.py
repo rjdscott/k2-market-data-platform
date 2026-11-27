@@ -132,7 +132,7 @@ def held_to_their_shape(out: dict[str, str], m: Model) -> None:
             assert sql.count(";") == 1 and sql.endswith(");\n"), path
             literals = {model.sql_literal(v) for kv in lake.TBLPROPERTIES for v in kv}
         elif path.startswith("compiled/lake/ddl/trino/"):
-            assert text == model.RUN_RECORD_SQL.read_text(), path  # the frozen file, copied
+            assert text in [f.read_text() for f in model.PLATFORM_SQL], path  # a frozen file, copied
             continue
         else:
             assert path.endswith(".json"), path
@@ -661,13 +661,15 @@ def with_governance(documents: dict[str, bytes]) -> dict[str, bytes]:
         governance={"owner": "platform-team", "kind": "consumer-aligned", "description": "Made up for the test."}))
 
 
-def test_the_run_record_is_copied_byte_for_byte_when_its_domain_is_declared() -> None:
-    path = model.ddl_path("trino", "governance", "run_records", "run_record")
+@pytest.mark.parametrize(("table", "source"), [("run_record", model.RUN_RECORD_SQL), ("holds", model.HOLDS_SQL)])
+def test_each_platform_table_is_copied_byte_for_byte_when_its_domain_is_declared(table: str, source: Path) -> None:
+    path = model.ddl_path("trino", "governance", "run_records", table)
     assert path not in lake.emit(load(good()))
     out = lake.emit(load(with_governance(good())))
-    assert out[path].encode() == model.RUN_RECORD_SQL.read_bytes()
-    assert '"governance.run_records.run_record": 7' in out[model.RETENTION]
-    assert '"table": "governance.run_records.run_record"' in out[model.BACKUP_SET]
+    assert out[path].encode() == source.read_bytes()
+    assert f'"governance.run_records.{table}": 7' in out[model.RETENTION]  # the run records' retention, the floor
+    entry = {"kind": "table", "table": f"governance.run_records.{table}", "mode": "restore", "ref": "main"}
+    assert entry in json.loads(out[model.BACKUP_SET])["entries"]
     assert model.need_of(path) == "ddl"
 
 

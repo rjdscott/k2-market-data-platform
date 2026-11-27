@@ -29,11 +29,16 @@ through re.escape (Trino matches a rule's regex against the whole name), so `t` 
   definer-view owner check demands (the gate, h1.02: the read-only connector still refuses writes).
   Nobody else holds GRANT_SELECT anywhere.
 - svc.platform, the operator: `all` on every `_build` catalog, SELECT in base namespaces there (table
-  maintenance), the run-record table's DDL, every `system` table, viewing and killing any query,
-  system information, every session property. It holds no privilege in a reader namespace.
+  maintenance), the platform tables' DDL (model.PLATFORM_SQL), every `system` table, viewing and
+  killing any query, system information, every session property. It holds no privilege in a reader namespace.
 - The builder of model.QUALITY_RESULTS alone also reads each model.test_results_writers product's
   `<domain>.<fence>__base.dq_test_results` (model.TEST_RESULTS), its own included, through the
   reader catalog at main; svc.catalog reads its views by exact name, as it reads the run record.
+- The platform tables (model.PLATFORM_SQL: the run record and the holds), each by exact name, three
+  rules apiece and no other: svc.platform SELECT and OWNERSHIP through `<domain>_build` (it creates
+  them at deploy, and deploy reads the holds); svc.runs SELECT and INSERT there, never DELETE or
+  UPDATE, so both stay append-only (a DAG's resolve reads the holds as svc.runs, through k2runs);
+  svc.catalog SELECT through the reader catalog, for the page.
 - model.REFS_READERS read exactly `<table>$refs` of each lake table, at its model.input_relation;
   a publisher reads its own bases' `$refs` too, through its views' guard.
 - svc.api may impersonate the declared `p.*` principals by exact name and nobody else.
@@ -75,9 +80,9 @@ from k2gen.model import (
     LAKE,
     LAKE_BUILDS,
     PIPELINE_PRINCIPALS,
+    PLATFORM_SQL,
     QUALITY_RESULTS,
     REFS_READERS,
-    RUN_RECORD_SQL,
     STATISTICS_PROPERTY,
     TEST_RESULTS,
     Model,
@@ -127,9 +132,10 @@ SYSTEM_TABLES = {
 # The services that are the platform's own: never a reader, never impersonated (A10).
 PLATFORM_SERVICES = ("svc.runs", "svc.catalog", OPERATOR, API)
 _NOT_A_READER = re.compile(r"(dbt|pub)_.*|k2_release_.*|" + "|".join(re.escape(s) for s in PLATFORM_SERVICES))
-# The run-record table (A6): created by svc.platform at deploy, written only by svc.runs, both
-# through `<domain>_build`; read by svc.catalog through the reader catalog.
-_RUN_RECORD = re.search(r"CREATE TABLE (\w+)_build\.(\w+)\.(\w+) ", RUN_RECORD_SQL.read_text()).groups()  # type: ignore[union-attr]
+# The platform tables (A6, I-7), as (domain fence, namespace, table): created by svc.platform at
+# deploy, written only by svc.runs, both through `<domain>_build`; read by svc.catalog through the
+# reader catalog.
+_PLATFORM = [re.search(r"CREATE TABLE (\w+)_build\.(\w+)\.(\w+) ", p.read_text()).groups() for p in PLATFORM_SQL]  # type: ignore[union-attr]
 
 
 def exact(names: Iterable[str]) -> str:
@@ -299,13 +305,17 @@ def emit(model: Model) -> dict[str, str]:
         if bases:
             operator_tables.append({"user": exact([OPERATOR]), "catalog": exact([build_catalog(d)]), "schema": exact(bases), "privileges": ["SELECT"]})
     run_records: list[dict[str, Any]] = []
-    rr_domain, rr_schema, rr_table = _RUN_RECORD
-    if rr_domain in {fence(d) for d in domains}:
+    owned_schemas: set[tuple[str, str]] = set()
+    for rr_domain, rr_schema, rr_table in _PLATFORM:
+        if rr_domain not in {fence(d) for d in domains}:
+            continue
         reach(f"{rr_domain}_build", "svc.runs", "all")
         reach(rr_domain, "svc.catalog", "read-only")
         where = {"schema": exact([rr_schema]), "table": exact([rr_table])}
-        schemas.append({"user": exact([OPERATOR]), "catalog": exact([f"{rr_domain}_build"]), "schema": exact([rr_schema]), "owner": True})
-        run_records = [
+        if (rr_domain, rr_schema) not in owned_schemas:
+            owned_schemas.add((rr_domain, rr_schema))
+            schemas.append({"user": exact([OPERATOR]), "catalog": exact([f"{rr_domain}_build"]), "schema": exact([rr_schema]), "owner": True})
+        run_records += [
             {"user": exact([OPERATOR]), "catalog": exact([f"{rr_domain}_build"]), **where, "privileges": ["SELECT", "OWNERSHIP"]},
             {"user": exact(["svc.runs"]), "catalog": exact([f"{rr_domain}_build"]), **where, "privileges": ["SELECT", "INSERT"]},
             {"user": exact(["svc.catalog"]), "catalog": exact([rr_domain]), **where, "privileges": ["SELECT"]}]

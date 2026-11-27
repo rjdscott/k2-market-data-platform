@@ -132,7 +132,7 @@ def ddl_path(engine: DdlEngine, warehouse: str, namespace: str, table: str) -> s
     by S15 and applied by deploy (S19) when `needs.ddl` names `<warehouse>.<namespace>.<table>`.
     spark: tables in warehouse k2 (landing_files, audit_checks, landing, bronze_*), whose
     Trino catalog is read-only; trino: platform tables, through `<domain>_build` (the run
-    records, copied from RUN_RECORD_SQL). dbt builds its own tables; views are VIEWS."""
+    records and the holds, each copied from its file in PLATFORM_SQL). dbt builds its own tables; views are VIEWS."""
     return f"compiled/lake/ddl/{engine}/{warehouse}.{namespace}.{table}.sql"
 
 
@@ -263,6 +263,12 @@ KAFKA_SUMMARY_KEYS = {
 }
 DBT_PROJECT = "k2"  # the compiled dbt project's name (S17), so node ids are model.k2.<name>
 RUN_RECORD_SQL = REPO / "platform" / "runs" / "run_record.sql"  # S15 emits it as ddl_path("trino", ...)
+HOLDS_SQL = REPO / "platform" / "runs" / "holds.sql"  # I-7: the operator hold and the rebuild and restore locks
+# The platform's own Trino tables, each a frozen CREATE TABLE in one file, all in the run records'
+# namespace of the governance build catalog: emit/lake.py copies each byte for byte (S15) and
+# emit/trino_rules.py gives each the same three rules (svc.platform creates, svc.runs appends,
+# svc.catalog reads).
+PLATFORM_SQL = (RUN_RECORD_SQL, HOLDS_SQL)
 
 # Principals matched by pattern in Trino's rules and resource groups (A8, ADR-061, the gate):
 # - pipeline principals run in resource group `pipeline` and alone may set STATISTICS_PROPERTY,
@@ -314,8 +320,9 @@ TEMPLATE = r"^(?:[^{}]|\{\{ds\}\})*$"
 
 # A product's fence names lake namespaces; these are the old layer namespaces and the
 # platform's own (A5).
-# `run_records` holds the run-record table (platform/runs/run_record.sql): a product whose fence
-# took that namespace would own the platform's run history (review of S15, H1).
+# `run_records` holds the platform's tables (model.PLATFORM_SQL: the run record and the holds): a
+# product whose fence took that namespace would own the platform's run history and its holds
+# (review of S15, H1). A product or table named `holds` takes no platform namespace, so is free.
 RESERVED_PRODUCT_NAMES = frozenset({"raw", "bronze", "silver", "gold", "audit", "scratch", "dq", "runs", "run_records"})
 # A domain's fence is its reader catalog and warehouse, and <fence>_build its writer
 # catalog; its name is also a directory beside contracts/access/ and contracts/schema/. A Trino

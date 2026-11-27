@@ -32,7 +32,8 @@
       "namespaces": [
         "currency_master",
         "ecb_fx_rates",
-        "kraken_instruments"
+        "kraken_instruments",
+        "kraken_trades"
       ],
       "remoteSigningEnabled": false
     },

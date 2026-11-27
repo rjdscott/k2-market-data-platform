@@ -158,6 +158,44 @@ def test_the_repository_set_has_the_run_record_rules() -> None:
         {"user": "svc\\.catalog", "catalog": "governance", "schema": "run_records", "table": "run_record", "privileges": ["SELECT"]}]
 
 
+def _first(rules: dict[str, Any], user: str, relation: str) -> list[str]:
+    """The privileges Trino gives `user` on `relation`: the first table rule matching all four
+    names decides; a field a rule leaves out matches any name; no rule, none."""
+    names = dict(zip(("catalog", "schema", "table"), relation.split("."), strict=True), user=user)
+    for r in rules["tables"]:
+        if "user" in r and all(re.fullmatch(r.get(k, ".*"), v) for k, v in names.items()):
+            return r["privileges"]
+    return []
+
+
+def test_the_holds_are_svc_runs_to_append_svc_catalog_to_read_and_nobody_elses() -> None:
+    # I-7: svc.platform creates the table (OWNERSHIP) and deploy reads it; svc.runs appends and
+    # reads, for make hold and a DAG's resolve; svc.catalog reads it for the page. No DELETE or
+    # UPDATE for anyone, so a hold is ended only by a release row; no group rule reaches it.
+    m = loaded("repository")
+    rules, _ = emitted(m)
+    holds = [r for r in rules["tables"] if r.get("table") == "holds"]
+    assert holds == [
+        {"user": "svc\\.platform", "catalog": "governance_build", "schema": "run_records", "table": "holds", "privileges": ["SELECT", "OWNERSHIP"]},
+        {"user": "svc\\.runs", "catalog": "governance_build", "schema": "run_records", "table": "holds", "privileges": ["SELECT", "INSERT"]},
+        {"user": "svc\\.catalog", "catalog": "governance", "schema": "run_records", "table": "holds", "privileges": ["SELECT"]}]
+    want = {("svc.platform", "governance_build"): ["SELECT", "OWNERSHIP"], ("svc.runs", "governance_build"): ["SELECT", "INSERT"],
+            ("svc.catalog", "governance"): ["SELECT"]}
+    users = {*trino_rules.known_principals(m), "svc.api", "svc.runsx", "svcXruns", "p.stranger"}
+    assert {"svc.runs", "svc.catalog", "svc.platform", "dbt_quality_results", "pub_access_canary"} <= users
+    for user in sorted(users):
+        for catalog in ("governance_build", "governance"):
+            assert _first(rules, user, f"{catalog}.run_records.holds") == want.get((user, catalog), []), (user, catalog)
+    assert not [r for r in rules["tables"] if "group" in r and re.fullmatch(r.get("table", ".*"), "holds")]
+    # The writer's catalog access is what INSERT needs; svc.catalog's is read-only.
+    access = {(r["catalog"], r["allow"]): unescape(r["user"]) for r in rules["catalogs"] if "user" in r}
+    assert "svc.runs" in access[("governance_build", "all")] and "svc.catalog" in access[("governance", "read-only")]
+    # Without the governance domain, neither platform table gets a rule.
+    gone, _ = emitted(dataclasses.replace(m, domains=tuple(d for d in m.domains if d.name != "governance"),
+                                          products=tuple(p for p in m.products if p.domain != "governance")))
+    assert not [r for r in gone["tables"] if r.get("table") in ("holds", "run_record")]
+
+
 def _relations(rules: list[dict[str, Any]]) -> set[str]:
     return {f"{r['catalog']}.{r['schema']}.{r['table']}" for r in rules}
 
@@ -170,7 +208,7 @@ def test_the_quality_builder_alone_reads_every_writers_results_and_svc_catalog_i
     assert len(want) == 5 and _relations(results) == want and len(results) == len(want)
     assert {r["user"] for r in results} == {"dbt_quality_results"} and all(r["privileges"] == ["SELECT"] for r in results)
     catalog = [r for r in rules["tables"] if r.get("user") == "svc\\.catalog"]
-    assert _relations(catalog) == {"governance.run_records.run_record", "governance.quality_results.test_results"}
+    assert _relations(catalog) == {"governance.run_records.run_record", "governance.run_records.holds", "governance.quality_results.test_results"}
     assert all(r["privileges"] == ["SELECT"] for r in catalog)
     # A retired writer drops out; without the quality product, nobody reads any results table.
     retired = dataclasses.replace(m, products=tuple(dataclasses.replace(p, status="retired") if p.name == "access-canary" else p
@@ -297,7 +335,7 @@ def unescape(pattern: str) -> list[str]:
 def universe(m: Model) -> set[str]:
     """Every name a rule could be asked about, and near misses of each: an extension, a prefix, a
     `.` swapped for `x`, every `$` metadata table."""
-    names = {"lake", "system", "runtime", "metadata", "jdbc", "information_schema", "run_records", "run_record",
+    names = {"lake", "system", "runtime", "metadata", "jdbc", "information_schema", "run_records", "run_record", "holds",
              "svc.platform", "svc.api", "svc.runs", "svc.catalog", model.canary_user(m.provenance.set_sha256)}
     names |= set(trino_rules.known_principals(m)) | {p.id for p in m.principals}
     for d in m.domains:
