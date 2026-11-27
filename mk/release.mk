@@ -38,5 +38,5 @@ deploy-rehearsal:  ## [KEEP=1] [CUTOVER=1] [FAST=1] Every deploy claim on a thro
 	@uv run --project platform/k2gen --locked -q --with bcrypt==5.0.0 python scripts/verify/deploy_rehearsal.py
 
 .PHONY: spine-e2e
-spine-e2e:  ## [KEEP=1] [FULL=1] The release and rules spine end to end from a scratch clone of the current tree: a release, access-verify, test-access, the rules suite with C1 and identity on one lake, the deploy rehearsal (FAST=1 unless FULL=1, which runs before a tag); one line per stage (scripts/verify/spine-e2e.sh)
+spine-e2e:  ## [KEEP=1] [FULL=1] The release and rules spine end to end from a scratch clone of the current tree: a release, access-verify, test-access, the rules suite with C1 and identity on one lake, the run path of calendars and ECB on its own lake (scripts/verify/run-path.sh), the deploy rehearsal (FAST=1 unless FULL=1, which runs before a tag); one line per stage (scripts/verify/spine-e2e.sh)
 	@bash scripts/verify/spine-e2e.sh
