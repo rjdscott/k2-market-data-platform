@@ -6,8 +6,8 @@ compose file. The checks library runs first, on the set and the previous release
 made: compiling never depends on `k2gen check` having been run, and nothing skips it. Every file
 is made in memory first: documents/ (the set, as docset.write writes it: each document at its
 path and provenance.json), provenance.json, model.RELEASE_COMPOSE (the compose file, byte for
-byte) and every emitter's files through k2gen.emit.run (a stub emitter, or two emitters writing
-one path, is an error). Every emitted file
+byte), the run code under platform/ (run_code: model.PLATFORM_CODE, A1) and every emitter's files
+through k2gen.emit.run (a stub emitter, or two emitters writing one path, is an error). Every emitted file
 with a schema (model.SCHEMAS) is validated against it, then manifest.json, whose `files` hash
 every other file and whose `needs` follow model.need_of against `previous`. Only then is
 <out_root>/.<id>.tmp/ written, made read-only and renamed to <out_root>/<id>/ in one step.
@@ -20,6 +20,7 @@ never rewritten: compiling its set again finds it, verifies it and reports it.
 import hashlib
 import json
 import os
+import re
 import shutil
 import sys
 from collections.abc import Mapping
@@ -46,6 +47,19 @@ EMITTED_SCHEMAS = {
     model.pipeline_path("*"): "pipeline",
     model.catalog_path("*"): "catalog-product",
 }
+
+
+# Never run code, under any root of model.PLATFORM_CODE: a test, its fixtures and conftest.py, a cache.
+NOT_RUN_CODE = re.compile(r"(^|/)(tests|__pycache__)/|(^|/)(test_[^/]*|[^/]*_test\.[^/]*|conftest\.py)$")
+
+
+def run_code(documents: Mapping[str, bytes]) -> dict[str, bytes]:
+    """The release's platform/ tree (A1): each document under a root of model.PLATFORM_CODE with one
+    of that root's suffixes, at model.PLATFORM_DIR/<its path>, byte for byte. A root the set lacks
+    gives nothing."""
+    return {f"{model.PLATFORM_DIR}/{path}": data for path, data in documents.items()
+            if any(path.startswith(root) and path.endswith(suffixes) for root, (suffixes, _) in model.PLATFORM_CODE.items())
+            and not NOT_RUN_CODE.search(path)}
 
 
 def _sha(data: bytes) -> str:
@@ -107,8 +121,10 @@ def needs(previous: Release | None, files: Mapping[str, bytes], images: Mapping[
     return Needs(
         recreate=tuple(s for s in services if recreatable(s)),
         trino_restart=previous is None or any(kinds[p] == "trinoRestart" for p in moved),
-        # a DAG that gained, lost or reordered a task, or went: a new DAG has no run to drain
-        dag_shape_change=previous is None or any(new_dags.get(d) != t for d, t in old_dags.items()),
+        # a DAG that gained, lost or reordered a task, or went: a new DAG has no run to drain; or the
+        # DAG code moved, which decides every DAG's tasks
+        dag_shape_change=previous is None or any(new_dags.get(d) != t for d, t in old_dags.items())
+        or any(kinds[p] == "dagShapeChange" for p in moved - {model.DAGS}),
         ddl=tuple(sorted({PurePosixPath(p).name.removesuffix(".sql") for p in moved & files.keys() if kinds[p] == "ddl"})),
     )
 
@@ -137,7 +153,7 @@ def release(set_dir: Path, previous: Path | None, images: Path, out_root: Path, 
 
     files = {f"{model.DOCUMENTS_DIR}/{p}": data for p, data in docs.documents.items()}
     files |= {f"{model.DOCUMENTS_DIR}/{model.PROVENANCE}": provenance, model.PROVENANCE: provenance,
-              model.RELEASE_COMPOSE: compose.read_bytes()}
+              model.RELEASE_COMPOSE: compose.read_bytes()} | run_code(docs.documents)
     for path, text in emit.run(loaded).items():
         files[path] = text.encode()
         if kind := next((k for pattern, k in EMITTED_SCHEMAS.items() if fnmatchcase(path, pattern)), None):

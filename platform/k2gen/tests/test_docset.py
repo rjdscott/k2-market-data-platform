@@ -85,6 +85,18 @@ def test_a_root_the_tag_lacks_is_skipped(repo: Path) -> None:
     assert model.load(docs).expectations == ()
 
 
+def test_a_tag_gives_the_run_code_under_its_roots_and_nothing_beside_them(repo: Path) -> None:
+    factory, dockerfile = repo / "docker/airflow/dags/factory.py", repo / "docker/airflow/Dockerfile"
+    factory.parent.mkdir(parents=True)
+    factory.write_text("DAGS = []\n")
+    dockerfile.write_text("FROM scratch\n")
+    commit(repo, "feat: the DAG factory (#11)")
+    git(repo, "tag", "-a", "v0.4.0", "-m", "Release v0.4.0")
+    docs = docset.load("v0.4.0", repo)
+    assert docs.documents["docker/airflow/dags/factory.py"] == b"DAGS = []\n"
+    assert "docker/airflow/Dockerfile" not in docs.documents
+
+
 def test_a_tag_archived_twice_gives_identical_trees(repo: Path, tmp_path: Path) -> None:
     for out in ("a", "b"):
         assert cli.main(["docset", "--tag", "v0.1.0", "--out", str(tmp_path / out), "--repo", str(repo)]) == 0
