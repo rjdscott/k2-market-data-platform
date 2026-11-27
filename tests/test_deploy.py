@@ -117,7 +117,11 @@ if A[0] == "exec":
         print("\n".join(os.readlink(p.replace("/k2/releases", E["FAKE_ROOT"])) for p in A[3:])); sys.exit(0)
     if A[2] == "airflow":  # Airflow 3.3.2's CLI: piped -o json is one line, every value a string
         F, argv = S["airflow"], A[3:]
+        prompts = argv[:2] in (["dags", "pause"], ["dags", "unpause"]) and argv[-1:] != ["-y"]  # the real CLI would ask on a pipe
+        argv = [a for a in argv if a != "-y"]
         log("airflow", *argv)
+        if prompts:
+            sys.exit(1)
         if argv == ["dags", "list", "-o", "json"]:
             print(json.dumps([{"dag_id": d, "fileloc": "/x/factory.py", "is_paused": str(p)} for d, p in sorted(F["paused"].items())]))
         elif argv[:2] in (["dags", "pause"], ["dags", "unpause"]) and len(argv) == 3:
@@ -126,7 +130,7 @@ if A[0] == "exec":
         elif argv[:2] == ["dags", "list-runs"] and argv[3:] == ["--state", "running", "-o", "json"]:
             # a paused DAG's run stays running, its later tasks unscheduled, after its task is done
             print(json.dumps([{"dag_id": argv[2], "run_id": "scheduled__1", "state": "running"}] if argv[2] in F["busy"] else []))
-        elif argv[:2] == ["dags", "states-for-dag-run"] and argv[3:] == ["scheduled__1", "-o", "json"]:
+        elif argv[:2] == ["tasks", "states-for-dag-run"] and argv[3:] == ["scheduled__1", "-o", "json"]:
             n = F["busy"][argv[2]]  # its build runs for n more polls; -1: for ever
             F["busy"][argv[2]] = n - 1 if n > 0 else n
             print(json.dumps([{"dag_id": argv[2], "task_id": "resolve", "state": "success"},
@@ -1154,7 +1158,7 @@ sys.exit(f"fake docker: no answer for {A}")
         world.ctx.say = said.append
         assert world.deploy(r2) == 0
         runs = [[*p, "--state", "running", "-o", "json"] for p in (["dags", "list-runs", DL], ["dags", "list-runs", SR])]
-        poll = [*runs, ["dags", "states-for-dag-run", SR, "scheduled__1", "-o", "json"]]
+        poll = [*runs, ["tasks", "states-for-dag-run", SR, "scheduled__1", "-o", "json"]]
         assert world.airflow_calls() == [["dags", "list", "-o", "json"], ["dags", "pause", SR], *poll, *poll,
                                          ["dags", "unpause", SR]]  # daily_load's run is asked, its pause kept
         assert world.paused() == {SR: False, DL: True} and not (world.root / deploy.DRAIN_STATE).exists()

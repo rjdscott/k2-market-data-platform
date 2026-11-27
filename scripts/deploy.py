@@ -556,8 +556,9 @@ def drain_need(p: Plan) -> tuple[set[str] | None, str]:
 def airflow(ctx: Ctx, cid: str, *argv: str) -> Any:
     """One Airflow CLI command in the scheduler's container; with `-o json` last, its rows. Every argv
     deploy runs is in drain, running_tasks and resume, read from apache-airflow-core 3.3.2's
-    cli_config.py: `dags list -o json`, `dags list-runs <dag> --state running -o json`, `dags
-    states-for-dag-run <dag> <run> -o json`, `dags pause <dag>`, `dags unpause <dag>`. Piped, -o json
+    cli_config.py and checked against the 3.3.2 scheduler's own --help: `dags list -o json`, `dags
+    list-runs <dag> --state running -o json`, `tasks states-for-dag-run <dag> <run> -o json`, `dags
+    pause <dag> -y`, `dags unpause <dag> -y` (-y: never a prompt on a pipe). Piped, -o json
     prints one line, each value a string ("True", not true: AirflowConsole._normalize_data)."""
     out = run("docker", "exec", cid, "airflow", *argv).stdout
     if argv[-2:] != ("-o", "json"):
@@ -595,7 +596,7 @@ def running_tasks(ctx: Ctx, cid: str, dags: list[str]) -> list[str]:
     for d in dags:
         for r in airflow(ctx, cid, "dags", "list-runs", d, "--state", "running", "-o", "json"):
             out += [f"{d}.{t['task_id']} (run {r['run_id']}, {t['state']})"
-                    for t in airflow(ctx, cid, "dags", "states-for-dag-run", d, r["run_id"], "-o", "json") if t["state"] in BUSY]
+                    for t in airflow(ctx, cid, "tasks", "states-for-dag-run", d, r["run_id"], "-o", "json") if t["state"] in BUSY]
     return out
 
 
@@ -609,7 +610,7 @@ def resume(ctx: Ctx) -> list[str]:
         raise Failed(f"{SCHEDULER} is not running, so the DAGs deploy paused stay paused: {', '.join(held)} "
                      f"({ctx.root / DRAIN_STATE}); the next deploy or rollback that reaches done unpauses them")
     for d in held:
-        airflow(ctx, cid, "dags", "unpause", d)
+        airflow(ctx, cid, "dags", "unpause", d, "-y")
     (ctx.root / DRAIN_STATE).unlink()
     return [f"unpaused {', '.join(held)}: the DAGs deploy paused"]
 
@@ -633,7 +634,7 @@ def drain(ctx: Ctx, p: Plan, frm: str | None) -> list[str]:
     t0 = time.monotonic()
     try:
         for d in pause:
-            airflow(ctx, cid, "dags", "pause", d)
+            airflow(ctx, cid, "dags", "pause", d, "-y")
         while (busy := running_tasks(ctx, cid, dags)) and time.monotonic() - t0 < DRAIN_WAIT_S:
             time.sleep(DRAIN_POLL_S)
     except Exception:
