@@ -14,6 +14,8 @@
 # seed: scripts/lib/kafka_seed.py in compose's Spark image on this lake's network, the fixture's
 #   frames (default services/capture-rust/tests/fixtures/synthetic-kraken-20s.jsonl) produced to
 #   Kraken's raw topic as capture frames them; its one count line.
+# K2_THROWAWAY_TOPIC on up and seed names that topic instead (default market.crypto.v3.raw.kraken):
+#   scripts/verify/kafka-path.sh's fixture product reads a topic of its own.
 #
 # up: the release (a sealed <root>/<id> from `k2gen release`) is copied to <state>/releases/<id>
 #   and mounted read-only at /k2/releases, `pointers/trino -> ../<id>`, and Trino runs
@@ -166,7 +168,8 @@ spark.stop()
 PY
 }
 
-RAW_TOPIC=market.crypto.v3.raw.kraken  # docker/redpanda/init.sh's name for Kraken's raw frames, which kraken-trades reads
+# docker/redpanda/init.sh's name for Kraken's raw frames, which kraken-trades reads, unless overridden
+RAW_TOPIC=${K2_THROWAWAY_TOPIC:-market.crypto.v3.raw.kraken}
 redpanda_up() {  # K2_THROWAWAY_REDPANDA=1: one broker and its schema registry, Kraken's raw topic, RawMessage's subject
   [ "${K2_THROWAWAY_REDPANDA:-}" = 1 ] || return 0
   local rp=$P-redpanda t0=$SECONDS
