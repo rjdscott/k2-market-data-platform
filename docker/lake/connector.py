@@ -7,7 +7,15 @@ docs/development/phase-001-interfaces.md, "The fetch container" and the bronze n
     connector.py publish --release <id> --product <domain>.<product> --run-id <dagId>/<runId>
 
 A pipeline whose connector kind is kafka runs kafka.py's flows instead (task_of; its docstring):
-no spool, the topic in place of the landing bucket. Everything below is the file kind's.
+no spool, the topic in place of the landing bucket. Everything below is the https-file kind's, and
+the public-api kind's with three differences. Its fetch.json lists pages, {"fetchedAt", "pages":
+[{"page", "url", "finalUrl", "sha256", "bytes", "fetchedAt", "httpStatus", ..., "raw"}]}, and each
+page's own fields are read; a run must hold exactly one, page 1 at raw.1.json, landed as .json.
+Its batch is an observation, the bytes at the page's fetchedAt: every staged row gets fetched_at
+too, set here and never by the parser, and every check and dedupe is scoped by source_file_sha256
+and fetched_at both. So a response seen again after another (A, B, A) lands no second object, is
+logged in landing_files again at its own time, and stages its rows again; the same bytes fetched
+twice in a row never get here (fetch exits 10). A file's same bytes again stage nothing.
 
 --release defaults to $K2_RELEASE. Each reads the product's compiled/products/<product>/pipeline.json
 from /k2/releases/<id>/ and the run's spool entry /spool/<dagId>/<runId>/ that fetch.py left
@@ -76,6 +84,7 @@ SPOOL = Path("/spool")
 # holds each equal to model.py's.
 LANDING_BUCKET = "k2-landing"
 LINEAGE = "source_file_sha256"  # model.LINEAGE_COLUMN
+FETCHED_AT = "fetched_at"  # a public-api row's second lineage column, its page's fetchedAt
 AUDIT = "audit"  # model.AUDIT_BRANCH
 SUMMARY_KEYS = ("k2.run-id", "k2.release", "k2.batch-id", "k2.source-sha256")  # model.SNAPSHOT_SUMMARY_KEYS
 LANDING_COLUMNS = ("object_key", "sha256", "bytes", "url", "final_url", "http_status", "fetched_at",
@@ -128,8 +137,8 @@ class Run:
         return SPOOL / self.run_id
 
     @property
-    def raw(self) -> Path:
-        return self.entry / f"raw.{self.pipeline['connector']['format']}"
+    def api(self) -> bool:
+        return self.pipeline["connector"]["kind"] == "public-api"
 
     @property
     def bronze(self) -> dict:
@@ -183,10 +192,55 @@ class Run:
             return None
 
     def spooled(self) -> tuple[dict, bytes, str]:
-        """fetch.json, the raw bytes and their verified sha256."""
+        """The fetch record of the run's one file, its bytes and their verified sha256: fetch.json
+        and raw.<format> for a file, fetch.json's one page and raw.1.json for a public API."""
         record = json.loads(self.read("fetch.json"))
-        data = self.read(self.raw.name)
+        if self.api:
+            record = one_page(record)
+            data = self.read(record["raw"])
+        else:
+            data = self.read(f"raw.{self.pipeline['connector']['format']}")
         return record, data, verify(record, data)
+
+
+def one_page(record: dict) -> dict:
+    """The one page a public API's fetch.json lists, refused unless it is page 1 at raw.1.json."""
+    pages = record.get("pages")
+    # ponytail: one page per run, which pagination `none` fetches and all k2gen compiles today. Lift it
+    # when a product declares pagination other than `none`: land each changed page and stage each
+    # page's rows at its own fetchedAt, which needs rows.jsonl to say which page a row came from.
+    if not isinstance(pages, list) or len(pages) != 1:
+        raise Refused(f"fetch.json lists {len(pages) if isinstance(pages, list) else 'no'} pages; "
+                      "a public-api run lands exactly one")
+    [page] = pages
+    if not isinstance(page, dict) or page.get("page") != 1 or page.get("raw") != "raw.1.json":
+        raise Refused("fetch.json's one page is not page 1 spooled as raw.1.json")
+    return page
+
+
+def extension(connector: dict) -> str:
+    """The landed object's extension: a public API's pages are JSON, a file is its format."""
+    return "json" if connector["kind"] == "public-api" else connector["format"]
+
+
+def observed_at(run: Run, record: dict) -> datetime | None:
+    """A public-api batch's fetched_at, its page's fetchedAt; None for a file. Refused unless the
+    bronze key holds fetched_at: without it a response seen again after another (A, B, A) would
+    stage the first one's keys again, a duplicate."""
+    if not run.api:
+        return None
+    if FETCHED_AT not in run.bronze["key"]:
+        raise Refused(f"{run.bronze['table']} has no {FETCHED_AT} in its key, so a response seen again "
+                      "after another would repeat its first rows' keys")
+    return datetime.fromisoformat(record["fetchedAt"])
+
+
+def at_fetch(fetched_at: datetime | None) -> tuple[str, dict]:
+    """The SQL that narrows a batch's rows to one observation, `AND fetched_at = :fetched_at`, and
+    its argument; nothing for a file."""
+    if fetched_at is None:
+        return "", {}
+    return f" AND {name(FETCHED_AT)} = :fetched_at", {"fetched_at": fetched_at}
 
 
 def verify(record: dict, data: bytes) -> str:
@@ -206,7 +260,7 @@ def object_key(pipeline: dict, record: dict, sha: str) -> str:
     if landing["bucket"] != LANDING_BUCKET or not SHA256.fullmatch(sha):
         raise ValueError(f"landing {landing['bucket']!r} or sha256 {sha!r} is not the connector's")
     day = datetime.fromisoformat(record["fetchedAt"]).astimezone(timezone.utc).date().isoformat()
-    return f"{landing['prefix']}{day}/{sha}.{pipeline['connector']['format']}"
+    return f"{landing['prefix']}{day}/{sha}.{extension(pipeline['connector'])}"
 
 
 def land(store, key: str, data: bytes) -> bool:
@@ -241,26 +295,30 @@ def check_names(bronze: dict) -> list[str]:
             *(f"in_domain:{c}" for c in sorted(bronze["patterns"])), *values, *bronze["audits"]]
 
 
-def check_sql(bronze: dict, snapshot, sha: str, parsed: int) -> list[tuple[str, str, dict, int]]:
+def check_sql(bronze: dict, snapshot, sha: str, parsed: int,
+              fetched_at: datetime | None = None) -> list[tuple[str, str, dict, int]]:
     """`(check, sql, args, wanted)` for each declared check that runs in SQL: the query returns
     one count, which must equal `wanted`. Every query reads the batch's rows alone (lineage =
-    the batch's sha256) at the one snapshot audited, never the whole branch (SPIKE-RUNCOST F12).
+    the batch's sha256, and for a public API its fetched_at) at the one snapshot audited, never
+    the whole branch (SPIKE-RUNCOST F12).
     Names come from the pipeline through name() and rel(); values only as bound parameters."""
     t, lin = rel(bronze["table"]), name(LINEAGE)
     at = f"VERSION AS OF {snapshot_id(snapshot)}"
-    src = f"{t} {at} WHERE {lin} = :sha"
+    observation, args = at_fetch(fetched_at)
+    src, args = f"{t} {at} WHERE {lin} = :sha{observation}", {"sha": sha, **args}
     keys = ", ".join(name(c) for c in bronze["key"])
-    out = [("row_count", f"SELECT count(*) FROM {src}", {"sha": sha}, parsed),
+    out = [("row_count", f"SELECT count(*) FROM {src}", args, parsed),
            ("keys_unique", f"SELECT count(*) FROM (SELECT 1 FROM {src} GROUP BY {keys} HAVING count(*) > 1)",
-            {"sha": sha}, 0)]
+            args, 0)]
     for column in sorted(bronze["patterns"]):
         c = name(column)
         out.append((f"in_domain:{column}",
                     f"SELECT count(*) FROM {src} AND {c} IS NOT NULL AND NOT (CAST({c} AS STRING) RLIKE :pattern)",
-                    {"sha": sha, "pattern": f"^(?:{bronze['patterns'][column]})$"}, 0))
+                    {**args, "pattern": f"^(?:{bronze['patterns'][column]})$"}, 0))
     if "values_unchanged" in check_names(bronze):
         # ponytail: the other side, `o`, is every published row sharing a key, which Spark reads by
         # scanning the table at the snapshot; partition bronze on the key's date when it grows.
+        # A public API's key holds fetched_at (observed_at), so its rows compare within one fetch.
         on = " AND ".join(f"b.{name(c)} = o.{name(c)}" for c in business_key(bronze))
         same = " AND ".join(f"b.{name(c)} <=> o.{name(c)}" for c in bronze["values"])
         out.append(("values_unchanged",
@@ -307,11 +365,12 @@ def load(run: Run, store, lake) -> tuple[int, dict]:
     except Refused as e:
         print(f"load refused: {e}", file=sys.stderr)
         return EXIT_REFUSED, {"objectKey": uri}
-    log = run.pipeline["landing"]["log"]
-    if not lake.has_object(log, uri):  # a retry of this task logs the object once
+    log, fetched = run.pipeline["landing"]["log"], datetime.fromisoformat(record["fetchedAt"])
+    # a retry of this task logs the object once; a public API logs each observation of it
+    if not lake.has_object(log, uri, fetched if run.api else None):
         row = {"object_key": uri, "sha256": sha, "bytes": len(data), "url": record["url"],
                "final_url": record["finalUrl"], "http_status": record["httpStatus"],
-               "fetched_at": datetime.fromisoformat(record["fetchedAt"]), "landed_at": now(), "parsed": parsed,
+               "fetched_at": fetched, "landed_at": now(), "parsed": parsed,
                "batch_id": run.run_id, "run_id": run.run_id, "release_id": run.release}
         lake.append(log, [row], summary(run, sha))
     print(f"load: {'landed' if wrote else 'already landed'} {uri}, {len(data)} bytes, parsed {parsed}")
@@ -319,13 +378,19 @@ def load(run: Run, store, lake) -> tuple[int, dict]:
     if not parsed:
         print("load: the parse failed, so nothing is staged; the audit fails the batch")
         return EXIT_OK, landed
-    return stage(run, lake, lines, sha, landed)
+    try:
+        at = observed_at(run, record)
+    except Refused as e:
+        print(f"load refused: {e}; its file is landed, nothing staged", file=sys.stderr)
+        return EXIT_REFUSED, landed
+    return stage(run, lake, lines, sha, landed, at)
 
 
-def stage(run: Run, lake, lines: list[str], sha: str, result: dict) -> tuple[int, dict]:
+def stage(run: Run, lake, lines: list[str], sha: str, result: dict,
+          fetched_at: datetime | None = None) -> tuple[int, dict]:
     """Appends the batch's rows to `audit` unless another batch waits there unpublished (it
     blocks this one: bronze publishes in order), this batch is staged already (a retry), or its
-    bytes are published already (the same file again)."""
+    bytes are published already (the same file again; for a public API, at this fetched_at)."""
     table = run.bronze["table"]
     refs = lake.refs(table)
     result = {**result, "table": table, "snapshotBefore": refs.get(AUDIT)}
@@ -337,15 +402,16 @@ def stage(run: Run, lake, lines: list[str], sha: str, result: dict) -> tuple[int
         print(f"load refused: {AUDIT} of {table} holds batch {pending}, unpublished; this batch waits "
               f"behind it (its file is landed)", file=sys.stderr)
         return EXIT_REFUSED, result
-    if lake.published_rows(table, sha):
-        print(f"load: {sha} is published in {table} already; nothing staged")
+    if lake.published_rows(table, sha, fetched_at):
+        print(f"load: {sha}{'' if fetched_at is None else f' at {fetched_at}'} is published in {table} already; "
+              "nothing staged")
         return EXIT_OK, result
     if AUDIT not in refs:
         lake.create_branch(table)
     elif refs[AUDIT] != refs.get("main"):  # behind main, which maintenance moved on
         lake.reset_branch(table, refs["main"])
     if lines:
-        lake.append_rows(table, lines, sha, summary(run, sha))
+        lake.append_rows(table, lines, sha, summary(run, sha), fetched_at)
     after = lake.refs(table).get(AUDIT)
     print(f"load: {len(lines)} rows staged on {AUDIT} of {table}, snapshot {after}")
     return EXIT_OK, {**result, "rows": len(lines), "snapshotAfter": after}
@@ -353,7 +419,8 @@ def stage(run: Run, lake, lines: list[str], sha: str, result: dict) -> tuple[int
 
 def audit(run: Run, store, lake) -> tuple[int, dict]:
     """Runs every check of the batch at `audit`'s head and records each in audit_checks."""
-    _, _, sha = run.spooled()
+    record, _, sha = run.spooled()
+    fetched_at = observed_at(run, record)
     bronze, lines = run.bronze, run.lines()
     table = bronze["table"]
     refs = lake.refs(table)
@@ -362,7 +429,7 @@ def audit(run: Run, store, lake) -> tuple[int, dict]:
         print(f"audit refused: {AUDIT} of {table} holds batch {pending}, not this one", file=sys.stderr)
         return EXIT_REFUSED, {"table": table}
     head = refs.get(AUDIT, refs.get("main"))
-    results = audit_results(bronze, lines, lake, head, sha, run.audits())
+    results = audit_results(bronze, lines, lake, head, sha, run.audits(), fetched_at)
     at = now()
     rows = [{"table_name": table, "batch_id": run.run_id, "snapshot_id": head, "check_name": check,
              "passed": passed, "detail": detail[:1000], "checked_at": at, "run_id": run.run_id,
@@ -501,11 +568,13 @@ def parser_audits(declared: list[str], found: dict) -> list[tuple[str, bool, str
 
 
 def audit_results(bronze: dict, lines: list[str] | None, lake, head, sha: str,
-                  audits: dict) -> list[tuple[str, bool, str]]:
+                  audits: dict, fetched_at: datetime | None = None) -> list[tuple[str, bool, str]]:
     """`(check, passed, detail)` in check_names order; a batch that did not parse has one row."""
     if lines is None:
         return [("parses", False, "fetch could not parse the file; its bytes are landed")]
-    problems = shape_problems(lines, lake.columns(bronze["table"]))
+    # a public API's fetched_at is the connector's to set, as source_file_sha256 is, never the parser's
+    columns = [c for c in lake.columns(bronze["table"]) if fetched_at is None or c != FETCHED_AT]
+    problems = shape_problems(lines, columns)
     if problems:
         return [("parses", False, f"{len(problems)} rows: " + "; ".join(problems[:5]))]
     out = [("parses", True, f"{len(lines)} rows"),
@@ -513,7 +582,7 @@ def audit_results(bronze: dict, lines: list[str] | None, lake, head, sha: str,
     if head is None:
         out += [(c, False, f"no snapshot on {AUDIT} to check") for c in check_names(bronze)[2:]]
         return out
-    for check, text, args, wanted in check_sql(bronze, head, sha, len(lines)):
+    for check, text, args, wanted in check_sql(bronze, head, sha, len(lines), fetched_at):
         got = lake.count(check, text, args)
         detail = (f"{got} rows on {AUDIT}, the parser wrote {wanted}" if check == "row_count"
                   else f"{got} rows fail it" if got else "")
@@ -631,8 +700,10 @@ class SparkLake:
     def _sql(self, text: str, **args):
         return [tuple(r) for r in self.spark.sql(text, args or None).collect()]
 
-    def has_object(self, log: str, uri: str) -> bool:
-        return bool(self._sql(f"SELECT 1 FROM {rel(log)} WHERE `object_key` = :uri LIMIT 1", uri=uri))
+    def has_object(self, log: str, uri: str, fetched_at: datetime | None = None) -> bool:
+        """Whether `uri` is logged; with `fetched_at`, logged as that observation."""
+        at, args = at_fetch(fetched_at)
+        return bool(self._sql(f"SELECT 1 FROM {rel(log)} WHERE `object_key` = :uri{at} LIMIT 1", uri=uri, **args))
 
     def append(self, table: str, records: list, props: dict) -> None:
         schema = self.spark.table(rel(table)).schema
@@ -659,8 +730,9 @@ class SparkLake:
                           "WHERE `snapshot_id` = :s", s=snapshot_id(snapshot))
         return found[0][0] if found else None
 
-    def published_rows(self, table: str, sha: str) -> int:
-        return self._sql(f"SELECT count(*) FROM {rel(table)} WHERE {name(LINEAGE)} = :sha", sha=sha)[0][0]
+    def published_rows(self, table: str, sha: str, fetched_at: datetime | None = None) -> int:
+        at, args = at_fetch(fetched_at)
+        return self._sql(f"SELECT count(*) FROM {rel(table)} WHERE {name(LINEAGE)} = :sha{at}", sha=sha, **args)[0][0]
 
     def columns(self, table: str) -> list[str]:
         return [f.name for f in self.spark.table(rel(table)).schema.fields]
@@ -671,20 +743,24 @@ class SparkLake:
     def reset_branch(self, table: str, snapshot: int) -> None:
         self.spark.sql(f"ALTER TABLE {rel(table)} REPLACE BRANCH {name(AUDIT)} AS OF VERSION {snapshot_id(snapshot)}")
 
-    def append_rows(self, table: str, lines: list[str], sha: str, props: dict) -> None:
+    def append_rows(self, table: str, lines: list[str], sha: str, props: dict,
+                    fetched_at: datetime | None = None) -> None:
         """rows.jsonl onto `audit`, read by Spark's JSON reader against the table's own types
         (FAILFAST: a value that does not read as its column's type fails the task, nothing
-        written), with the lineage column set to the batch's sha256."""
+        written), with the lineage column set to the batch's sha256 and, for a public API,
+        fetched_at to its page's fetchedAt."""
         from pyspark.sql import functions as F
         from pyspark.sql.types import StructType
 
+        stamped = {LINEAGE: sha, **({} if fetched_at is None else {FETCHED_AT: fetched_at})}
         schema = self.spark.table(rel(table)).schema
-        body = StructType([f for f in schema.fields if f.name != LINEAGE])
+        body = StructType([f for f in schema.fields if f.name not in stamped])
         # ponytail: the rows pass through the driver, bounded by fetch's 64 MiB cap.
         frame = (self.spark.read.schema(body).option("mode", "FAILFAST")
-                 .json(self.spark.sparkContext.parallelize(lines, 1))
-                 .withColumn(LINEAGE, F.lit(sha))
-                 .select(*[F.col(f.name).cast(f.dataType) for f in schema.fields]))
+                 .json(self.spark.sparkContext.parallelize(lines, 1)))
+        for column, value in stamped.items():
+            frame = frame.withColumn(column, F.lit(value))
+        frame = frame.select(*[F.col(f.name).cast(f.dataType) for f in schema.fields])
         self._write(frame, f"{rel(table)}.{name('branch_' + AUDIT)}", props)
 
     def count(self, check: str, text: str, args: dict) -> int:
@@ -739,7 +815,7 @@ def parse_args(argv: list[str] | None, read_pipeline) -> tuple[str, Run]:
 
 
 TASKS = {"load": load, "audit": audit, "publish": publish}
-KINDS = ("https-file", "kafka")
+KINDS = ("https-file", "kafka", "public-api")
 
 
 def task_of(task: str, kind: str):
