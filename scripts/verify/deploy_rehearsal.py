@@ -4,6 +4,7 @@ on a throwaway compose project, never the live stack.
 
     make deploy-rehearsal [KEEP=1]            the deploy chain on the release-shaped stack
     make deploy-rehearsal CUTOVER=1 [KEEP=1]  the one-time cutover from today's stack shape, and back
+    make deploy-rehearsal FAST=1 [KEEP=1]     sections 1 to 3, kills after swap and recreate only: merge points
 
 Under a new directory in $HOME (Docker Desktop shares only the home directory) it builds a scratch git
 repository holding this checkout's code and the repository's own documents (contracts/,
@@ -67,6 +68,9 @@ k2tools = _load("k2tools", REPO / "docker/tools/k2tools.py")
 ps = _load("principal_secret", REPO / "scripts/principal-secret.py")
 
 PROJECT = "k2-rehearsal"
+FAST = os.environ.get("FAST") == "1" and os.environ.get("CUTOVER") != "1"  # merge points; the full chain before a tag
+FAST_SKIPS = ("4 (one image), 5 (forced mismatch, rollback with Trino stopped), 6 (masked column dropped), "
+              "7's kills after 11 of its 13 steps and inside the automatic rollback, 8 (two deploys at once), 9 (M4)")
 BASE = Path.home() / f"s19-rehearsal-{os.getpid()}"
 CLONE, ROOT, SECRETS, WORK = BASE / "repo", BASE / "releases", BASE / "secrets", BASE / "work"
 CANARY = "contracts/governance/access-canary"
@@ -552,51 +556,55 @@ def rehearse() -> int:
           f"guarded after R2: {guarded}; {shape.polls} polls, {shape.errors} errors, shapes {shape.shapes}; "
           + "; ".join(x.strip()[:120] for x in (back.stderr + again.stderr).splitlines() if "shape" in x))
 
-    # 4. the stand-in's image only
-    edit("docker-compose.yml", ALPINE_A, ALPINE_B, 1)
-    r3 = cut("v0.0.1-rehearsal.3", "R3: the stand-in's image")
-    before = started()
-    out = make("deploy", f"RELEASE={r3}", check=False)
-    after = started()
-    moved = sorted(s for s in after if before.get(s) != after[s])
-    check("R3 recreates only the stand-in", code(out) == 0 and moved == ["standin"], f"recreated {moved}")
-    img3 = after["standin"].split()[1]
+    if not FAST:
+        # 4. the stand-in's image only
+        edit("docker-compose.yml", ALPINE_A, ALPINE_B, 1)
+        r3 = cut("v0.0.1-rehearsal.3", "R3: the stand-in's image")
+        before = started()
+        out = make("deploy", f"RELEASE={r3}", check=False)
+        after = started()
+        moved = sorted(s for s in after if before.get(s) != after[s])
+        check("R3 recreates only the stand-in", code(out) == 0 and moved == ["standin"], f"recreated {moved}")
+        img3 = after["standin"].split()[1]
 
-    # 5. a forced mismatch: back to R3, images included, exit 1
-    edit("docker-compose.yml", ALPINE_B, ALPINE_A, 1)
-    r4 = cut("v0.0.1-rehearsal.4", "R4: the stand-in back, deployed with a forced mismatch")
-    out = make("deploy", f"RELEASE={r4}", fault="verify-mismatch", check=False)
-    failed = [r for r in records(40) if r["outcome"] == "failed" and r["release"] == r4]
-    check("a forced mismatch restores R3, its image too, exit 1, the reason recorded",
-          code(out) == 1 and live_release() == r3 and started()["standin"].split()[1] == img3
-          and bool(failed) and "verify-mismatch" in failed[-1].get("reason", ""), (failed[-1].get("reason", "") if failed else "")[:120])
-    out = make("rollback", check=False)
-    check("make rollback returns to R2, the stand-in on R2's image", code(out) == 0 and live_release() == r2
-          and started()["standin"].split()[1] != img3)
-    make("deploy", f"RELEASE={r3}")
-    compose("stop", "trino")  # Trino down under the live release (review R1 H2): the rollback swaps first
-    out = make("rollback", check=False)
-    check("with Trino stopped, make rollback moves the pointers and recreates first, exit 0",
-          code(out) == 0 and live_release() == r2 and "Trino does not answer" in out.stderr,
-          next((x.strip()[:160] for x in out.stderr.splitlines() if "FAILED" in x), ""))
-    make("deploy", f"RELEASE={r3}")
+        # 5. a forced mismatch: back to R3, images included, exit 1
+        edit("docker-compose.yml", ALPINE_B, ALPINE_A, 1)
+        r4 = cut("v0.0.1-rehearsal.4", "R4: the stand-in back, deployed with a forced mismatch")
+        out = make("deploy", f"RELEASE={r4}", fault="verify-mismatch", check=False)
+        failed = [r for r in records(40) if r["outcome"] == "failed" and r["release"] == r4]
+        check("a forced mismatch restores R3, its image too, exit 1, the reason recorded",
+              code(out) == 1 and live_release() == r3 and started()["standin"].split()[1] == img3
+              and bool(failed) and "verify-mismatch" in failed[-1].get("reason", ""), (failed[-1].get("reason", "") if failed else "")[:120])
+        out = make("rollback", check=False)
+        check("make rollback returns to R2, the stand-in on R2's image", code(out) == 0 and live_release() == r2
+              and started()["standin"].split()[1] != img3)
+        make("deploy", f"RELEASE={r3}")
+        compose("stop", "trino")  # Trino down under the live release (review R1 H2): the rollback swaps first
+        out = make("rollback", check=False)
+        check("with Trino stopped, make rollback moves the pointers and recreates first, exit 0",
+              code(out) == 0 and live_release() == r2 and "Trino does not answer" in out.stderr,
+              next((x.strip()[:160] for x in out.stderr.splitlines() if "FAILED" in x), ""))
+        make("deploy", f"RELEASE={r3}")
 
-    # 6. the masked column dropped, read every 50 ms throughout
-    drop_note()
-    r5 = cut("v0.0.1-rehearsal.5", "R5: note dropped from the canary, its mask with it; the stand-in on A")
-    poller = Poller()
-    poller.start()
-    time.sleep(1)
-    out = make("deploy", f"RELEASE={r5}", check=False)
-    time.sleep(1)
-    cols = [c[0] for c in q("p.canary-full", f"SELECT * FROM {VIEW}")["columns"]]
-    check("R5 deploys and the view no longer has note", code(out) == 0 and "note" not in cols, f"columns {cols}")
-    check("R5: the delayed reader never saw a note", not poller.leaks and poller.polls > 20,
-          f"{poller.polls} polls, {poller.errors} errors, shapes {poller.shapes}")
+        # 6. the masked column dropped, read every 50 ms throughout
+        drop_note()
+        r5 = cut("v0.0.1-rehearsal.5", "R5: note dropped from the canary, its mask with it; the stand-in on A")
+        poller = Poller()
+        poller.start()
+        time.sleep(1)
+        out = make("deploy", f"RELEASE={r5}", check=False)
+        time.sleep(1)
+        cols = [c[0] for c in q("p.canary-full", f"SELECT * FROM {VIEW}")["columns"]]
+        check("R5 deploys and the view no longer has note", code(out) == 0 and "note" not in cols, f"columns {cols}")
+        check("R5: the delayed reader never saw a note", not poller.leaks and poller.polls > 20,
+              f"{poller.polls} polls, {poller.errors} errors, shapes {poller.shapes}")
 
     # 7. a SIGKILL after each step, then a rerun, alternating R3 and R5, the reader still polling
     steps = ("preflight", "images", "plan", "ddl", "views-narrow", "canary", "swap", "recreate", "rules-loaded",
              "ddl-late", "views-widen", "verify", "done")
+    if FAST:  # no R3 to R5, R2 live: two kills, back to R1 (the old view shape) and forward, a reader polling
+        steps, r3, r5, poller = ("swap", "recreate"), r1, r2, Poller()
+        poller.start()
     target, other, bad = r3, r5, []
     for s in steps:
         killed = make("deploy", f"RELEASE={target}", fault=f"kill:{s}", check=False)
@@ -607,36 +615,38 @@ def rehearse() -> int:
             bad.append(f"{s}: kill {code(killed)}, rerun {code(rerun)}, verify {code(verified)}")
         target, other = other, target
     check(f"a kill after each of the {len(steps)} steps, then a rerun, converges and verifies", not bad, "; ".join(bad))
-    make("deploy", f"RELEASE={target}", fault="verify-mismatch,kill:rollback-swap", check=False)
-    out = make("rollback", check=False)
-    check("a kill inside the automatic rollback, then make rollback, converges", code(out) == 0 and live_release() == other
-          and code(make("release-verify", check=False)) == 0)
+    if not FAST:
+        make("deploy", f"RELEASE={target}", fault="verify-mismatch,kill:rollback-swap", check=False)
+        out = make("rollback", check=False)
+        check("a kill inside the automatic rollback, then make rollback, converges", code(out) == 0 and live_release() == other
+              and code(make("release-verify", check=False)) == 0)
     poller.stop.set()
     poller.join()
     check("through every kill and rerun the delayed reader never saw a note", not poller.leaks,
           f"{poller.polls} polls, {poller.errors} errors, shapes {poller.shapes}")
 
-    # 8. two deploys at once
-    first = subprocess.Popen(["make", "-s", "-C", str(CLONE), "deploy", f"RELEASE={other}"], env=env(),
-                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-    time.sleep(4)
-    second = make("deploy", f"RELEASE={other}", check=False)
-    _, err = first.communicate()
-    check("two deploys at once: the second refused at the lock (exit 2), the first exits 0",
-          code(second) == 2 and "another deploy holds" in second.stderr and code(subprocess.CompletedProcess([], 0, "", err)) == 0)
+    if not FAST:
+        # 8. two deploys at once
+        first = subprocess.Popen(["make", "-s", "-C", str(CLONE), "deploy", f"RELEASE={other}"], env=env(),
+                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        time.sleep(4)
+        second = make("deploy", f"RELEASE={other}", check=False)
+        _, err = first.communicate()
+        check("two deploys at once: the second refused at the lock (exit 2), the first exits 0",
+              code(second) == 2 and "another deploy holds" in second.stderr and code(subprocess.CompletedProcess([], 0, "", err)) == 0)
 
-    # 9. the backup-set refusal (review M4) on a real table: restore, then rebuild while the table holds rows
-    edit(EVENTS, "  - property: backup\n    value: rebuild", "  - property: backup\n    value: restore")
-    bump("3.0.0", "3.0.1")
-    r6 = cut("v0.0.1-rehearsal.6", "R6: the canary's events kept by restore")
-    out6 = make("deploy", f"RELEASE={r6}", check=False)
-    edit(EVENTS, "  - property: backup\n    value: restore", "  - property: backup\n    value: rebuild")
-    bump("3.0.1", "3.0.2")
-    r7 = cut("v0.0.1-rehearsal.7", "R7: back to rebuild while the table still holds its rows")
-    out7 = make("deploy", f"RELEASE={r7}", check=False)
-    check("M4: a release dropping a restore entry while the table holds rows is refused, naming make drop",
-          code(out6) == 0 and code(out7) == 2 and "make drop TARGET" in out7.stderr and live_release() == r6,
-          next((x.strip()[:220] for x in out7.stderr.splitlines() if "REFUSED" in x), ""))
+        # 9. the backup-set refusal (review M4) on a real table: restore, then rebuild while the table holds rows
+        edit(EVENTS, "  - property: backup\n    value: rebuild", "  - property: backup\n    value: restore")
+        bump("3.0.0", "3.0.1")
+        r6 = cut("v0.0.1-rehearsal.6", "R6: the canary's events kept by restore")
+        out6 = make("deploy", f"RELEASE={r6}", check=False)
+        edit(EVENTS, "  - property: backup\n    value: restore", "  - property: backup\n    value: rebuild")
+        bump("3.0.1", "3.0.2")
+        r7 = cut("v0.0.1-rehearsal.7", "R7: back to rebuild while the table still holds its rows")
+        out7 = make("deploy", f"RELEASE={r7}", check=False)
+        check("M4: a release dropping a restore entry while the table holds rows is refused, naming make drop",
+              code(out6) == 0 and code(out7) == 2 and "make drop TARGET" in out7.stderr and live_release() == r6,
+              next((x.strip()[:220] for x in out7.stderr.splitlines() if "REFUSED" in x), ""))
     check("the stand-in capture was never restarted by any of it", started()["capture-binance"] == capture)
     return summary()
 
@@ -656,6 +666,8 @@ def drop_note() -> None:
 
 def summary() -> int:
     print("\n".join(f"{'PASS' if ok else 'FAIL'}  {name}  {detail}" for name, ok, detail in RESULTS))
+    if FAST:
+        print(f"rehearsal: FAST=1: skipped {FAST_SKIPS}; run the full one before a tag")
     return 0 if all(ok for _, ok, _ in RESULTS) else 1
 
 
