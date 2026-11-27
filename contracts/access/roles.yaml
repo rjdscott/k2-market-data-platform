@@ -1,11 +1,18 @@
 # The roles a product's table may offer (A10). A grant names one of them, at most one per
 # principal per product; the table's policies say what each holder sees, and Trino's rules
 # apply them on the reader view's exact name (ADR-061 condition 2).
+#
+# `within` is the restriction order, declared one pair at a time and never inferred: an output
+# may offer a role over an input that offers, instead, a role it is declared within, and is then
+# held to that role's policy on the input (checks.access, access.inherit-role). A role within
+# none is comparable only to itself. public_reader is within none: its holders may take data off
+# the platform, which an input offering full_reader alone has not agreed to.
 roles:
   full_reader:
     description: Every row and column the table offers.
   delayed_reader:
     description: Rows only once older than the table's delay, its masked columns as null, in its row scope if it has one.
     requires: [delay]
+    within: [full_reader]
   public_reader:
     description: What may leave the platform under the product's terms, with the table's policies for this role applied.
