@@ -289,6 +289,7 @@ def test_a_storage_key_out_of_place_fails(mutate, says):
 AIRFLOW = ("airflow-migrate", "airflow-api-server", "airflow-scheduler", "airflow-dag-processor")
 DAGS_FOLDER = "/k2/releases/pointers/airflow/platform/docker/airflow/dags"  # factory.py's POINTER + the release's platform/
 RULES = "/k2/releases/pointers/prometheus/platform/docker/prometheus/rules/*.yml"
+COMPILED_RULES = "/k2/releases/pointers/prometheus/compiled/prometheus/*.yml"  # k2gen emit/alerts.py (I-5)
 # Where a release before phase 002 mounts the checkout's rules (its compose); prometheus.yml is the
 # checkout's under every release, so after a rollback to one this glob is the only one that matches.
 OLD_RULES = "/etc/prometheus/rules/*.yml"
@@ -328,9 +329,9 @@ def run_path_problems(doc: dict, prometheus: dict, spark_dockerfile: str, fetch_
     if OWNER.findall(spark_dockerfile) != OWNER.findall(fetch_dockerfile) or len(OWNER.findall(fetch_dockerfile)) != 1:
         out.append(f"/spool's owner in the Spark image {OWNER.findall(spark_dockerfile)} is not fetch's "
                    f"{OWNER.findall(fetch_dockerfile)}: the first to mount the empty volume decides its owner")
-    if prometheus.get("rule_files") != [RULES, OLD_RULES]:
+    if prometheus.get("rule_files") != [RULES, COMPILED_RULES, OLD_RULES]:
         out.append(f"prometheus.yml reads rules from {prometheus.get('rule_files')}, not the pointer's {RULES} "
-                   f"then a pre-phase-002 release's {OLD_RULES}")
+                   f"and {COMPILED_RULES}, then a pre-phase-002 release's {OLD_RULES}")
     # Nothing at the old path under this compose, so the two globs never both match: no group loads twice.
     targets = [v.get("target", "") if isinstance(v, dict) else str(v).split(":")[1] for v in services["prometheus"].get("volumes") or []]
     if any("docker/prometheus/rules" in str(v) for v in services["prometheus"].get("volumes") or []) \
@@ -379,7 +380,8 @@ def test_a_run_path_off_the_pointers_fails(mutate, says):
     assert any(says in p for p in found), found
 
 
-@pytest.mark.parametrize("rules", [["rules/*.yml"], [RULES], [OLD_RULES], [OLD_RULES, RULES], [RULES, "rules/*.yml"], None])
+@pytest.mark.parametrize("rules", [["rules/*.yml"], [RULES], [OLD_RULES], [OLD_RULES, RULES], [RULES, "rules/*.yml"],
+                                   [RULES, OLD_RULES], [COMPILED_RULES, RULES, OLD_RULES], None])
 def test_prometheus_rules_off_the_pointer_fail(rules):
     found = run_path_problems(COMPOSE, {**PROMETHEUS, "rule_files": rules}, *DOCKERFILES)
     assert any("not the pointer's" in p for p in found), found

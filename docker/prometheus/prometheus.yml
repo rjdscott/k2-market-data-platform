@@ -26,14 +26,21 @@ alerting:
 # and is no error: Prometheus starts, and alerts begin at the first deploy. promtool and
 # `make check-alerts` read the same files at docker/prometheus/rules/ in the checkout.
 #
-# The second glob is for a rollback to a release from before phase 002: this file is the
+# The last glob is for a rollback to a release from before phase 002: this file is the
 # checkout's under every release, and such a release has no platform/ rules but mounts the
 # checkout's docker/prometheus/rules at /etc/prometheus/rules (its compose). Without it that
 # Prometheus would start healthy with no rule and say nothing. This phase's compose mounts
-# nothing there (tests/test_catalog_fence_compose.py), so the two never both match and no
-# group loads twice.
+# nothing there (tests/test_catalog_fence_compose.py), so it and the first never both match and
+# no group loads twice.
+#
+# The middle glob is the rules k2gen compiles from the release's contracts (I-5, emit/alerts.py): per
+# product, a failed run, no successful run, a slow run. A release compiled before them has no
+# compiled/prometheus/, which matches nothing. This file is a file bind mount, so a deploy that
+# brings a change to it needs `docker compose up -d --force-recreate --no-deps prometheus`: the
+# swap's SIGHUP rereads the inode the container started with.
 rule_files:
   - "/k2/releases/pointers/prometheus/platform/docker/prometheus/rules/*.yml"
+  - "/k2/releases/pointers/prometheus/compiled/prometheus/*.yml"
   - "/etc/prometheus/rules/*.yml"
 
 # Scrape configurations
