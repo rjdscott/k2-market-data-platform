@@ -27,7 +27,10 @@ customProperties:
       kind: kafka
       brokers: "redpanda:9092"
       registry: "http://redpanda:8081"
-      topic: market.crypto.v3.raw.kraken
+      # its own topic, never a capture topic (one product reads each: connectors.topic-claimed-twice);
+      # kafka-path.sh declares it under market-capture in its scratch clone's contracts/domains.yaml
+      # alone, and the throwaway's Redpanda creates and seeds it (K2_THROWAWAY_TOPIC)
+      topic: fixture.kafka-path.raw
       envelope:
         format: avro-confluent
         contract: market-capture.kafka-fixture.bronze_frames  # stands in for raw_message (W2-1); nothing resolves it

@@ -5,7 +5,8 @@
 # WRAPPER, by docker exec into one long-lived Spark container), on the synthetic fixture product
 # market-capture.kafka-fixture (platform/k2gen/tests/fixtures/kafka-fixture/) in a release of this
 # tree compiled here. Its pipeline.json is k2gen's own (W1-2's emitter); the connector reads
-# `connector`, `landing`, `bronze[0].table` and `checks` of it. Frames: scripts/lib/kafka_seed.py's,
+# `connector`, `landing`, `bronze[0].table` and `checks` of it. Its topic is its own, declared for the
+# scratch clone only (KTOPIC below). Frames: scripts/lib/kafka_seed.py's,
 # from services/capture-rust/tests/fixtures/synthetic-kraken-20s.jsonl (1185 frames, 3 trades),
 # and its 20 heartbeat lines alone for a batch of control frames.
 #
@@ -78,17 +79,27 @@ rp_start kafka-path "${1:-}" "$N"
 FX=platform/k2gen/tests/fixtures/kafka-fixture
 KF=market-capture.kafka-fixture DAG=kafka_fixture
 PROBE=scripts/lib/kafka_path_probe.py
+# The fixture's own topic, as its product declares it: one product reads each topic
+# (connectors.topic-claimed-twice), so it never reads a capture topic. Declared under market-capture
+# in the scratch clone's contracts/domains.yaml only, and the throwaway's Redpanda creates and seeds it.
+KTOPIC=$(sed -n 's/^ *topic: *//p' "$FX/kafka-fixture/product.odps.yaml")
+[[ "$KTOPIC" =~ ^[A-Za-z0-9._-]+$ ]] || die "the fixture product declares no one topic ($KTOPIC)"
 rp_fail_release "$(cat <<PY
-import shutil, sys
+import re, shutil, sys
 from pathlib import Path
 clone, fx = Path(sys.argv[1]), Path("$REPO/$FX")
 shutil.copytree(fx / "kafka-fixture", clone / "contracts/market-capture/kafka-fixture")
 with open(clone / "tests/access/expectations.yaml", "a") as f:
     f.write((fx / "expectations.yaml").read_text())
+domains = clone / "contracts/domains.yaml"
+text = domains.read_text()
+m = re.search(r"^  market-capture:\n(?:    .*\n|\n)*?    topics:\n", text, re.M)  # its topics list, inside its block
+assert m and "$KTOPIC" not in text, "contracts/domains.yaml: no topics list under market-capture"
+domains.write_text(text[:m.end()] + "      - $KTOPIC  # kafka-path.sh's fixture, this clone only\n" + text[m.end():])
 PY
 )" kf
 REL=$W/kf/releases/$IDF ID=$IDF IDF=
-export K2_THROWAWAY_REDPANDA=1
+export K2_THROWAWAY_REDPANDA=1 K2_THROWAWAY_TOPIC=$KTOPIC
 rp_lake
 FULL=$REPO/services/capture-rust/tests/fixtures/synthetic-kraken-20s.jsonl
 grep -F '\"channel\":\"heartbeat\"' "$FULL" > "$W/heartbeats.jsonl"  # derived at run time from the synthetic fixture, never committed
