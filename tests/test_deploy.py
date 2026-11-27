@@ -133,6 +133,14 @@ if A[0] == "exec":
             sys.exit(f"fake airflow: no such command {argv}")
         save(); sys.exit(0)
     log("exec", *A[2:4]); sys.exit(0)
+if A[:2] == ["network", "inspect"]:
+    sys.exit(0 if A[-1] in S.get("networks", {}) else 1)
+if A[:2] == ["network", "create"]:
+    labels = dict(A[i + 1].split("=", 1) for i, a in enumerate(A) if a == "--label")
+    S.setdefault("networks", {})[A[-1]] = {"driver": A[A.index("--driver") + 1], "labels": labels}
+    save(); log("network", *A[1:]); sys.exit(0)
+if A[:3] == ["compose", "version", "--short"]:
+    print("5.0.0"); sys.exit(0)
 assert A[0] == "compose", A
 files = [A[i + 1] for i, a in enumerate(A) if a == "-f"]
 pinned = json.loads(open(files[1]).read())["services"]
@@ -941,6 +949,29 @@ sys.exit(f"fake docker: no answer for {A}")
             with pytest.raises(deploy.Failed, match="k2-api serves v0.0.0-other" if says != "down" else "k2-api did not answer: .*503"):
                 deploy.verify(world.ctx, r_new, None)
         assert "k2-api" in deploy.POINTERS  # and the readlink check maps service k2-api to its pointer by name
+
+    def test_every_declared_network_exists_after_a_deploy_and_a_rollback_with_compose_labels(world: World) -> None:
+        r1 = world.release()
+        world.live(r1)
+        s = world.read()
+        s["networks"] = {"k2_k2-net": {"driver": "bridge", "labels": {}}}  # made by compose for running services
+        s["rendered"]["networks"] = {k: {"name": f"k2_{k}", "driver": "bridge", "ipam": {}} for k in ("k2-net", "k2-egress")}
+        world.write(s)
+        assert world.deploy(world.release(over=policy(60))) == 0
+        made = [e[1:] for e in world.timeline() if e[0] == "network"]
+        assert made == [["create", "--driver", "bridge", "--label", "com.docker.compose.project=k2", "--label",
+                         "com.docker.compose.network=k2-egress", "--label", "com.docker.compose.version=5.0.0", "k2_k2-egress"]]
+        assert world.read()["networks"]["k2_k2-egress"]["labels"] == {"com.docker.compose.project": "k2",
+                                                                     "com.docker.compose.network": "k2-egress",
+                                                                     "com.docker.compose.version": "5.0.0"}
+        with deploy.lock(world.root):
+            assert deploy.rollback(world.ctx) == 0
+        assert len([e for e in world.timeline() if e[0] == "network"]) == 1  # it exists: never created twice
+        s = world.read()
+        s["rendered"]["networks"]["odd"] = {"name": "k2_odd", "driver": "bridge", "internal": True}
+        world.write(s)
+        with pytest.raises(deploy.Failed, match="network odd declares"):
+            deploy.ensure_networks(world.ctx, r1)
 
     def test_a_running_service_profiled_in_both_is_recreated_not_removed(world: World) -> None:
         r1 = world.release(compose=compose_doc(), images={"clickhouse": A})

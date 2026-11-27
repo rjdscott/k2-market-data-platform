@@ -1185,6 +1185,27 @@ def verify(ctx: Ctx, target: Release, previous_canary: str | None) -> list[str]:
     return lines
 
 
+def ensure_networks(ctx: Ctx, rel: Release) -> list[str]:
+    """Every network the release's compose declares, created when missing, with the labels compose gives
+    its own (project, network key, compose's version), so a later `up` adopts it: compose makes a network
+    only for a service it starts, and fetch's k2-egress has no other member (the operator `docker run`s
+    fetch on it). Never --all-resources on `up`, which would also make the paused hot-gold volumes."""
+    out, version = [], ""
+    for key, spec in sorted((rendered(ctx, rel).get("networks") or {}).items()):
+        name = spec.get("name") or f"{ctx.project}_{key}"
+        if spec.get("external") or run("docker", "network", "inspect", "--format", "{{.Name}}", name, check=False).returncode == 0:
+            continue
+        if set(spec) - {"name", "driver", "ipam"} or spec.get("ipam"):
+            raise Failed(f"network {key} declares {sorted(set(spec) - {'name'})}: deploy creates only a plain one; "
+                         f"create {name} by hand as compose would")
+        version = version or run("docker", "compose", "version", "--short").stdout.strip()
+        run("docker", "network", "create", "--driver", spec.get("driver") or "bridge",
+            "--label", f"com.docker.compose.project={ctx.project}", "--label", f"com.docker.compose.network={key}",
+            "--label", f"com.docker.compose.version={version}", name)
+        out.append(f"network {name} created: no service compose starts uses it yet")
+    return out
+
+
 def api_release(ctx: Ctx, rel: Release) -> tuple[str | None, str]:
     """(the release k2-api says it serves, or None; where it asked or why not): GET /v1/release on the
     port the release's rendered compose publishes, a few tries while a recreated k2-api starts."""
@@ -1409,7 +1430,7 @@ def converge(ctx: Ctx, p: Plan, frm: str | None, prefix: str = "", trino_down: b
             [f"{s} stopped and removed: behind profile {','.join(target_svc[s]['profiles'])} in {t.id}"])
 
     def recreate() -> list[str]:
-        out = []
+        out = ensure_networks(ctx, t)  # before verify: the fence's fetch rows dial from k2-egress
         for s in p.recreate:
             run(*compose(ctx, t, "up", "-d", "--no-deps", "--no-build", "--pull", "never",
                          *(["--force-recreate"] if s == "trino" else []), s), env=compose_env(ctx))
