@@ -26,16 +26,22 @@ docs/research/2026-11-26-release-spine-spikes.md. In order:
 5. on a failure, every output whose main moved is restored as the builder, `rolled_back`.
 6. on a pass, as the publisher: each moved main must be this dbt invocation's own commit
    (built_here(): committed by a query that carried this run's client tag, or that dbt reported),
-   then views narrowed, one compare-and-set tag commit, views widened, `audited` (publish()). A
-   pass with warn-severity test failures publishes degraded: each `audited` row's detail is
-   {"degraded": true, "warned": [<test unique_id>, ...]}, as k2runs.state reads it (warned()).
+   then each incremental output compacted where it needs it (compact(): ALTER TABLE ... EXECUTE
+   optimize as the builder, under this run's client tag; the one snapshot accepted on top of the
+   tested one is that statement's `replace` of it reading as many rows, compaction_guard(); a
+   failed optimize publishes the tested snapshot), views narrowed, one compare-and-set tag
+   commit, views widened, `audited` (publish()). A pass with warn-severity test failures
+   publishes degraded: each `audited` row's detail is {"degraded": true, "warned": [<test
+   unique_id>, ...]}, as k2runs.state reads it (warned()); a compaction adds "compacted":
+   {"files": [before, after], "deleteFiles": [before, after]} or "compactionSkipped": <why>.
 
 Exits: 0 passed and published; 1 tests failed, outputs restored; 2 build error, outputs restored;
-3 a restore, the tag commit, the view sync, the reconcile or the drift check failed (pages); 4 a
-required input was never tested. The last stdout line, on every path, is the XCom
-{"exit": n, "expire": [{"table": <relation>, "ids": [...]}]}: the failed build's snapshots, which
-the Spark `expire` task removes by id; a degraded publish adds "degraded": true and "warned".
-dbt's own output goes to stderr.
+3 a restore, the tag commit, the view sync, the reconcile or the drift check failed, or a write
+after the tests (pages); 4 a required input was never tested. The last stdout line, on every
+path, is the XCom {"exit": n, "expire": [{"table": <relation>, "ids": [...]}]}: the failed build's
+snapshots, which the Spark `expire` task removes by id; a degraded publish adds "degraded": true
+and "warned", a compaction "compacted": [{"table", "files", "deleteFiles"}] or
+"compactionSkipped": [{"table", "why"}]. dbt's own output goes to stderr.
 
 Trust: identifiers come from the compiled release only, each part held to k2gen's IDENTIFIER and
 quoted by k2gen's quote_relation; snapshot ids pass snap() (an int, never a string spliced in);
@@ -102,6 +108,17 @@ INVOCATION = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-
 QUERY_ID = re.compile(r"[0-9]{8}_[0-9]{6}_[0-9]{5}_[a-z0-9]{5}")  # Trino's QueryId
 CLIENT_TAG = "K2_DBT_CLIENT_TAG"  # dbt/profiles.yml's client_tags: every statement of the run carries it
 ORPHAN_WAIT = 60  # seconds a killed query has to end (its commit or abort) before reconcile reads
+# Compaction of an incremental output, after its tests (compact()), by docker/lake/maintain.py's
+# rule for a Kafka product: a data file under SMALL_FILE_BYTES is small, and a table is compacted
+# once it holds COMPACT_SMALL_FILES small files beyond one per partition or COMPACT_DELETE_FILES
+# delete files. A `table` model is rebuilt whole by every build and never compacted.
+SMALL_FILE_BYTES = 64 * 1024 * 1024
+# ponytail: 48 is four hours of five-minute builds at one new file each (maintain.py's); 12 is an
+# hour of five-minute builds that each leave one delete file, the F13 ceiling per build
+# (docs/benchmarks/2026-11-26-product-run-cost.md), so most builds skip. Tune both from the soak's
+# files and delete files per build and the optimize's time in the chain (W0-12).
+COMPACT_SMALL_FILES, COMPACT_DELETE_FILES = 48, 12
+COMPACTION_WHY_CHARS = 80  # a skip's reason, cut: with WARNED_MAX names beside it the detail stays under 1000
 
 
 class Refused(Exception):
@@ -173,6 +190,7 @@ class Output:
     view: k2.View  # its reader view, compiled/trino/views.json
     partitioning: tuple[str, ...] = ()  # the contract's, compiled/lake/contract_schemas.json, as dbt sets it
     sort: tuple[str, ...] = ()
+    incremental: bool = False  # its model's config(materialized='incremental'): the only kind compacted
 
 
 @dataclass(frozen=True)
@@ -202,10 +220,12 @@ class Ctx:
 
 
 def ctx_from(release: str, release_path: Path, product: str, run_id: str, pipeline: dict[str, Any],
-             views: list[dict[str, Any]], tables: dict[str, tuple[str, str, str]], schemas: dict[str, Any]) -> Ctx:
+             views: list[dict[str, Any]], tables: dict[str, tuple[str, str, str]], schemas: dict[str, Any],
+             incremental: frozenset[str] = frozenset()) -> Ctx:
     """The run's context from the release's compiled pipeline.json, views.json and
     contract_schemas.json; `tables` maps each input's contract id to (input_relation, tested_ref,
-    product status), from k2gen's model."""
+    product status), from k2gen's model; `incremental` names the product's tables whose model is
+    incremental."""
     if not RELEASE_ID.fullmatch(release) or not PRODUCT_ID.fullmatch(product):
         raise Refused(f"release {release!r} or product {product!r} is not an id")
     m = RUN_ID.fullmatch(run_id)
@@ -232,7 +252,7 @@ def ctx_from(release: str, release_path: Path, product: str, run_id: str, pipeli
         schema = schemas.get(f"{k2.warehouse(domain)}.{ns}.{table}")
         if schema is None:
             raise Refused(f"{product}: output {rel} has no entry in {k2.CONTRACT_SCHEMAS}")
-        outputs.append(Output(rel, view, tuple(schema.get("partitioning", ())), tuple(schema.get("sort", ()))))
+        outputs.append(Output(rel, view, tuple(schema.get("partitioning", ())), tuple(schema.get("sort", ())), table in incremental))
     if not outputs:
         raise Refused(f"{product}: its build names no output")
     inputs = []
@@ -264,7 +284,9 @@ def load(release: str, product: str, run_id: str) -> Ctx:
     status = {p.id: p.status for p in m.products}
     tables = {t.contract_id: (k2.input_relation(t), k2.tested_ref(t), status[k2.product_id(p.domain, p.name)])
               for p in m.products for t in p.tables if t.build.kind in k2.LAKE_BUILDS}
-    return ctx_from(release, path, product, run_id, pipeline, views, tables, schemas)
+    incremental = frozenset(t.name for p in m.products if k2.product_id(p.domain, p.name) == product for t in p.tables
+                            if t.build.kind == "dbt" and k2.model_config(p.models.get(f"{t.name}.sql", "")).get("materialized") == "incremental")
+    return ctx_from(release, path, product, run_id, pipeline, views, tables, schemas, incremental)
 
 
 # ---- the core: decisions from observed state; `io` does every read and write --------------------
@@ -562,12 +584,93 @@ def tag_change(o: Output, tested: int, previous: int | None) -> dict[str, Any]:
             "updates": [{"action": "set-snapshot-ref", "ref-name": k2.AUDITED_TAG, "type": "tag", "snapshot-id": snap(tested)}]}
 
 
+def needs_compaction(files: dict[str, int]) -> str | None:
+    """Why an output is compacted now, from its main's `$files` (Live.files), or None to skip."""
+    beyond = files["small"] - files["partitions"]
+    if files["deletes"] >= COMPACT_DELETE_FILES or beyond >= COMPACT_SMALL_FILES:
+        return f"{files['deletes']} delete files, {beyond} small files beyond one per partition"
+    return None
+
+
+def total(meta: dict[str, Any], key: str, rel: str) -> int:
+    """One of a snapshot summary's totals (Live.snapshot), a string of digits; anything else refuses."""
+    value = meta.get(key)
+    if not (isinstance(value, str) and value.isascii() and value.isdigit()):
+        raise Refused(f"{rel}: its snapshot summary's {key} is {value!r}, not a count")
+    return int(value)
+
+
+def rows_read(meta: dict[str, Any], rel: str) -> int:
+    """The rows a snapshot reads, from its summary: total-records counts every row of its data
+    files, a row a position delete hides included, so those deletes are taken off; an equality
+    delete hides any number of rows, so a snapshot with one has no count here (Trino writes none)."""
+    if total(meta, "equality_deletes", rel):
+        raise Refused(f"{rel}: the snapshot holds equality deletes: its rows are not countable from its summary")
+    return total(meta, "records", rel) - total(meta, "position_deletes", rel)
+
+
+def compaction_guard(rel: str, tested: int, main: int, meta: dict[str, Any], tested_meta: dict[str, Any],
+                     ours: str | None) -> None:
+    """The one snapshot the wrapper accepts on top of the tested one after the tests (finding 5 of
+    the phases 004 and 005 breakdown: built_here passes any write carrying the client tag): a
+    `replace` (files rewritten, no row changed, by the Iceberg spec) whose parent is exactly the
+    tested snapshot, committed by this run's own optimize statement (`ours`, its query id, the
+    statement under this run's client tag), reading as many rows. Anything else raises Refused,
+    a write after the tests."""
+    parent, op, qid = meta.get("parent"), meta.get("operation"), meta.get("query_id")
+    if op != "replace" or parent is None or snap(parent) != tested or ours is None or qid != ours:
+        raise Refused(f"{rel}: main {main} is {op!r} on {parent} by query {qid}, not this run's compaction ({ours}) of the "
+                      f"tested snapshot {tested}: a write after its tests")
+    if (after := rows_read(meta, rel)) != (was := rows_read(tested_meta, rel)):
+        raise Refused(f"{rel}: compaction {main} reads {after} rows, the tested snapshot {tested} {was}: a write after its tests")
+
+
+def compact(io: Any, o: Output, tested: int, client: str) -> tuple[int, dict[str, Any]]:
+    """Step 6, after the tests and before the tag commit, as the builder: an incremental output
+    that needs_compaction() is compacted by one optimize under the run's client tag, so the tag
+    moves onto the compaction and the next reconcile finds main on it (a compaction after the tag
+    moved main past it, and reconcile would undo it). Returns (the snapshot the tag moves to, what
+    the run records say: {} when nothing was tried). Compaction is not correctness: an optimize
+    that fails or commits nothing publishes the tested snapshot, its reason kept; a commit that
+    compaction_guard() refuses is rolled back to the tested snapshot and refused, as any write
+    after the tests is (exit 3)."""
+    if not o.incremental:
+        return tested, {}
+    ours = failed = None
+    try:
+        why = needs_compaction(io.files(o.relation, bool(o.partitioning)))
+        if why is None:
+            return tested, {}
+        log(f"{o.relation}: {why}: compacted after its tests")
+        ours = io.optimize(o.relation, client)
+    except Exception as e:
+        failed = f"{type(e).__name__}: {e}"
+    main = heads(io, o.relation)[0]
+    if main == tested:
+        why = failed or "optimize rewrote nothing"
+        log(f"{o.relation}: compaction skipped ({why}); the tested snapshot {tested} is published")
+        return tested, {"compactionSkipped": scrub(why)[:COMPACTION_WHY_CHARS]}
+    try:
+        meta, was = io.snapshot(o.relation, main), io.snapshot(o.relation, tested)
+        compaction_guard(o.relation, tested, main, meta, was, ours)
+        done = {"files": [total(was, "data_files", o.relation), total(meta, "data_files", o.relation)],
+                "deleteFiles": [total(was, "delete_files", o.relation), total(meta, "delete_files", o.relation)]}
+    except Exception:
+        log(f"{o.relation}: main {main} is refused on top of the tested snapshot {tested}; rolled back to it")
+        restore(io, o, tested, True)
+        raise
+    log(f"{o.relation}: compacted to {main}: data files {done['files']}, delete files {done['deleteFiles']}")
+    return main, {"compacted": done}
+
+
 def publish(ctx: Ctx, io: Any, before: dict[str, dict[str, Any]], invocation: str | None,
             queries: set[str], window: tuple[datetime, datetime], warns: list[str] | None = None,
-            xcom: dict[str, Any] | None = None) -> int:
+            xcom: dict[str, Any] | None = None, client: str | None = None) -> int:
     """Step 6, as the publisher, after every test passed. With `warns` (warn-severity failures,
     warned()) each `audited` row's detail is {"degraded": true, "warned": [...]} and `xcom` gains
-    the same two keys once those rows are written; with none, both are as before.
+    the same two keys once those rows are written; with none, both are as before. With `client`,
+    this run's client tag, each incremental output is first compacted where it needs it
+    (compact()), and the tag moves onto the compaction; its row's detail and `xcom` say so.
 
     INVARIANT: at every instant each reader view (a) reads its base at the `audited` tag, and the
     tag names only a snapshot whose tests passed; (b) selects only columns that the tagged snapshot
@@ -590,8 +693,13 @@ def publish(ctx: Ctx, io: Any, before: dict[str, dict[str, Any]], invocation: st
         if main != before[o.relation]["main"]:
             built_here(o.relation, io.snapshot(o.relation, main), queries, window)
         tested[o.relation] = main
+    compaction: dict[str, dict[str, Any]] = {}
+    for o in ctx.outputs:  # after every output's checks: none is compacted for a build refused anyway
+        tested[o.relation], compaction[o.relation] = compact(io, o, tested[o.relation], client) if client else (tested[o.relation], {})
+    for o in ctx.outputs:
+        tag = before[o.relation]["tag"]
         old = io.columns(o.relation, tag) if tag is not None else None
-        new = io.columns(o.relation, main)
+        new = io.columns(o.relation, tested[o.relation])  # a compaction changes no column: the tested snapshot's
         if old == new:
             steps[o.relation] = (None, None)  # the view reads the tag by name: moving it is the publish
             continue
@@ -619,12 +727,17 @@ def publish(ctx: Ctx, io: Any, before: dict[str, dict[str, Any]], invocation: st
         if widen:
             io.sql("publisher", widen)
     degraded = {"degraded": True, "warned": list(warns)} if warns else {}
-    detail = {"detail": json.dumps(degraded, separators=(",", ":"))} if degraded else {}
     for o in ctx.outputs:
+        said = degraded | compaction[o.relation]
+        detail = {"detail": json.dumps(said, separators=(",", ":"))} if said else {}
         record(ctx, io, event="audited", table_name=o.relation, snapshot_before=before[o.relation]["tag"],
                snapshot_after=tested[o.relation], dbt_invocation_id=invocation, **detail)
     if xcom is not None:
         xcom.update(degraded)
+        if done := [{"table": r, **c["compacted"]} for r, c in compaction.items() if "compacted" in c]:
+            xcom["compacted"] = done
+        if skipped := [{"table": r, "why": c["compactionSkipped"]} for r, c in compaction.items() if "compactionSkipped" in c]:
+            xcom["compactionSkipped"] = skipped
     if deliberate:
         log(f"published, but no column was common to the old and new snapshots of {', '.join(deliberate)}: "
             "readers lost the view between the tag commit and the widen")
@@ -677,7 +790,7 @@ def run(ctx: Ctx, io: Any, xcom: dict[str, Any] | None = None) -> tuple[int, lis
             log(f"dbt build {'failed its tests' if outcome == 1 else 'failed'} (exit {code}); restoring the outputs")
             rollback(ctx, io, before, invocation, expire)
             return outcome, expire
-        return publish(ctx, io, before, invocation, reported(results) | io.tagged(tag), window, warned(results), xcom), expire
+        return publish(ctx, io, before, invocation, reported(results) | io.tagged(tag), window, warned(results), xcom, tag), expire
     except Exception as e:
         log(f"{'rollback' if outcome else 'publish'}: {type(e).__name__}: {e}")
         return 3, expire
@@ -721,12 +834,15 @@ class Live:
         self.conns: dict[str, Any] = {}
         self.catalogs: dict[str, Any] = {}
 
+    def connect(self, role: str, client_tags: list[str] | None = None) -> Any:
+        user = self.environ[self.USERS[role]]
+        return trino.dbapi.connect(host=self.environ["K2_TRINO_HOST"], port=int(self.environ["K2_TRINO_INTERNAL_PORT"]), user=user,
+                                   http_scheme="https", verify=CA, auth=trino.auth.BasicAuthentication(user, password(role)),
+                                   client_tags=client_tags)
+
     def conn(self, role: str) -> Any:
         if role not in self.conns:
-            user = self.environ[self.USERS[role]]
-            self.conns[role] = trino.dbapi.connect(
-                host=self.environ["K2_TRINO_HOST"], port=int(self.environ["K2_TRINO_INTERNAL_PORT"]), user=user,
-                http_scheme="https", verify=CA, auth=trino.auth.BasicAuthentication(user, password(role)))
+            self.conns[role] = self.connect(role)
         return self.conns[role]
 
     def query(self, role: str, sql: str, params: list[Any] | None = None) -> tuple[list[Any], list[Any]]:
@@ -791,14 +907,41 @@ class Live:
                 raise Refused(f"Trino refused {self.ctx.writer} the cancel of its own query {query_id}: HTTP {e.code}") from None
             log(f"cancel {query_id}: HTTP {e.code}; the wait decides")
 
+    SNAPSHOT = {"committed_at": "committed_at", "query_id": "element_at(summary, 'trino_query_id')", "parent": "parent_id",
+                "operation": "operation", "records": "element_at(summary, 'total-records')",
+                "position_deletes": "element_at(summary, 'total-position-deletes')",
+                "equality_deletes": "element_at(summary, 'total-equality-deletes')",
+                "data_files": "element_at(summary, 'total-data-files')", "delete_files": "element_at(summary, 'total-delete-files')"}
+
     def snapshot(self, rel: str, snapshot: int) -> dict[str, Any]:
-        """One snapshot's commit time and committing query, from `t$snapshots`."""
+        """One snapshot's commit time, committing query, parent, operation and summary totals, from `t$snapshots`."""
         relation(rel)
-        rows, _ = self.query("builder", "SELECT committed_at, element_at(summary, 'trino_query_id') FROM "
+        rows, _ = self.query("builder", f"SELECT {', '.join(self.SNAPSHOT.values())} FROM "
                                         f"{k2.quote_relation(rel + '$snapshots')} WHERE snapshot_id = {snap(snapshot)}")
         if not rows:
             raise Refused(f"{rel}: snapshot {snapshot} is not in its $snapshots")
-        return {"committed_at": rows[0][0], "query_id": rows[0][1]}
+        return dict(zip(self.SNAPSHOT, rows[0], strict=True))
+
+    def files(self, rel: str, partitioned: bool) -> dict[str, int]:
+        """Main's files from `t$files`, as the builder: data files, those under SMALL_FILE_BYTES, the
+        partitions those are in, and delete files (content 1, position, and 2, equality). Only a
+        partitioned table's `$files` has a `partition` column; the contract says which this is, and
+        a table that disagrees fails the read, so its compaction is skipped."""
+        relation(rel)
+        small, part = f"content = 0 AND file_size_in_bytes < {SMALL_FILE_BYTES}", '"partition"' if partitioned else "1"
+        rows, _ = self.query("builder", f"SELECT count_if(content = 0), count_if({small}), count(DISTINCT CASE WHEN {small} "
+                                        f"THEN {part} END), count_if(content <> 0) FROM {k2.quote_relation(rel + '$files')}")
+        return dict(zip(("data", "small", "partitions", "deletes"), (int(v) for v in rows[0]), strict=True))
+
+    def optimize(self, rel: str, tag: str) -> str | None:
+        """Step 6's compaction: ALTER TABLE ... EXECUTE optimize as the builder, the files under
+        SMALL_FILE_BYTES and the deletes on them rewritten, the statement carrying this run's client
+        tag; its query id, which the commit's summary must name (compaction_guard), or None."""
+        cur = self.connect("builder", [tag]).cursor()
+        cur.execute(f"ALTER TABLE {relation(rel)} EXECUTE optimize(file_size_threshold => '{SMALL_FILE_BYTES // 2**20}MB')")
+        cur.fetchall()
+        qid = cur.query_id
+        return qid if isinstance(qid, str) and QUERY_ID.fullmatch(qid) else None
 
     def snapshots(self, rel: str) -> set[int]:
         relation(rel)
