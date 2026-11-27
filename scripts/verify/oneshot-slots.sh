@@ -2,7 +2,7 @@
 # The one-shot operator (docker/airflow/dags/oneshot.py) on a throwaway Airflow (step W0-8): four
 # LocalExecutor slots and the pools lake_spark 1, fetch 1, dbt 2 hold; a task killed in Airflow
 # leaves no container; a crashed try's container is removed by the retry; and the operator's
-# mounts work on this Docker host. One PASS or FAIL line per check, then `<n> FAIL`; exit 0 only
+# mounts work on this Docker host, fetch's spool volume subpath (its DAG's directory alone) among them. One PASS or FAIL line per check, then `<n> FAIL`; exit 0 only
 # when none failed.
 #
 #   bash scripts/verify/oneshot-slots.sh
@@ -94,7 +94,9 @@ from oneshot import OneShotOperator
 
 RELEASE = "/k2/releases/$RID"
 HAS_RELEASE = "test -f /k2/releases/$RID/compiled/oneshots.json"
-FETCH = HAS_RELEASE + ' && d="/spool/{{ dag.dag_id }}/{{ run_id }}" && mkdir -p "\$d" && id -u > "\$d/uid" && '
+# fetch sees /spool/<dagId> alone (fetch2 runs after fetch1, whose directory is then in the volume)
+FETCH = (HAS_RELEASE + ' && test "\$(ls -A /spool)" = "{{ dag.dag_id }}"'
+         ' && d="/spool/{{ dag.dag_id }}/{{ run_id }}" && mkdir -p "\$d" && id -u > "\$d/uid" && ')
 DBT = ("cat /run/k2-secrets/builder.password /run/k2-secrets/publisher.password /run/k2-secrets/runs.password "
        "/run/k2-secrets/tls/ca.pem > /dev/null && test \"\$(id -u)\" = $(id -u) && " + HAS_RELEASE +
        " && sleep 25 && echo '{\"exit\": 0, \"expire\": []}'")
@@ -301,7 +303,8 @@ try:
     out = subprocess.run(["docker", "run", "--rm", "--network", "none", "--pull", "never", "--mount",
                           f"type=volume,source={SPOOL},target=/s,readonly", IMG, "sh", "-c",
                           f"cat /s/{TAG}_fetch1/*/uid /s/{TAG}_fetch2/*/uid"], capture_output=True, text=True)
-    check(out.stdout.split() == ["10001", "10001"], "fetch wrote /spool/<dagId>/<runId>/ as its image user 10001",
+    check(out.stdout.split() == ["10001", "10001"],
+          "fetch saw only its DAG's /spool/<dagId> and wrote <runId>/ there as its image user 10001",
           " ".join((out.stdout + out.stderr).split()))
 
     # A task marked failed through the API.
