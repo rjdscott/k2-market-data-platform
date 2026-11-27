@@ -99,7 +99,7 @@ class ArgumentList(unittest.TestCase):
             "docker", "run", "--rm", "--name", "k2-fetch-ecb_fx-1", "--pull", "never", "--read-only", "--tmpfs",
             "/tmp:rw,noexec,nosuid,size=64m", "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
             "--pids-limit", "256",
-            "--cpus", "0.5", "--memory", "512M", "--network", "k2proj_k2-net", "-e", "K2_RELEASE", *RELEASE_MOUNT,
+            "--cpus", "0.5", "--memory", "512M", "--network", "k2proj_k2-egress", "-e", "K2_RELEASE", *RELEASE_MOUNT,
             "--mount", "type=volume,source=k2proj_k2-spool,target=/spool/ecb_fx,volume-subpath=ecb_fx",
             "fetch:4008294739ab", "k2-fetch", "--spool", "/spool/ecb_fx/manual__1"])
         self.assertNotIn("--privileged", run.docker_run)
@@ -190,6 +190,10 @@ class Refusals(unittest.TestCase):
         self.refused(kinds=self.golden("fetch", image="--privileged"))
         self.refused(kinds=self.golden("fetch", networks=["host"]))
         self.refused(kinds=self.golden("fetch", networks=["k2-net", "k2-catalog"]))
+        self.refused(kinds=self.golden("fetch", networks=["k2-net"]))  # F5: k2-net reaches MinIO, Redpanda, Airflow
+        self.refused(kinds=self.golden("fetch", networks=["k2-egress", "k2-net"]))
+        self.refused(kinds=self.golden("tools", networks=["k2-net", "k2-egress"]), kind="tools")  # fetch's alone
+        self.refused(kinds=self.golden("dbt-runner", networks=["k2-egress"]), **DBT)
         self.refused(kinds=self.golden("fetch", secrets=["/run/k2-secrets/tls/ca.pem"]))
         self.refused(kinds=self.golden("fetch", env=["K2_RELEASE=x"]))
         self.refused(kinds=self.golden("fetch", cpus="1 --privileged"))

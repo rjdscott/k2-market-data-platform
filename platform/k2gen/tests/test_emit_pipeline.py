@@ -245,13 +245,14 @@ def test_a_one_shot_kind_without_an_image_is_left_out_and_said(capsys: pytest.Ca
 
 
 def test_the_one_shot_kinds_agree_with_the_compose_stubs() -> None:
-    """Limits and networks as docker-compose.yml declares each stub; fetch never on k2-catalog and
-    without a secret; dbt-runner's env is the wrapper's exact list (the phase page)."""
+    """Limits and networks as docker-compose.yml declares each stub; fetch on k2-egress alone and
+    without a secret, no other kind on k2-egress; dbt-runner's env is the wrapper's exact list (the phase page)."""
     services = yaml.safe_load((model.REPO / model.COMPOSE).read_text())["services"]
     for name, spec in pipeline.ONESHOT_KINDS.items():
         limits = services[name]["deploy"]["resources"]["limits"]
         assert (spec["cpus"], spec["memory"], spec["networks"]) == (limits["cpus"], limits["memory"], services[name]["networks"]), name
-    assert "k2-catalog" not in pipeline.ONESHOT_KINDS["fetch"]["networks"] and pipeline.ONESHOT_KINDS["fetch"]["secrets"] == []
+    assert pipeline.ONESHOT_KINDS["fetch"]["networks"] == ["k2-egress"] and pipeline.ONESHOT_KINDS["fetch"]["secrets"] == []
+    assert not [k for k, spec in pipeline.ONESHOT_KINDS.items() if k != "fetch" and "k2-egress" in spec["networks"]]
     page = (model.REPO / "docs/development/phase-001-interfaces.md").read_text()
     assert "Its environment is exactly `" + " ".join(pipeline.ONESHOT_KINDS["dbt-runner"]["env"]) + "`" in page.replace("\n  ", " ")
 

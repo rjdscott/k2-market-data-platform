@@ -2,7 +2,8 @@
 # The one-shot operator (docker/airflow/dags/oneshot.py) on a throwaway Airflow (step W0-8): four
 # LocalExecutor slots and the pools lake_spark 1, fetch 1, dbt 2 hold; a task killed in Airflow
 # leaves no container; a crashed try's container is removed by the retry; and the operator's
-# mounts work on this Docker host, fetch's spool volume subpath (its DAG's directory alone) among them. One PASS or FAIL line per check, then `<n> FAIL`; exit 0 only
+# mounts work on this Docker host, fetch's spool volume subpath (its DAG's directory alone) among them,
+# and fetch runs on k2-egress, where the project's database on k2-net does not resolve. One PASS or FAIL line per check, then `<n> FAIL`; exit 0 only
 # when none failed.
 #
 #   bash scripts/verify/oneshot-slots.sh
@@ -41,6 +42,7 @@ TAG="w08$(date +%s | tail -c 5)$((RANDOM % 1000))"
 P="oneslots-$TAG"
 AF="$P-airflow"
 SPOOL="${P}_k2-spool"
+EGRESS="${P}_k2-egress"  # fetch's network: no compose service joins it, so compose would not make it
 RID="v0.0.0-oneslots-0123456789ab"
 ALPINE='alpine@sha256:f59abe656b692d901e184be3445e084786602108599d2a51d229c0f5a48c71bf'
 POSTGRES='postgres@sha256:fe0737ba566a2c5b2a28f34433c0a423261900ec17b9bf7ad115e1aae7e57f1b'
@@ -54,6 +56,7 @@ cleanup() {
   [ -n "$ids" ] && docker rm -f $ids >/dev/null 2>&1
   docker compose -p "$P" -f "$S/compose.yml" down -v --remove-orphans -t 5 >/dev/null 2>&1
   docker volume rm "$SPOOL" >/dev/null 2>&1
+  docker network rm "$EGRESS" >/dev/null 2>&1
   [ ${#TAGS[@]} -gt 0 ] && docker rmi "${TAGS[@]}" >/dev/null 2>&1
   docker rmi "$IMG" >/dev/null 2>&1
   rm -rf "$S"
@@ -68,6 +71,7 @@ printf 'FROM %s\nLABEL com.k2.verify=oneshot-slots-%s\nRUN mkdir /spool && chown
 ID12=$(docker image inspect -f '{{.Id}}' "$IMG" | sed 's/^sha256://' | cut -c1-12)
 for kind in fetch dbt-runner tools; do docker tag "$IMG" "$kind:$ID12"; TAGS+=("$kind:$ID12"); done
 docker volume create "$SPOOL" >/dev/null  # empty, as compose would create it for its first reader
+docker network create --driver bridge "$EGRESS" >/dev/null
 
 mkdir -p "$S/releases/$RID/compiled" "$S/dags" "$S/secrets/principals" "$S/secrets/tls"
 chmod 755 "$S" "$S/releases" "$S/releases/$RID" "$S/releases/$RID/compiled" "$S/dags"
@@ -95,7 +99,9 @@ from oneshot import OneShotOperator
 RELEASE = "/k2/releases/$RID"
 HAS_RELEASE = "test -f /k2/releases/$RID/compiled/oneshots.json"
 # fetch sees /spool/<dagId> alone (fetch2 runs after fetch1, whose directory is then in the volume)
+# and from k2-egress the project's database (db, on k2-net) neither resolves nor answers
 FETCH = (HAS_RELEASE + ' && test "\$(ls -A /spool)" = "{{ dag.dag_id }}"'
+         ' && command -v nc > /dev/null && ! nc -z -w 3 db 5432'
          ' && d="/spool/{{ dag.dag_id }}/{{ run_id }}" && mkdir -p "\$d" && id -u > "\$d/uid" && ')
 DBT = ("cat /run/k2-secrets/builder.password /run/k2-secrets/publisher.password /run/k2-secrets/runs.password "
        "/run/k2-secrets/tls/ca.pem > /dev/null && test \"\$(id -u)\" = $(id -u) && " + HAS_RELEASE +

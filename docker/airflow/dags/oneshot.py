@@ -19,8 +19,10 @@ in the logged command line.
 
 The scheduler's own environment gives the host side of each mount and the network prefix:
 `K2_RELEASES` and `K2_SECRETS` are host paths (the daemon resolves a bind source on the host, not in
-this container), `K2_COMPOSE_PROJECT` the compose project whose `<project>_k2-net` and
-`<project>_k2-catalog` the networks are and whose `<project>_k2-spool` fetch writes. A kind with
+this container), `K2_COMPOSE_PROJECT` the compose project whose `<project>_k2-net`,
+`<project>_k2-catalog` and `<project>_k2-egress` the networks are and whose `<project>_k2-spool`
+fetch writes. fetch is on `k2-egress` alone, a network no other service joins: its parser reaches
+the internet and no service of the stack. A kind with
 secret mounts runs as `K2_RUN_UID:K2_RUN_GID`, the host user who owns the mode-600 secret files (as
 scripts/deploy.py runs tools with `--user`); fetch, which holds none, runs as its image's USER.
 
@@ -53,7 +55,7 @@ SPOOL_HELPER = ["--rm", "--pull", "never", "--network", "none", "--read-only", "
                 "--security-opt", "no-new-privileges", "--pids-limit", "16", "--cpus", "0.1", "--memory", "32m"]
 
 KEYS = {"image", "cpus", "memory", "networks", "env", "secrets"}
-NETWORKS = {"k2-net", "k2-catalog"}
+NETWORKS = {"k2-net", "k2-catalog", "k2-egress"}
 # manifest.schema.json#/$defs/imageRef: a registry image by digest, or a local build by image id
 IMAGE = re.compile(r"[a-z0-9][a-z0-9._:/-]*@sha256:[0-9a-f]{64}"
                    r"|(k2-airflow|k2-capture|k2-spark-iceberg|tools|fetch|dbt-runner|k2-api):[0-9a-f]{12}")
@@ -107,8 +109,10 @@ def check_kind(kind: str, spec: object) -> dict:
         bad.append(f"networks {networks}")
     bad += [f"env {e!r}" for e in env if not ENV.fullmatch(e)]
     bad += [f"secret {s!r}" for s in secrets if not SECRET.fullmatch(s) or ".." in s.split("/")]
-    if kind == "fetch" and (networks != ["k2-net"] or secrets):
-        bad.append("fetch is egress only: k2-net and no secret (A8)")
+    if kind == "fetch" and (networks != ["k2-egress"] or secrets):
+        bad.append("fetch is egress only: k2-egress alone and no secret (A8)")
+    if kind != "fetch" and "k2-egress" in networks:
+        bad.append("k2-egress is fetch's network alone")
     if bad:
         raise AirflowFailException(f"oneshots.json {kind}: refused: {'; '.join(bad)}")
     return spec

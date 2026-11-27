@@ -7,7 +7,8 @@ stack against). Loopback binding of every published port is scripts/check-budget
 repeated here. Each mutation below breaks the fence one way in the loaded document and must fail.
 
 The two run one-shots are held the same way, as the Airflow one-shot operator runs them
-(docker/airflow/dags/oneshot.py): fetch on k2-net alone with no storage key and no secret (A8);
+(docker/airflow/dags/oneshot.py): fetch on k2-egress alone, a plain bridge no other service joins,
+with no storage key and no secret (A8);
 dbt-runner with exactly the wrapper's seven environment names and its four files
 (phase-001-interfaces.md, "The dbt wrapper"); both read-only, without capabilities or the socket.
 """
@@ -98,8 +99,12 @@ def secret_targets(svc: dict) -> set[str]:
 def oneshot_problems(doc: dict) -> list[str]:
     services, out = doc["services"], []
     fetch, dbt = services["fetch"], services["dbt-runner"]
-    if fetch.get("networks") != ["k2-net"]:
-        out.append(f"fetch is on {fetch.get('networks')}: k2-net only (A8)")
+    if fetch.get("networks") != ["k2-egress"]:
+        out.append(f"fetch is on {fetch.get('networks')}: k2-egress only (A8)")
+    if others := sorted(n for n, s in services.items() if n != "fetch" and "k2-egress" in nets(s)):
+        out.append(f"{others} on k2-egress: fetch's network alone, or a parser reaches them")
+    if (net := doc["networks"].get("k2-egress", "absent")) != {"driver": "bridge"}:
+        out.append(f"network k2-egress is {net}, not a plain bridge: renamed, external or internal breaks the operator or egress")
     if s3 := sorted(e for e in env_names(fetch) if "S3_" in e):
         out.append(f"fetch has storage key names {s3}")
     if any("k2-secrets" in str(v) for v in fetch.get("volumes") or []):
@@ -128,6 +133,13 @@ def svc_set(svc, key, value):
 
 @pytest.mark.parametrize("mutate,says", [
     (svc_set("fetch", "networks", ["k2-net", "k2-catalog"]), "fetch is on"),
+    (svc_set("fetch", "networks", ["k2-net"]), "fetch is on"),
+    (svc_set("fetch", "networks", ["k2-egress", "k2-net"]), "fetch is on"),
+    (svc_set("minio", "networks", ["k2-net", "k2-catalog", "k2-egress"]), "['minio'] on k2-egress"),
+    (svc_set("grafana", "networks", {"k2-net": None, "k2-egress": None}), "['grafana'] on k2-egress"),
+    (lambda d: d["networks"].__setitem__("k2-egress", {"driver": "bridge", "internal": True}), "not a plain bridge"),
+    (lambda d: d["networks"].__setitem__("k2-egress", {"driver": "bridge", "name": "shared"}), "not a plain bridge"),
+    (lambda d: d["networks"].pop("k2-egress"), "not a plain bridge"),
     (svc_set("fetch", "environment", {"K2_RELEASE": None, "K2_SPARK_S3_ACCESS_KEY": "x"}), "storage key names"),
     (svc_set("fetch", "environment", ["K2_RELEASE", "K2_TRINO_S3_SECRET_KEY=x"]), "storage key names"),
     (lambda d: d["services"]["fetch"]["volumes"].append("${K2_SECRETS}/tls/ca.pem:/run/k2-secrets/tls/ca.pem:ro"),

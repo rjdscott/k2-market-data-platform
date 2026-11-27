@@ -4,7 +4,7 @@ oneshots:
     image: fetch:4008294739ab
     cpus: "0.5"
     memory: 512M
-    networks: [k2-net]
+    networks: [k2-egress]
     env: [K2_RELEASE]
     secrets: []
   dbt-runner:
