@@ -26,6 +26,14 @@ networks:
   # images never join it.
   k2-catalog:
     driver: bridge
+  # fetch's own network (review F5/R7, 2026-11-27): a product's parser runs in fetch, so fetch
+  # reaches the internet and nothing of the stack. No other service joins it: Docker's embedded
+  # DNS answers on a user-defined bridge only for containers on that network, and separate bridges
+  # do not route to each other, so minio, trino, redpanda and the rest neither resolve nor answer
+  # from here (tests/test_catalog_fence_compose.py; the `fetch` probe rows of
+  # tests/access/expectations.yaml on the stack).
+  k2-egress:
+    driver: bridge
 
 #############################################################################
 # VOLUMES
@@ -1501,7 +1509,7 @@ services:
     image: fetch:local
     command: ["k2-fetch"]
     networks:
-      - k2-net  # egress only, never k2-catalog (A8)
+      - k2-egress  # egress only: alone on its network, never k2-net or k2-catalog (A8)
     # No environment but the release (oneshots.json's env); no storage key and no secret mount:
     # what a parser can reach, it can leak.
     environment:

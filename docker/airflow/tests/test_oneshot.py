@@ -40,6 +40,16 @@ DBT = {"kind": "dbt-runner", "command": ["k2-dbt", "build", "--release", RID, "-
        "env": {"K2_TRINO_USER": "dbt_ecb_fx", "K2_PUB_USER": "pub_ecb_fx"},
        "principals": ["dbt_ecb_fx", "pub_ecb_fx", "svc.runs"]}
 FETCH = {"kind": "fetch", "command": ["k2-fetch", "--spool", "/spool/ecb_fx/manual__1"]}
+SPOOL_HELPER = ["docker", "run", "--rm", "--pull", "never", "--network", "none", "--read-only", "--cap-drop", "ALL",
+                "--security-opt", "no-new-privileges", "--pids-limit", "16", "--cpus", "0.1", "--memory", "32m",
+                "--mount", "type=volume,source=k2proj_k2-spool,target=/spool", "fetch:4008294739ab",
+                "mkdir", "-p", "/spool/ecb_fx"]
+
+
+DBT_ENV = ["K2_TRINO_HOST", "K2_TRINO_INTERNAL_PORT", "K2_TRINO_USER", "K2_PUB_USER", "K2_RUNS_USER", "K2_CATALOG_URI",
+           "K2_RELEASE"]
+DBT_SECRETS = ["/run/k2-secrets/builder.password", "/run/k2-secrets/publisher.password", "/run/k2-secrets/runs.password",
+               "/run/k2-secrets/tls/ca.pem"]
 
 
 def secret_mount(source: str, target: str) -> list[str]:
@@ -50,10 +60,12 @@ class Run:
     """One execute with docker faked; `calls` is every docker command line, in order."""
 
     def __init__(self, kinds: dict | None = None, lines: tuple[str, ...] = (), code: int = 0,
-                 rm: subprocess.CompletedProcess | None = None, env: dict | None = None):
+                 rm: subprocess.CompletedProcess | None = None, env: dict | None = None,
+                 helper: subprocess.CompletedProcess | None = None):
         self.kinds = kinds if kinds is not None else oneshot.load_oneshots(str(GOLDEN))
         self.lines, self.code, self.env = lines, code, {**HOST, **(env or {})}
         self.rm = rm or subprocess.CompletedProcess([], 0, "", "")
+        self.helper = helper or subprocess.CompletedProcess([], 0, "", "")
         self.calls: list[list[str]] = []
         self.pushed: dict = {}
         self.popen_env: dict = {}
@@ -61,7 +73,7 @@ class Run:
 
     def run(self, argv, **_):
         self.calls.append(argv)
-        return self.rm
+        return self.helper if argv[:2] == ["docker", "run"] else self.rm
 
     def popen(self, argv, env, **_):
         self.calls.append(argv)
@@ -81,7 +93,8 @@ class Run:
 
     @property
     def docker_run(self) -> list[str]:
-        return next(c for c in self.calls if c[:2] == ["docker", "run"])
+        """The one-shot itself: the last `docker run` (fetch's spool helper runs before it)."""
+        return [c for c in self.calls if c[:2] == ["docker", "run"]][-1]
 
 
 class ArgumentList(unittest.TestCase):
@@ -92,12 +105,28 @@ class ArgumentList(unittest.TestCase):
             "docker", "run", "--rm", "--name", "k2-fetch-ecb_fx-1", "--pull", "never", "--read-only", "--tmpfs",
             "/tmp:rw,noexec,nosuid,size=64m", "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
             "--pids-limit", "256",
-            "--cpus", "0.5", "--memory", "512M", "--network", "k2proj_k2-net", "-e", "K2_RELEASE", *RELEASE_MOUNT,
-            "--mount", "type=volume,source=k2proj_k2-spool,target=/spool",
+            "--cpus", "0.5", "--memory", "512M", "--network", "k2proj_k2-egress", "-e", "K2_RELEASE", *RELEASE_MOUNT,
+            "--mount", "type=volume,source=k2proj_k2-spool,target=/spool/ecb_fx,volume-subpath=ecb_fx",
             "fetch:4008294739ab", "k2-fetch", "--spool", "/spool/ecb_fx/manual__1"])
         self.assertNotIn("--privileged", run.docker_run)
         self.assertNotIn("--user", run.docker_run)  # no secret: the image's own USER
         self.assertEqual(run.popen_env["K2_RELEASE"], RID)  # the run's release, never the scheduler's
+
+    def test_fetch_gets_its_own_dags_spool_directory_made_first_by_the_image_alone(self):
+        """F1: one product's parser must not reach another product's spool. The helper runs only the
+        image's mkdir, as the image's user, with no network, before the fetch and after the stale rm."""
+        run = Run()
+        run(**FETCH)
+        self.assertEqual([c[:3] for c in run.calls], [["docker", "rm", "-f"], ["docker", "run", "--rm"],
+                                                      ["docker", "run", "--rm"]])
+        self.assertEqual(run.calls[1], SPOOL_HELPER)
+        self.assertNotIn("--user", run.calls[1])
+        self.assertEqual([a for a in run.docker_run if "k2-spool" in a],
+                         ["type=volume,source=k2proj_k2-spool,target=/spool/ecb_fx,volume-subpath=ecb_fx"])
+        dbt = Run(lines=('{"exit": 0, "expire": []}',))
+        dbt(**DBT)
+        self.assertEqual(len([c for c in dbt.calls if c[:2] == ["docker", "run"]]), 1)  # no spool, no helper
+        self.assertFalse([a for c in dbt.calls for a in c if "k2-spool" in a])
 
     def test_dbt_runner_runs_with_exactly_what_its_kind_names(self):
         run = Run(lines=('{"exit": 0, "expire": []}',))
@@ -135,11 +164,11 @@ class ArgumentList(unittest.TestCase):
 class Refusals(unittest.TestCase):
     """Each refused before anything runs: no rm, no run."""
 
-    def refused(self, kinds: dict | None = None, host: dict | None = None, **kwargs):
+    def refused(self, kinds: dict | None = None, host: dict | None = None, dag_id: str = "ecb_fx", **kwargs):
         """`host` is added to the scheduler's environment; the rest are the operator's arguments."""
         run = Run(kinds=kinds, env=host)
         with self.assertRaises(AirflowFailException) as caught:
-            run(**{**FETCH, **kwargs})
+            run(dag_id=dag_id, **{**FETCH, **kwargs})
         self.assertEqual(run.calls, [])
         return str(caught.exception)
 
@@ -167,11 +196,37 @@ class Refusals(unittest.TestCase):
         self.refused(kinds=self.golden("fetch", image="--privileged"))
         self.refused(kinds=self.golden("fetch", networks=["host"]))
         self.refused(kinds=self.golden("fetch", networks=["k2-net", "k2-catalog"]))
+        self.refused(kinds=self.golden("fetch", networks=["k2-net"]))  # F5: k2-net reaches MinIO, Redpanda, Airflow
+        self.refused(kinds=self.golden("fetch", networks=["k2-egress", "k2-net"]))
+        self.refused(kinds=self.golden("tools", networks=["k2-net", "k2-egress"]), kind="tools")  # fetch's alone
+        self.refused(kinds=self.golden("dbt-runner", networks=["k2-egress"]), **DBT)
         self.refused(kinds=self.golden("fetch", secrets=["/run/k2-secrets/tls/ca.pem"]))
         self.refused(kinds=self.golden("fetch", env=["K2_RELEASE=x"]))
         self.refused(kinds=self.golden("fetch", cpus="1 --privileged"))
         self.refused(kinds=self.golden("tools", secrets=["/run/k2-secrets/../../../var/run/docker.sock"]), kind="tools")
         self.refused(kind="spark")
+
+    def test_a_dag_id_that_could_leave_its_spool_directory(self):
+        for dag_id in ("", ".", "..", "../ecb_fx", "ecb_fx/..", "a/b", "ecb_fx,target=/x", "Ecb", "ecb-fx"):
+            self.assertIn("dag id", self.refused(dag_id=dag_id))
+
+    def test_a_secret_or_env_name_the_frozen_contract_does_not_list_for_the_kind(self):
+        """R11: never ca.key, a directory, password.db or principals/; env only the kind's own names."""
+        for secret in ("/run/k2-secrets/tls/ca.key", "/run/k2-secrets/principals", "/run/k2-secrets/principals/svc.runs.password",
+                       "/run/k2-secrets/trino/password.db", "/run/k2-secrets/canary/keys.json", "/run/k2-secrets/tls",
+                       "/run/k2-secrets/api.password"):
+            self.assertIn(secret, self.refused(kinds=self.golden("dbt-runner", secrets=[*DBT_SECRETS, secret]), **DBT))
+        self.assertIn("builder.password", self.refused(kinds=self.golden("tools", secrets=[
+            "/run/k2-secrets/tls/ca.pem", "/run/k2-secrets/builder.password"]), kind="tools"))
+        for env in ("AIRFLOW__DATABASE__SQL_ALCHEMY_CONN", "AIRFLOW__API_AUTH__JWT_SECRET", "K2_SECRETS"):
+            self.assertIn(env, self.refused(kinds=self.golden("dbt-runner", env=[*DBT_ENV, env]), **DBT))
+        self.assertIn("K2_TRINO_HOST", self.refused(kinds=self.golden("fetch", env=["K2_RELEASE", "K2_TRINO_HOST"])))
+
+    def test_the_allow_lists_are_k2gens_one_shot_kinds_exactly(self):
+        """Mirrors k2gen.emit.pipeline.ONESHOT_KINDS through its golden, so the two cannot drift."""
+        golden = oneshot.load_oneshots(str(GOLDEN))
+        self.assertEqual({k: {f: set(v[f]) for f in ("networks", "env", "secrets")} for k, v in golden.items()},
+                         oneshot.ALLOWED)
 
     def test_a_release_path_that_is_not_one_release(self):
         self.refused(release_path="/k2/releases/pointers")
@@ -212,6 +267,15 @@ class Lifecycle(unittest.TestCase):
         with self.assertRaises(AirflowException):
             run(**FETCH)
         self.assertEqual(len(run.calls), 1)
+
+    def test_a_spool_helper_that_fails_fails_the_task_and_fetch_never_starts(self):
+        for helper in (subprocess.CompletedProcess([], 1, "", "mkdir: can't create directory\n"),
+                       subprocess.CompletedProcess([], 125, "", "")):
+            run = Run(helper=helper)
+            with self.assertRaises(AirflowException):
+                run(**FETCH)
+            self.assertEqual([c[:2] for c in run.calls], [["docker", "rm"], ["docker", "run"]])  # rm, helper; no Popen
+            self.assertIsNone(run.op._name)  # on_kill has nothing to kill
 
     def test_on_kill_kills_this_try_by_name_and_tolerates_it_gone(self):
         run = Run()
