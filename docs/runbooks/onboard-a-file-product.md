@@ -265,8 +265,13 @@ for the next (`v3.0.0-alpha.4-rc.3-48ad71fba732`, a drain of 12.8 s, nothing rec
 
 **When**, the deploy is verified.
 
-**Expected behaviour**, an `active` product's DAG starts unpaused and runs at its cron; a trigger
-runs it now. Its inputs must be tested first: `ecb-fx-rates` requires `calendars`' tested
+**Expected behaviour**, on the releases up to `3.0.0-alpha.5.1` an `active` product's DAG started
+unpaused and ran at its cron. **From the release that carries phase 004** (not yet deployed), every
+DAG a release adds is created paused, whatever its status, and deploy never unpauses it: unpause it
+after `make release-verify` exits 0, inputs first (`docker exec k2-airflow-scheduler airflow dags
+unpause <fence> -y`, not yet run by hand; the order for phase 004's products is in
+[onboard-a-kafka-product.md](./onboard-a-kafka-product.md) section 4). A DAG that existed before
+keeps its state. A trigger runs it now. Its inputs must be tested first: `ecb-fx-rates` requires `calendars`' tested
 `target_days`, or its build exits 4. A first run of a file product fetches, lands the file, stages
 and audits its rows on bronze's `audit` branch, publishes `main`, builds and tests the dbt outputs,
 moves their `audited` tags, and writes one run-record row per step.

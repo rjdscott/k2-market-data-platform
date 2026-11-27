@@ -323,3 +323,21 @@ learns that the output is not yet published and nothing more.
 
 **Revisit when**, besides the triggers above: `INVALID_VIEW` appears in a reader's poll again, which
 reopens the view sync's order.
+
+## Outcome (2026-11-28, phase 004: compaction after the tests)
+
+The decision stands, with one write added on top of the tested snapshot. Built on branch `phase/004-005-kraken-and-enriched`; **not yet in a deployed release**. A merge-heavy
+incremental output leaves delete files every build, and a compaction by maintenance after the tag
+moved would put `main` past `audited`, which the next build's reconcile restores. So the wrapper
+compacts an incremental output inside the build, after its tests and before the tag commit: once
+its `main` holds 12 delete files or 48 small files beyond one per partition, one `ALTER TABLE ...
+EXECUTE optimize` as the builder under the run's client tag, and the tag then moves onto the
+compaction by the same compare-and-set commit. A `table` model is never compacted. The only snapshot
+accepted on top of the tested one is a `replace` whose parent is the tested snapshot, committed by
+this run's own optimize statement (its query id), reading as many rows (`total-records` less
+`total-position-deletes`; a snapshot with equality deletes is refused as uncountable). Anything else
+is rolled back to the tested snapshot and refused, exit 3; a failed or empty optimize publishes the
+tested snapshot (`docker/dbt-runner/k2_dbt.py`, `compact` and `compaction_guard`). Provenance:
+`docker/dbt-runner/test_k2_dbt.py`; `scripts/verify/dbt-patterns.sh` claim 12 (compaction to zero
+delete files, a reconcile that changes nothing, an INSERT after the optimize refused) is written and
+its run pending.

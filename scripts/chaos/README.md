@@ -150,6 +150,17 @@ script's header says so). And on a throwaway lake the dbt runner's flags are
 `run-path-lib.sh`'s, which mirror `oneshot.py`; the operator's own flags are held to the same
 names by `docker/airflow/tests/test_oneshot.py`.
 
+## The Kafka product scripts (plan 004): not written yet
+
+Plan 004 names six: `kafka-connector-kill.sh`, `kafka-below-log-start.sh`, `unknown-symbol.sh`,
+`bronze-failed-then-repaired.sh`, `venue-test-fails.sh` and `pause-input.sh`. None exists at this
+commit. Until they do, the Kafka connector's kills, the below-log-start refusal and the accept-data-loss
+load are proven on a fixture product by [`../verify/kafka-path.sh`](../verify/kafka-path.sh) groups a,
+b and c ([`docs/development/testing.md`](../../docs/development/testing.md)), with the connector run
+directly, not through Airflow. The runbooks the scripts will measure are
+[accept-data-loss.md](../../docs/runbooks/accept-data-loss.md) and
+[kafka-batch-blocked.md](../../docs/runbooks/kafka-batch-blocked.md).
+
 ---
 
 ## Prerequisites

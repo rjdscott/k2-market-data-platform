@@ -418,6 +418,23 @@ releases root <home>/s19-rehearsal-3452690/releases; good release v0.0.1-rehears
 
 `release-status` also prints `DAGs a deploy paused and has not yet unpaused: <dags or none>`.
 
+**From the release that carries phase 004** (`v3.0.0-alpha.6`, not yet deployed; built and unit-tested
+in `tests/test_deploy.py` and `docker/airflow/tests/test_factory.py`): every DAG a release adds is
+created paused, whatever its product's status, and deploy never pauses or unpauses it; its drain line
+names them, `new in this release, with no run to drain, never paused or unpaused by deploy: <dags>`.
+Deploy also keeps paused any DAG it drained whose product is held, printing `kept paused, held: <dag>
+(<kind> hold by <who> at <time>: <reason>); each stays paused until its hold is released`
+([hold-a-product.md](./hold-a-product.md)). After `make release-verify` exits 0, unpause each new DAG,
+inputs first; not yet run:
+
+```bash
+docker exec k2-airflow-scheduler airflow dags unpause <dag> -y
+docker exec k2-airflow-scheduler airflow dags list            # is_paused False
+```
+
+The order for phase 004's products is in [onboard-a-kafka-product.md](./onboard-a-kafka-product.md)
+section 4.
+
 **Measured**, 1.4 to 1.7 s for `release-verify`, 0.1 s for `release-status`, 2026-11-27, on the rehearsal,
 before the live access suite and k2-api joined verify. Live, with them and identity.sh, 2026-11-27: exit 0,
 not timed.

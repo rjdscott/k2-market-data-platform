@@ -368,3 +368,21 @@ this phase does not meet it.
   `is live and verified`, `unpaused access_canary, calendars, ecb_fx_rates: the DAGs deploy paused`. The
   two DAGs the operator had paused stayed paused. Exit 0 in 56 s. `make release-verify` then passed with
   `access-verify LIVE=1 passed: {'PASS': 82, 'FAIL': 0, 'SKIP': 30}` and `catalog-fence: 10 PASS, 0 FAIL`.
+
+## Outcome (2026-11-28, phase 004: DAGs created paused, holds, a second platform table)
+
+The decision stands. Built on branch `phase/004-005-kraken-and-enriched`; **not yet in a deployed release**. Three changes, each held by `tests/test_deploy.py` or
+`docker/airflow/tests/test_factory.py`, none rehearsed yet:
+
+1. **Every DAG is created paused**, whatever its product's status (`is_paused_upon_creation`): a new
+   Kafka product's first load reads its whole retained backlog, and a first publish during the
+   deploy's verify would fail the drift check. Deploy names the DAGs a release adds, never pauses or
+   unpauses them, and the operator unpauses each after `make release-verify`. Airflow applies this at
+   creation only, so an existing DAG keeps its state.
+2. **A held DAG is never unpaused by a deploy.** Deploy unpauses only what it paused for its drain,
+   and skips any DAG whose product holds an open hold, read as `svc.platform` under the release that
+   runs then; holds that cannot be read keep every one paused.
+3. **A second platform table rolls back as a LEFT line.** After a rollback across the first release
+   with the holds table, the table stays (DDL is additive) in a namespace the live release declares;
+   the drift check reports it as LEFT, not drift, when a release in `--left-by` declares it and no
+   table rule of the live release grants a privilege on it.
