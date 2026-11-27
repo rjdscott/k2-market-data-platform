@@ -45,9 +45,9 @@
         "properties": {
           "contractId": {"description": "The input's contract id.", "type": "string", "pattern": "^[a-z][a-z0-9]*(-[a-z0-9]+)*\\.[a-z][a-z0-9]*(-[a-z0-9]+)*\\.[a-z][a-z0-9_]*$"},
           "relation": {"description": "What the run read: k2gen.model.input_relation of the input.", "type": "string", "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"},
-          "snapshot": {"description": "The audited snapshot id read; null when the input was never audited.", "type": ["integer", "null"]},
+          "snapshot": {"description": "The audited snapshot id read; null when the run read none: the input was never audited, or was absent (its port says whenAbsent empty or emptyIntoTable and it was paused), read as zero rows.", "type": ["integer", "null"]},
           "state": {"description": "The input product's lifecycle state in the run's release; how late it was is lagMinutes.", "enum": ["active", "paused", "deprecated", "retired"]},
-          "lagMinutes": {"description": "How far the input was behind, in minutes: the run's start time minus the input's audited commit time (the committed_at of its audited snapshot), never below 0; null when the input was never audited.", "type": ["number", "null"], "minimum": 0}
+          "lagMinutes": {"description": "How far the input was behind, in minutes: the run's start time minus the input's audited commit time (the committed_at of its audited snapshot), never below 0; null when the run read no snapshot of it (see snapshot).", "type": ["number", "null"], "minimum": 0}
         }
       }
     },

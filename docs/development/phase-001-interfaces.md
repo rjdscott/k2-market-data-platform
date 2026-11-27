@@ -161,6 +161,14 @@ k2-dbt build --release <id> --product <domain>.<product> --run-id <dag_id>/<run_
 - Its vars to dbt: `k2_inputs`, `{"<fence>/<table>": {"snapshot": <integer id>}}` for every input
   (`dbt/macros/k2_input.sql` refuses a missing, null or non-integer id at parse), and
   `k2_run_id`, which the results hook writes on every test row beside dbt's `invocation_id`.
+  Added 2026-11-28 (step W0-7): an entry may instead be `{"absent": true}`, which `k2_input`
+  renders as zero rows of the source's declared columns, each cast to its contract type. The
+  wrapper passes it only for an optional input whose port says `whenAbsent: empty` (or
+  `emptyIntoTable`), while that input is `paused` in the release or was never audited, and
+  records it with `snapshot` and `lagMinutes` null and its `state`, so the product is `partial`.
+  The default, `whenAbsent: fail`, is the rule above unchanged. `k2gen check` refuses `empty` in
+  a product with a model that is not incremental (`docs.empty-input-into-table`), since the zero
+  rows would rebuild it and publish it empty.
 - Steps: (1) reconcile: the catalog drift check; an unfinished run's outputs restored to their
   tag (no tag: `DROP TABLE`), `reconciled`; a tag ahead of the records gets its `audited` row; the
   view rule of step 6 rerun until each view equals C ∩ the tagged schema. (2) Resolve every input

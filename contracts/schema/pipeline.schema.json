@@ -78,7 +78,8 @@
           "contractId": {"description": "The input's contract id.", "type": "string", "pattern": "^[a-z][a-z0-9]*(-[a-z0-9]+)*\\.[a-z][a-z0-9]*(-[a-z0-9]+)*\\.[a-z][a-z0-9_]*$"},
           "relation": {"description": "k2gen.model.input_relation: <domain>.<fence>__base.<table> through the input's reader catalog for a dbt or code output, lake.<fence>.<table> for a connector table, <domain>.<fence>.<table> for a platform table; read at k2gen.model.tested_ref.", "type": "string", "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"},
           "required": {"description": "A required input never audited stops the build, wrapper exit 4.", "type": "boolean"},
-          "maxLagMinutes": {"description": "The input port's maxLagMinutes; null for no bound.", "type": ["integer", "null"], "minimum": 0}
+          "maxLagMinutes": {"description": "The input port's maxLagMinutes; null for no bound.", "type": ["integer", "null"], "minimum": 0},
+          "whenAbsent": {"description": "The input port's whenAbsent: empty or emptyIntoTable, and the input paused or never audited, gives k2_inputs {\"absent\": true} for it, zero rows of its columns; fail, or the key left out (a release compiled before it), leaves it out of k2_inputs.", "enum": ["fail", "empty", "emptyIntoTable"]}
         }
       }
     },
