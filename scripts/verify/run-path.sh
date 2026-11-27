@@ -33,13 +33,17 @@
 #     wrapper restores silver and lists the build's snapshots in its XCom line; expire.py removes
 #     them with the maintenance key; maintain.py runs clean on the product
 #   8 every build's run records are in governance_build.run_records.run_record under its release
+#   9 every dbt product of the release builds through the wrapper, each after the products it reads
+#     and governance.quality-results last, exits 0 and ends with its audited tag on main: a
+#     materialization shape the publish guard does not know (a table of no rows: currency-master's
+#     bronze is empty here) fails on this lake first, not on live
 #
 # One container job (run-path-lib.sh's guards); a killed run leaves the lake to
 # `bash scripts/lib/throwaway-lake.sh down run-path`.
 set -uo pipefail
 # shellcheck source=scripts/lib/run-path-lib.sh
 . "$(dirname "$0")/../lib/run-path-lib.sh"
-rp_start run-path "${1:-}" 8
+rp_start run-path "${1:-}" 9
 # claim 6's release: this tree with gold given a duplicate row, which gold's unit test catches
 rp_fail_release "$(cat <<'PY'
 import sys
@@ -69,4 +73,5 @@ probe state expired
 claim expire "$ID"
 # 8. the run records of every build above
 claim records "$ID" "$IDF"
+rp_every  # 9
 finish

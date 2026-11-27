@@ -474,7 +474,7 @@ elif cmd == "claims":
           and not any("canary-note" in str(r) for r in delayed) and all(r[1] == "north" for r in scoped),
           f"renames {sw['renames']}; delayed {delayed}; scoped {scoped}")
     fell_back = [r for r, code in rc.items() if code == 0 and "the dbt invocation's time decides" in err.get(r, "")]
-    claim("every publish matched its tested snapshot's trino_query_id to one dbt reported (none fell back to the time window)",
+    claim("every publish matched its tested snapshot's trino_query_id to a query of its dbt build, reported or carrying the run's client tag (none fell back to the time window)",
           not fell_back and sum(1 for code in rc.values() if code == 0) >= 8, f"fell back: {fell_back}")
     print(f"claims: every claim run, {fails} FAIL", flush=True)  # the shell requires this last line
     sys.exit(1 if fails else 0)
