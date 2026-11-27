@@ -22,7 +22,10 @@ FROM apache/airflow:slim-3.3.2-python3.12
 # Python, so every transitive dependency is the set Airflow tested; it pins
 # every one of cosmos's own dependencies too (aenum, deprecation, msgpack,
 # openlineage-integration-common, virtualenv and the rest).
-RUN pip install --no-cache-dir "apache-airflow[postgres,statsd]==3.3.2" "astronomer-cosmos==1.16.0" \
+# trino: the client the `record` task writes run records with (platform/runs/k2runs.py, loaded
+# from the run's release). 0.339.0, not the newest 0.340.0 that dbt/uv.lock pins for dbt-runner:
+# the constraints file pins 0.339.0, and pip refuses a requirement that contradicts it.
+RUN pip install --no-cache-dir "apache-airflow[postgres,statsd]==3.3.2" "astronomer-cosmos==1.16.0" "trino==0.339.0" \
       --constraint=https://raw.githubusercontent.com/apache/airflow/constraints-3.3.2/constraints-3.12.txt \
     && docker --version && psql --version
 

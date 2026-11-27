@@ -20,9 +20,13 @@ alerting:
     - static_configs:
         - targets: ['alertmanager:9093']
 
-# Load rules (alerting and recording rules)
+# The alerting and recording rules of the release the prometheus pointer names (ADR-058),
+# read through the releases root; deploy sends SIGHUP after each swap so they are reread.
+# A glob that matches nothing (no pointer yet, or a release without platform/) loads no rule
+# and is no error: Prometheus starts, and alerts begin at the first deploy. promtool and
+# `make check-alerts` read the same files at docker/prometheus/rules/ in the checkout.
 rule_files:
-  - "rules/*.yml"
+  - "/k2/releases/pointers/prometheus/platform/docker/prometheus/rules/*.yml"
 
 # Scrape configurations
 scrape_configs:

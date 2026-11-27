@@ -90,3 +90,59 @@ def test_no_throwaway_client_mounts_the_checkout_with_its_env(script):
     assert not whole, whole
     for m in re.findall(r'-v "\$REPO/([^":]+):(/src/[^":]+)(:ro)?"', text) + re.findall(r'-v "\$REPO/\$d:(/src/\$d)(:ro)"', text):
         assert m[-1] == ":ro", m
+
+
+# The scheduler's `record` task writes run records as svc.runs (docker/airflow/dags/factory.py,
+# k2runs.connect()): it alone among the Airflow services mounts a secret, exactly these two files,
+# each by name, read-only, never created when missing.
+SCHEDULER_SECRETS = {"/run/k2-secrets/runs.password": "principals/svc.runs.password",
+                     "/run/k2-secrets/tls/ca.pem": "tls/ca.pem"}
+AIRFLOW = ("airflow-migrate", "airflow-api-server", "airflow-scheduler", "airflow-dag-processor")
+
+
+def airflow_secret_problems(compose: dict) -> list[str]:
+    found = []
+    for name in AIRFLOW:
+        mounts = {}
+        for v in compose["services"][name].get("volumes") or []:
+            if m := ROOT.match(source(v)):
+                if not isinstance(v, dict) or v.get("read_only") is not True or (v.get("bind") or {}).get("create_host_path") is not False:
+                    found.append(f"{name} mounts {source(v)} other than long-syntax, read-only, create_host_path false")
+                mounts[v["target"] if isinstance(v, dict) else str(v)] = source(v)[m.end():].strip("/")
+        want = SCHEDULER_SECRETS if name == "airflow-scheduler" else {}
+        if mounts != want:
+            found.append(f"{name} mounts secrets {mounts}, not {want}")
+    return found
+
+
+def test_only_the_scheduler_mounts_a_secret_and_only_its_two_files():
+    assert airflow_secret_problems(yaml.safe_load(COMPOSE.read_text())) == []
+
+
+@pytest.mark.parametrize("service, volume, says", [
+    ("airflow-dag-processor", {"type": "bind", "source": "${K2_SECRETS:-${HOME}/k2-secrets}/tls/ca.pem",
+                               "target": "/run/k2-secrets/tls/ca.pem", "read_only": True, "bind": {"create_host_path": False}},
+     "airflow-dag-processor mounts secrets"),
+    ("airflow-api-server", "${K2_SECRETS:-${HOME}/k2-secrets}/principals/svc.runs.password:/run/k2-secrets/runs.password:ro",
+     "other than long-syntax"),
+    ("airflow-scheduler", {"type": "bind", "source": "${K2_SECRETS:-${HOME}/k2-secrets}/principals/svc.platform.password",
+                           "target": "/run/k2-secrets/platform.password", "read_only": True, "bind": {"create_host_path": False}},
+     "airflow-scheduler mounts secrets"),
+    ("airflow-scheduler", {"type": "bind", "source": "${K2_SECRETS:-${HOME}/k2-secrets}/principals/svc.runs.password",
+                           "target": "/run/k2-secrets/runs.password", "read_only": True}, "create_host_path false"),
+])
+def test_a_secret_mount_off_the_schedulers_two_fails(service, volume, says):
+    doc = yaml.safe_load(COMPOSE.read_text())
+    vols = doc["services"][service].setdefault("volumes", [])
+    if isinstance(volume, dict) and volume["target"] == "/run/k2-secrets/runs.password" and service == "airflow-scheduler":
+        vols[:] = [v for v in vols if not (isinstance(v, dict) and v.get("target") == volume["target"])]
+    vols.append(volume)
+    found = airflow_secret_problems(doc)
+    assert any(says in p for p in found), found
+
+
+def test_a_scheduler_without_its_password_file_fails():
+    doc = yaml.safe_load(COMPOSE.read_text())
+    vols = doc["services"]["airflow-scheduler"]["volumes"]
+    vols[:] = [v for v in vols if not (isinstance(v, dict) and v.get("target") == "/run/k2-secrets/runs.password")]
+    assert any("airflow-scheduler mounts secrets" in p for p in airflow_secret_problems(doc))
