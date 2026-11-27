@@ -70,7 +70,7 @@ ps = _load("principal_secret", REPO / "scripts/principal-secret.py")
 PROJECT = "k2-rehearsal"
 FAST = os.environ.get("FAST") == "1" and os.environ.get("CUTOVER") != "1"  # merge points; the full chain before a tag
 FAST_SKIPS = ("4 (one image), 5 (forced mismatch, rollback with Trino stopped), 6 (masked column dropped), "
-              "7's kills after 11 of its 13 steps and inside the automatic rollback, 8 (two deploys at once), 9 (M4)")
+              "7's kills after 12 of its 14 steps and inside the automatic rollback, 8 (two deploys at once), 9 (M4)")
 BASE = Path.home() / f"s19-rehearsal-{os.getpid()}"
 CLONE, ROOT, SECRETS, WORK = BASE / "repo", BASE / "releases", BASE / "secrets", BASE / "work"
 CANARY = "contracts/governance/access-canary"
@@ -611,7 +611,7 @@ def rehearse() -> int:
               f"{poller.polls} polls, {poller.errors} errors, shapes {poller.shapes}")
 
     # 7. a SIGKILL after each step, then a rerun, alternating R3 and R5, the reader still polling
-    steps = ("preflight", "images", "plan", "ddl", "views-narrow", "canary", "swap", "recreate", "rules-loaded",
+    steps = ("preflight", "images", "plan", "drain", "ddl", "views-narrow", "canary", "swap", "recreate", "rules-loaded",
              "ddl-late", "views-widen", "verify", "done")
     if FAST:  # no R3 to R5, R2 live: two kills, back to R1 (the old view shape) and forward, a reader polling
         steps, r3, r5, poller = ("swap", "recreate"), r1, r2, Poller()

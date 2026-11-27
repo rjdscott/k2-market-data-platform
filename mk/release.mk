@@ -14,7 +14,7 @@ release:  ## TAG=<annotated tag> [IMAGES=<images.json>]: compile the tag into a 
 	@$(DEPLOY) release --tag "$$TAG" $${IMAGES:+--images "$$IMAGES"}
 
 .PHONY: deploy
-deploy:  ## RELEASE=<release id or tag> [PLAN=1] [ALLOW_STATEFUL=<svc>,...]: preflight, images, plan, DDL, views, canary, pointer swap, recreate only what changed, verify; on a failure back to the previous release, exit 1
+deploy:  ## RELEASE=<release id or tag> [PLAN=1] [ALLOW_STATEFUL=<svc>,...] [ALLOW_RUNNING=1]: preflight, images, plan, DDL, views, canary, pointer swap, recreate only what changed, verify; on a failure back to the previous release, exit 1
 	@$(DEPLOY) deploy "$$RELEASE" $$(test "$$PLAN" = 1 && echo --plan) $${ALLOW_STATEFUL:+--allow-stateful "$$ALLOW_STATEFUL"}
 
 .PHONY: release-verify
