@@ -58,3 +58,25 @@ def test_the_hot_tier_is_a_paused_serving_copy_with_no_lake_table() -> None:
     assert {t.build.kind for t in hot.tables} == {"serving"} and hot.grants == ()
     with pytest.raises(ValueError, match="LAKE_BUILDS"):
         model.reader_relation(hot.tables[0])
+
+
+def test_a_grant_outside_the_team_needs_terms_upstream_too() -> None:
+    """A3 of the 2026-11-28 review. The ECB product grants outside its team over the calendars,
+    which record no terms and pass: every row of theirs was written on the platform (a seed, no
+    connector, no input). The new products grant nobody, so they pass; a grant on candles outside
+    its team names each venue-fed product upstream of it that records no terms, and candles."""
+    import yaml
+
+    from k2gen import checks
+
+    documents = dict(repository_set().documents)
+    assert [f for f in checks.run(DocumentSet(documents, repository_set().provenance), None) if f.code == "docs.terms-missing"] == []
+    grants = "contracts/market-analytics/candles/grants.yaml"
+    documents[grants] = yaml.safe_dump({"grants": [{"principal": "p.analyst-a", "role": "full_reader"}]}).encode()
+    found = [f for f in checks.docs.check(DocumentSet(documents, repository_set().provenance), None) if f.code == "docs.terms-missing"]
+    assert [f.path for f in found] == [grants, grants], found
+    assert "record the source's terms in the product's terms property" in found[0].message
+    for upstream in ("market-analytics.canonical-trades", "market-capture.kraken-trades", "reference-data.security-master",
+                     "market-capture.kraken-instruments", "reference-data.currency-master"):
+        assert upstream in found[1].message, upstream
+    assert "calendars" not in found[1].message

@@ -548,3 +548,13 @@ declaration sits in the file the platform team owns (`.github/CODEOWNERS`), not 
 directory. Redpanda has no ACLs and every load shares the Spark key and network, so this is a
 compile-time rule; what stops a product the documents do not describe is the review of its
 contract.
+
+2026-11-28, terms upstream (finding A3): `docs.terms-missing` now holds a grant outside the owning
+team to terms on the product and on every product upstream of it through input ports, directly or
+through others, since a derived product passes its inputs' data on. An upstream product is exempt
+only when everything it holds was written on the platform: no connector, no input port, every table
+built by dbt (from seeds the schema records synthetic, or SQL alone). The calendars product is one,
+so `ecb-fx-rates`'s grant passes over it; the exemption on the product itself is unchanged (a grant
+within the owning team needs no terms). No phase 004 product grants anyone yet; a grant on
+`candles` outside its team would be refused until `canonical-trades`, `kraken-trades`,
+`security-master`, `kraken-instruments`, `currency-master` and `candles` record terms.

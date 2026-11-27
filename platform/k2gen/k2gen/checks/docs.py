@@ -27,8 +27,12 @@ schema-valid documents. Then, each rule a code in CODES:
 - layers: bronze is written only by connectors and a connector writes only bronze (ADR-056 part 2);
   a bronze table is named bronze_<name> and keyed (pipeline.schema.json), and a fetch kind's carries
   model.LINEAGE_COLUMN;
-- terms before a grant outside the owning team (ADR-055 part 5); a table another product reads
-  keeps at least the retention floor;
+- terms before a grant outside the owning team (ADR-055 part 5), on the product and on every
+  product upstream of it through input ports, directly or through others (A3 of the 2026-11-28
+  review: a derived product passes its inputs' data on). An upstream product is exempt only when
+  everything it holds was written on the platform: no connector, no input port, every table built
+  by dbt (from seeds, which the schema records synthetic, or from SQL alone), as the calendars
+  product is; a table another product reads keeps at least the retention floor;
 - an incremental dbt table's key holds every partition source column (A7; experiment (a) of
   docs/research/2026-11-26-release-spine-spikes.md);
 - an input port read empty when absent (`whenAbsent: empty`) only in a product whose every dbt model
@@ -209,8 +213,11 @@ def _rules(shared: dict[str, Any], dirs: dict[tuple[str, str], _Dir]) -> Iterato
     products = [d for d in dirs.values() if d.product is not None]
     tables = {d.contract_id(t): c for d in products for t, c in d.contracts.items()}
     read = {port["contractId"] for d in products for port in d.product.get("inputPorts", [])}
-    for d in products:
-        yield from _product(d, domains, owners, tables)
+    by_id = {model.product_id(d.domain, d.name): d for d in products}
+    feeds = {pid: {port["contractId"].rsplit(".", 1)[0] for port in d.product.get("inputPorts", [])} for pid, d in by_id.items()}
+    for pid, d in by_id.items():
+        upstream = [by_id[u] for u in sorted(_upstream(pid, feeds)) if u in by_id and u != pid]
+        yield from _product(d, domains, owners, tables, upstream)
         for table, contract in d.contracts.items():
             yield from _table(d, table, contract, tables, read)
     yield from _taken("docs.product-name-taken", [(d.name, d.at(model.V2_PRODUCT_FILE)) for d in products],
@@ -244,7 +251,26 @@ def _repeated(path: str, node: Any, at: str = "$") -> Iterator[Finding]:
                     yield _finding("docs.property-repeated", path, f"{at}.customProperties: {name} appears {n} times; keep one")
 
 
-def _product(d: _Dir, domains: dict[str, Any], owners: dict[str, str], tables: dict[str, Any]) -> Iterator[Finding]:
+def _upstream(pid: str, feeds: dict[str, set[str]]) -> set[str]:
+    """Every product `pid` reads through input ports, directly or through another."""
+    seen: set[str] = set()
+    todo = list(feeds.get(pid, ()))
+    while todo:
+        p = todo.pop()
+        if p not in seen:
+            seen.add(p)
+            todo += feeds.get(p, ())
+    return seen
+
+
+def _platform_written(d: _Dir) -> bool:
+    """Everything `d` holds was written on the platform, so no source's terms apply to it."""
+    p = d.product
+    return ("connector" not in _props(p) and not p.get("inputPorts")
+            and bool(d.contracts) and all(_build(c) == "dbt" for c in d.contracts.values()))
+
+
+def _product(d: _Dir, domains: dict[str, Any], owners: dict[str, str], tables: dict[str, Any], upstream: list[_Dir]) -> Iterator[Finding]:
     p, path = d.product, d.at(model.V2_PRODUCT_FILE)
     props, team = _props(p), p["team"]["name"]
     yield from _repeated(path, p)
@@ -289,11 +315,15 @@ def _product(d: _Dir, domains: dict[str, Any], owners: dict[str, str], tables: d
     if builds and set(builds.values()) == {"serving"} and p["status"] != "paused":
         yield _finding("docs.serving-only-not-paused", path, "$.status: every table is build serving, so the product has no lake table and nothing runs it; a serving-only product is valid only paused (ADR-057), so set status paused with its lifecycleChange, or give a table a lake build")
 
-    if d.grants is not None and "terms" not in props:
-        for i, grant in enumerate(d.grants["grants"]):
-            owner = owners.get(grant["principal"])  # an undeclared principal is the access check's
-            if owner is not None and owner != team:
-                yield _finding("docs.terms-missing", d.at("grants.yaml"), f"$.grants[{i}]: {grant['principal']} belongs to {owner}, outside the product's team {team}; record the source's terms in the product's terms property before a grant outside the owning team (ADR-055 part 5)")
+    lacking = [model.product_id(u.domain, u.name) for u in upstream if "terms" not in _props(u.product) and not _platform_written(u)]
+    for i, grant in enumerate(d.grants["grants"] if d.grants is not None else []):
+        owner = owners.get(grant["principal"])  # an undeclared principal is the access check's
+        if owner is None or owner == team:
+            continue
+        if "terms" not in props:
+            yield _finding("docs.terms-missing", d.at("grants.yaml"), f"$.grants[{i}]: {grant['principal']} belongs to {owner}, outside the product's team {team}; record the source's terms in the product's terms property before a grant outside the owning team (ADR-055 part 5)")
+        if lacking:
+            yield _finding("docs.terms-missing", d.at("grants.yaml"), f"$.grants[{i}]: {grant['principal']} belongs to {owner}, outside the product's team {team}, and reads through it the data of {', '.join(lacking)}, upstream through input ports, which record no terms; each records its source's terms before a grant outside the owning team downstream of it (ADR-055 part 5)")
 
     # ponytail: any model of the product, not only those calling k2_input on the port: an ephemeral
     # or view between them passes the zero rows on. Name the readers when a product needs one exempt.
