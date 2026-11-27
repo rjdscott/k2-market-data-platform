@@ -308,7 +308,7 @@
       ]
     },
     {
-      "user": "dbt_daily_load|dbt_station_readings|k2_release_9770905272de|p\\.analyst\\-delayed|p\\.analyst\\-full|pub_daily_load|pub_station_readings|svc\\.api|svc\\.catalog|svc\\.load\\-dashboard|svc\\.runs",
+      "user": "dbt_daily_load|dbt_station_readings|k2_release_000000000000|p\\.analyst\\-delayed|p\\.analyst\\-full|pub_daily_load|pub_station_readings|svc\\.api|svc\\.catalog|svc\\.load\\-dashboard|svc\\.runs",
       "allow": [
         "execute"
       ]

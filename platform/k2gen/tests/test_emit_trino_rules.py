@@ -52,11 +52,16 @@ def emitted(m: Model) -> tuple[dict[str, Any], dict[str, list[str]]]:
 def test_each_set_compiles_to_its_golden_files(name: str) -> None:
     out, root = trino_rules.emit(loaded(name)), ROOTS[name]
     _, groups = emitted(loaded(name))
+    # The release canary's name is the set's hash, which moves with ANY document edit (the compose
+    # file included): the golden holds a fixed name in its place, and the name's shape is asserted.
+    canaries = set(re.findall(r"k2_release_[0-9a-f]{12}", out[trino_rules.RULES]))
+    assert len(canaries) == 1, canaries
+    rules = out[trino_rules.RULES].replace(canaries.pop(), "k2_release_000000000000")
     if os.environ.get("K2GEN_UPDATE_GOLDEN"):
         (root / trino_rules.RULES).parent.mkdir(parents=True, exist_ok=True)
-        (root / trino_rules.RULES).write_text(out[trino_rules.RULES])
+        (root / trino_rules.RULES).write_text(rules)
         (root / "groups.yaml").write_text(yaml.safe_dump(groups, sort_keys=True))
-    assert out[trino_rules.RULES] == (root / trino_rules.RULES).read_text()
+    assert rules == (root / trino_rules.RULES).read_text()
     assert groups == yaml.safe_load((root / "groups.yaml").read_text())
     assert out == trino_rules.emit(loaded(name))  # deterministic
     assert all(model.need_of(p) is None for p in out)  # read through the pointer every 5 s
