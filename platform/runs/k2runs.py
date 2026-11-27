@@ -13,7 +13,8 @@ from typing import Any
 
 TABLE = "governance_build.run_records.run_record"
 TASKS = ("fetch", "load", "audit", "publish", "build", "expire", "record", "maintain")
-EVENTS = ("started", "passed", "failed", "rolled_back", "audited", "reconciled", "expired")
+EVENTS = ("started", "passed", "failed", "rolled_back", "audited", "reconciled", "expired",
+          "offset_gap")
 # The columns of platform/runs/run_record.sql, in order; every one is written, absent ones as null.
 COLUMNS = ("run_id", "product_id", "release_id", "task", "event", "table_name", "snapshot_before",
            "snapshot_after", "inputs", "rows_written", "bytes_written", "started_at", "recorded_at",

@@ -224,3 +224,24 @@ For the wrapper above, step (6)'s two view statements are `emit/lake.view_update
 with `old` and `new` the tagged and tested snapshots' columns mapped to their types. The table
 above holds for `trino/password.db` with one addition: each line sits in a fixed 128-byte slot,
 rewritten by one aligned write in place, so a reader never sees a torn line.
+
+## Run-record additions, 2026-11-28 (phases 004 and 005, step I-3)
+
+Additions only: no column, enum value or key was renamed or removed, and a record written before
+this section still validates against `contracts/schema/run-record.schema.json`.
+
+- **Event `offset_gap`.** A load run with accept-data-loss writes one `offset_gap` row (task `load`)
+  for the offsets it gave up. Its `detail` is JSON text shaped by `#/$defs/offsetGapDetail`: `partitions`
+  (each `partition`, `fromOffset`, `toOffset`) and the operator's `reason`. `k2runs.EVENTS`, the schema
+  enum and the `event` column's comment list it. The table gains no column.
+- **The `lagMinutes` rule.** An input's `lagMinutes` is the run's start time minus the audited commit
+  time of the snapshot it read, never below 0; null when the input was never audited. Stated in the
+  schema's description of `inputs[].lagMinutes`.
+- **The product state.** `#/$defs/productState` fixes the allowed forms of a derived product's
+  completeness: `complete`, `partial: <contract ids of the inputs missing or late>` (comma and space
+  separated) or `degraded`. It is computed from the newest run's inputs (`k2runs.state`, a later step), not
+  stored in a column: the A6 columns are frozen, so a stored form would move them.
+- **The `holds` table is not yet created.** The operator hold (columns `product_id`, `reason`,
+  `held_by`, `held_at`, `released_at`, in the governance build catalog) needs the lake emitter,
+  deploy, the drift check, the access expectations and the backup set to learn a second table, which this
+  step does not touch; the step that writes `scripts/hold.py` owns it.
