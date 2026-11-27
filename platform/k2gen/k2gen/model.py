@@ -248,7 +248,19 @@ LINEAGE_COLUMN = "source_file_sha256"  # every fetch-kind bronze table's landed-
 AUDIT_BRANCH = "audit"  # bronze write-audit-publish branch (Spark)
 AUDITED_TAG = "audited"  # the tested-data marker on dbt and code outputs (ADR-061)
 BASE_SUFFIX = "__base"  # <fence>__base: the namespace a build writes into (ADR-061)
-SNAPSHOT_SUMMARY_KEYS = ("k2.run-id", "k2.release", "k2.batch-id", "k2.source-sha256")
+SNAPSHOT_SUMMARY_KEYS = ("k2.run-id", "k2.release", "k2.batch-id", "k2.source-sha256")  # a file connector's every commit, in connector.summary's order
+# A kafka connector's commits (I-1, 2026-11-28; docker/lake/kafka.py, which writes exactly these:
+# tests/test_frozen_interfaces.py reads its literals). Every one carries "every", k2.job being
+# KAFKA_JOB and k2.batch-id the run id; landing commits add "landing" (k2.kafka-offsets the end
+# offsets, exclusive; k2.kafka-gaps only when the run accepted a loss); bronze commits add "bronze"
+# (k2.kafka-offsets the landing offsets staged through, exclusive, trailing skipped records
+# included). A renamed key orphans every earlier snapshot as a resume point (ADR-022).
+KAFKA_JOB = "connector"
+KAFKA_SUMMARY_KEYS = {
+    "every": ("k2.job", "k2.run-id", "k2.release", "k2.batch-id"),
+    "landing": ("k2.kafka-offsets", "k2.kafka-starts", "k2.kafka-gaps"),
+    "bronze": ("k2.src-snapshot-id", "k2.kafka-offsets", "k2.kafka-skipped"),
+}
 DBT_PROJECT = "k2"  # the compiled dbt project's name (S17), so node ids are model.k2.<name>
 RUN_RECORD_SQL = REPO / "platform" / "runs" / "run_record.sql"  # S15 emits it as ddl_path("trino", ...)
 

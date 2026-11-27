@@ -245,3 +245,138 @@ this section still validates against `contracts/schema/run-record.schema.json`.
   `held_by`, `held_at`, `released_at`, in the governance build catalog) needs the lake emitter,
   deploy, the drift check, the access expectations and the backup set to learn a second table, which this
   step does not touch; the step that writes `scripts/hold.py` owns it.
+
+## A Kafka product's pipeline, 2026-11-28 (phases 004 and 005, step I-1)
+
+Frozen against `docker/lake/kafka.py` as merged with W0-1 and W0-2; where the build breakdown and
+the code differed, the code won and the line says so. Additions only, but for one departure from
+plan 004 and one replaced plan sentence, each stated below. `model.SNAPSHOT_SUMMARY_KEYS` keeps its
+four keys (a file connector's commits; `connector.py` zips them in order and
+`tests/test_lake_connector.py` holds the two equal), so the Kafka keys are its sibling,
+`model.KAFKA_SUMMARY_KEYS`.
+
+**Snapshot summary keys.** `tests/test_frozen_interfaces.py` reads every `k2.*` key `kafka.py`
+names, as a literal or through `offsets.py` and `connector.py`, and fails unless they are exactly
+these. A renamed key orphans every earlier snapshot as a resume point (ADR-022).
+
+| Commit | Key | Value |
+|---|---|---|
+| every Kafka connector commit | `k2.job` | `connector` (`model.KAFKA_JOB`), what the resume walk and expiry look for |
+| | `k2.run-id`, `k2.release`, `k2.batch-id` | the run, its release, and the batch id, which is the run id |
+| landing | `k2.kafka-offsets` | end offsets, exclusive, `{topic: {partition: offset}}`, every partition read before carried forward |
+| | `k2.kafka-starts` | the batch's first offset per partition |
+| | `k2.kafka-gaps` | only when the run accepted a loss: `{topic: {partition: [committed, log start]}}`, the offsets lost being committed to log start minus 1 |
+| bronze | `k2.kafka-offsets` | the landing offsets bronze has staged through, exclusive: the landing's end offsets at the snapshot read, so trailing skipped records advance it and `max(kafka_offset) + 1` is not it |
+| | `k2.src-snapshot-id` | the landing snapshot the stage read |
+| | `k2.kafka-skipped` | the landing rows the filter skipped, per partition |
+
+The code over the breakdown: `k2.job` is on every Kafka connector commit only; a file connector's
+commits carry `model.SNAPSHOT_SUMMARY_KEYS` and no `k2.job`, and a Kafka commit has no
+`k2.source-sha256`.
+
+**What the landing holds: a departure from plan 004.** Plan 004 says the landing table "holds the
+kept records byte for byte". Frozen instead: `lake.<fence>.landing` holds every record of the
+planned range, trade and control frames alike, `record_key` and `record_value` as read and never
+decoded; the connector's `filter` (`stream` in `[trade]` for `kraken-trades`) runs at bronze
+staging. The reason is the frozen landing columns (`model.PLATFORM_TABLES["landing"]`), which have
+no place for a skipped record, and the offset checks reused from phase 001, which hold only over an
+unbroken range: `offsets.batch_audit` passes a partition only if `end - start` rows landed at
+`start..end - 1`, and `offsets.offset_gaps` calls it intact only if `max - min + 1` equals its row
+count, so a landing without its control frames fails both at the first one, and skipped counts kept
+only in summaries would go with the snapshots that carry them. Bronze accounting: per partition the
+stage reads the landing rows from bronze's through-offset to the landing's end offset, at one
+landing snapshot and never from the topic, and kept plus skipped must equal the rows read or
+nothing stages. The descriptions of `kafkaConnector` and its `filter` in `k2-v2.schema.json` still
+say the filter decides what lands; the next step to edit that file's descriptions brings them to
+this.
+
+**Bronze.** A Kafka product has one bronze table (`kafka.py` stages into exactly one), staged from the landing
+by offset, never by run id, so a retry, or a kill between the landing commit and the stage, stages
+nothing twice and leaves no hole. Its columns are exactly the landing's nine, by name and type, as
+`stage_rows` selects them from the landing row: the key `(kafka_partition, kafka_offset)`, primary
+key positions 1 and 2, which is also each row's lineage to the landing and the topic; the source's
+values `kafka_timestamp`, `record_key` and `record_value`; and the lineage columns `batch_id`,
+`landed_at`, `run_id` and `release_id`, those of the landing batch that landed the record. The run
+that staged it is the bronze commit's `k2.batch-id` and `k2.run-id`. A column decoded from the
+envelope would be computed at stage; adding one changes this interface.
+
+**The envelope contract.** The capture's `RawMessage` (`schemas/avro/raw-message.avsc`, subject
+`market.crypto.v3.raw.<exchange>-value`) is declared by `market-capture` as the table contract
+`contracts/market-capture/kraken-trades/raw_message.odcs.yaml`, id
+`market-capture.kraken-trades.raw_message`, which the connector's `envelope.contract` names. Its
+seven fields are the Avro schema's, by name; the Avro file stays the schema the registry serves.
+W2-1 writes it. Two things are not settled today: nothing in k2gen checks that `envelope.contract`
+resolves, and `k2-v2.schema.json#/$defs/build` has no kind for a contract that is no lake table but
+the paused hot tier's `serving`.
+
+**Accepting data loss.** The Airflow trigger `conf` of the product's own DAG, so per product by
+construction:
+
+```json
+{"acceptDataLoss": true, "reason": "<why the operator accepts the loss>"}
+```
+
+Both keys or neither: `acceptDataLoss` the JSON boolean `true`, and `reason` a non-empty string,
+carried verbatim into `offsetGapDetail.reason`. No `conf`, or `{}`, is a normal run. The factory
+refuses, before `load`, a `conf` with any other key, a flag that is not `true`, a flag without a
+reason or a reason without the flag, so a misspelt key never runs as a normal run. It passes
+`--accept-data-loss` to `connector.py load` and to no other task; the reason never reaches the
+connector.
+
+The `offset_gap` run record (I-3): one row, task `load`, `table_name` the landing, `detail` the JSON
+text of `run-record.schema.json#/$defs/offsetGapDetail`, one `partitions` entry per element of
+load's result `offsetGaps` (`{topic, partition, committed, logStart, lost}`): `partition`,
+`fromOffset` its `committed`, `toOffset` its `logStart - 1`. It is written when the landing commit
+carrying `k2.kafka-gaps` was made, which load's result shows as exit 0, or as a result carrying
+bronze's `table` (the stage runs only after that commit, so a stage refused after it still lost
+the range). A run whose plan finds nothing below the log start is a normal run and writes no
+`offset_gap`. The summary is the durable record: a load that dies after its landing commit and
+before printing its result leaves the gap there alone, and nothing yet reconciles the two. A gap
+whose resumed range is empty commits a landing snapshot of no rows; W0-4b proves Spark makes that
+commit.
+
+**Below the log start, and a paused product.** A start below the broker's log start is refused at
+plan time, before Spark reads: load exits 2, nothing lands, and the message names every such
+partition with its committed offset, the log start and the records gone. Only an accept-data-loss
+run moves past it: those partitions resume at the log start, the gap committed in the landing's
+summary and reported as `offset_gap`. A paused product lands and stages nothing (load exits 0, and
+an accept-data-loss run on it records nothing). Resumed, its first run plans from its committed end
+offsets like any run: still in the log, it continues with no loss; fallen below the log start
+during the pause, it is the case above and fails loudly until an accept-data-loss run. This
+replaces plan 004's "A paused product lands nothing and resumes at the log start": a silent jump
+to the log start is the unrecorded hole ADR-022 exists to prevent. The header of `kafka.py` says
+the first run after a resume "is an accept-data-loss run"; the code refuses it unless the run is
+given the flag, and the code is what is frozen.
+
+**The watermark a derived product reads from a Kafka input** is the bronze commit's
+through-offsets: `k2.kafka-offsets` of the newest connector snapshot in the lineage of the snapshot
+the build read, per partition, end exclusive; the build selects rows by `(kafka_partition,
+kafka_offset)` against it and keeps the offsets themselves, never a snapshot id. Offsets only
+advance (`offsets.merge_committed`), a compaction or expiry commit carries no `k2.job` of
+`connector` and moves no row's offset, and the value needs no old snapshot to be evaluated, so it is
+monotonic across compaction and survives expiry. Landing time is neither: `landed_at` is a driver's
+wall clock, which can step back between runs, and a snapshot's commit time moves forward on every
+compaction. For the same reason a Kafka input's `lagMinutes` (I-3) is taken from that connector
+snapshot's commit time, its audited commit, never from a compaction snapshot after it.
+
+**Retention.** A Kafka product's landing is never expired (owner, 2026-11-28): `maintain.py`'s
+`LANDING_DAYS` is the file landings' rule alone. Snapshot expiry runs on the landing and on bronze
+by `compiled/lake/retention.json` and never removes the newest connector snapshot of either: it is
+the landing's resume point and bronze's staged-through point, and without it the next run lands
+again from the log start, or stages again from offset 0, duplicating both. W1-9 builds it and W0-4c
+proves the resume after a compaction and an expiry.
+
+**What k2gen compiles for a Kafka product (W1-2).** In `pipeline.json`: `connector` as the product
+file declares it (`kind` `kafka`, `brokers`, `registry`, `topic`, `envelope` `{format, contract}`,
+`filter` `{field, in}` when it filters, `payload`, `startFrom`, `maxOffsetsPerPartition`);
+`landing` `{table: lake.<fence>.landing}` (compiled today); `bronze`, exactly one entry: `table`
+`lake.<fence>.bronze_<name>`, `key` `["kafka_partition", "kafka_offset"]`, `values`
+`["kafka_timestamp", "record_key", "record_value"]` (today's `_bronze` leaves out only
+`source_file_sha256`, so it would list the four lineage columns as values), `decimal` `[]`,
+`patterns` `{}`, `audits` the contract's `k2-connector` checks, `branch` `audit`, `checks`
+`lake.<fence>.audit_checks`; and the DAG's tasks with no `fetch` (compiled today). k2gen refuses a
+Kafka product with more than one connector table, or one whose columns are not the landing's with
+that key, and `pipeline.schema.json` gains the matching rule for `kind` `kafka` with its test
+(its descriptions state it now; a rule there today would fail the emitter test that compiles a
+Kafka connector over a fetch-kind fixture's bronze). The landing goes in the backup set as
+`restore`, with no row expiry. The accept-data-loss `conf` is run time and is never compiled.
