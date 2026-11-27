@@ -1,0 +1,56 @@
+{
+  "bronze": [
+    {
+      "audits": [],
+      "branch": "audit",
+      "checks": "lake.kraken_trades.audit_checks",
+      "decimal": [],
+      "key": [
+        "kafka_partition",
+        "kafka_offset"
+      ],
+      "patterns": {},
+      "table": "lake.kraken_trades.bronze_trade",
+      "values": [
+        "kafka_timestamp",
+        "record_key",
+        "record_value"
+      ]
+    }
+  ],
+  "connector": {
+    "brokers": "redpanda:9092",
+    "envelope": {
+      "contract": "market-capture.kraken-trades.bronze_trade",
+      "format": "avro-confluent"
+    },
+    "filter": {
+      "field": "stream",
+      "in": [
+        "trade"
+      ]
+    },
+    "kind": "kafka",
+    "maxOffsetsPerPartition": 150000,
+    "payload": "json",
+    "registry": "http://redpanda:8081",
+    "startFrom": "earliest-retained",
+    "topic": "market.crypto.v3.raw.kraken"
+  },
+  "dagId": "kraken_trades",
+  "domain": "market-capture",
+  "fence": "kraken_trades",
+  "inputs": [],
+  "landing": {
+    "table": "lake.kraken_trades.landing"
+  },
+  "maintain": {
+    "cron": "4 4 * * *"
+  },
+  "product": "market-capture.kraken-trades",
+  "schedule": {
+    "cron": "*/5 * * * *",
+    "timeoutMinutes": 10
+  },
+  "status": "active"
+}

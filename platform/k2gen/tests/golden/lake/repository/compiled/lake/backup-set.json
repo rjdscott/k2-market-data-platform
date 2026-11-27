@@ -78,6 +78,24 @@
     },
     {
       "kind": "table",
+      "mode": "restore",
+      "ref": "main",
+      "table": "k2.kraken_trades.audit_checks"
+    },
+    {
+      "kind": "table",
+      "mode": "rebuild",
+      "ref": "main",
+      "table": "k2.kraken_trades.bronze_trade"
+    },
+    {
+      "kind": "table",
+      "mode": "restore",
+      "ref": "main",
+      "table": "k2.kraken_trades.landing"
+    },
+    {
+      "kind": "table",
       "mode": "rebuild",
       "ref": "audited",
       "table": "reference_data.calendars__base.target_days"
