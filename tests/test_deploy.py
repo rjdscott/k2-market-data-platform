@@ -179,7 +179,8 @@ sys.exit(f"fake docker: no answer for {A}")
             images = {r: "sha256:" + r[-64:] for r in (A, B, TRINO, LK, LK2)} | {TOOLS: "sha256:0123456789ab" + "0" * 52}
             self.write({"containers": [], "images": images, "tables": {}, "oneshots": ["lake-init"]})
             for f in ("tls/ca.pem", "trino/password.db", "tls/trino.pem", "principals/pub_station_readings.password",
-                      "principals/svc.platform.password"):
+                      "principals/svc.platform.password", *(f"principals/{p}.password" for p in (
+                          "dbt_station_readings", "dbt_daily_load", "pub_daily_load", "svc.runs"))):  # the good set's builds
                 (self.secrets / f).parent.mkdir(parents=True, exist_ok=True)
                 (self.secrets / f).write_text("svc.platform:$2y$10$" + "x" * 53 + "\n" if f.endswith(".db") else f"fixture {f}\n")
             self.views: dict[str, list[str]] = {}
@@ -888,6 +889,32 @@ sys.exit(f"fake docker: no answer for {A}")
         r2 = world.release(compose=compose_doc(), images={"clickhouse": B})
         p = deploy.make_plan(world.ctx, r2, [r1])
         assert p.remove == [] and "clickhouse" in p.recreate
+
+    # --- review R3: every secret file the target mounts, before anything changes ---------
+
+    def test_preflight_names_every_missing_secret_file_of_the_target_and_its_make_command(world: World) -> None:
+        now = yaml.safe_load((ROOT / "docker-compose.yml").read_text())["services"]
+        doc = compose_doc()
+        doc["services"] |= {s: now[s] for s in ("trino", "tools", "k2-api", "airflow-scheduler", "alertmanager", "dbt-runner")}
+        r1 = world.release(compose=doc)
+        p = deploy.make_plan(world.ctx, r1, [None])
+        builds = sorted(deploy.run_principals(r1))
+        assert "svc.runs" in builds and any(x.startswith("dbt_") for x in builds) and any(x.startswith("pub_") for x in builds)
+        assert deploy.secret_binds(r1) >= {"principals/svc.catalog.password", "principals/svc.api.password", "api",
+                                           "principals/svc.runs.password", "trino", "tls/trino.pem", "alertmanager"}
+        (world.secrets / "principals/dbt_daily_load.password").unlink()  # a build's: the operator mounts it at run time
+        missing = deploy.required_secrets(world.ctx, p)
+        assert missing == ["alertmanager/slack-webhook-url", "api/keys.json", "principals/dbt_daily_load.password",
+                           "principals/svc.api.password", "principals/svc.catalog.password"], missing
+        with pytest.raises(deploy.Refused) as e:
+            world.deploy(r1)
+        assert "principals/svc.catalog.password (make password PRINCIPAL=svc.catalog TO_FILE=1)" in str(e.value)
+        assert "api/keys.json (make api-key)" in str(e.value) and "alertmanager/slack-webhook-url (make alerts-install-webhook)" in str(e.value)
+        assert "fixture" not in str(e.value) and world.ups() == [] and records(world)[-1]["step"] == "preflight"
+        for n in missing:
+            (world.secrets / n).parent.mkdir(parents=True, exist_ok=True)
+            (world.secrets / n).write_text("fixture\n")
+        assert deploy.required_secrets(world.ctx, p) == []
 
     # --- the drain (W1-6, ADR-058) ------------------------------------------------------
 

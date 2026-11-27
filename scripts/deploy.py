@@ -623,13 +623,64 @@ def drain(ctx: Ctx, p: Plan, frm: str | None) -> list[str]:
 # --- step 1, preflight -------------------------------------------------------------------
 
 
+# A bind source under the secrets directory, as compose files spell it: ${K2_SECRETS} or with a default.
+SECRET_SOURCE = re.compile(r"\$\{K2_SECRETS(?::?-(?:\$\{[^}]*\}|[^}])*)?\}/([^:]+)")
+
+
+def secret_binds(rel: Release) -> set[str]:
+    """Each path under ${K2_SECRETS} a bind of the release's compose mounts, for its default set and
+    tools (deploy runs it), as compose reads the file; a source naming another variable is per run."""
+    out = set()
+    for name, spec in services(rel).items():
+        if spec.get("profiles") and name != "tools":
+            continue
+        for v in spec.get("volumes") or []:
+            m = SECRET_SOURCE.match(str(v.get("source", "") if isinstance(v, dict) else v))
+            if m and "$" not in m[1]:
+                out.add(m[1])
+    return out
+
+
+def run_principals(rel: Release) -> set[str]:
+    """The principals whose password files the one-shot operator mounts at a build: each live
+    product's builder and publisher, as its pipeline.json names them (factory.PinnedOneShot), and svc.runs."""
+    retired = {x.id for x in rel.manifest.products if x.status == "retired"}
+    out = set()
+    for path in rel.manifest.files:
+        product = path.removeprefix("compiled/products/").removesuffix("/pipeline.json")
+        if path == model.pipeline_path(product) and product not in retired:
+            if build := json.loads((rel.root / path).read_bytes()).get("build"):
+                out |= {build["writer"], build["publisher"], "svc.runs"}
+    return out
+
+
+def make_for(path: str) -> str:
+    """The command that writes a secret file, from model.SECRET_FILES' writer."""
+    if path.startswith("principals/"):
+        return f"make password PRINCIPAL={path.removeprefix('principals/').removesuffix('.password')} TO_FILE=1"
+    f = next((f for f in model.SECRET_FILES if re.fullmatch(re.sub(r"<[a-z]+>", "[^/]+", f.path), path)), None)
+    m = re.search(r"`(make [^`]+)`", f.writer) if f else None
+    return m[1] if m else "docs/runbooks/create-or-rotate-a-principal.md"
+
+
 def required_secrets(ctx: Ctx, p: Plan) -> list[str]:
-    svc = {s for s, spec in services(p.target).items() if not spec.get("profiles")}
-    need = {CA} | {f.path for f in model.SECRET_FILES if f.mount and "<" not in f.path and set(f.services) & svc}
+    """Every secret file the target's services mount, each directory bind by the files
+    model.SECRET_FILES puts in it, the build principals' password files, and those this deploy's
+    own SQL logs in with: the missing ones, before anything changes."""
+    need, dirs = {CA}, set()
+    for b in secret_binds(p.target):
+        inside = {f.path for f in model.SECRET_FILES if f.path.startswith(f"{b}/") and "<" not in f.path}
+        if inside:  # a directory bind (trino/, api/, alertmanager/): the files read through it
+            need |= inside
+        elif b.startswith("principals/") or b in {f.path for f in model.SECRET_FILES}:
+            need.add(b)
+        else:  # a bind model.SECRET_FILES does not describe: it must at least exist
+            dirs.add(b)
+    need |= {model.password_file(x) for x in run_principals(p.target)}
     if any(model.ddl_path("trino", *t.split(".")) in p.target.manifest.files for t in p.ddl):
         need.add(model.password_file("svc.platform"))
     need |= {model.password_file(v.owner) for v in p.views}
-    return sorted(n for n in need if not (ctx.secrets / n).is_file())
+    return sorted([n for n in need if not (ctx.secrets / n).is_file()] + [d for d in dirs if not (ctx.secrets / d).exists()])
 
 
 def floors(ctx: Ctx) -> None:
@@ -699,7 +750,8 @@ def preflight(ctx: Ctx, p: Plan) -> None:
                       f"{', '.join(f'{s} {r}' for s, r in gone)}; {IMAGE_FIX}")
     secrets_health(ctx)
     if missing := required_secrets(ctx, p):
-        raise Refused(f"secret files missing under {ctx.secrets}: {', '.join(missing)}")
+        raise Refused(f"secret files missing under {ctx.secrets}: "
+                      + "; ".join(f"{n} ({make_for(n)})" for n in missing) + "; nothing changed")
     if held := dropped_storage(ctx, p.sources[0], p.target):
         raise Refused(f"the release's backup set drops {'; '.join(held)}, which storage still holds; "
                       "copy and drop it first with `make drop TARGET=...` (docs/runbooks/drop-and-rebuild.md)")
