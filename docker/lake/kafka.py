@@ -14,8 +14,12 @@ land   reads the pinned range from the topic once to count and once to write. Ev
        range lands byte for byte in lake.<fence>.landing, the count per partition equal to its span
        or nothing commits, with the end offsets, the batch's starts and every accepted gap so far
        (cumulative: the previous connector commit's and any this run accepts) in that one commit's
-       summary. A retry plans from that commit, so it lands only what is new.
-stage  takes, per partition, every landing row after the offset bronze has staged through up to the
+       summary. A retry plans from that commit, so it lands only what is new. The commit is
+       written on branch LAND from main as plan read it, and made main's head by one catalog
+       commit requiring main unmoved (commit_landing): of two loads at once one lands, the other
+       exits 2 having landed nothing.
+stage  takes, per partition, every landing row after the offset bronze has staged through (for a
+       partition bronze never staged, from the landing's first offset in it, never 0) up to the
        landing's newest end offsets, read from the landing at one snapshot and never from the
        topic, so whatever earlier runs landed and did not stage is picked up exactly once. Each
        frame's envelope is decoded with the writer schema its schema id names (fetched from the
@@ -25,8 +29,10 @@ stage  takes, per partition, every landing row after the offset bronze has stage
        keeps its records for bronze's `audit` branch and counts the rest; kept plus skipped must
        equal the rows read. The bronze commit records the through-offsets (the landing's end
        offsets: trailing skipped records advance them too), the landing snapshot it read and the
-       skipped counts. While `audit` holds another unpublished batch it is refused, after the
-       landing has committed (bronze publishes in order; a blocked bronze never blocks the landing).
+       skipped counts. While `audit` holds another run's unpublished batch that failed its audit it
+       is refused, after the landing has committed (bronze publishes in order; a blocked bronze
+       never blocks the landing); one never audited, or audited and passed but never published, is
+       discarded and its range staged again by this run (restageable).
 
 audit  checks the batch at `audit`'s head over the range it staged (main's through-offsets to its
        own), never the whole branch, one audit_checks row per check of CHECKS:
@@ -36,10 +42,13 @@ audit  checks the batch at `audit`'s head over the range it staged (main's throu
        parses       every staged frame, read again from the landing at the snapshot the stage
                     read, is Confluent-framed with an id the registry serves as RawMessage, its
                     body reads, its writer schema has each of bronze's envelope columns by name
-                    and of a type that reads as the column's (problems), and the filter keeps
-                    it; a failure names partition and offset and any column, at most LISTED of
-                    them, never a byte of the frame. So a column the stage wrote NULL because
-                    the record lacks it never publishes as a silent null.
+                    and of a type that reads as the column's (problems), the filter keeps it,
+                    and bronze's staged row holds what it decodes to; a failure names partition
+                    and offset and any column, at most LISTED of them, never a byte of the
+                    frame. So a column the stage wrote NULL, because the record lacks it or the
+                    registry answered 404 for its id then, never publishes as a silent null. Any
+                    other registry error fails the task, before the stage writes or the audit
+                    records anything (catalog.fetch_schema).
        keys_unique  (kafka_partition, kafka_offset) once within the batch, and none on main.
        A run whose batch staged nothing passes each, saying so.
 
@@ -63,6 +72,7 @@ KAFKA_STARTS = "k2.kafka-starts"  # landing commits: the batch's first offset pe
 KAFKA_GAPS = "k2.kafka-gaps"
 KAFKA_SKIPPED = "k2.kafka-skipped"  # bronze commits: landing rows the filter skipped, per partition
 KEPT = "k2_kept"  # the filter's verdict on a landing row (a column of the stage's read, never written)
+LAND = "land"  # the landing's branch a load writes on, before one catalog commit makes it main's head
 # The landing's columns from the Kafka source's, as read: the bytes are never decoded or re-encoded.
 # tests/test_lake_kafka.py holds these with the run's four equal to model.PLATFORM_TABLES["landing"].
 LANDING_SOURCE = (("kafka_partition", "partition"), ("kafka_offset", "offset"),
@@ -131,6 +141,37 @@ def account(p: Plan, found: list) -> None:
     if failures:
         raise C.Refused("the read does not cover its offsets, nothing landed: "
                         + "; ".join(f"{f['scope']} {f['detail']}" for f in failures))
+
+
+def landed_on(parents: dict, head: int, parent) -> bool:
+    """Whether the landing commit `head` was written on `parent`, main as plan read it: its parent
+    is `parent`, or, with no main yet, nothing or a root no load wrote (the empty snapshot Iceberg
+    makes for a branch of a table with none). `parents` is `{snapshot: (parent, k2.batch-id)}`.
+    Iceberg retries a conflicting append on the newer head, so a load whose write landed on
+    another's would carry both ranges."""
+    on = parents.get(head, (None, None))[0]
+    return on == parent if parent is not None else on is None or parents.get(on) == (None, None)
+
+
+def commit_landing(lake, table: str, parent, head: int) -> None:
+    """Makes `head`, the landing commit written on LAND, main's head by one catalog commit that
+    requires main to be `parent` still and LAND to be `head`, only if `head` was written on
+    `parent` (landed_on). Refused otherwise, nothing landed: another load, or a compaction, moved
+    the landing since plan read it, and the next run plans from where it is."""
+    if not landed_on(lake.parents(table), head, parent):
+        raise C.Refused(f"the landing commit {head} was not written on main's {parent}, which the plan read: another "
+                        "load wrote the landing at once; nothing landed")
+    catalog = lake.catalog(table)
+    status, doc = catalog.commit(table, C.publish_change(table, parent, head, LAND))
+    if status == 409:
+        found = catalog.refs(table)
+        raise C.Refused(f"the catalog answered HTTP 409, {(doc.get('error') or {}).get('message')!r}: main (read "
+                        f"{parent}, now {found.get('main')}), {LAND} (wrote {head}, now {found.get(LAND)}); nothing "
+                        "landed, and the next run plans from what landed")
+    after = (((doc.get("metadata") or {}).get("refs") or {}).get("main") or {}).get("snapshot-id")
+    if status != 200 or after != head:
+        raise RuntimeError(f"the landing commit answered HTTP {status} with main at {after}, not {LAND}'s {head}")
+    lake.refresh(table)
 
 
 def merged(ranges) -> list:
@@ -230,17 +271,30 @@ def range_sql(ranges: dict) -> tuple[str, dict]:
     return " OR ".join(terms), args
 
 
-def stage_ranges(through: dict, landed: dict) -> dict:
+def stage_ranges(through: dict, landed: dict, firsts: dict) -> dict:
     """`{partition: (start, end)}` of the landing not yet in bronze: from the offset bronze has
-    staged through (exclusive; none staged: 0) to the landing's end offsets. Empty when level.
-    Refused when bronze is past the landing on a partition (a landing restored older than its
-    bronze): restaging would skip or double it."""
+    staged through (exclusive) to the landing's end offsets. A partition bronze has never staged
+    starts at the landing's first offset in it (`firsts`, `{partition: offset}`), never at 0: the
+    first run, and a partition added since, land from the log start. One the landing holds no row
+    of has nothing to stage. Empty when level. Refused when bronze is past the landing on a
+    partition (a landing restored older than its bronze): restaging would skip or double it."""
     [(topic, ends)] = landed.items()
-    starts = through.get(topic, {})
-    ahead = sorted(p for p, s in starts.items() if s > ends.get(p, 0))
+    starts = {**{p: firsts.get(p, e) for p, e in ends.items()}, **through.get(topic, {})}
+    ahead = sorted(p for p, s in through.get(topic, {}).items() if s > ends.get(p, 0))
     if ahead:
         raise C.Refused(f"bronze is past the landing on {topic} partitions {ahead}; nothing staged")
-    return {p: (starts.get(p, 0), e) for p, e in ends.items() if e > starts.get(p, 0)}
+    return {p: (starts[p], e) for p, e in ends.items() if e > starts[p]}
+
+
+def ranges_of(lake, landing: str, snapshot: int, through: dict, ends: dict) -> dict:
+    """stage_ranges over the landing at `snapshot`. The first offset of a partition bronze has no
+    through-offset for is the landing's minimum `kafka_offset` in it, read from its rows: they are
+    never expired (Retention), where the landing commit that recorded the batch's start
+    (KAFKA_STARTS) may be. The land step held that commit's read to its planned span, first offset
+    at its start, so the minimum is that start."""
+    [(topic, parts)] = ends.items()
+    new = sorted(p for p in parts if p not in through.get(topic, {}))
+    return stage_ranges(through, ends, lake.firsts(landing, snapshot, new) if new else {})
 
 
 def stage_account(topic: str, ranges: dict, found: list) -> dict:
@@ -253,6 +307,25 @@ def stage_account(topic: str, ranges: dict, found: list) -> dict:
     if bad:
         raise C.Refused("the stage does not account for the landing rows it read, nothing staged: " + "; ".join(bad))
     return {topic: {int(p): int(skipped) for p, _, _, skipped, _, _ in found}}
+
+
+def restageable(found: list, head: dict) -> tuple[bool, str]:
+    """`(restaged, why)` for the unpublished batch of another run on `audit`: `found` its
+    audit_checks rows at `audit`'s head (connector.checks_of), `head` that commit's summary.
+
+    A Kafka batch is its offsets, reproducible from the landing, so one never audited (its run
+    ended between stage and audit: Airflow retries no task, and the run's timeout kills it) or
+    audited, passed and never published is discarded with `audit` and its range staged again by
+    this run, with whatever landed since, under this run's own audit. Restaged, not adopted:
+    publish takes only this run's audit at the head, and adopting another run's would widen what
+    licenses a publish. A batch whose newest audit failed or lacks a check, or a head no Kafka
+    stage wrote, is never reset: it blocks until an operator clears it."""
+    if (head or {}).get(O.JOB) != JOB_CONNECTOR or O.KAFKA_OFFSETS not in head:
+        return False, "no Kafka stage wrote it"
+    if not found:
+        return True, "never audited"
+    why = C.unaudited(found, list(CHECKS))
+    return (True, "audited and passed, never published") if why is None else (False, why)
 
 
 def summary(run: C.Run, **props) -> dict:
@@ -314,21 +387,26 @@ def accounting(topic: str, ranges: dict, lost: dict, landed: list, staged: list,
                   f"{want_all} landed over {len(ranges)} partitions")
 
 
-def unparsed_reason(schema_id, registered: bool, decoded: bool, problem: str | None = None) -> str:
+def unparsed_reason(schema_id, registered: bool, decoded: bool, problem: str | None = None,
+                    staged: str | None = None) -> str:
     """Why a staged frame fails parses, from facts about it alone: never a byte of it. `problem` is
-    its writer schema's problems() joined, or None."""
+    its writer schema's problems() joined, or None; `staged` the envelope columns, joined, whose
+    value in bronze is not what the frame decodes to now (null where the stage could not decode
+    it: the registry answered 404 then), or None."""
     if schema_id is None:
         return "not Confluent-framed"
     if not registered:
         return f"schema id {int(schema_id)} is not a registered {ENVELOPE}"
     if not decoded:
         return f"its body does not read as {ENVELOPE}"
-    return f"its writer schema {int(schema_id)} {problem}" if problem else "the filter does not keep it"
+    if problem:
+        return f"its writer schema {int(schema_id)} {problem}"
+    return f"bronze staged {staged} other than it decodes to" if staged else "the filter does not keep it"
 
 
 def parses(topic: str, frames: int, failing: int, listed: list) -> tuple[bool, str]:
-    """`listed` is the first `[(partition, offset, schema id, registered, decoded, problem)]` of the
-    `failing` frames, by partition and offset."""
+    """`listed` is the first `[(partition, offset, schema id, registered, decoded, problem, staged)]`
+    of the `failing` frames, by partition and offset."""
     if not failing:
         return True, f"{frames} frames parse"
     shown = listed[:LISTED]
@@ -367,7 +445,7 @@ def land(run: C.Run, source, lake) -> tuple[int, dict]:
     are lost when the snapshots expire. The filter runs at stage, into bronze."""
     connector, table = run.pipeline["connector"], run.pipeline["landing"]["table"]
     result = {"landing": table, "landed": 0}
-    _, history = lake.history(table)
+    parent, history = lake.history(table)
     earliest, latest = source.offsets(connector["topic"])
     try:
         p = plan(history, earliest, latest, connector["maxOffsetsPerPartition"], run.accept_data_loss)
@@ -394,7 +472,11 @@ def land(run: C.Run, source, lake) -> tuple[int, dict]:
     if gaps_so_far:  # absent when no loss was ever accepted
         props[KAFKA_GAPS] = gaps_json(gaps_so_far)
     values = dict(zip(LANDING_RUN, (run.run_id, C.now(), run.run_id, run.release)))
-    lake.land(table, frames, values, summary(run, **props))
+    try:
+        commit_landing(lake, table, parent, lake.land(table, frames, values, summary(run, **props), parent))
+    except C.Refused as e:
+        print(f"load refused: {e}", file=sys.stderr)
+        return C.EXIT_REFUSED, result
     landed = sum(n for _, n, _, _ in found)
     print(f"load: landed {landed} records in {table}")
     return C.EXIT_OK, {**result, "landed": landed}
@@ -412,9 +494,17 @@ def stage(run: C.Run, lake) -> tuple[int, dict]:
         print(f"load: batch {run.run_id} is on {C.AUDIT} already; nothing staged")
         return C.EXIT_OK, result
     if pending is not None:
-        print(f"load refused: {C.AUDIT} of {table} holds batch {pending}, unpublished; this batch waits "
-              "behind it (its records are landed)", file=sys.stderr)
-        return C.EXIT_REFUSED, result
+        at = refs[C.AUDIT]
+        restage, why = restageable(lake.checks_of(bronze["checks"], table, pending, at), lake.summary_of(table, at))
+        if not restage:
+            clear = (f"ALTER TABLE {table} REPLACE BRANCH {C.AUDIT} AS OF VERSION {refs['main']}"
+                     if refs.get("main") is not None else f"ALTER TABLE {table} DROP BRANCH {C.AUDIT}")
+            print(f"load refused: {C.AUDIT} of {table} holds batch {pending} at {at}, unpublished: {why}. This batch "
+                  "waits behind it (its records are landed); once the cause is fixed an operator clears it as the "
+                  f"Spark key (docs/runbooks/file-source-audit-failed.md, step 5): {clear}", file=sys.stderr)
+            return C.EXIT_REFUSED, result
+        print(f"load: {C.AUDIT} of {table} holds batch {pending} at {at}, {why}: a Kafka batch is its offsets, so it "
+              "is discarded and its range staged again by this run, with what landed since")
     head, landed = lake.history(landing)
     last_landed = newest(landed)
     if last_landed is None:
@@ -424,7 +514,7 @@ def stage(run: C.Run, lake) -> tuple[int, dict]:
     through = O.decode(last_staged[O.KAFKA_OFFSETS]) if last_staged else {}
     ends = O.decode(last_landed[O.KAFKA_OFFSETS])
     try:
-        ranges = stage_ranges(through, ends)
+        ranges = ranges_of(lake, landing, head, through, ends)
         if not ranges:
             print(f"load: {table} is level with {landing}; nothing staged")
             return C.EXIT_OK, result
@@ -436,8 +526,8 @@ def stage(run: C.Run, lake) -> tuple[int, dict]:
         return C.EXIT_REFUSED, result
     if C.AUDIT not in refs:
         lake.create_branch(table)
-    elif refs[C.AUDIT] != refs.get("main"):  # behind main, which maintenance moved on
-        lake.reset_branch(table, refs["main"])
+    elif refs[C.AUDIT] != refs.get("main"):  # behind main, which maintenance moved on, or a batch restaged
+        lake.reset_branch(table, refs.get("main"))
     props = {O.SRC_SNAPSHOT_ID: str(head), O.KAFKA_OFFSETS: O.encode(O.merge_committed(through, ends)),
              KAFKA_SKIPPED: O.encode(skipped)}
     rows = lake.stage_rows(table, frames, summary(run, **props))
@@ -467,15 +557,14 @@ def audit_results(run: C.Run, lake, refs: dict) -> list[tuple[str, bool, str]]:
     table, landing, head = bronze["table"], run.pipeline["landing"]["table"], refs[C.AUDIT]
     batch = lake.summary_of(table, head)
     before = newest(lake.history(table)[1])
-    after = O.decode(batch[O.KAFKA_OFFSETS])
+    after, src = O.decode(batch[O.KAFKA_OFFSETS]), int(batch[O.SRC_SNAPSHOT_ID])
     [topic] = after
-    ranges = stage_ranges(O.decode(before[O.KAFKA_OFFSETS]) if before else {}, after)
+    ranges = ranges_of(lake, landing, src, O.decode(before[O.KAFKA_OFFSETS]) if before else {}, after)
     staged = lake.offset_counts(table, head, ranges)
-    failing, listed = lake.unparsed(landing, int(batch[O.SRC_SNAPSHOT_ID]), table, head, ranges,
-                                    keep_sql(run.pipeline["connector"].get("filter")))
+    failing, listed = lake.unparsed(landing, src, table, head, ranges, keep_sql(run.pipeline["connector"].get("filter")))
     return [
         ("accounting", *accounting(topic, ranges, accepted_losses(lake.history(landing)[1], topic),
-                                   lake.offset_counts(landing, int(batch[O.SRC_SNAPSHOT_ID]), ranges), staged,
+                                   lake.offset_counts(landing, src, ranges), staged,
                                    O.decode(batch[KAFKA_SKIPPED]).get(topic, {}), int(batch.get("added-records") or 0))),
         ("parses", *parses(topic, sum(n for _, n, *_ in staged), failing, listed)),
         ("keys_unique", *keys_unique(staged, lake.offset_counts(table, refs.get("main"), ranges))),
@@ -550,13 +639,26 @@ class SparkLanding(C.SparkLake):
 
         return current_snapshot_id(self.spark, C.rel(table)), snapshot_history(self.spark, C.rel(table))
 
-    def land(self, table: str, frames, values: dict, props: dict) -> None:
+    def land(self, table: str, frames, values: dict, props: dict, parent) -> int:
+        """The landing commit, written on branch LAND set to `parent` first, main untouched: its
+        snapshot id, for commit_landing. Refused unless LAND's head after the write is this Spark
+        application's own commit (the spark.app.id Iceberg's Spark writes record): another load
+        writing the branch at once moved it."""
         from pyspark.sql import functions as F
 
+        self.reset_branch(table, parent, LAND)
         cols = [F.col(src).alias(dst) for dst, src in LANDING_SOURCE] + [F.lit(v).alias(k) for k, v in values.items()]
         schema = self.spark.table(C.rel(table)).schema
         self._write(frames.select(*cols).select(*[F.col(f.name).cast(f.dataType) for f in schema.fields]),
-                    C.rel(table), props)
+                    f"{C.rel(table)}.{C.name('branch_' + LAND)}", props)
+        head = self.refs(table)[LAND]
+        if self.summary_of(table, head).get("spark.app.id") != self.spark.sparkContext.applicationId:
+            raise C.Refused(f"{LAND} of {table} is at {head}, which another load wrote at once; nothing landed")
+        return head
+
+    def refresh(self, table: str) -> None:
+        """Spark's cached copy of `table` dropped: commit_landing moved main past it, by the catalog."""
+        self.spark.sql(f"REFRESH TABLE {C.rel(table)}")
 
     def envelopes(self, frames) -> dict:
         """`{schema id: writer schema}` of the ids among `frames`' `schema_id` that the registry
@@ -642,6 +744,14 @@ class SparkLanding(C.SparkLake):
                           s=C.snapshot_id(snapshot))
         return dict(found[0][0] or {}) if found else {}
 
+    def firsts(self, table: str, snapshot: int, partitions: list) -> dict:
+        """`{partition: min(kafka_offset)}` of `table` at `snapshot` over `partitions`, those it holds
+        a row of. ponytail: a scan of those partitions, run only on a partition's first stage."""
+        marks = ", ".join(f":p{i}" for i in range(len(partitions)))
+        return dict(self._sql(f"SELECT `kafka_partition`, min(`kafka_offset`) FROM {C.rel(table)} VERSION AS OF "
+                              f"{C.snapshot_id(snapshot)} WHERE `kafka_partition` IN ({marks}) GROUP BY `kafka_partition`",
+                              **{f"p{i}": int(p) for i, p in enumerate(partitions)}))
+
     def offset_counts(self, table: str, snapshot, ranges: dict) -> list:
         """`[(partition, rows, offsets, first, last)]` of `table` at `snapshot` in `ranges`."""
         if snapshot is None or not ranges:
@@ -654,31 +764,43 @@ class SparkLanding(C.SparkLake):
     def unparsed(self, landing: str, src: int, table: str, snapshot: int, ranges: dict, keep: str) -> tuple[int, list]:
         """How many frames of `ranges` in `table` at `snapshot` fail parses, each read again from
         `landing` at `src`, the snapshot the stage read, and the first LISTED by partition and
-        offset as `(partition, offset, schema id, registered, decoded, problem)`: only the facts,
-        never the bytes. A body that does not read decodes to null (decoded_sql), and fails."""
+        offset as `(partition, offset, schema id, registered, decoded, problem, staged)`: only the
+        facts, never the bytes. A body that does not read decodes to null (decoded_sql), and fails;
+        so does a frame whose bronze row holds other values than its decode projects (`staged`, the
+        columns named), so a column the stage wrote null publishes only when the decode is null too.
+
+        ponytail: the staged row's columns are joined to the frame, payload included; a batch is
+        bounded by maxOffsetsPerPartition."""
         from pyspark.sql import functions as F
 
         if not ranges:
             return 0, []
         where, args = range_sql(ranges)
-        staged = self.spark.sql(f"SELECT `kafka_partition`, `kafka_offset` FROM {C.rel(table)} VERSION AS OF "
-                                f"{C.snapshot_id(snapshot)} WHERE {where}", args).distinct()
-        raw = self._framed(landing, src, ranges, "`kafka_partition`, `kafka_offset`, `record_value`").join(
-            staged, ["kafka_partition", "kafka_offset"], "left_semi")
         columns = envelope_columns({f.name: f.dataType.simpleString() for f in self.spark.table(C.rel(table)).schema})
+        was = "_staged_"  # a prefix no envelope column can carry: NAME starts with a letter
+        staged = (self.spark.sql(f"SELECT `kafka_partition`, `kafka_offset`, {', '.join(C.name(n) for n in columns)} "
+                                 f"FROM {C.rel(table)} VERSION AS OF {C.snapshot_id(snapshot)} WHERE {where}", args)
+                  .select("kafka_partition", "kafka_offset", *[F.col(n).alias(was + n) for n in columns]).distinct())
+        raw = self._framed(landing, src, ranges, "`kafka_partition`, `kafka_offset`, `record_value`").join(
+            staged, ["kafka_partition", "kafka_offset"])
         envelopes = self.envelopes(raw)
         cols = ["kafka_partition", "kafka_offset", "schema_id"]
         facts = (raw.where(F.col("schema_id").isNull() | ~F.col("schema_id").isin(list(envelopes)))
                  .select(*cols, F.lit(False).alias("registered"), F.lit(False).alias("decoded"),
-                         F.lit(None).cast("string").alias("problem"), F.lit(False).alias("kept")))
+                         F.lit(None).cast("string").alias("problem"), F.lit(None).cast("string").alias("staged"),
+                         F.lit(False).alias("kept")))
         for sid, schema in sorted(envelopes.items()):
             decoded = self._decoded(raw.where(F.col("schema_id") == sid), schema)
             fields = {f.name: f.dataType.simpleString() for f in decoded.schema["envelope"].dataType.fields}
             problem = ", and ".join(problems(fields, columns)) or None
-            facts = facts.unionByName(decoded.select(*cols, F.lit(True).alias("registered"),
-                                                     F.col("envelope").isNotNull().alias("decoded"),
-                                                     F.lit(problem).cast("string").alias("problem"),
-                                                     F.coalesce(F.expr(keep), F.lit(False)).alias("kept")))
-        bad = facts.where(~(F.col("registered") & F.col("decoded") & F.col("kept") & F.col("problem").isNull()))
-        listed = [tuple(r)[:6] for r in bad.orderBy("kafka_partition", "kafka_offset").limit(LISTED).collect()]
+            projected = decoded.selectExpr("*", *project_sql(fields, columns))
+            differs = F.concat_ws(", ", *[F.when(~F.col(n).eqNullSafe(F.col(was + n)), F.lit(n)) for n in columns])
+            facts = facts.unionByName(projected.select(*cols, F.lit(True).alias("registered"),
+                                                       F.col("envelope").isNotNull().alias("decoded"),
+                                                       F.lit(problem).cast("string").alias("problem"),
+                                                       F.when(differs != "", differs).alias("staged"),
+                                                       F.coalesce(F.expr(keep), F.lit(False)).alias("kept")))
+        bad = facts.where(~(F.col("registered") & F.col("decoded") & F.col("kept") & F.col("problem").isNull()
+                            & F.col("staged").isNull()))
+        listed = [tuple(r)[:7] for r in bad.orderBy("kafka_partition", "kafka_offset").limit(LISTED).collect()]
         return bad.count(), listed

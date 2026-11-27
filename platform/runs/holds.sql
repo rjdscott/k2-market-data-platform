@@ -2,12 +2,14 @@
 -- "Holds"). Frozen here, beside run_record.sql and in its namespace. k2gen's lake emitter copies
 -- this file into every release as compiled/lake/ddl/trino/governance.run_records.holds.sql
 -- (k2gen.model.ddl_path, model.PLATFORM_SQL), and deploy applies it when the release's needs.ddl
--- names the table. Written only by svc.runs through governance_build (platform/runs/k2runs.py:
--- hold, release); read by svc.catalog through governance, and by a DAG's resolve through k2runs
--- as svc.runs.
+-- names the table. Written only by svc.operator, INSERT through governance_build
+-- (platform/runs/k2runs.py: hold, release), from the host alone (scripts/hold.py; its password file
+-- is mounted into no container); read through governance, read-only at the connector, by
+-- svc.operator, svc.catalog, a DAG's resolve as svc.runs and deploy as svc.platform (k2runs.held).
 --
--- Append-only, as the run record: svc.runs holds SELECT and INSERT and nothing else, so no row is
--- ever updated or deleted. A hold is one row with released_at null; its release is a second row
+-- Append-only: svc.operator holds INSERT and nothing else here, so no row is ever updated or
+-- deleted; SELECT through governance_build, the right to roll the table back (spike (e)), is
+-- svc.platform's alone, the creator, with OWNERSHIP. A hold is one row with released_at null; its release is a second row
 -- that copies the hold's product_id, kind, reason, held_by and held_at and sets released_at and
 -- released_by. A hold is open while no release row carries its (product_id, kind, held_at).
 -- One open hold per product and kind: an operator hold and a restore's lock are apart, so the
@@ -23,4 +25,4 @@ CREATE TABLE governance_build.run_records.holds (
     released_at timestamp(6) with time zone COMMENT 'Null on the hold row; on the release row, when the hold ended, UTC',
     released_by varchar COMMENT 'Null on the hold row; on the release row, who ended it'
 )
-COMMENT 'One row per hold taken and one per hold released (step I-7); written only by svc.runs'
+COMMENT 'One row per hold taken and one per hold released (step I-7); written only by svc.operator'

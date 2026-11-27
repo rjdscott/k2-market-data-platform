@@ -18,7 +18,7 @@ CODES = {"principal-duplicate", "principal-collides", "role-undeclared", "policy
          "role-requirement-unmet", "grant-unknown-principal", "grant-unknown-role", "grant-role-not-offered", "grant-two-roles",
          "grant-to-platform", "inherit-role", "inherit-delay", "inherit-mask", "inherit-row-scope", "inherit-undeclared",
          "expectation-missing", "expectation-weak", "expectation-unknown-principal", "delay-type", "row-scope-unpartitioned",
-         "connector-role"}
+         "connector-role", "input-undeclared", "role-within-invalid"}
 SILVER = "contracts/sensor-net/station-readings/silver_readings.odcs.yaml"
 GOLD = "contracts/ops-insight/daily-load/gold_daily_load.odcs.yaml"
 
@@ -47,10 +47,13 @@ def change(doc: Any, step: dict[str, Any]) -> None:
         del node[key]
 
 
-def changed(steps: list[dict[str, Any]]) -> dict[str, bytes]:
-    documents = good()
+def changed(steps: list[dict[str, Any]], documents: dict[str, bytes] | None = None) -> dict[str, bytes]:
+    documents = good() if documents is None else dict(documents)
     parsed: dict[str, Any] = {}
     for step in steps:
+        if "text" in step:  # a model's SQL, written whole
+            documents[step["file"]] = step["text"].encode()
+            continue
         doc = parsed.setdefault(step["file"], model.parse(step["file"], documents[step["file"]]))
         change(doc, step)
     for path, doc in parsed.items():
@@ -188,3 +191,84 @@ def test_a_sibling_in_input_contracts_is_followed_to_what_it_derives_from() -> N
     assert access._inputs(product, {"id": "d.p.gold"}) == ["d.other.x"]
     doc["outputPorts"][0] = port("d.p.silver", "d.p.gold")  # a cycle of siblings ends, deriving from nothing
     assert access._inputs(product, {"id": "d.p.gold"}) == []
+
+
+DAILY = "contracts/ops-insight/daily-load/product.odps.yaml"
+GOLD_SQL = "contracts/ops-insight/daily-load/models/gold_daily_load.sql"
+BRONZE_PORT = {"file": DAILY, "append": "inputPorts",
+               "value": {"name": "bronze_readings", "version": "1.0.0", "contractId": "sensor-net.station-readings.bronze_readings"}}
+
+
+def _gold(where: str) -> dict[str, str]:
+    return {"file": GOLD_SQL, "text": "{{ config(materialized='table') }}\nselect cast(read_at as date) as load_date, station_id, "
+            "count(*) as readings, cast(avg(value) as decimal(12, 3)) as mean_value\nfrom {{ k2_input('station_readings', "
+            f"'silver_readings') }}}}\nwhere {where}\ngroup by 1, 2\n"}
+
+
+def test_a_model_reading_an_input_its_port_omits_is_refused_and_held_to_it() -> None:
+    """A1 of the 2026-11-28 review, its exploit: gold's port lists silver alone, and its model reads
+    bronze, an input port of its product offering no role, through k2_input. Read from the port's
+    list, every inherit-* rule skipped bronze; now it is refused, and full_reader meets bronze's
+    floor. Declared as a port and never read, bronze is no finding."""
+    assert codes(changed([BRONZE_PORT])) == set()
+    exploit = [BRONZE_PORT, _gold("station_id in (select station_id from {{ k2_input('station_readings', 'bronze_readings') }})")]
+    found = access.check(docset(changed(exploit)), None)
+    assert {f.code for f in found} == {"access.input-undeclared", "access.inherit-role"}, [f.message for f in found]
+    (undeclared,) = [f for f in found if f.code == "access.input-undeclared"]
+    assert undeclared.path == DAILY
+    assert "models/gold_daily_load.sql: k2_input('station_readings', 'bronze_readings')" in undeclared.message
+
+
+def test_an_expression_k2gen_cannot_read_stands_for_every_input_port() -> None:
+    for hidden in ("{% set f = k2_input %}station_id in (select station_id from {{ f('station_readings', 'bronze_readings') }})",
+                   "station_id in (select station_id from {{ k2_input('station_' ~ 'readings', 'bronze_readings') }})",
+                   "station_id in (select station_id from {{ api.Relation.create(schema='station_readings__base') }})"):
+        found = access.check(docset(changed([BRONZE_PORT, _gold(hidden)])), None)
+        assert {f.code for f in found} == {"access.input-undeclared", "access.inherit-role"}, hidden
+        assert any("which k2gen cannot read" in f.message for f in found), hidden
+
+
+def test_the_reviewers_exploit_on_the_security_master_is_refused() -> None:
+    """instrument offers full_reader; currency offers no role and is an input port of the product,
+    not of instrument's output port. Read through k2_input, k2gen check passed it before the fix."""
+    from test_repository_documents import repository_set
+
+    path = "contracts/reference-data/security-master/models/instrument.sql"
+    repo = repository_set().documents
+    assert access.check(docset(dict(repo)), None) == []
+    sql = repo[path].decode().replace("  where held_reason is null\n", "  where held_reason is null\n    and base_asset in "
+                                      "(select code from {{ k2_input('currency_master', 'currency') }})\n", 1)
+    found = access.check(docset({**repo, path: sql.encode()}), None)
+    assert sorted(f.code for f in found) == ["access.inherit-role", "access.input-undeclared"], [f.message for f in found]
+    assert all(f.message.startswith("reference-data.security-master.instrument") for f in found)
+
+
+def test_a_sibling_reached_by_ref_passes_its_reads_on() -> None:
+    """The same read in venue_symbol_claim reaches every model that refs it: each is refused, and
+    the two offering full_reader meet currency's floor; asset declares currency, so it passes."""
+    from test_repository_documents import repository_set
+
+    path = "contracts/reference-data/security-master/models/venue_symbol_claim.sql"
+    repo = repository_set().documents
+    sql = repo[path].decode().replace("  from {{ ref('security_master__code_exceptions') }}\n", "  from {{ ref("
+                                      "'security_master__code_exceptions') }}\n  union all\n  select 'kraken', upper(code), "
+                                      "upper(code) from {{ k2_input('currency_master', 'currency') }}\n", 1)
+    found = access.check(docset({**repo, path: sql.encode()}), None)
+    ids = "reference-data.security-master."
+    assert sorted((f.code, f.message.split("'s model")[0].split(" offers")[0]) for f in found) == [
+        ("access.inherit-role", ids + "instrument"), ("access.inherit-role", ids + "venue_symbol"),
+        *(("access.input-undeclared", ids + t) for t in ("instrument", "venue_symbol", "venue_symbol_claim", "venue_symbol_held"))]
+    (chain,) = [f.message for f in found if f.code == "access.input-undeclared" and f.message.startswith(ids + "instrument")]
+    assert ("models/instrument.sql: ref('security_master__venue_symbol_claim') -> models/venue_symbol_claim.sql: "
+            "k2_input('currency_master', 'currency')") in chain
+
+
+def test_public_reader_within_full_reader_would_offer_internal_data_publicly() -> None:
+    """Why A6 forbids the one direction: declared, gold could offer public_reader over silver,
+    which offers no public_reader, and only the order check stops it; the other direction, an
+    internal role within public_reader, is no finding."""
+    steps = [{"file": "contracts/access/roles.yaml", "set": "roles/public_reader/within", "value": ["full_reader"]},
+             {"file": GOLD, "append": "roles", "value": {"role": "public_reader", "access": "read"}}]
+    assert codes(changed(steps)) == {"access.role-within-invalid"}
+    assert codes(changed(steps[1:])) == {"access.inherit-role"}
+    assert codes(changed([{"file": "contracts/access/roles.yaml", "set": "roles/full_reader/within", "value": ["public_reader"]}])) == set()

@@ -20,18 +20,21 @@ schema:
     properties:
       - name: venue
         physicalType: varchar
+        transformSourceObjects: [market-analytics.canonical-trades.trades.venue]
         required: true
         primaryKey: true
         primaryKeyPosition: 1
         description: The venue the trades happened on.
       - name: instrument_id
         physicalType: varchar
+        transformSourceObjects: [market-analytics.canonical-trades.trades.instrument_id]
         required: true
         primaryKey: true
         primaryKeyPosition: 2
         description: The security master's instrument the trades are of.
       - name: window_start
         physicalType: timestamp(6) with time zone
+        transformSourceObjects: [market-analytics.canonical-trades.trades.trade_ts]
         required: true
         primaryKey: true
         primaryKeyPosition: 3
@@ -52,6 +55,9 @@ schema:
             value: event
       - name: open
         physicalType: decimal(38,18)
+        # The price of the first (last) trade by trade_ts; the venue row's key only breaks a tie
+        # between trades at one instant, so its order reaches the column and none of its values.
+        transformSourceObjects: [market-analytics.canonical-trades.trades.price, market-analytics.canonical-trades.trades.trade_ts, market-analytics.canonical-trades.trades.is_duplicate]
         required: true
         description: >-
           The first trade's price, first by trade_ts, ties broken by the venue row's key
@@ -59,40 +65,51 @@ schema:
           candles broke ties by receive time and position in the frame.
       - name: high
         physicalType: decimal(38,18)
+        transformSourceObjects: [market-analytics.canonical-trades.trades.price, market-analytics.canonical-trades.trades.is_duplicate]
         required: true
         description: The highest price.
       - name: low
         physicalType: decimal(38,18)
+        transformSourceObjects: [market-analytics.canonical-trades.trades.price, market-analytics.canonical-trades.trades.is_duplicate]
         required: true
         description: The lowest price.
       - name: close
         physicalType: decimal(38,18)
+        # The price of the first (last) trade by trade_ts; the venue row's key only breaks a tie
+        # between trades at one instant, so its order reaches the column and none of its values.
+        transformSourceObjects: [market-analytics.canonical-trades.trades.price, market-analytics.canonical-trades.trades.trade_ts, market-analytics.canonical-trades.trades.is_duplicate]
         required: true
         description: The last trade's price, in the order open uses.
       - name: volume
         physicalType: decimal(38,18)
+        transformSourceObjects: [market-analytics.canonical-trades.trades.quantity, market-analytics.canonical-trades.trades.is_duplicate]
         required: true
         description: The sum of the trades' quantities, in the base asset, exact.
       - name: quote_volume
         physicalType: decimal(38,18)
+        transformSourceObjects: [market-analytics.canonical-trades.trades.price, market-analytics.canonical-trades.trades.quantity, market-analytics.canonical-trades.trades.is_duplicate]
         required: true
         description: >-
           The sum of price times quantity, in the quote asset: each price rounded half up to 12
           and each quantity to 10 fractional digits first, the sum to 18.
       - name: trade_count
         physicalType: bigint
+        transformSourceObjects: [market-analytics.canonical-trades.trades.is_duplicate]
         required: true
         description: The trades counted, each once (is_duplicate false).
       - name: first_trade_at
         physicalType: timestamp(6) with time zone
+        transformSourceObjects: [market-analytics.canonical-trades.trades.trade_ts, market-analytics.canonical-trades.trades.is_duplicate]
         required: true
         description: The earliest trade_ts counted.
       - name: last_trade_at
         physicalType: timestamp(6) with time zone
+        transformSourceObjects: [market-analytics.canonical-trades.trades.trade_ts, market-analytics.canonical-trades.trades.is_duplicate]
         required: true
         description: The latest trade_ts counted.
       - name: through_load_seq
         physicalType: bigint
+        transformSourceObjects: [market-analytics.canonical-trades.trades.load_seq]
         required: true
         description: >-
           The highest canonical-trades load_seq the build that wrote this row had read: the
@@ -118,3 +135,7 @@ customProperties:
         # canonical-trades delays trade_ts 20 minutes; a candle shows once its window ended 20
         # minutes ago, by then every trade in it is past that delay (access.inherit-delay)
         delay: {column: window_end, minutes: 20}
+        # canonical-trades masks load_seq for this role, and through_load_seq is its highest value
+        # at the build that wrote the row, so an old candle rewritten late carries the newest count
+        # (access.inherit-mask). Every other column declares what it derives from.
+        mask: [through_load_seq]

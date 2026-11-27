@@ -129,5 +129,10 @@ customProperties:
     value:
       delayed_reader:
         # The venue's delay, on the same market time (access.inherit-delay); candles carries it on
-        # to window_end. No mask: the masked venue columns are not carried.
+        # to window_end. The venue's masks where a column is carried (access.inherit-mask):
+        # kafka_offset, and load_seq, which derives from it and is itself a running count of the
+        # rows each build writes, so a late rewrite of an old visible row carries the newest number.
+        # conn_id, conn_msg_seq and received_at are not carried. kafka_offset is a key column, so
+        # this role's rows are not keyed by the whole key (silver_trade's note).
         delay: {column: trade_ts, minutes: 20}
+        mask: [kafka_offset, load_seq]

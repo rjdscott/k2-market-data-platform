@@ -1,0 +1,12 @@
+# The v2 fixture set's domains with the kinds overlay's topic: synthetic, no real source, venue or
+# market. The overlay's file replaces the good set's (tests/test_checks_connectors.py kinds()).
+domains:
+  sensor-net:
+    owner: sensor-team
+    kind: source-aligned
+    description: Made-up weather-station readings, as a synthetic feed would send them.
+    topics: [example.station.frames]  # station-feed's (connectors.topic-*)
+  ops-insight:
+    owner: insight-team
+    kind: consumer-aligned
+    description: Made-up daily summaries derived from the sensor domain.

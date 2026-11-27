@@ -303,6 +303,24 @@ nothing stages. The descriptions of `kafkaConnector` and its `filter` in `k2-v2.
 say the filter decides what lands; the next step to edit that file's descriptions brings them to
 this.
 
+2026-11-28 (review finding D1): a partition bronze has no through-offset for (the product's first
+stage, or a partition added since) starts at the landing's first offset in it, its minimum
+`kafka_offset` read from the landing's rows, never at 0. The landing lands from the log start
+(`startFrom: earliest-retained`), so a range from 0 planned rows that were never there and the first
+audit on a trimmed topic failed for good. The rows are the source because they are never expired;
+the landing commit whose `k2.kafka-starts` recorded that start may be. The audit's accounting plans
+from the same start, and Retention's "stages again from offset 0" reads "from the landing's first
+offset".
+
+2026-11-28 (review finding D4): the landing commit is no plain append to `main`, which Iceberg
+retries on a newer head, so two loads at once landed one range twice. It is written on the
+landing's branch `land`, set first to `main` as the plan read it (a landing with no `main`: made
+again, empty), and made `main`'s head by one Iceberg REST commit requiring `main` to be that
+snapshot and `land` the commit, as `connector.publish` moves bronze, and only if the commit's
+parent is that snapshot. The loser of a race, or a load whose landing a compaction moved under
+it, exits 2 having landed nothing, and the next run plans from what landed. The landing's refs
+are `main` and `land`.
+
 **Bronze.** A Kafka product has one bronze table (`kafka.py` stages into exactly one), staged from the landing
 by offset, never by run id, so a retry, or a kill between the landing commit and the stage, stages
 nothing twice and leaves no hole. Its columns are exactly the landing's nine, by name and type, as
@@ -332,6 +350,22 @@ batch in the audit's `parses`, which reads each staged frame again from the land
 column. `schema_id` and the envelope columns are never `required`: a frame unframed, of an id that
 is no `RawMessage`, or whose body does not read, is staged with them null and fails `parses`.
 k2gen's `connectors.kafka-bronze-shape` and `pipeline.schema.json` hold this shape.
+
+2026-11-28 (review finding D3): an id is unresolvable only when the registry answers 404 for it;
+any other registry error fails the task, exit 1, before the stage writes or the audit records
+anything. `parses` also compares each staged row with the frame's decode from the landing: a frame
+whose bronze columns are not what its decode projects (null where the decode is not, as when the
+registry answered 404 at the stage and serves the id since) fails the batch, naming partition,
+offset and the columns.
+
+2026-11-28 (review finding D2): a kill between the stage and the audit leaves no stuck batch either.
+A stage that finds another run's batch unpublished on `audit` resets `audit` to `main` and stages
+the range again from `main`'s through-offsets, with whatever landed since, when that batch has no
+`audit_checks` row at its snapshot (never audited) or its newest audit passed every check (never
+published); it is refused, naming the failed checks and the `REPLACE BRANCH` (no `main`: `DROP
+BRANCH`) that clears it, when its newest audit failed or lacks a check, or no Kafka stage wrote the
+head. A batch that failed its audit is never reset. The file kinds keep their rule: any other
+batch blocks.
 
 **The envelope contract.** The capture's `RawMessage` (`schemas/avro/raw-message.avsc`, subject
 `market.crypto.v3.raw.<exchange>-value`) is declared by `market-capture` as the table contract
@@ -462,6 +496,26 @@ deploy reads it, below); svc.runs SELECT and INSERT there (`make hold` and the l
 `resolve` reads); svc.catalog SELECT through `governance`, for the page. No principal holds DELETE or
 UPDATE on it, and no reader group reaches it.
 
+2026-11-28 (review A4): this replaces the writer above. svc.runs's password is in every dbt-runner
+one-shot and the scheduler, and Trino enforces only who may INSERT, so its holder could forge or end
+a hold; and SELECT through `governance_build` is the right to roll the table back (spike (e)), which
+ends a hold with no row written. The holds' one writer is now `svc.operator` (`model.HOLDS_WRITER`,
+declared in `contracts/access/principals.yaml`), the operator's own login from the host: INSERT
+through `governance_build` and nothing else there. Every read of the holds goes through the reader
+catalog, read-only at the connector (`k2runs.HOLDS_READ`, `governance.run_records.holds`), the
+writes' own `NOT EXISTS` conditions included: SELECT there for svc.operator, svc.runs (`resolve`),
+svc.platform (deploy's resume) and svc.catalog. svc.platform keeps SELECT and OWNERSHIP through
+`governance_build` as the table's creator; OWNERSHIP lets it drop and recreate the table, and
+SELECT there lets it roll it back, so a hold is as safe as svc.platform's password, which only the
+host holds. `scripts/hold.py` connects as svc.operator from
+`${K2_SECRETS}/principals/svc.operator.password`, which the operator makes once with
+`make password PRINCIPAL=svc.operator TO_FILE=1`, and refuses without it; no compose service and no
+one-shot kind is given it (`tests/test_hold.py`). The one container that sees it is deploy's own
+live access one-shot, which the operator starts from the host and which mounts `principals/`
+read-only whole, svc.platform's included, for the live rows; those rows log in as svc.operator, so
+a deploy whose live suite runs needs the file, though its preflight does not ask for it (deploy
+writes no hold). The run record's rules are unchanged.
+
 **Backup and retention.** In the backup set as `restore` at `main`, and in `retention.json` at the
 run records' 7 days of snapshots; no row is ever expired.
 
@@ -579,3 +633,44 @@ Additive: one compiled file, one rule glob. Built by W1-17 in `platform/k2gen/k2
 - **Proof** (a container job): `platform/k2gen/tests/promtool/product-alerts_test.yml`, for
   `kraken_trades`, runs beside a scratch release's compiled file with `promtool check rules` and
   `promtool test rules` (the commands are in its header).
+
+## The access review's fixes, 2026-11-28 (phases 004 and 005)
+
+2026-11-28, what an output derives from (finding A1): the inputs every `access.inherit-*` rule runs
+over are the output port's `inputContracts`, as before, plus every `k2_input` target its model
+reads, a sibling's through the product's own `ref()` chain included
+(`k2gen.checks.sql.model_reads`). A model expression the lint cannot name (a variable, a macro,
+`api.Relation.create`, a `k2_input` with arguments that are not literals) stands for every input
+port of the product, all that Trino lets its builder read. An input read and not declared for that
+output is `access.input-undeclared`, on the product file, naming the model, the input and the
+chain; one declared and never read stays no finding.
+
+2026-11-28, a Kafka topic's one reader (finding A2): a domain in `contracts/domains.yaml` may list
+the Kafka `topics` its capture writes (additive, `k2-v2.schema.json#/$defs/domains`);
+`market-capture` lists the nine `market.crypto.v3.{raw,trades,book}.<venue>` topics
+`docker/redpanda/init.sh` creates. A kafka product's topic must be one its own domain lists
+(`connectors.topic-not-owned`), a topic is read by one product of the set and listed by one domain
+(`connectors.topic-claimed-twice`, naming both). Nothing already declared could carry it: the
+envelope contract is the reading product's own bronze, and the compose file names no domain. The
+declaration sits in the file the platform team owns (`.github/CODEOWNERS`), not in a product's
+directory. Redpanda has no ACLs and every load shares the Spark key and network, so this is a
+compile-time rule; what stops a product the documents do not describe is the review of its
+contract.
+
+2026-11-28, terms upstream (finding A3): `docs.terms-missing` now holds a grant outside the owning
+team to terms on the product and on every product upstream of it through input ports, directly or
+through others, since a derived product passes its inputs' data on. An upstream product is exempt
+only when everything it holds was written on the platform: no connector, no input port, every table
+built by dbt (from seeds the schema records synthetic, or SQL alone). The calendars product is one,
+so `ecb-fx-rates`'s grant passes over it; the exemption on the product itself is unchanged (a grant
+within the owning team needs no terms). No phase 004 product grants anyone yet; a grant on
+`candles` outside its team would be refused until `canonical-trades`, `kraken-trades`,
+`security-master`, `kraken-instruments`, `currency-master` and `candles` record terms.
+
+2026-11-28, the role order checked (finding A6): each `within` entry of
+`contracts/access/roles.yaml` names a declared role, never the role itself, with no cycle, and
+`public_reader` is within none (`access.role-within-invalid`). The forbidden direction is the one
+that leaks: `public_reader` within `full_reader` would let an output offer data to holders who may
+take it off the platform over an input that offered it only inside. An internal role within
+`public_reader` is allowed: the output is held to that role's policy on the public input, and
+nothing leaves.

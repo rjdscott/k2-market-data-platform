@@ -23,7 +23,7 @@ from __future__ import annotations
 from typing import Any
 
 from k2gen import model
-from k2gen.checks.docs import _build, _prop_at, _props, _read
+from k2gen.checks.docs import _build, _prop_at, _props, _read, _upstream
 from k2gen.emit.dbt import quality_test
 from k2gen.model import DocumentSet, Finding
 
@@ -71,18 +71,6 @@ def check(docs: DocumentSet, previous: DocumentSet | None) -> list[Finding]:
         if "refresh" in _props(t.product):
             out.append(_finding("refresh.target-chains", path, f"{at}: {target} names its own refresh, {_props(t.product)['refresh']}; a refresh is one hop, so a target declares none"))
     return out
-
-
-def _upstream(pid: str, feeds: dict[str, set[str]]) -> set[str]:
-    """Every product `pid` reads through input ports, directly or through another."""
-    seen: set[str] = set()
-    todo = list(feeds.get(pid, ()))
-    while todo:
-        p = todo.pop()
-        if p not in seen:
-            seen.add(p)
-            todo += feeds.get(p, ())
-    return seen
 
 
 def _warns(d: Any) -> bool:

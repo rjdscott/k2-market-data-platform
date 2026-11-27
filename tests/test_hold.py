@@ -1,14 +1,18 @@
-"""scripts/hold.py: make hold and make unhold, with the run-records client and Airflow faked."""
+"""scripts/hold.py: make hold and make unhold, with the run-records client and Airflow faked; and
+the holds' writer, svc.operator, whose password file no service or one-shot is given (review A4)."""
+import ast
 import json
 import sys
 from pathlib import Path
 
 import pytest
+import yaml
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path[:0] = [str(ROOT / "scripts"), str(ROOT / "platform" / "runs")]
 import hold  # noqa: E402
 import k2runs  # noqa: E402
+from test_secret_mounts import source  # noqa: E402
 
 DAGS = [{"product": "market-capture.kraken-trades", "dagId": "kraken_trades"},
         {"product": "sensor-net.station-readings", "dagId": "station_readings"}]
@@ -124,3 +128,64 @@ def test_live_dags_reads_airflow_pointer(tmp_path):
     assert hold.live_dags(tmp_path / "rels") == DAGS
     with pytest.raises(hold.Refused):
         hold.live_dags(tmp_path / "none")
+
+
+def releases(tmp_path):
+    rel = tmp_path / "rels" / "R1" / "compiled" / "airflow"
+    rel.mkdir(parents=True)
+    (rel / "dags.json").write_text(json.dumps({"dags": DAGS}))
+    (tmp_path / "rels" / "pointers").mkdir()
+    (tmp_path / "rels" / "pointers" / "airflow").symlink_to("../R1")
+    return tmp_path / "rels"
+
+
+def test_hold_connects_as_svc_operator_and_refuses_without_its_password_file(monkeypatch, tmp_path, capsys):
+    secrets = tmp_path / "secrets"
+    monkeypatch.setenv("K2_RELEASES", str(releases(tmp_path)))
+    monkeypatch.setenv("K2_SECRETS", str(secrets))
+    calls = []
+    monkeypatch.setattr(k2runs, "connect", lambda **k: calls.append(k) or "conn")
+    monkeypatch.setattr(hold, "do_hold", lambda conn, *a: calls.append(conn) or 0)
+    # no file: refused before any connection, naming the one command that makes it
+    assert hold.main(["hold", P, "drill"]) == 2
+    err = capsys.readouterr().err
+    assert "make password PRINCIPAL=svc.operator TO_FILE=1" in err and calls == []
+    # svc.runs's file, which every dbt-runner one-shot and the scheduler hold, is never used instead
+    (secrets / "principals").mkdir(parents=True)
+    (secrets / "principals" / "svc.runs.password").write_text("x")
+    assert hold.main(["hold", P, "drill"]) == 2 and calls == []
+    (secrets / "principals" / "svc.operator.password").write_text("x")
+    assert hold.main(["hold", P, "drill"]) == 0
+    assert calls[0]["user"] == "svc.operator" and calls[0]["password_file"] == str(secrets / "principals" / "svc.operator.password")
+    assert calls[1] == "conn"
+
+
+def test_the_writer_is_the_models_holds_writer():
+    tree = ast.parse((ROOT / "platform/k2gen/k2gen/model.py").read_text())
+    found = {n.targets[0].id: ast.literal_eval(n.value) for n in tree.body
+             if isinstance(n, ast.Assign) and isinstance(n.targets[0], ast.Name) and n.targets[0].id == "HOLDS_WRITER"}
+    assert found == {"HOLDS_WRITER": "svc.operator"} and hold.WRITER == "svc.operator"
+
+
+def oneshot_secrets() -> set[str]:
+    """Every secret path oneshot.ALLOWED lets any one-shot kind mount, its assignments run alone
+    (the module imports Airflow, which these tests do not have)."""
+    ns: dict = {}
+    for n in ast.parse((ROOT / "docker/airflow/dags/oneshot.py").read_text()).body:
+        if isinstance(n, ast.Assign) and isinstance(n.targets[0], ast.Name) and n.targets[0].id in ("SECRETS_MOUNT", "CA", "ALLOWED"):
+            exec(compile(ast.Module([n], []), "oneshot.py", "exec"), ns)
+    return {s for kind in ns["ALLOWED"].values() for s in kind["secrets"]}
+
+
+def test_no_service_or_one_shot_is_given_the_holds_writers_password():
+    # The compose file: no service mounts svc.operator's file, nor the principals directory whole.
+    compose = yaml.safe_load((ROOT / "docker-compose.yml").read_text())
+    for name, svc in compose["services"].items():
+        for v in svc.get("volumes") or []:
+            src = source(v)
+            assert "svc.operator" not in src and not src.rstrip("/").endswith("/principals"), (name, src)
+    # A DAG's one-shot: svc.operator's mount (k2gen.model.password_mount) is in no kind's allow-list,
+    # so oneshot.py refuses it as a principal of any run.
+    mounts = oneshot_secrets()
+    assert mounts and "/run/k2-secrets/runs.password" in mounts and "/run/k2-secrets/operator.password" not in mounts
+    assert not [m for m in mounts if "operator" in m]

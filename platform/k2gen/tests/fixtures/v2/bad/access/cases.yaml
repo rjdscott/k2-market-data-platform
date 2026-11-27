@@ -2,7 +2,8 @@
 # which tests/test_checks_access.py applies and then requires access.check to report `code` and
 # no other; every changed document stays schema-valid, so a case tests this check, not a schema.
 # A change names a `file` under good/ and one of: `set` a slash path (keys and list indexes) to
-# `value`, `append` `value` to the list at a path, `remove` what a path names.
+# `value`, `append` `value` to the list at a path, `remove` what a path names; or `text`, a model's
+# SQL written whole.
 # Indexes used below: silver_readings customProperties/6 is `policies`, /4 `partitioning`;
 # gold_daily_load's columns are load_date, station_id, readings, mean_value, and a gold delay on
 # load_date makes it a timestamp(6) with time zone first (access.delay-type); expectations/1 is the delayed
@@ -90,7 +91,8 @@ cases:
   - name: an output over an input offering no role, owner-only bronze
     code: access.inherit-role
     changes:
-      - {file: contracts/ops-insight/daily-load/product.odps.yaml, set: outputPorts/0/inputContracts/0/id, value: sensor-net.station-readings.bronze_readings}
+      # listed beside silver, which the model reads (a port without it is access.input-undeclared)
+      - {file: contracts/ops-insight/daily-load/product.odps.yaml, append: outputPorts/0/inputContracts, value: {id: sensor-net.station-readings.bronze_readings, version: 1.0.0}}
   - name: an output offering delayed_reader over an input offering only full_reader, which masks a column the output shows
     code: access.inherit-mask
     changes:
@@ -261,3 +263,26 @@ cases:
     code: access.expectation-weak
     changes:
       - {file: tests/access/expectations.yaml, remove: expectations/1/mustAppear}
+  # the role order (A6 of the 2026-11-28 review)
+  - name: a role within one roles.yaml does not declare
+    code: access.role-within-invalid
+    changes:
+      - {file: contracts/access/roles.yaml, set: roles/delayed_reader/within, value: [full_raeder]}
+  - name: a role within itself
+    code: access.role-within-invalid
+    changes:
+      - {file: contracts/access/roles.yaml, set: roles/delayed_reader/within, value: [delayed_reader]}
+  - name: two roles each within the other
+    code: access.role-within-invalid
+    changes:
+      - {file: contracts/access/roles.yaml, set: roles/full_reader/within, value: [delayed_reader]}
+  - name: public_reader within full_reader, which would offer internal data off the platform
+    code: access.role-within-invalid
+    changes:
+      - {file: contracts/access/roles.yaml, set: roles/public_reader/within, value: [full_reader]}
+  # what a model reads (A1 of the 2026-11-28 review)
+  - name: a model reading an input through k2_input that its output port does not declare
+    code: access.input-undeclared
+    changes:
+      - file: contracts/sensor-net/station-readings/models/silver_readings.sql
+        text: "{{ config(materialized='table') }}\nselect s.* from {{ source('station_readings', 'bronze_readings') }} as s\njoin {{ k2_input('daily_load', 'gold_daily_load') }} as g on g.station_id = s.station_id\n"
