@@ -3,7 +3,9 @@
     (scripts/spikes/2026-11-26/spine-d-k2-input/, docs/research/2026-11-26-release-spine-spikes.md),
     its parameter named as A7 freezes it. The shape that holds in one dbt build:
       k2_inputs absent                           -> source(), unpinned (a developer's run)
-      k2_inputs set, no "<product_fence>/<table>" -> a compiler error, at parse
+      k2_inputs set, no "<product_fence>/<table>" -> a compiler error when the model compiles (at
+                                                    parse source(): the project holds every product, and
+                                                    the wrapper pins one product's inputs)
       a unit test                                -> source(), which dbt has already replaced with the
                                                     fixture's CTE (__dbt__cte__<source>__<table>), and a
                                                     CTE takes no FOR VERSION AS OF
@@ -23,7 +25,12 @@
   {%- if inputs is none -%}
     {{ rel }}
   {%- elif key not in inputs -%}
-    {{ exceptions.raise_compiler_error("k2_input: k2_inputs is set but has no entry " ~ key) }}
+    {#- Only when the model compiles: dbt parses every model of the project, and another product's
+        models name inputs this run's wrapper (one product's) does not pin. -#}
+    {%- if execute -%}
+      {{ exceptions.raise_compiler_error("k2_input: k2_inputs is set but has no entry " ~ key) }}
+    {%- endif -%}
+    {{ rel }}
   {%- elif model.resource_type == 'unit_test' -%}
     {{ rel }}
   {%- else -%}
