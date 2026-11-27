@@ -38,6 +38,12 @@
       "kind": "table",
       "mode": "restore",
       "ref": "main",
+      "table": "governance.run_records.holds"
+    },
+    {
+      "kind": "table",
+      "mode": "restore",
+      "ref": "main",
       "table": "governance.run_records.run_record"
     },
     {
