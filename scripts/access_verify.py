@@ -177,9 +177,9 @@ def connect(env_file: Path | None) -> tuple[Trino, dict[str, Any]]:
             except KeyError as x:
                 raise NoPassword(f"{x.args[0]} ({env_file})") from None
 
-        # A REST row's key, mode 600, beside the people's passwords: the lake made one per principal
-        # of a `via: rest` row and gave k2-api only its sha256 (throwaway-lake.sh, api/keys.json).
-        return Trino(env["trino"], env["ca"], lake_password), env | {"apiKeys": os.environ.get("K2_API_KEY_DIR") or f"{env['secrets']}/throwaway"}
+        # A REST row's key, mode 600, where `make api-key TO_FILE=1` writes it: the lake made one per
+        # principal of a `via: rest` row and gave k2-api only its sha256 (throwaway-lake.sh, api/keys.json).
+        return Trino(env["trino"], env["ca"], lake_password), env | {"apiKeys": os.environ.get("K2_API_KEY_DIR") or f"{env['secrets']}/api-keys"}
     root = Path(os.environ.get("K2_SECRETS") or Path.home() / "k2-secrets")
     url = f"https://{os.environ.get('K2_TRINO_HOST') or 'localhost'}:{os.environ.get('K2_TRINO_PORT') or 8443}"
 
@@ -189,7 +189,8 @@ def connect(env_file: Path | None) -> tuple[Trino, dict[str, Any]]:
             raise NoPassword(f"no {f}")
         return f.read_text().strip()
 
-    keys = os.environ.get("K2_API_KEY_DIR") or str(root / "api")  # <principal>.key, each the operator's `make api-key`
+    # <principal>.key, each the operator's `make api-key TO_FILE=1`; never api/, which k2-api mounts
+    keys = os.environ.get("K2_API_KEY_DIR") or str(root / "api-keys")
     return Trino(url, os.environ.get("K2_TRINO_CA") or str(root / "tls/ca.pem"), live_password), {"trino": url, "apiKeys": keys}
 
 
@@ -375,8 +376,8 @@ def rest_skip(e: Any, scope: str, env: dict[str, Any]) -> str | None:
     made, as live skips a password the platform does not hold. A lake makes every key it needs,
     so there a missing one fails the leg."""
     if scope == "live" and api_key(env, e.principal) is None:
-        return (f"no {env['apiKeys']}/{e.principal}.key: (umask 077; make api-key PRINCIPAL={e.principal} "
-                f"> ${{K2_SECRETS}}/api/{e.principal}.key) runs it")
+        return (f"no {env['apiKeys']}/{e.principal}.key: make api-key PRINCIPAL={e.principal} TO_FILE=1 "
+                "(ROTATE=1 too when it has a key already) runs it")
     return None
 
 

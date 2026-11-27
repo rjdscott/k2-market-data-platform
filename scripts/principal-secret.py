@@ -2,7 +2,7 @@
 """Creates, rotates or removes one principal's Trino password or k2-api key; writes only its hash.
 
     make password PRINCIPAL=<id> [ROTATE=1] [TO_FILE=1]
-    make api-key PRINCIPAL=<id> [ROTATE=1]
+    make api-key PRINCIPAL=<id> [ROTATE=1] [TO_FILE=1]
     make principal-remove PRINCIPAL=<id> [FORCE=1]
     make principals-status
 
@@ -10,7 +10,7 @@ The procedure around it: docs/runbooks/create-or-rotate-a-principal.md. Every fi
 ${K2_SECRETS:-$HOME/k2-secrets}, laid out as k2gen.model.SECRET_FILES says, outside any git
 checkout (refused inside one, found by a `.git` above it, never by asking git), and nothing here
 is ever committed, compiled or hashed into a release. Every run puts ${K2_SECRETS} and its
-trino/, api/ and principals/ back to mode 700, and each file it writes to 600.
+trino/, api/, api-keys/ and principals/ back to mode 700, and each file it writes to 600.
 
 - `password`: a 32-byte random secret (secrets.token_urlsafe, 43 characters). Its bcrypt, cost
   10 and spelt `$2y$` as Trino's file authenticator requires, replaces or appends the one line
@@ -23,17 +23,24 @@ trino/, api/ and principals/ back to mode 700, and each file it writes to 600.
   holds so that `make access-verify LIVE=1` can run its rows. A person with a grant on any
   other product is refused: their password is theirs, printed once.
 - `api-key`: `k2_` and a 32-byte random secret, printed once on stdout, which must be a
-  terminal. api/keys.json maps the sha256 hex of the whole key, `k2_` included, to the
-  principal; a rotation drops the principal's old key. Only a principal k2-api may act as
+  terminal. With TO_FILE=1 it is instead written to api-keys/<id>.key, mode 600, and printed
+  nowhere: the operator's copy of a reader's key, for the access suite's REST rows
+  (`make access-verify LIVE=1`, scripts/access_verify.py), which deploy mounts by name into that
+  one-shot alone. It is api-keys/ and never api/: k2-api mounts api/ whole for keys.json and must
+  only ever hold hashes, so no compose service mounts api-keys/ (tests/test_secret_mounts.py).
+  api/keys.json maps the sha256 hex of the whole key, `k2_` included, to the principal; a
+  rotation drops the principal's old key, rewrites the key file with TO_FILE=1, and without it
+  removes the key file, which would no longer match. Only a principal k2-api may act as
   (compiled/api/principals.json, k2gen.emit.api) gets one.
-- `remove`: drops the principal's lines of trino/password.db, its entries of api/keys.json, and
-  principals/<id>.password (emptied in place, then unlinked, so a container's stale mount of it
-  reads nothing); every other line and entry is kept byte for byte. It prints the names of what
+- `remove`: drops the principal's lines of trino/password.db, its entries of api/keys.json,
+  principals/<id>.password and api-keys/<id>.key (each emptied in place, then unlinked, so a
+  container's stale mount of it reads nothing); every other line and entry is kept byte for byte. It prints the names of what
   it removed, or that there was nothing, and exits 0 either way: the state asked for holds, so a
   rerun is not an error. Refused for a principal still known unless FORCE=1, and always for the
   release canary.
-- `status`: each known principal's id and which of the three it has, then a `STALE` line for
-  each principal holding any of the three that is not known, and a `MALFORMED` line for each
+- `status`: each known principal's id and which of the four it has (a key file whose sha256 is
+  not its principal's in api/keys.json reads `stale`), then a `STALE` line for each such key file
+  and for each principal holding any of the four that is not known, and a `MALFORMED` line for each
   line of password.db Trino would refuse (by line number and reason, never its content); never
   a hash or a secret. Exit 1 when any STALE or MALFORMED line is printed.
 
@@ -86,8 +93,9 @@ from k2gen.emit import api
 
 PASSWORD_DB = "trino/password.db"
 API_KEYS = "api/keys.json"
+API_KEY_DIR = "api-keys"  # the operator's key files: never api/, which k2-api mounts whole
 assert {PASSWORD_DB, API_KEYS} <= {f.path for f in model.SECRET_FILES}
-MANAGED_DIRS = ("trino", "api", "principals")  # under ${K2_SECRETS}, kept at mode 700 on every run
+MANAGED_DIRS = ("trino", "api", API_KEY_DIR, "principals")  # under ${K2_SECRETS}, kept at mode 700 on every run
 BCRYPT_COST = 10  # the secrets table's cost; Trino refuses below 8
 SLOT = 128  # bytes per password.db line, its newline included: 32 to a 4 KiB page
 USER = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
@@ -300,6 +308,17 @@ def put(fd: int, i: int, data: bytes) -> None:
         die(f"a short write to {PASSWORD_DB}; rerun")
 
 
+def key_file(principal: str) -> str:
+    return f"{API_KEY_DIR}/{principal}.key"
+
+
+def drop(path: Path) -> None:
+    """Emptied in place under its lock, then unlinked: a container's stale mount of it reads nothing."""
+    with locked(path) as fd:
+        write(fd, "")
+        path.unlink()
+
+
 def print_once(secret: str, what: str) -> None:
     print(secret, flush=True)
     print(f"principal-secret: that {what} is shown this once; store it now", file=sys.stderr)
@@ -343,21 +362,35 @@ def password(root: Path, principal: str, rotate: bool, to_file: bool, held: froz
         print_once(secret, f"password for {principal}")
 
 
-def api_key(root: Path, principal: str, rotate: bool) -> None:
+def api_key(root: Path, principal: str, rotate: bool, to_file: bool = False) -> None:
+    stored = root / key_file(principal)
     with locked(root / API_KEYS) as f:
         text = read(f).strip()
         keys: dict[str, str] = json.loads(text) if text else {}
-        if principal in keys.values() and not rotate:
+        if (principal in keys.values() or stored.exists()) and not rotate:
             die(f"{principal} already has an API key; ROTATE=1 replaces it")
         key = "k2_" + secrets.token_urlsafe(32)
         keys = {h: p for h, p in keys.items() if p != principal}
         keys[hashlib.sha256(key.encode()).hexdigest()] = principal
+        if to_file:
+            with locked(stored) as s:
+                write(s, key)
         write(f, json.dumps(keys, indent=2, sort_keys=True) + "\n")
+        dropped = not to_file and stored.is_file()
+        if dropped:  # it holds the old key, which keys.json no longer does
+            drop(stored)
+    if to_file:
+        print(f"principal-secret: {principal}: sha256 in {root / API_KEYS}, key in {stored} (mode 600)", file=sys.stderr)
+        return
+    if dropped:
+        print(f"principal-secret: {principal}: removed {stored}, which held the old key; TO_FILE=1 ROTATE=1 writes a key there",
+              file=sys.stderr)
     print_once(key, f"API key for {principal}")
 
 
 def remove(root: Path, principal: str) -> None:
     db, keys_file, stored = root / PASSWORD_DB, root / API_KEYS, root / model.password_file(principal)
+    key = root / key_file(principal)
     removed = []
     with (locked(db) if db.exists() else nullcontext()) as f:  # held over the file, as password() holds it
         if f is not None:
@@ -367,18 +400,19 @@ def remove(root: Path, principal: str) -> None:
                 write(f, "".join(kept))
                 removed.append(f"{len(lines) - len(kept)} line(s) of {PASSWORD_DB}")
         if stored.is_file():
-            with locked(stored) as s:
-                write(s, "")  # a container's stale mount of it then reads nothing, not the password
-                stored.unlink()
+            drop(stored)
             removed.append(model.password_file(principal))
-    if keys_file.exists():
-        with locked(keys_file) as f:
+    with (locked(keys_file) if keys_file.exists() else nullcontext()) as f:  # held over the key file, as api_key() holds it
+        if f is not None:
             text = read(f).strip()
             keys: dict[str, str] = json.loads(text) if text else {}
             kept_keys = {h: p for h, p in keys.items() if p != principal}
             if len(kept_keys) < len(keys):
                 write(f, json.dumps(kept_keys, indent=2, sort_keys=True) + "\n")
                 removed.append(f"{len(keys) - len(kept_keys)} key(s) of {API_KEYS}")
+        if key.is_file():
+            drop(key)
+            removed.append(key_file(principal))
     print(f"principal-secret: {principal}: "
           + (f"removed {', '.join(removed)}" if removed else "nothing to remove") + f" under {root}", file=sys.stderr)
 
@@ -391,32 +425,40 @@ def status(root: Path, ids: set[str], callers: set[str], held: set[str]) -> int:
     nameless = {n for n, user, _ in malformed if user is None}  # its content is never printed, not even as a name
     with_password = {line.partition(":")[0] for n, line in enumerate(lines_of(db_text), 1) if line and n not in nameless}
     text = keys_file.read_text().strip() if keys_file.exists() else ""
-    with_key = set(json.loads(text).values()) if text else set()
+    keys: dict[str, str] = json.loads(text) if text else {}
+    with_key = set(keys.values())
     with_file = {p.name.removesuffix(".password") for p in root.glob(model.password_file("*"))}
-    print(f"{'principal':<28} {'password':<9} {'file':<5} api-key")
+    key_files = {f.name.removesuffix(".key"): f for f in root.glob(key_file("*"))}
+    # hashed here, never printed: a key file k2-api would refuse, its sha256 not its principal's in keys.json
+    unmatched = {p for p, f in key_files.items() if keys.get(hashlib.sha256(f.read_text().strip().encode()).hexdigest()) != p}
+    print(f"{'principal':<28} {'password':<9} {'file':<5} {'api-key':<8} key-file")
     for p in sorted(ids):
         has_file = (root / model.password_file(p)).exists() if not p.startswith("p.") or p in held else None
         print(f"{p:<28} {'yes' if p in with_password else 'no':<9} "
               f"{'-' if has_file is None else 'yes' if has_file else 'no':<5} "
-              f"{('yes' if p in with_key else 'no') if p in callers else '-'}")
+              f"{('yes' if p in with_key else 'no') if p in callers else '-':<8} "
+              f"{'stale' if p in unmatched else 'yes' if p in key_files else 'no' if p in callers else '-'}")
     canaries = sorted(u for u in with_password if u.startswith("k2_release_"))
-    stale = sorted((with_password | with_key | with_file) - ids - set(canaries))
+    stale = sorted((with_password | with_key | with_file | set(key_files)) - ids - set(canaries))
     if canaries:
         print(f"release canaries in {PASSWORD_DB} (deploy writes them): {', '.join(canaries)}")
     for p in stale:
         where = [f for f, has in ((PASSWORD_DB, p in with_password), (API_KEYS, p in with_key),
-                                  (model.password_file(p), p in with_file)) if has]
+                                  (model.password_file(p), p in with_file), (key_file(p), p in key_files)) if has]
         why = "neither declared nor a dbt or code product's builder or publisher"
         if p in with_password:
             why += ", yet Trino still logs it in"
             if any(re.fullmatch(r, p) for r in model.PIPELINE_PRINCIPALS):
                 why += " and the platform's pattern rules still match it"
         print(f"STALE {p} in {', '.join(where)}: {why}; make principal-remove PRINCIPAL={p}")
+    for p in sorted(unmatched & ids):
+        print(f"STALE {p} in {key_file(p)}: its sha256 is not {p}'s in {API_KEYS}, so k2-api refuses the key; "
+              f"make api-key PRINCIPAL={p} TO_FILE=1 ROTATE=1")
     for n, user, why in malformed:
         fix = f"make principal-remove PRINCIPAL={user} FORCE=1" if user else \
             "blank it in place (docs/runbooks/create-or-rotate-a-principal.md section 4)"
         print(f"MALFORMED {PASSWORD_DB} line {n}: {why}; Trino refuses every login while it stands; {fix}")
-    return 1 if stale or malformed else 0
+    return 1 if stale or malformed or unmatched & ids else 0
 
 
 def main() -> None:
@@ -425,7 +467,8 @@ def main() -> None:
     parser.add_argument("--principal", default="")
     parser.add_argument("--rotate", action="store_true", help="replace the principal's existing password or key")
     parser.add_argument("--to-file", action="store_true",
-                        help="password of a service or test principal: write it to principals/<id>.password, print nothing")
+                        help="write a service's or test principal's password to principals/<id>.password, "
+                             "or an API key to api-keys/<id>.key; print nothing")
     parser.add_argument("--force", action="store_true", help="remove: the credentials of a principal still known")
     args = parser.parse_args()
     root = secrets_root()
@@ -447,15 +490,14 @@ def main() -> None:
             "nor a dbt or code product's builder or publisher")
     if args.action == "api-key" and args.principal not in callers:
         die(f"{args.principal}: k2-api never acts as it (compiled/api/principals.json), so it gets no key")
-    if args.action == "api-key" and args.to_file:
-        die("TO_FILE=1 is for a password; an API key is printed, never stored")
     if not args.to_file and not sys.stdout.isatty():
         die("stdout is not a terminal, and the secret is printed there once; run it in a terminal"
-            + (", or TO_FILE=1 for a service principal's password file" if args.action == "password" else ""))
+            + (", or TO_FILE=1 for a service principal's password file" if args.action == "password"
+               else f", or TO_FILE=1 for the operator's key file under {API_KEY_DIR}/"))
     if args.action == "password":
         password(root, args.principal, args.rotate, args.to_file, frozenset(held))
     else:
-        api_key(root, args.principal, args.rotate)
+        api_key(root, args.principal, args.rotate, args.to_file)
 
 
 if __name__ == "__main__":

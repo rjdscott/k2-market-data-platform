@@ -117,7 +117,11 @@ if A[0] == "exec":
         print("\n".join(os.readlink(p.replace("/k2/releases", E["FAKE_ROOT"])) for p in A[3:])); sys.exit(0)
     if A[2] == "airflow":  # Airflow 3.3.2's CLI: piped -o json is one line, every value a string
         F, argv = S["airflow"], A[3:]
+        prompts = argv[:2] in (["dags", "pause"], ["dags", "unpause"]) and argv[-1:] != ["-y"]  # the real CLI would ask on a pipe
+        argv = [a for a in argv if a != "-y"]
         log("airflow", *argv)
+        if prompts:
+            sys.exit(1)
         if argv == ["dags", "list", "-o", "json"]:
             print(json.dumps([{"dag_id": d, "fileloc": "/x/factory.py", "is_paused": str(p)} for d, p in sorted(F["paused"].items())]))
         elif argv[:2] in (["dags", "pause"], ["dags", "unpause"]) and len(argv) == 3:
@@ -126,7 +130,7 @@ if A[0] == "exec":
         elif argv[:2] == ["dags", "list-runs"] and argv[3:] == ["--state", "running", "-o", "json"]:
             # a paused DAG's run stays running, its later tasks unscheduled, after its task is done
             print(json.dumps([{"dag_id": argv[2], "run_id": "scheduled__1", "state": "running"}] if argv[2] in F["busy"] else []))
-        elif argv[:2] == ["dags", "states-for-dag-run"] and argv[3:] == ["scheduled__1", "-o", "json"]:
+        elif argv[:2] == ["tasks", "states-for-dag-run"] and argv[3:] == ["scheduled__1", "-o", "json"]:
             n = F["busy"][argv[2]]  # its build runs for n more polls; -1: for ever
             F["busy"][argv[2]] = n - 1 if n > 0 else n
             print(json.dumps([{"dag_id": argv[2], "task_id": "resolve", "state": "success"},
@@ -654,6 +658,23 @@ sys.exit(f"fake docker: no answer for {A}")
         if pending:
             assert any(x.startswith("SKIP access-verify LIVE=1") and "governance.access-canary" in x for x in lines)
 
+    def test_live_access_verify_mounts_each_operator_key_file_by_name_and_nothing_of_api(world: World,
+                                                                                          monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.undo()
+        r1 = world.release()
+        for f in ("api-keys/p.b.key", "api-keys/p.a.key", "api/keys.json", "api/p.old.key"):
+            (world.secrets / f).parent.mkdir(parents=True, exist_ok=True)
+            (world.secrets / f).write_text("fixture\n")
+        calls: list[list[str]] = []
+        monkeypatch.setattr(deploy, "run", lambda *a, **k: calls.append(list(a)) or subprocess.CompletedProcess(a, 0, "", ""))
+        deploy.access_live(world.ctx, r1, world.ctx.tmp / "access-live.json")
+        (c,) = calls
+        mounts = [c[i + 1] for i, x in enumerate(c) if x == "-v"]
+        # the runner reads K2_SECRETS=/run/k2-secrets, so its default <secrets>/api-keys is where the files land
+        assert c[c.index(f"{model.SECRETS_ENV}=/run/k2-secrets") - 1] == "-e"
+        assert [m for m in mounts if ":/run/k2-secrets/api" in m] == [f"{world.secrets}/api-keys/{n}:/run/k2-secrets/api-keys/{n}:ro"
+                                                     for n in ("p.a.key", "p.b.key")]
+
     GUARDED = ('SELECT "id", "note" FROM "g"."a__base"."e" FOR VERSION AS OF \'audited\' WHERE EXISTS (SELECT 1 FROM '
                '"g"."a__base"."e$refs" WHERE "name" = \'audited\' AND "type" = \'TAG\')')
     STORED = ('SELECT\n  "id"\n, "note"\nFROM\n  "g"."a__base"."e" FOR VERSION AS OF \'audited\'\nWHERE (EXISTS (SELECT 1\n'
@@ -1137,7 +1158,7 @@ sys.exit(f"fake docker: no answer for {A}")
         world.ctx.say = said.append
         assert world.deploy(r2) == 0
         runs = [[*p, "--state", "running", "-o", "json"] for p in (["dags", "list-runs", DL], ["dags", "list-runs", SR])]
-        poll = [*runs, ["dags", "states-for-dag-run", SR, "scheduled__1", "-o", "json"]]
+        poll = [*runs, ["tasks", "states-for-dag-run", SR, "scheduled__1", "-o", "json"]]
         assert world.airflow_calls() == [["dags", "list", "-o", "json"], ["dags", "pause", SR], *poll, *poll,
                                          ["dags", "unpause", SR]]  # daily_load's run is asked, its pause kept
         assert world.paused() == {SR: False, DL: True} and not (world.root / deploy.DRAIN_STATE).exists()

@@ -65,13 +65,14 @@ file is read inside the container.
 |---|---|---|
 | `make password PRINCIPAL=<id>` | the password | the line `<id>:<bcrypt>` in `trino/password.db` |
 | `make password PRINCIPAL=<id> TO_FILE=1` (service principals: `svc.*`, `dbt_*`, `pub_*`; and test principals, below) | nothing | that line, and the password in `principals/<id>.password` |
-| `make api-key PRINCIPAL=<id>` | the key, `k2_` and 43 characters | `"<sha256 of the whole key>": "<id>"` in `api/keys.json` |
-| `make principal-remove PRINCIPAL=<id> [FORCE=1]` | the names of what it removed | `<id>`'s lines of `trino/password.db` and entries of `api/keys.json` removed, `principals/<id>.password` emptied and deleted |
-| `make principals-status` | names and yes or no, a `STALE` line for each unknown principal still holding one, a `MALFORMED` line for each line of `password.db` Trino would refuse; exit 1 on either | nothing (it puts the directories back to 700) |
+| `make api-key PRINCIPAL=<id>` | the key, `k2_` and 43 characters | `"<sha256 of the whole key>": "<id>"` in `api/keys.json`; with `ROTATE=1`, an `api-keys/<id>.key` that held the old key deleted |
+| `make api-key PRINCIPAL=<id> TO_FILE=1` (a reader whose REST rows the access suite runs) | nothing | that entry, and the key in `api-keys/<id>.key`, never in `api/`, which k2-api mounts |
+| `make principal-remove PRINCIPAL=<id> [FORCE=1]` | the names of what it removed | `<id>`'s lines of `trino/password.db` and entries of `api/keys.json` removed, `principals/<id>.password` and `api-keys/<id>.key` emptied and deleted |
+| `make principals-status` | names and yes or no (`stale` for a key file whose sha256 is not its principal's in `api/keys.json`), a `STALE` line for each such key file and each unknown principal still holding one, a `MALFORMED` line for each line of `password.db` Trino would refuse; exit 1 on any | nothing (it puts the directories back to 700) |
 
 The password is 32 random bytes (43 characters); its bcrypt has cost 10 and the `$2y$` prefix
 Trino's file authenticator requires. Every file is mode 600 in a directory of mode 700 (every run
-puts `${K2_SECRETS}`, `trino/`, `api/` and `principals/` back to 700), and is rewritten in place
+puts `${K2_SECRETS}`, `trino/`, `api/`, `api-keys/` and `principals/` back to 700), and is rewritten in place
 under a lock, so concurrent runs cannot lose a line and a running container sees the change
 (section 4 says why that matters). `password.db` is a file of fixed 128-byte lines: a rotation
 rewrites its own line where it is, a removal blanks it with spaces (Trino skips a blank line),
@@ -87,10 +88,15 @@ so `TO_FILE=1` writes it to `principals/<id>.password` for `make access-verify L
 with (`access_verify.platform_held`, the same rule the live suite runs by). A person with a grant
 on any other product is refused `TO_FILE=1`: their password is printed once and is theirs. A principal that already has a password or
 key keeps it unless `ROTATE=1` is given. Without `TO_FILE=1` the command refuses to run unless
-its output is a terminal, so a secret is never captured by a pipe or a log; no secret is ever
-taken from the command line. An API key exists only for a principal k2-api may act as, which is
-every declared principal but `dbt_*`, `pub_*`, `svc.runs`, `svc.platform`, `svc.catalog` and
-`svc.api` (`compiled/api/principals.json`).
+its output is a terminal, so a secret is never captured by a pipe or a log (a redirect to a file
+is refused too: use `TO_FILE=1`); no secret is ever taken from the command line. An API key
+exists only for a principal k2-api may act as, which is every declared principal but `dbt_*`,
+`pub_*`, `svc.runs`, `svc.platform`, `svc.catalog` and `svc.api` (`compiled/api/principals.json`).
+`make api-key PRINCIPAL=<id> TO_FILE=1` writes a reader's key to `api-keys/<id>.key`, mode 600,
+instead of printing it: the operator's copy for the access suite's REST rows (`make access-verify
+LIVE=1`). The directory is `api-keys/`, never `api/`: k2-api mounts `api/` whole for `keys.json`
+and must only ever hold hashes, so no compose service mounts `api-keys/`; deploy mounts each key
+file by name, read-only, into the live suite's one-shot alone.
 
 ---
 
@@ -108,9 +114,10 @@ password or key yet; `make principals-status` shows `no` in its column.
 
 ```bash
 make principals-status
-# principal                    password  file  api-key
-# dbt_access_canary            no        no    -
-# p.canary-delayed             no        -     no
+# principal                    password  file  api-key  key-file
+# dbt_access_canary            no        no    -        -
+# p.analyst-a                  no        -     no       no
+# p.canary-delayed             no        no    no       no
 # ...
 
 make password PRINCIPAL=p.canary-full
@@ -120,6 +127,10 @@ make password PRINCIPAL=p.canary-full
 make api-key PRINCIPAL=p.canary-full
 # <the key, k2_ and 43 characters>
 # principal-secret: that API key for p.canary-full is shown this once; store it now
+
+# or a reader's key the access suite reads, written to a file and printed nowhere:
+make api-key PRINCIPAL=p.canary-full TO_FILE=1
+# principal-secret: p.canary-full: sha256 in <K2_SECRETS>/api/keys.json, key in <K2_SECRETS>/api-keys/p.canary-full.key (mode 600)
 ```
 
 Store each in the principal's password manager at once: nothing can show it again, and a lost
@@ -200,6 +211,9 @@ make password PRINCIPAL=svc.runs TO_FILE=1 ROTATE=1
 
 make password PRINCIPAL=p.canary-full ROTATE=1
 make api-key PRINCIPAL=p.canary-full ROTATE=1
+# with a key file, which would no longer match keys.json:
+# principal-secret: p.canary-full: removed <K2_SECRETS>/api-keys/p.canary-full.key, which held the old key; TO_FILE=1 ROTATE=1 writes a key there
+make api-key PRINCIPAL=p.canary-full TO_FILE=1 ROTATE=1   # the hash and the key file both replaced
 ```
 
 Check the login as in section 1 or 2. A one-shot container (dbt-runner) reads its password file
@@ -309,10 +323,11 @@ answered `401` (section 1).
 
 ```bash
 make principals-status
-# principal                    password  file  api-key
+# principal                    password  file  api-key  key-file
 # ...
 # STALE dbt_gone in trino/password.db, principals/dbt_gone.password: neither declared nor a dbt or code product's builder or publisher, yet Trino still logs it in and the platform's pattern rules still match it; make principal-remove PRINCIPAL=dbt_gone
-# make: *** [mk/principals.mk:24: principals-status] Error 1
+# STALE p.canary-full in api-keys/p.canary-full.key: its sha256 is not p.canary-full's in api/keys.json, so k2-api refuses the key; make api-key PRINCIPAL=p.canary-full TO_FILE=1 ROTATE=1
+# make: *** [mk/principals.mk:25: principals-status] Error 1
 
 make principal-remove PRINCIPAL=dbt_gone
 # principal-secret: dbt_gone: removed 1 line(s) of trino/password.db, principals/dbt_gone.password under ...

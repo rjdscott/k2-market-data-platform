@@ -297,7 +297,7 @@ def test_the_live_scope_runs_only_platform_held_passwords_on_the_canary():
     assert (sql, rest) == ("sql", "rest") and legs["a service's REST row"][0][1] is None and "make api-key PRINCIPAL=svc.api" in why
 
 
-def test_the_lake_env_json_is_read_as_the_lake_writes_it(tmp_path):
+def test_the_lake_env_json_is_read_as_the_lake_writes_it(tmp_path, monkeypatch):
     """A release-scope run finds each principal's password where the lake put it (the review of
     S13 and S20, H1: env.json once named one `passwordFile`; the lake now writes a map)."""
     secrets = tmp_path / "secrets"
@@ -317,6 +317,15 @@ def test_the_lake_env_json_is_read_as_the_lake_writes_it(tmp_path):
     assert [trino.password(u) for u in ("p.canary-full", "svc.api", "svc.extra")] == \
         ["pw-of-p.canary-full", "pw-of-svc.api", "pw-of-svc.extra"]
     assert env["users"] == sorted(files) and env["release"] == "/work/releases/r"
+    monkeypatch.delenv("K2_API_KEY_DIR", raising=False)
+    # Each REST key where `make api-key TO_FILE=1` writes it, on a lake and live alike: api-keys/, never
+    # api/, the directory k2-api mounts for keys.json.
+    assert av.connect(env_file)[1]["apiKeys"] == f"{secrets}/api-keys"
+    monkeypatch.setenv("K2_SECRETS", str(secrets))
+    monkeypatch.setenv("K2_TRINO_CA", str(tmp_path / "ca.pem"))
+    assert av.connect(None)[1]["apiKeys"] == str(secrets / "api-keys")
+    monkeypatch.setenv("K2_API_KEY_DIR", str(tmp_path / "elsewhere"))
+    assert av.connect(None)[1]["apiKeys"] == str(tmp_path / "elsewhere")
     with pytest.raises(av.NoPassword, match="no password file for p.nobody"):
         trino.password("p.nobody")
     del env["passwords"]
@@ -706,7 +715,8 @@ def test_a_rest_read_refused_its_key_fails_and_an_unreachable_api_fails():
 def test_a_missing_key_skips_a_live_rest_leg_naming_the_command_and_never_a_release_one(tmp_path):
     env = {"apiKeys": str(tmp_path)}
     r = SimpleNamespace(principal="p.a")
-    assert "make api-key PRINCIPAL=p.a" in av.rest_skip(r, "live", env)
+    hint = av.rest_skip(r, "live", env)
+    assert "make api-key PRINCIPAL=p.a TO_FILE=1" in hint and "ROTATE=1" in hint and ">" not in hint  # the terminal guard refuses a redirect
     assert av.rest_skip(r, "release", env) is None  # the lake makes every key: a missing one fails the leg
     (tmp_path / "p.a.key").write_text(KEY + "\n")
     assert av.rest_skip(r, "live", env) is None and av.api_key(env, "p.a") == KEY
