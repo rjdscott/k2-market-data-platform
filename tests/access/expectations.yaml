@@ -151,6 +151,10 @@ expectations:
   - {principal: p.analyst-a, table: lake.ecb_fx_rates.landing_files, denied: true}  # the product's landing
   - {principal: p.canary-full, table: lake.kraken_trades.landing, denied: true}  # a Kafka landing: every record, no reader
   - {principal: p.canary-full, table: lake.kraken_trades.bronze_trade, denied: true}  # bronze, which offers no role
+  - {principal: p.canary-full, table: market_capture.kraken_instruments.silver_listing, denied: true}  # no grant yet: the product grants no reader
+  - {principal: p.canary-full, table: market_capture.kraken_instruments__base.silver_listing, denied: true}  # the base, never a reader's
+  - {principal: p.canary-full, table: lake.kraken_instruments.bronze_pairs, denied: true}  # bronze, which offers no role
+  - {principal: p.canary-full, table: lake.kraken_instruments.landing_files, denied: true}  # the product's landing
   # No compaction by a consumer (plan 002's optimize line). The reader name is a view, which Trino
   # refuses as NOT_SUPPORTED before any access check, so the denials name the table under it.
   - {principal: p.analyst-a, sql: "ALTER TABLE fx_reference.ecb_fx_rates.silver_rates EXECUTE optimize", expect: error}  # a view: not supported
