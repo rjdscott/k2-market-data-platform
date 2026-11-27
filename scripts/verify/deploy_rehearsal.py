@@ -81,7 +81,8 @@ RUN_RECORD = "governance_build.run_records.run_record"
 RESULTS: list[tuple[str, bool, str]] = []
 CODE = ("platform/k2gen/k2gen", "platform/k2gen/pyproject.toml", "platform/k2gen/uv.lock", "platform/runs",
         "contracts", "dbt", "docker/tools", "scripts/deploy.py", "scripts/principal-secret.py",
-        "scripts/tls.sh", "scripts/check-env.py", "scripts/backup-lake.sh", "scripts/lib", "scripts/access_verify.py", "scripts/verify", "tests/access", "mk")
+        "scripts/tls.sh", "scripts/check-env.py", "scripts/backup-lake.sh", "scripts/lib", "scripts/access_verify.py", "scripts/verify", "tests/access", "mk",
+        "docker/lake", "scripts/engine-keys.py", ".env.example")  # lake-init's script and policies; make engine-keys and the placeholders it replaces
 
 COMPOSE = """\
 # The rehearsal's compose file, release-shaped (scripts/verify/deploy_rehearsal.py): what S22 makes live.
@@ -143,8 +144,8 @@ services:
     command: ["/usr/lib/trino/bin/launcher", "run", "--etc-dir=/k2/releases/pointers/trino/compiled/trino/etc"]
     environment:
       K2_TRINO_SHARED_SECRET: "${K2_TRINO_SHARED_SECRET}"
-      K2_TRINO_S3_ACCESS_KEY: "${MINIO_ROOT_USER}"
-      K2_TRINO_S3_SECRET_KEY: "${MINIO_ROOT_PASSWORD}"
+      K2_TRINO_S3_ACCESS_KEY: "${K2_TRINO_S3_ACCESS_KEY:?make engine-keys}"  # its own MinIO user, made by lake_setup
+      K2_TRINO_S3_SECRET_KEY: "${K2_TRINO_S3_SECRET_KEY:?make engine-keys}"
     networks: [k2-net, k2-catalog]
     ports: ["127.0.0.1:${K2_TRINO_PORT}:8443"]
     volumes:
@@ -295,7 +296,7 @@ def scratch_repo(compose_text: str) -> None:
     (CLONE / "Makefile").write_text("include mk/*.mk\n")
     (CLONE / "docker-compose.yml").write_text(compose_text)
     prom_rules(1)
-    (CLONE / ".gitignore").write_text(".env\n.venv/\n__pycache__/\n")
+    (CLONE / ".gitignore").write_text(".env*\n!.env.example\n.venv/\n__pycache__/\n")  # .env and engine-keys' backups
     sh("git", "init", "-q", "-b", "main", str(CLONE))
     sh("git", "-C", str(CLONE), "config", "user.name", "Rehearsal Operator")
     sh("git", "-C", str(CLONE), "config", "user.email", "rehearsal@example.org")
@@ -327,8 +328,14 @@ def dotenv() -> None:
                    "K2_TRINO_SHARED_SECRET": secrets.token_urlsafe(32)})
     (CLONE / ".env").write_text("".join(f"{k}={v}\n" for k, v in DOTENV.items()))
     os.chmod(CLONE / ".env", 0o600)
+    # Each engine's own MinIO pair by the operator's command; lake_setup makes their users.
+    make("engine-keys")
+    ek = _load("engine_keys", CLONE / "scripts/engine-keys.py")
+    DOTENV.update({n: v for n, v in ek.values((CLONE / ".env").read_text()).items() if n not in DOTENV})
 
 
+# Today's lake for deploy_cutover.py alone (bucket lake, root credential): the release-shaped chain runs the real
+# lake-init instead (lake_setup).
 LAKE_SETUP = '''
 import json, os, sys, urllib.request
 def call(m, u, b=None):
@@ -349,15 +356,19 @@ for w in sys.argv[2:]:
 '''
 
 
-def lake_setup(release: str, network: str, lakekeeper: str = "http://lakekeeper:8181") -> None:
-    """What lake-init does: the bucket, the catalog's bootstrap, every warehouse of the storage plan."""
-    c = compose("ps", "-q", "minio").stdout.strip()
-    sh("docker", "exec", c, "sh", "-c", 'MC_HOST_l="http://$MINIO_ROOT_USER:$MINIO_ROOT_PASSWORD@localhost:9000" mc mb --ignore-existing l/lake')
-    plan = json.loads((ROOT / release / model.STORAGE_PLAN).read_text())
-    tools = json.loads((ROOT / release / "manifest.json").read_text())["images"]["tools"]
-    print(sh("docker", "run", "--rm", "-i", "--network", network, "--memory", "128m", "-e", "MINIO_ROOT_USER",
-             "-e", "MINIO_ROOT_PASSWORD", tools, "python3", "-", lakekeeper, *[w["name"] for w in plan["warehouses"]],
-             input=LAKE_SETUP, env=env()).stdout.strip().replace("\n", "; "))
+def lake_setup(release: str, network: str) -> None:
+    """lake-init, run as compose runs it: the real docker/lake/init-lake.sh in the MinIO image on the catalog's
+    network, the release's storage plan, the root pair and every engine's pair by name. The live layout follows:
+    buckets k2-lake and the landing bucket, every warehouse at warehouse/<name> with remote signing off, one
+    MinIO user and policy per engine, so Trino signs with its own key."""
+    ek = _load("engine_keys", CLONE / "scripts/engine-keys.py")
+    names = ["MINIO_ROOT_USER", "MINIO_ROOT_PASSWORD", *(n for e in ek.ENGINES for n in ek.pair_names(e))]
+    minio = re.search(r"ghcr\.io/rjdscott/minio@sha256:[0-9a-f]{64}", COMPOSE)[0]  # type: ignore[index]
+    done = sh("docker", "run", "--rm", "--network", network, "--memory", "128m", "--cpus", "0.25",
+              "-v", f"{CLONE / 'docker/lake'}:/init:ro", "-v", f"{ROOT}:/k2/releases:ro",
+              "-e", f"K2_STORAGE_PLAN=/k2/releases/{release}/{model.STORAGE_PLAN}", *(a for n in names for a in ("-e", n)),
+              "--entrypoint", "/bin/bash", minio, "/init/init-lake.sh", env=env())
+    print(f"rehearsal: lake-init: {done.stdout.strip().splitlines()[-1]}")
 
 
 def publish(release: str) -> str:

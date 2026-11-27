@@ -893,16 +893,23 @@ services:
       # The jobs stay on the checkout until a release carries them (phase 002); the
       # releases root is mounted now for the spark pointer.
       - *k2-releases-ro
+    # Two storage keys, never the root pair (docker/lake/minio/policies/, made by lake-init):
+    # Spark's, which docker/lake/spark_conf.py hands each session's catalogs and the connector signs
+    # landings with, and the maintenance key, which only expire's session uses (docker/lake/expire.py).
+    # The maintenance key lives here, not in the scheduler: the scheduler never holds a storage key.
     environment:
-      # MinIO / S3 credentials (Iceberg cold storage)
-      - AWS_ACCESS_KEY_ID=${MINIO_ROOT_USER}
-      - AWS_SECRET_ACCESS_KEY=${MINIO_ROOT_PASSWORD}
-      - AWS_REGION=us-east-1
-      - AWS_S3_ENDPOINT=http://minio:9000
-      # Same credentials under their own names — docker/lake/spark_conf.py passes
-      # them to the `lake` catalog's S3FileIO explicitly, not via the AWS chain.
-      - MINIO_ROOT_USER=${MINIO_ROOT_USER}
-      - MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD}
+      K2_SPARK_S3_ACCESS_KEY: ${K2_SPARK_S3_ACCESS_KEY:?set K2_SPARK_S3_ACCESS_KEY in .env (make engine-keys)}
+      K2_SPARK_S3_SECRET_KEY: ${K2_SPARK_S3_SECRET_KEY:?set K2_SPARK_S3_SECRET_KEY in .env (make engine-keys)}
+      K2_MAINTENANCE_S3_ACCESS_KEY: ${K2_MAINTENANCE_S3_ACCESS_KEY:?set K2_MAINTENANCE_S3_ACCESS_KEY in .env (make engine-keys)}
+      K2_MAINTENANCE_S3_SECRET_KEY: ${K2_MAINTENANCE_S3_SECRET_KEY:?set K2_MAINTENANCE_S3_SECRET_KEY in .env (make engine-keys)}
+      K2_S3_ENDPOINT: http://minio:9000
+      K2_S3_REGION: local-01
+      # Spark's pair again under the AWS SDK's names, for one reader: scripts/deploy.py's spark-sql
+      # DDL on warehouse k2 (SPARK_LAKE) sets no key and takes S3FileIO's default chain. They go when
+      # deploy passes the K2_SPARK names instead.
+      AWS_ACCESS_KEY_ID: ${K2_SPARK_S3_ACCESS_KEY:?set K2_SPARK_S3_ACCESS_KEY in .env (make engine-keys)}
+      AWS_SECRET_ACCESS_KEY: ${K2_SPARK_S3_SECRET_KEY:?set K2_SPARK_S3_SECRET_KEY in .env (make engine-keys)}
+      AWS_REGION: us-east-1
     # ClickHouse and PostgreSQL credentials went with docker/offload/ in Phase D,
     # and nothing that runs here needs them.
     depends_on:
@@ -1042,9 +1049,22 @@ services:
     volumes:
       - ./docker/lake:/init:ro
       - *k2-releases-ro  # the warehouse list: the release's compiled/lake/storage-plan.json
+    # The one service besides minio holding the root pair: it makes the buckets, the warehouses
+    # (whose storage credential Lakekeeper keeps) and one MinIO user per engine from the ten names
+    # below, refusing a pair unset, equal to the root's or shared (init-lake.sh).
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      K2_SPARK_S3_ACCESS_KEY: ${K2_SPARK_S3_ACCESS_KEY:?set K2_SPARK_S3_ACCESS_KEY in .env (make engine-keys)}
+      K2_SPARK_S3_SECRET_KEY: ${K2_SPARK_S3_SECRET_KEY:?set K2_SPARK_S3_SECRET_KEY in .env (make engine-keys)}
+      K2_TRINO_S3_ACCESS_KEY: ${K2_TRINO_S3_ACCESS_KEY:?set K2_TRINO_S3_ACCESS_KEY in .env (make engine-keys)}
+      K2_TRINO_S3_SECRET_KEY: ${K2_TRINO_S3_SECRET_KEY:?set K2_TRINO_S3_SECRET_KEY in .env (make engine-keys)}
+      K2_MAINTENANCE_S3_ACCESS_KEY: ${K2_MAINTENANCE_S3_ACCESS_KEY:?set K2_MAINTENANCE_S3_ACCESS_KEY in .env (make engine-keys)}
+      K2_MAINTENANCE_S3_SECRET_KEY: ${K2_MAINTENANCE_S3_SECRET_KEY:?set K2_MAINTENANCE_S3_SECRET_KEY in .env (make engine-keys)}
+      K2_BACKUP_S3_ACCESS_KEY: ${K2_BACKUP_S3_ACCESS_KEY:?set K2_BACKUP_S3_ACCESS_KEY in .env (make engine-keys)}
+      K2_BACKUP_S3_SECRET_KEY: ${K2_BACKUP_S3_SECRET_KEY:?set K2_BACKUP_S3_SECRET_KEY in .env (make engine-keys)}
+      K2_TOOLS_S3_ACCESS_KEY: ${K2_TOOLS_S3_ACCESS_KEY:?set K2_TOOLS_S3_ACCESS_KEY in .env (make engine-keys)}
+      K2_TOOLS_S3_SECRET_KEY: ${K2_TOOLS_S3_SECRET_KEY:?set K2_TOOLS_S3_SECRET_KEY in .env (make engine-keys)}
       # Empty: the script reads the plan through the trino pointer. Deploy sets it to the
       # release being deployed, so a first deploy and a new warehouse read that release.
       K2_STORAGE_PLAN: ${K2_STORAGE_PLAN:-}
@@ -1107,8 +1127,9 @@ services:
       - ${K2_SECRETS:-${HOME}/k2-secrets}/trino:/run/k2-secrets/trino:ro
     environment:
       K2_TRINO_SHARED_SECRET: ${K2_TRINO_SHARED_SECRET:?set K2_TRINO_SHARED_SECRET in .env (openssl rand -hex 32)}
-      K2_TRINO_S3_ACCESS_KEY: ${K2_TRINO_S3_ACCESS_KEY:?set K2_TRINO_S3_ACCESS_KEY in .env}
-      K2_TRINO_S3_SECRET_KEY: ${K2_TRINO_S3_SECRET_KEY:?set K2_TRINO_S3_SECRET_KEY in .env}
+      # Its own MinIO user (policy docker/lake/minio/policies/trino.json), never the root pair.
+      K2_TRINO_S3_ACCESS_KEY: ${K2_TRINO_S3_ACCESS_KEY:?set K2_TRINO_S3_ACCESS_KEY in .env (make engine-keys)}
+      K2_TRINO_S3_SECRET_KEY: ${K2_TRINO_S3_SECRET_KEY:?set K2_TRINO_S3_SECRET_KEY in .env (make engine-keys)}
     depends_on:
       lakekeeper:
         condition: service_healthy
@@ -1367,6 +1388,13 @@ services:
     networks:
       - k2-net
       - k2-catalog
+    # Two read-only storage keys: its own, and the backup's for the backup that runs here (W1-22;
+    # until then scripts/backup-lake.sh runs from the host on the root pair it reads from .env).
+    environment:
+      K2_TOOLS_S3_ACCESS_KEY: ${K2_TOOLS_S3_ACCESS_KEY:?set K2_TOOLS_S3_ACCESS_KEY in .env (make engine-keys)}
+      K2_TOOLS_S3_SECRET_KEY: ${K2_TOOLS_S3_SECRET_KEY:?set K2_TOOLS_S3_SECRET_KEY in .env (make engine-keys)}
+      K2_BACKUP_S3_ACCESS_KEY: ${K2_BACKUP_S3_ACCESS_KEY:?set K2_BACKUP_S3_ACCESS_KEY in .env (make engine-keys)}
+      K2_BACKUP_S3_SECRET_KEY: ${K2_BACKUP_S3_SECRET_KEY:?set K2_BACKUP_S3_SECRET_KEY in .env (make engine-keys)}
     volumes:
       # The one read-write mount of the releases root: pointers swap only here (A1).
       - <<: *k2-releases-ro
