@@ -402,6 +402,170 @@
     "partitioning": [],
     "sort": []
   },
+  "market_capture.kraken_trades__base.silver_trade": {
+    "columns": [
+      {
+        "name": "kafka_partition",
+        "required": true,
+        "type": "integer"
+      },
+      {
+        "name": "kafka_offset",
+        "required": true,
+        "type": "bigint"
+      },
+      {
+        "name": "trade_ordinal",
+        "required": true,
+        "type": "integer"
+      },
+      {
+        "name": "trade_ts",
+        "required": true,
+        "type": "timestamp(6) with time zone"
+      },
+      {
+        "name": "trade_id",
+        "required": true,
+        "type": "bigint"
+      },
+      {
+        "name": "venue_symbol",
+        "required": true,
+        "type": "varchar"
+      },
+      {
+        "name": "instrument_id",
+        "required": true,
+        "type": "varchar"
+      },
+      {
+        "name": "side",
+        "required": true,
+        "type": "varchar"
+      },
+      {
+        "name": "price",
+        "required": true,
+        "type": "decimal(38,18)"
+      },
+      {
+        "name": "quantity",
+        "required": true,
+        "type": "decimal(38,18)"
+      },
+      {
+        "name": "order_type",
+        "required": false,
+        "type": "varchar"
+      },
+      {
+        "name": "frame_type",
+        "required": true,
+        "type": "varchar"
+      },
+      {
+        "name": "is_duplicate",
+        "required": true,
+        "type": "boolean"
+      },
+      {
+        "name": "received_at",
+        "required": true,
+        "type": "timestamp(6) with time zone"
+      },
+      {
+        "name": "conn_id",
+        "required": true,
+        "type": "varchar"
+      },
+      {
+        "name": "conn_msg_seq",
+        "required": true,
+        "type": "bigint"
+      }
+    ],
+    "partitioning": [
+      "day(trade_ts)"
+    ],
+    "sort": []
+  },
+  "market_capture.kraken_trades__base.silver_trade_unresolved": {
+    "columns": [
+      {
+        "name": "kafka_partition",
+        "required": true,
+        "type": "integer"
+      },
+      {
+        "name": "kafka_offset",
+        "required": true,
+        "type": "bigint"
+      },
+      {
+        "name": "trade_ordinal",
+        "required": true,
+        "type": "integer"
+      },
+      {
+        "name": "trade_ts",
+        "required": true,
+        "type": "timestamp(6) with time zone"
+      },
+      {
+        "name": "trade_id",
+        "required": true,
+        "type": "bigint"
+      },
+      {
+        "name": "venue_symbol",
+        "required": true,
+        "type": "varchar"
+      },
+      {
+        "name": "side",
+        "required": true,
+        "type": "varchar"
+      },
+      {
+        "name": "price",
+        "required": true,
+        "type": "decimal(38,18)"
+      },
+      {
+        "name": "quantity",
+        "required": true,
+        "type": "decimal(38,18)"
+      },
+      {
+        "name": "order_type",
+        "required": false,
+        "type": "varchar"
+      },
+      {
+        "name": "frame_type",
+        "required": true,
+        "type": "varchar"
+      },
+      {
+        "name": "received_at",
+        "required": true,
+        "type": "timestamp(6) with time zone"
+      },
+      {
+        "name": "conn_id",
+        "required": true,
+        "type": "varchar"
+      },
+      {
+        "name": "conn_msg_seq",
+        "required": true,
+        "type": "bigint"
+      }
+    ],
+    "partitioning": [],
+    "sort": []
+  },
   "reference_data.calendars__base.target_days": {
     "columns": [
       {

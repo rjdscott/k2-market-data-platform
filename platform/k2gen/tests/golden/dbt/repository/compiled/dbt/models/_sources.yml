@@ -204,3 +204,82 @@ sources:
     - name: source_file_sha256
       data_type: varchar
       description: The landed response that first stated this version (or the pair's absence).
+- name: kraken_trades
+  database: lake
+  schema: kraken_trades
+  tables:
+  - name: bronze_trade
+    description: 'One row per record of the raw Kraken topic whose envelope stream is trade, the landing''s columns as landed
+      (I-1): staged from lake.kraken_trades.landing by offset, so a retry or a kill between the landing commit and the stage
+      adds no row twice and leaves no hole. The connector''s audit (accounting, parses, keys_unique) passes before a batch
+      publishes.'
+    meta:
+      k2:
+        contract: market-capture.kraken-trades.bronze_trade
+        tested_ref: main
+    columns:
+    - name: kafka_partition
+      data_type: integer
+      description: The topic partition; with kafka_offset, the row's lineage to the landing and the topic.
+    - name: kafka_offset
+      data_type: bigint
+      description: The record's offset in its partition.
+    - name: kafka_timestamp
+      data_type: timestamp(6) with time zone
+      description: The record's Kafka timestamp, set when the capture produced it.
+    - name: record_key
+      data_type: varbinary
+      description: The key's bytes as read, the envelope's symbol as the venue spells it in UTF-8; null for a frame of no
+        single instrument.
+    - name: record_value
+      data_type: varbinary
+      description: 'The value''s bytes as read and never decoded here: a Confluent-framed RawMessage (schemas/avro/raw-message.avsc),
+        the magic byte, the writer schema id, then the Avro body whose payload is the venue''s JSON frame.'
+    - name: batch_id
+      data_type: varchar
+      description: The landing batch that landed the record, its k2.batch-id.
+    - name: landed_at
+      data_type: timestamp(6) with time zone
+      description: When that landing batch committed, UTC.
+    - name: run_id
+      data_type: varchar
+      description: The run that landed the record, <dag_id>/<run_id>.
+    - name: release_id
+      data_type: varchar
+      description: The release that run resolved at its start.
+- name: security_master
+  database: reference_data
+  schema: security_master__base
+  tables:
+  - name: venue_symbol
+    description: 'Type-2: one row per venue spelling and version, the symbol the venue''s trades stream carries and the instrument
+      it names, valid from valid_from up to but not including valid_to. A trade resolves through the row of its venue and
+      symbol whose interval holds its time. A version changes when the instrument or the pair behind the spelling changes;
+      a delisting does not close it (the instrument''s is_listed records that), so the spelling still resolves.'
+    meta:
+      k2:
+        contract: reference-data.security-master.venue_symbol
+        tested_ref: audited
+    columns:
+    - name: venue
+      data_type: varchar
+      description: The venue (kraken).
+    - name: venue_symbol
+      data_type: varchar
+      description: The symbol as the venue's trades stream spells it (BTC/USD on Kraken's websocket v2).
+    - name: valid_from
+      data_type: timestamp(6) with time zone
+      description: The fetch that first saw this version, in UTC; the spelling's first version opens at 1970-01-01 00:00:00
+        UTC.
+    - name: valid_to
+      data_type: timestamp(6) with time zone
+      description: The next version's valid_from; 9999-12-31 23:59:59 UTC on the open row, never null.
+    - name: instrument_id
+      data_type: varchar
+      description: The instrument the spelling names (instrument.instrument_id).
+    - name: pair_code
+      data_type: varchar
+      description: The venue's REST code of the pair whose listing claims the spelling.
+    - name: recorded_at
+      data_type: timestamp(6) with time zone
+      description: When the fetch that first saw this version ran, in UTC (knowledge time).

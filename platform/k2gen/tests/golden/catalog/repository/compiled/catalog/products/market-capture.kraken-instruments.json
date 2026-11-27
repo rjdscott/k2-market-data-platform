@@ -1,0 +1,253 @@
+{
+  "id": "market-capture.kraken-instruments",
+  "name": "kraken-instruments",
+  "domain": "market-capture",
+  "version": "1.0.0",
+  "status": "active",
+  "type": "sourceAligned",
+  "owner": "capture-team",
+  "purpose": "The pairs Kraken lists, as its public AssetPairs endpoint states them: each pair's websocket name (the symbol on the trades stream), its REST pair code, its base and quote as the venue spells them, its tick size, price and lot decimals, minimum order size and trading status, one row per pair and version, a version valid from the first fetch that saw it.",
+  "limitations": "The venue's terms of reuse are not yet recorded here: the owner confirms them before any grant outside the owning team (k2gen check refuses such a grant while no terms are recorded). History starts at the first fetch landed; the endpoint shows only the listing as it is now. A version's start is the fetch that first saw it, so it is late by up to the hour between fetches. A pair missing from a later response is recorded as unlisted from that fetch (is_listed false), not deleted.",
+  "usage": "Read market_capture.kraken_instruments.silver_listing; the version in force for a pair at a time t is its row with the newest first_fetched_at at or before t. Join trades on ws_name.",
+  "issued": "2026-01-01T00:00:00Z",
+  "periodicity": "17 * * * *",
+  "productFile": "documents/contracts/market-capture/kraken-instruments/product.odps.yaml",
+  "inputs": [],
+  "outputs": [
+    {
+      "contractId": "market-capture.kraken-instruments.bronze_pairs",
+      "relation": "lake.kraken_instruments.bronze_pairs",
+      "build": "connector",
+      "testedRef": "main",
+      "contractFile": "documents/contracts/market-capture/kraken-instruments/bronze_pairs.odcs.yaml",
+      "layer": "bronze",
+      "version": "1.0.0",
+      "purpose": "One row per pair of one landed AssetPairs response, the listing attributes as the parser read them, tick size and minimum order the published strings. Each landed response adds a row for every pair it lists.",
+      "columns": [
+        {
+          "name": "pair_code",
+          "type": "varchar",
+          "required": true,
+          "primaryKey": true,
+          "description": "The pair's code, the key of the response's result object, as REST names the pair.",
+          "primaryKeyPosition": 1
+        },
+        {
+          "name": "ws_name",
+          "type": "varchar",
+          "required": true,
+          "primaryKey": true,
+          "description": "The pair's websocket name (wsname), the symbol a trades stream frame carries; unique in one response.",
+          "primaryKeyPosition": 2
+        },
+        {
+          "name": "base",
+          "type": "varchar",
+          "required": true,
+          "primaryKey": true,
+          "description": "The base asset's code as the venue spells it, its prefixes kept.",
+          "primaryKeyPosition": 3
+        },
+        {
+          "name": "quote",
+          "type": "varchar",
+          "required": true,
+          "primaryKey": true,
+          "description": "The quote asset's code as the venue spells it, its prefixes kept.",
+          "primaryKeyPosition": 4
+        },
+        {
+          "name": "tick_size",
+          "type": "varchar",
+          "required": true,
+          "primaryKey": true,
+          "description": "The smallest price step (tick_size), the published string; typed in silver.",
+          "primaryKeyPosition": 5
+        },
+        {
+          "name": "pair_decimals",
+          "type": "integer",
+          "required": true,
+          "primaryKey": true,
+          "description": "Digits after the decimal point of a price (pair_decimals).",
+          "primaryKeyPosition": 6
+        },
+        {
+          "name": "lot_decimals",
+          "type": "integer",
+          "required": true,
+          "primaryKey": true,
+          "description": "Digits after the decimal point of a volume (lot_decimals).",
+          "primaryKeyPosition": 7
+        },
+        {
+          "name": "order_min",
+          "type": "varchar",
+          "required": true,
+          "primaryKey": true,
+          "description": "The smallest order volume in the base asset (ordermin), the published string; typed in silver.",
+          "primaryKeyPosition": 8
+        },
+        {
+          "name": "status",
+          "type": "varchar",
+          "required": true,
+          "primaryKey": true,
+          "description": "The pair's trading status as the venue states it (online, cancel_only and the like).",
+          "primaryKeyPosition": 9
+        },
+        {
+          "name": "fetched_at",
+          "type": "timestamp(6) with time zone",
+          "required": true,
+          "primaryKey": true,
+          "description": "When the fetch that brought the response ran (fetch.json's fetchedAt), in UTC: lineage set by the connector on every row, as source_file_sha256 is, never by the parser.",
+          "time": "known",
+          "primaryKeyPosition": 10
+        },
+        {
+          "name": "source_file_sha256",
+          "type": "varchar",
+          "required": true,
+          "primaryKey": true,
+          "description": "The landed response's sha256, set by the connector on every row (its lineage).",
+          "primaryKeyPosition": 11
+        }
+      ],
+      "retentionDays": null,
+      "roles": [],
+      "readers": [],
+      "dbtDocs": null
+    },
+    {
+      "contractId": "market-capture.kraken-instruments.silver_listing",
+      "relation": "market_capture.kraken_instruments.silver_listing",
+      "build": "dbt",
+      "testedRef": "audited",
+      "contractFile": "documents/contracts/market-capture/kraken-instruments/silver_listing.odcs.yaml",
+      "layer": "silver",
+      "version": "1.0.0",
+      "purpose": "One row per pair and version: a version is a run of fetches, in fetch time order, that state the same listing attributes for the pair, valid from the first fetch of the run. A refetch with no change adds no row, a changed tick size adds one, and a pair missing from a fetch after it was listed adds one row with is_listed false and no attributes.",
+      "columns": [
+        {
+          "name": "pair_code",
+          "type": "varchar",
+          "required": true,
+          "primaryKey": true,
+          "description": "The pair's REST code, the key of the response's result object.",
+          "primaryKeyPosition": 1
+        },
+        {
+          "name": "first_fetched_at",
+          "type": "timestamp(6) with time zone",
+          "required": true,
+          "primaryKey": true,
+          "description": "The fetch time (bronze fetched_at) of the first fetch that stated this version, in UTC: the version is valid from it until the pair's next version. Ordered by fetch time, never by when a response arrived in the lake.",
+          "time": "valid",
+          "primaryKeyPosition": 2
+        },
+        {
+          "name": "is_listed",
+          "type": "boolean",
+          "required": true,
+          "primaryKey": false,
+          "description": "False when this version is the pair's absence from the response, every attribute below but source_file_sha256 null."
+        },
+        {
+          "name": "ws_name",
+          "type": "varchar",
+          "required": false,
+          "primaryKey": false,
+          "description": "The websocket name (wsname), the symbol a trades stream frame carries."
+        },
+        {
+          "name": "base",
+          "type": "varchar",
+          "required": false,
+          "primaryKey": false,
+          "description": "The base asset's code as the venue spells it."
+        },
+        {
+          "name": "quote",
+          "type": "varchar",
+          "required": false,
+          "primaryKey": false,
+          "description": "The quote asset's code as the venue spells it."
+        },
+        {
+          "name": "tick_size",
+          "type": "decimal(38,18)",
+          "required": false,
+          "primaryKey": false,
+          "description": "The smallest price step, the published string cast exactly."
+        },
+        {
+          "name": "pair_decimals",
+          "type": "integer",
+          "required": false,
+          "primaryKey": false,
+          "description": "Digits after the decimal point of a price."
+        },
+        {
+          "name": "lot_decimals",
+          "type": "integer",
+          "required": false,
+          "primaryKey": false,
+          "description": "Digits after the decimal point of a volume."
+        },
+        {
+          "name": "order_min",
+          "type": "decimal(38,18)",
+          "required": false,
+          "primaryKey": false,
+          "description": "The smallest order volume in the base asset, the published string cast exactly."
+        },
+        {
+          "name": "status",
+          "type": "varchar",
+          "required": false,
+          "primaryKey": false,
+          "description": "The pair's trading status as the venue states it."
+        },
+        {
+          "name": "source_file_sha256",
+          "type": "varchar",
+          "required": true,
+          "primaryKey": false,
+          "description": "The landed response that first stated this version (or the pair's absence)."
+        }
+      ],
+      "retentionDays": null,
+      "roles": [
+        {
+          "role": "full_reader",
+          "inWords": "every row and column"
+        }
+      ],
+      "readers": [],
+      "dbtDocs": "dbt-docs/#!/model/model.k2.kraken_instruments__silver_listing"
+    }
+  ],
+  "joinKeys": [],
+  "lineage": {
+    "nodes": [
+      {
+        "id": "market-capture.kraken-instruments.bronze_pairs",
+        "product": "market-capture.kraken-instruments",
+        "relation": "lake.kraken_instruments.bronze_pairs"
+      },
+      {
+        "id": "market-capture.kraken-instruments.silver_listing",
+        "product": "market-capture.kraken-instruments",
+        "relation": "market_capture.kraken_instruments.silver_listing"
+      }
+    ],
+    "edges": [
+      {
+        "from": "market-capture.kraken-instruments.bronze_pairs",
+        "to": "market-capture.kraken-instruments.silver_listing"
+      }
+    ]
+  },
+  "tag": "v3.0.0-alpha.3-rc.1"
+}

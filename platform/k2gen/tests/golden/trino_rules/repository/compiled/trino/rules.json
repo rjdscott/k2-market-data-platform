@@ -26,12 +26,12 @@
       "allow": "all"
     },
     {
-      "user": "pub_kraken_instruments",
+      "user": "pub_kraken_instruments|pub_kraken_trades",
       "catalog": "market_capture",
       "allow": "all"
     },
     {
-      "user": "dbt_kraken_instruments|pub_kraken_instruments|svc\\.platform",
+      "user": "dbt_kraken_instruments|dbt_kraken_trades|pub_kraken_instruments|pub_kraken_trades|svc\\.platform",
       "catalog": "market_capture_build",
       "allow": "all"
     },
@@ -56,7 +56,7 @@
       "allow": "read-only"
     },
     {
-      "user": "dbt_currency_master|dbt_ecb_fx_rates|dbt_kraken_instruments|svc\\.api|svc\\.catalog|svc\\.platform|svc\\.runs",
+      "user": "dbt_currency_master|dbt_ecb_fx_rates|dbt_kraken_instruments|dbt_kraken_trades|svc\\.api|svc\\.catalog|svc\\.platform|svc\\.runs",
       "catalog": "lake",
       "allow": "read-only"
     },
@@ -71,12 +71,12 @@
       "allow": "read-only"
     },
     {
-      "user": "dbt_ecb_fx_rates|dbt_quality_results|dbt_security_master|svc\\.api|svc\\.catalog|svc\\.platform|svc\\.runs",
+      "user": "dbt_ecb_fx_rates|dbt_kraken_trades|dbt_quality_results|dbt_security_master|svc\\.api|svc\\.catalog|svc\\.platform|svc\\.runs",
       "catalog": "reference_data",
       "allow": "read-only"
     },
     {
-      "user": "dbt_access_canary|dbt_calendars|dbt_currency_master|dbt_ecb_fx_rates|dbt_kraken_instruments|dbt_quality_results|dbt_security_master|svc\\.platform",
+      "user": "dbt_access_canary|dbt_calendars|dbt_currency_master|dbt_ecb_fx_rates|dbt_kraken_instruments|dbt_kraken_trades|dbt_quality_results|dbt_security_master|svc\\.platform",
       "catalog": "system",
       "allow": "read-only"
     },
@@ -91,7 +91,7 @@
       "allow": "read-only"
     },
     {
-      "group": "kraken_instruments__full_reader",
+      "group": "kraken_instruments__full_reader|kraken_trades__full_reader",
       "catalog": "market_capture",
       "allow": "read-only"
     },
@@ -101,7 +101,7 @@
       "allow": "read-only"
     },
     {
-      "group": "access_canary__delayed_reader|access_canary__full_reader|access_canary__public_reader|calendars__full_reader|ecb_fx_rates__full_reader|kraken_instruments__full_reader|security_master__full_reader",
+      "group": "access_canary__delayed_reader|access_canary__full_reader|access_canary__public_reader|calendars__full_reader|ecb_fx_rates__full_reader|kraken_instruments__full_reader|kraken_trades__full_reader|security_master__full_reader",
       "catalog": "system",
       "allow": "read-only"
     },
@@ -157,6 +157,18 @@
       "user": "pub_kraken_instruments",
       "catalog": "market_capture_build",
       "schema": "kraken_instruments",
+      "owner": true
+    },
+    {
+      "user": "dbt_kraken_trades",
+      "catalog": "market_capture_build",
+      "schema": "kraken_trades__base",
+      "owner": true
+    },
+    {
+      "user": "pub_kraken_trades",
+      "catalog": "market_capture_build",
+      "schema": "kraken_trades",
       "owner": true
     },
     {
@@ -229,7 +241,7 @@
     {
       "user": "svc\\.platform",
       "catalog": "market_capture_build",
-      "schema": "kraken_instruments__base",
+      "schema": "kraken_instruments__base|kraken_trades__base",
       "privileges": [
         "SELECT"
       ]
@@ -243,7 +255,7 @@
       ]
     },
     {
-      "user": "dbt_access_canary|dbt_calendars|dbt_currency_master|dbt_ecb_fx_rates|dbt_kraken_instruments|dbt_quality_results|dbt_security_master",
+      "user": "dbt_access_canary|dbt_calendars|dbt_currency_master|dbt_ecb_fx_rates|dbt_kraken_instruments|dbt_kraken_trades|dbt_quality_results|dbt_security_master",
       "catalog": "system",
       "schema": "metadata",
       "table": "analyze_properties|catalogs|column_properties|materialized_view_properties|materialized_views|schema_properties|table_comments|table_properties",
@@ -252,7 +264,7 @@
       ]
     },
     {
-      "group": "access_canary__delayed_reader|access_canary__full_reader|access_canary__public_reader|calendars__full_reader|ecb_fx_rates__full_reader|kraken_instruments__full_reader|security_master__full_reader",
+      "group": "access_canary__delayed_reader|access_canary__full_reader|access_canary__public_reader|calendars__full_reader|ecb_fx_rates__full_reader|kraken_instruments__full_reader|kraken_trades__full_reader|security_master__full_reader",
       "catalog": "system",
       "schema": "jdbc",
       "table": "attributes|catalogs|columns|procedure_columns|procedures|pseudo_columns|schemas|super_tables|super_types|table_types|tables|types|udts",
@@ -261,7 +273,7 @@
       ]
     },
     {
-      "group": "access_canary__delayed_reader|access_canary__full_reader|access_canary__public_reader|calendars__full_reader|ecb_fx_rates__full_reader|kraken_instruments__full_reader|security_master__full_reader",
+      "group": "access_canary__delayed_reader|access_canary__full_reader|access_canary__public_reader|calendars__full_reader|ecb_fx_rates__full_reader|kraken_instruments__full_reader|kraken_trades__full_reader|security_master__full_reader",
       "catalog": "system",
       "schema": "metadata",
       "table": "analyze_properties|catalogs|column_properties|materialized_view_properties|materialized_views|schema_properties|table_comments|table_properties",
@@ -401,6 +413,15 @@
     },
     {
       "user": "dbt_quality_results",
+      "catalog": "market_capture",
+      "schema": "kraken_trades__base",
+      "table": "dq_test_results",
+      "privileges": [
+        "SELECT"
+      ]
+    },
+    {
+      "user": "dbt_quality_results",
       "catalog": "reference_data",
       "schema": "calendars__base",
       "table": "dq_test_results",
@@ -482,6 +503,56 @@
       "catalog": "market_capture",
       "schema": "kraken_instruments__base",
       "table": "silver_listing|silver_listing\\$refs",
+      "privileges": [
+        "SELECT",
+        "GRANT_SELECT"
+      ]
+    },
+    {
+      "user": "dbt_kraken_trades",
+      "catalog": "market_capture_build",
+      "schema": "kraken_trades__base",
+      "privileges": [
+        "SELECT",
+        "INSERT",
+        "DELETE",
+        "UPDATE",
+        "OWNERSHIP"
+      ]
+    },
+    {
+      "user": "dbt_kraken_trades",
+      "catalog": "lake",
+      "schema": "kraken_trades",
+      "table": "bronze_trade",
+      "privileges": [
+        "SELECT"
+      ]
+    },
+    {
+      "user": "dbt_kraken_trades",
+      "catalog": "reference_data",
+      "schema": "security_master__base",
+      "table": "venue_symbol",
+      "privileges": [
+        "SELECT"
+      ]
+    },
+    {
+      "user": "pub_kraken_trades",
+      "catalog": "market_capture_build",
+      "schema": "kraken_trades",
+      "table": "silver_trade|silver_trade_unresolved",
+      "privileges": [
+        "SELECT",
+        "OWNERSHIP"
+      ]
+    },
+    {
+      "user": "pub_kraken_trades",
+      "catalog": "market_capture",
+      "schema": "kraken_trades__base",
+      "table": "silver_trade|silver_trade\\$refs|silver_trade_unresolved|silver_trade_unresolved\\$refs",
       "privileges": [
         "SELECT",
         "GRANT_SELECT"
@@ -751,6 +822,24 @@
     },
     {
       "user": "svc\\.api|svc\\.catalog|svc\\.platform|svc\\.runs",
+      "catalog": "market_capture",
+      "schema": "kraken_trades__base",
+      "table": "silver_trade\\$refs",
+      "privileges": [
+        "SELECT"
+      ]
+    },
+    {
+      "user": "svc\\.api|svc\\.catalog|svc\\.platform|svc\\.runs",
+      "catalog": "market_capture",
+      "schema": "kraken_trades__base",
+      "table": "silver_trade_unresolved\\$refs",
+      "privileges": [
+        "SELECT"
+      ]
+    },
+    {
+      "user": "svc\\.api|svc\\.catalog|svc\\.platform|svc\\.runs",
       "catalog": "reference_data",
       "schema": "calendars__base",
       "table": "target_days\\$refs",
@@ -875,6 +964,15 @@
       ]
     },
     {
+      "group": "kraken_trades__full_reader",
+      "catalog": "market_capture",
+      "schema": "kraken_trades",
+      "table": "silver_trade",
+      "privileges": [
+        "SELECT"
+      ]
+    },
+    {
       "group": "calendars__full_reader",
       "catalog": "reference_data",
       "schema": "calendars",
@@ -904,7 +1002,7 @@
   ],
   "system_session_properties": [
     {
-      "user": "dbt_access_canary|dbt_calendars|dbt_currency_master|dbt_ecb_fx_rates|dbt_kraken_instruments|dbt_quality_results|dbt_security_master|pub_access_canary|pub_calendars|pub_currency_master|pub_ecb_fx_rates|pub_kraken_instruments|pub_quality_results|pub_security_master|svc\\.catalog|svc\\.platform|svc\\.runs",
+      "user": "dbt_access_canary|dbt_calendars|dbt_currency_master|dbt_ecb_fx_rates|dbt_kraken_instruments|dbt_kraken_trades|dbt_quality_results|dbt_security_master|pub_access_canary|pub_calendars|pub_currency_master|pub_ecb_fx_rates|pub_kraken_instruments|pub_kraken_trades|pub_quality_results|pub_security_master|svc\\.catalog|svc\\.platform|svc\\.runs",
       "allow": true
     }
   ],
@@ -914,7 +1012,7 @@
       "allow": true
     },
     {
-      "user": "dbt_access_canary|dbt_calendars|dbt_currency_master|dbt_ecb_fx_rates|dbt_kraken_instruments|dbt_quality_results|dbt_security_master|pub_access_canary|pub_calendars|pub_currency_master|pub_ecb_fx_rates|pub_kraken_instruments|pub_quality_results|pub_security_master|svc\\.catalog|svc\\.runs",
+      "user": "dbt_access_canary|dbt_calendars|dbt_currency_master|dbt_ecb_fx_rates|dbt_kraken_instruments|dbt_kraken_trades|dbt_quality_results|dbt_security_master|pub_access_canary|pub_calendars|pub_currency_master|pub_ecb_fx_rates|pub_kraken_instruments|pub_kraken_trades|pub_quality_results|pub_security_master|svc\\.catalog|svc\\.runs",
       "property": "statistics_enabled",
       "allow": true
     }
@@ -929,7 +1027,7 @@
       ]
     },
     {
-      "user": "dbt_access_canary|dbt_calendars|dbt_currency_master|dbt_ecb_fx_rates|dbt_kraken_instruments|dbt_quality_results|dbt_security_master|k2_release_000000000000|p\\.analyst\\-a|p\\.canary\\-delayed|p\\.canary\\-full|p\\.canary\\-scoped|pub_access_canary|pub_calendars|pub_currency_master|pub_ecb_fx_rates|pub_kraken_instruments|pub_quality_results|pub_security_master|svc\\.api|svc\\.catalog|svc\\.runs",
+      "user": "dbt_access_canary|dbt_calendars|dbt_currency_master|dbt_ecb_fx_rates|dbt_kraken_instruments|dbt_kraken_trades|dbt_quality_results|dbt_security_master|k2_release_000000000000|p\\.analyst\\-a|p\\.canary\\-delayed|p\\.canary\\-full|p\\.canary\\-scoped|pub_access_canary|pub_calendars|pub_currency_master|pub_ecb_fx_rates|pub_kraken_instruments|pub_kraken_trades|pub_quality_results|pub_security_master|svc\\.api|svc\\.catalog|svc\\.runs",
       "allow": [
         "execute"
       ]

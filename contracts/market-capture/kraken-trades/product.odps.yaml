@@ -2,36 +2,70 @@
 # every five minutes, lands every record of the planned offset range byte for byte in
 # lake.kraken_trades.landing (control frames included, end offsets in the same commit, ADR-022),
 # then stages the trade frames into bronze_trade by offset, after its audit (I-1,
-# docs/development/phase-001-interfaces.md). The typed silver_trade and the held
-# silver_trade_unresolved (plan 004) come in later versions of this product.
+# docs/development/phase-001-interfaces.md). dbt then types them, one row per trade (silver_trade),
+# resolving each trade's symbol through the security master; a trade whose symbol resolves to
+# nothing waits in silver_trade_unresolved and moves into silver_trade once it resolves.
 apiVersion: v1.1.0
 kind: DataProduct
 id: market-capture.kraken-trades
 name: kraken-trades
-version: 1.0.0
+version: 1.1.0
 status: active
 domain: market-capture
 type: sourceAligned
 description:
   purpose: >-
-    Every trade frame Kraken's WebSocket v2 trade channel sent the capture, one bronze row per
-    Kafka record, the record's bytes exactly as read: the venue's trades, landed before anything
-    interprets them, so any later decoding is repairable from the landing.
+    Every trade Kraken's WebSocket v2 trade channel sent the capture: the frames exactly as read
+    (bronze_trade), and one typed row per trade and delivery (silver_trade) with the instrument
+    its symbol names, every delivery kept and a repeat of a trade id flagged, never dropped.
   limitations: >-
-    Bronze holds the Confluent-framed RawMessage undecoded (record_value): no typed trade columns
-    yet. Only frames the capture received are here; a capture outage is a hole in time, not in
-    offsets, and the offset checks cannot see it. The venue's terms of reuse are not yet recorded
-    here: the owner confirms them before any grant outside the owning team (k2gen check refuses
-    such a grant while no terms are recorded).
+    Only frames the capture received are here; a capture outage is a hole in time, not in
+    offsets, and the offset checks cannot see it. A trade whose symbol the security master does
+    not resolve at the trade's time is held in silver_trade_unresolved, owner-only, and missing
+    from silver_trade until the master resolves it; the audit unresolved_rows_zero then warns and
+    the product shows degraded. Every delivery is a row: a reader counting trades filters
+    is_duplicate false. The venue's terms of reuse are not yet recorded here: the owner confirms
+    them before any grant outside the owning team (k2gen check refuses such a grant while no terms
+    are recorded).
   usage: >-
-    Owner-only. Read lake.kraken_trades.bronze_trade by (kafka_partition, kafka_offset), its key
-    and its lineage to the landing and the topic.
+    Read market_capture.kraken_trades.silver_trade, one row per trade and delivery keyed by
+    (kafka_partition, kafka_offset, trade_ordinal, trade_ts); is_duplicate false keeps each trade
+    once, its first delivery by offset. bronze_trade and silver_trade_unresolved are the owning
+    team's.
 team:
   name: capture-team
+inputPorts:
+  - name: venue_symbol
+    version: 1.0.0
+    contractId: reference-data.security-master.venue_symbol
+    customProperties:
+      - property: required
+        # silver_trade_unresolved is a table model, which zero rows of an absent master would
+        # rebuild holding every trade; with the master paused the build reads its last audited
+        # snapshot, and with none it exits 4 (I-4).
+        value: true
+      - property: maxLagMinutes
+        value: null  # the listing changes by the hour at most; a late master holds trades, which the audit reports
 outputPorts:
   - name: bronze_trade
     version: 1.0.0
     contractId: market-capture.kraken-trades.bronze_trade
+  - name: silver_trade
+    version: 1.0.0
+    contractId: market-capture.kraken-trades.silver_trade
+    inputContracts:  # bronze a sibling, not an input port: the catalog's lineage edges
+      - id: market-capture.kraken-trades.bronze_trade
+        version: 1.0.0
+      - id: reference-data.security-master.venue_symbol
+        version: 1.0.0
+  - name: silver_trade_unresolved
+    version: 1.0.0
+    contractId: market-capture.kraken-trades.silver_trade_unresolved
+    inputContracts:  # the frames of bronze that silver_trade does not hold
+      - id: market-capture.kraken-trades.bronze_trade
+        version: 1.0.0
+      - id: market-capture.kraken-trades.silver_trade
+        version: 1.0.0
 customProperties:
   - property: connector
     value:

@@ -18,6 +18,16 @@
       ]
     }
   ],
+  "build": {
+    "engine": "dbt",
+    "outputs": [
+      "market_capture_build.kraken_trades__base.silver_trade",
+      "market_capture_build.kraken_trades__base.silver_trade_unresolved"
+    ],
+    "publisher": "pub_kraken_trades",
+    "selector": "kraken_trades",
+    "writer": "dbt_kraken_trades"
+  },
   "connector": {
     "brokers": "redpanda:9092",
     "envelope": {
@@ -40,7 +50,15 @@
   "dagId": "kraken_trades",
   "domain": "market-capture",
   "fence": "kraken_trades",
-  "inputs": [],
+  "inputs": [
+    {
+      "contractId": "reference-data.security-master.venue_symbol",
+      "maxLagMinutes": null,
+      "relation": "reference_data.security_master__base.venue_symbol",
+      "required": true,
+      "whenAbsent": "fail"
+    }
+  ],
   "landing": {
     "table": "lake.kraken_trades.landing"
   },

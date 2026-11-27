@@ -75,6 +75,50 @@
       "relation": "market_capture.kraken_instruments.silver_listing"
     },
     {
+      "base": "market_capture.kraken_trades__base.silver_trade",
+      "columns": [
+        "kafka_partition",
+        "kafka_offset",
+        "trade_ordinal",
+        "trade_ts",
+        "trade_id",
+        "venue_symbol",
+        "instrument_id",
+        "side",
+        "price",
+        "quantity",
+        "order_type",
+        "frame_type",
+        "is_duplicate",
+        "received_at",
+        "conn_id",
+        "conn_msg_seq"
+      ],
+      "owner": "pub_kraken_trades",
+      "relation": "market_capture.kraken_trades.silver_trade"
+    },
+    {
+      "base": "market_capture.kraken_trades__base.silver_trade_unresolved",
+      "columns": [
+        "kafka_partition",
+        "kafka_offset",
+        "trade_ordinal",
+        "trade_ts",
+        "trade_id",
+        "venue_symbol",
+        "side",
+        "price",
+        "quantity",
+        "order_type",
+        "frame_type",
+        "received_at",
+        "conn_id",
+        "conn_msg_seq"
+      ],
+      "owner": "pub_kraken_trades",
+      "relation": "market_capture.kraken_trades.silver_trade_unresolved"
+    },
+    {
       "base": "reference_data.calendars__base.target_days",
       "columns": [
         "calendar_date",

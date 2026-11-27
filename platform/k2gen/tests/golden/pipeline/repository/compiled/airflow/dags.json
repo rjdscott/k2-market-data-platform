@@ -93,6 +93,8 @@
         "load",
         "audit",
         "publish",
+        "build",
+        "expire",
         "record",
         "maintain"
       ]

@@ -46,7 +46,9 @@
       "name": "market_capture",
       "namespaces": [
         "kraken_instruments",
-        "kraken_instruments__base"
+        "kraken_instruments__base",
+        "kraken_trades",
+        "kraken_trades__base"
       ],
       "remoteSigningEnabled": false
     },

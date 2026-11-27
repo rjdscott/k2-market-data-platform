@@ -55,6 +55,9 @@ models:
       kraken_instruments:
         +database: market_capture_build
         +schema: kraken_instruments__base
+      kraken_trades:
+        +database: market_capture_build
+        +schema: kraken_trades__base
     reference_data:
       calendars:
         +database: reference_data_build

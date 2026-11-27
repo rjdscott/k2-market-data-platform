@@ -133,6 +133,18 @@
       "kind": "table",
       "mode": "rebuild",
       "ref": "audited",
+      "table": "market_capture.kraken_trades__base.silver_trade"
+    },
+    {
+      "kind": "table",
+      "mode": "rebuild",
+      "ref": "audited",
+      "table": "market_capture.kraken_trades__base.silver_trade_unresolved"
+    },
+    {
+      "kind": "table",
+      "mode": "rebuild",
+      "ref": "audited",
       "table": "reference_data.calendars__base.target_days"
     },
     {
