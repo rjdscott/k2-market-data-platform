@@ -6,8 +6,9 @@ For every table in model.LAKE_BUILDS (a serving table has no lake table and is s
   a changed file applied to an existing table fails aloud at deploy, so no column leaves or
   joins a table silently. spark, warehouse k2 (Trino's `lake` is read-only): every connector
   table, and per connector product the platform tables of model.PLATFORM_TABLES (landing_files
-  for a fetch kind, landing for kafka, audit_checks for both). trino: the run-record table,
-  model.RUN_RECORD_SQL byte for byte, when the domain whose build catalog it names is declared.
+  for a fetch kind, landing for kafka, audit_checks for both). trino: the platform's tables,
+  each file of model.PLATFORM_SQL (the run record, the holds) byte for byte, when the domain whose
+  build catalog it names is declared; each backed up as restore with the floor's retention.
   dbt and code outputs get none: their build creates them (model.ddl_path).
 - model.view_sql_path per dbt or code output (model.tested_ref is `audited`): the view's SQL and
   nothing else, `SELECT <contract columns> FROM <base> FOR VERSION AS OF 'audited' WHERE EXISTS
@@ -26,7 +27,7 @@ For every table in model.LAKE_BUILDS (a serving table has no lake table and is s
   never expiring its newest connector snapshot, the resume point (I-1, "Retention").
 
 Every name in emitted SQL goes through model.quote_ident or model.quote_relation and every value
-through model.sql_literal; the one exception is the frozen run-record file, copied unchanged.
+through model.sql_literal; the exceptions are the frozen platform files, copied unchanged.
 Spark reads those double-quoted names only with `spark.sql.ansi.doubleQuotedIdentifiers` (Spark
 3.4 and later), so each Spark file sets it first and is applied in one session (`spark-sql -f`).
 Spark refuses sql_literal's doubled quote (`'The key''s bytes'` is a syntax error on 3.5.9), so no
@@ -58,7 +59,7 @@ TBLPROPERTIES = (
     ("write.merge.mode", "copy-on-write"),
 )
 # The platform tables' backup: none can be rebuilt from an input (the fetch record, the audit's
-# evidence, Kafka's records past its retention, the run history), so all are restored.
+# evidence, Kafka's records past its retention, the run history, the holds), so all are restored.
 PLATFORM_BACKUP: k2.Backup = "restore"
 PLATFORM_OWNER = "platform"  # the owner of the run-record namespace; a product's namespaces are owned by its id
 
@@ -246,20 +247,24 @@ def emit(model: Model) -> dict[str, str]:
         own(*location[:2], owner)
         lake[location] = (days, backup, ref)
 
-    # The run record's namespace is the platform's in its domain's warehouse, declared or not
+    # The platform tables' namespace is the platform's in its domain's warehouse, declared or not
     # yet, so no product's reader or base namespace is it: its publisher would own the history.
-    run_record = k2.RUN_RECORD_SQL.read_text()
-    ((run_catalog, run_namespace, run_table),) = _CREATE.findall(run_record)
-    run_domains = [d for d in sorted(domains) if k2.build_catalog(d) == run_catalog]
-    for d in run_domains:
-        own(k2.warehouse(d), run_namespace, PLATFORM_OWNER)
+    platform_sql = []  # (domain, namespace, table, text), one per model.PLATFORM_SQL file
+    for sql_file in k2.PLATFORM_SQL:
+        text = sql_file.read_text()
+        ((catalog, namespace, table),) = _CREATE.findall(text)
+        for d in sorted(domains):
+            if k2.build_catalog(d) == catalog:
+                own(k2.warehouse(d), namespace, PLATFORM_OWNER)
+                platform_sql.append((d, namespace, table, text))
 
     for t in tables:
         domain, product, table = _parts(t)
         owner = k2.product_id(domain, product)
         if t.build.kind == "platform":
-            # The run record is the platform's one table, from RUN_RECORD_SQL; a second would need its DDL decided.
-            raise ValueError(f"{t.path}: a contract's platform table has no DDL here; the run record comes from {k2.RUN_RECORD_SQL.name}")
+            # The platform's tables come from their frozen files (model.PLATFORM_SQL), never a contract.
+            raise ValueError(f"{t.path}: a contract's platform table has no DDL here; the platform's tables come from "
+                             f"{', '.join(p.name for p in k2.PLATFORM_SQL)}")
         days = RETENTION_FLOOR_DAYS if t.retention is None else t.retention
         keep(_in_warehouse(k2.input_relation(t), domain), days, t.backup, k2.tested_ref(t), owner)
         own(*_in_warehouse(k2.reader_relation(t), domain)[:2], owner)
@@ -280,10 +285,10 @@ def emit(model: Model) -> dict[str, str]:
                  k2.product_id(p.domain, p.name))
 
     declared = {d.name for d in model.domains}
-    for d in run_domains:
+    for d, namespace, table, text in platform_sql:
         if d in declared:
-            put(k2.ddl_path("trino", k2.warehouse(d), run_namespace, run_table), run_record)
-            keep((k2.warehouse(d), run_namespace, run_table), RETENTION_FLOOR_DAYS, PLATFORM_BACKUP, "main", PLATFORM_OWNER)
+            put(k2.ddl_path("trino", k2.warehouse(d), namespace, table), text)
+            keep((k2.warehouse(d), namespace, table), RETENTION_FLOOR_DAYS, PLATFORM_BACKUP, "main", PLATFORM_OWNER)
 
     retired = {p.name for p in model.products if p.status == "retired"}  # no rules (ADR-055 part 4), so no view
     audited = [t for t in tables if k2.tested_ref(t) == k2.AUDITED_TAG and _parts(t)[1] not in retired]
