@@ -1,4 +1,7 @@
-# Owner-only: bronze is capture-team's, and the venue's terms are not yet recorded. The reader
-# grant plan 004 names, svc.partner-dashboard as delayed_reader, is on silver_trade, which this
-# version does not build.
+# Owner-only until the venue's terms are recorded: nobody holds a role, so only the owning team and
+# the platform read it. silver_trade offers full_reader and delayed_reader (its contract: trade_ts
+# delayed 20 minutes, conn_id and conn_msg_seq masked) for the reader plan 004 names,
+# svc.partner-dashboard as delayed_reader, which step W2-10 grants here, and for the products built
+# on it to offer them (access.inherit-role). bronze_trade (access.connector-role) and the held
+# silver_trade_unresolved offer no role.
 grants: []

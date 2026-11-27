@@ -1,0 +1,128 @@
+apiVersion: v3.2.0
+kind: DataContract
+id: market-capture.kraken-trades.silver_trade
+name: silver_trade
+version: 1.0.0
+domain: market-capture
+description:
+  purpose: >-
+    One typed row per trade and delivery: each element of a bronze trade frame's data array, its
+    symbol resolved to the security master's instrument at the trade's time. A trade the venue
+    sent twice is two rows, the later one flagged is_duplicate. A frame is here only once every
+    trade in it resolves; until then it is held in silver_trade_unresolved.
+team:
+  name: capture-team
+schema:
+  - id: silver_trade
+    name: silver_trade
+    physicalName: kraken_trades.silver_trade
+    physicalType: table
+    properties:
+      - name: kafka_partition
+        physicalType: integer
+        required: true
+        primaryKey: true
+        primaryKeyPosition: 1
+        description: The topic partition of the frame; with kafka_offset, the row's lineage to bronze_trade, the landing and the topic.
+      - name: kafka_offset
+        physicalType: bigint
+        required: true
+        primaryKey: true
+        primaryKeyPosition: 2
+        description: The frame's offset in its partition.
+      - name: trade_ordinal
+        physicalType: integer
+        required: true
+        primaryKey: true
+        primaryKeyPosition: 3
+        description: The trade's position in the frame's data array, from 1 (UNNEST ... WITH ORDINALITY).
+      - name: trade_ts
+        physicalType: timestamp(6) with time zone
+        required: true
+        primaryKey: true
+        primaryKeyPosition: 4
+        description: >-
+          The venue's timestamp of the trade (timestamp), in UTC to the microsecond. The partition
+          source (day), so it is in the key, as an incremental merge's unique key holds every
+          partition source column; the first three key columns alone are already unique.
+        customProperties:
+          - property: time
+            value: event
+      - name: trade_id
+        physicalType: bigint
+        required: true
+        description: The venue's trade id (trade_id), sequential per symbol.
+      - name: venue_symbol
+        physicalType: varchar
+        required: true
+        description: The symbol as the venue spells it (symbol), the security master's venue_symbol.
+      - name: instrument_id
+        physicalType: varchar
+        required: true
+        description: The security master's instrument the symbol named at trade_ts, from the version valid then.
+      - name: side
+        physicalType: varchar
+        required: true
+        description: The taker's side as the venue sends it, buy or sell.
+      - name: price
+        physicalType: decimal(38,18)
+        required: true
+        description: >-
+          The price in the quote asset, the venue's JSON number cast exactly to a decimal:
+          twenty integer and eighteen fractional digits, the precision of the listing's tick_size,
+          so a price is compared with its tick exactly and nothing the venue sends is rounded.
+      - name: quantity
+        physicalType: decimal(38,18)
+        required: true
+        description: The quantity in the base asset (qty), cast exactly as price is; the listing's order_min has the same precision.
+      - name: order_type
+        physicalType: varchar
+        description: The taker order's type as the venue sends it (ord_type), market or limit.
+      - name: frame_type
+        physicalType: varchar
+        required: true
+        description: >-
+          The frame's type: snapshot, the recent trades the venue sends on subscribing, or update,
+          trades as they happen. A snapshot repeats trades an earlier connection delivered, which
+          is_duplicate then flags.
+      - name: is_duplicate
+        physicalType: boolean
+        required: true
+        description: >-
+          True when an earlier delivery of the same trade_id for the same venue_symbol is in this
+          table: the first delivery by (kafka_partition, kafka_offset, trade_ordinal) is the
+          original, every later one is flagged and kept.
+      - name: received_at
+        physicalType: timestamp(6) with time zone
+        required: true
+        description: When the capture received the frame (the envelope's recv_ts_ns), in UTC, truncated to the microsecond.
+      - name: conn_id
+        physicalType: varchar
+        required: true
+        description: The capture's websocket connection that received the frame.
+      - name: conn_msg_seq
+        physicalType: bigint
+        required: true
+        description: The frame's number within that connection, from the envelope.
+roles:
+  - role: full_reader
+    access: read
+  - role: delayed_reader
+    access: read
+customProperties:
+  - property: layer
+    value: silver
+  - property: build
+    value: dbt
+  - property: backup
+    value: rebuild  # rebuilt from bronze
+  - property: partitioning
+    value: [day(trade_ts)]
+  - property: policies
+    value:
+      delayed_reader:
+        # On trade_ts, the market time the delay is about, which the products derived from this
+        # one (canonical-trades, candles) carry and delay on (access.inherit-delay); a venue clock
+        # ahead of the platform's only delays a row longer.
+        delay: {column: trade_ts, minutes: 20}
+        mask: [conn_id, conn_msg_seq]
