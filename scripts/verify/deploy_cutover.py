@@ -97,7 +97,7 @@ NAMED = ("prefect-db", "minio", "lakekeeper-migrate", "lakekeeper", "trino", "pr
 def release_shape(R: Any) -> str:
     """The release-shaped compose with today's fixed container names kept, so compose, under the same
     project, recognises each running container as its own and recreates it in place."""
-    text = R.COMPOSE.replace("STANDIN_IMAGE", R.ALPINE_A)
+    text = R.COMPOSE.replace("STANDIN_IMAGE", R.ALPINE_A).replace("SPARK_IMAGE", R.SPARK)
     for svc in NAMED:
         text = re.sub(rf"^  {re.escape(svc)}:(.*)$", rf"  {svc}:\1\n    container_name: k2r-{svc}", text, count=1, flags=re.M)
     return text
@@ -128,17 +128,8 @@ def rehearse(R: Any) -> int:
     R.sh("git", "-C", str(R.CLONE), "commit", "-q", "-m", "today: the stack as main runs it before S22")
     today_commit = R.sh("git", "-C", str(R.CLONE), "rev-parse", "HEAD").stdout.strip()
 
-    # Today's stack, running, with its lake
-    R.compose("up", "-d", "--wait", "prefect-db", "minio", "lakekeeper", "capture-binance")
-    domains = R.model.parse(R.model.DOMAINS, (R.CLONE / R.model.DOMAINS).read_bytes())["domains"]
-    warehouses = [R.model.warehouse(d) for d in domains]  # what lake-init made: one per domain
-    c = R.compose("ps", "-q", "minio").stdout.strip()
-    R.sh("docker", "exec", c, "sh", "-c", 'MC_HOST_l="http://$MINIO_ROOT_USER:$MINIO_ROOT_PASSWORD@localhost:9000" mc mb --ignore-existing l/lake')
-    tools_today = R.sh("docker", "build", "-q", "-f", str(R.CLONE / "docker/tools/Dockerfile"), str(R.CLONE)).stdout.strip()
-    print(R.sh("docker", "run", "--rm", "-i", "--network", f"{R.PROJECT}_k2-net", "--memory", "128m", "-e", "MINIO_ROOT_USER",
-               "-e", "MINIO_ROOT_PASSWORD", tools_today, "python3", "-", "http://lakekeeper:8181", "k2", *warehouses,
-               input=R.LAKE_SETUP, env=R.env()).stdout.strip().replace("\n", "; "))
-    R.compose("up", "-d", "--wait", "trino")
+    # Today's stack, running; its lake is made below by the real lake-init, once a release gives the plan
+    R.compose("up", "-d", "--wait", "prefect-db", "minio", "lakekeeper", "capture-binance", "trino")
     q_http = lambda: http(f"http://127.0.0.1:{http_port}/v1/statement", {"X-Trino-User": "today"}, b"SELECT 1")  # noqa: E731
     today_ok = (q_http(), http(f"http://127.0.0.1:{lk_port}/health"))
     R.check("today's shape runs: Trino answers on HTTP, Lakekeeper on its host port", today_ok == (200, 200), str(today_ok))
@@ -156,6 +147,7 @@ def rehearse(R: Any) -> int:
             for s in ("prefect-db", "minio", "lakekeeper", "capture-binance")}
     R.check("make release: the services deploy never recreates keep the images they run", all(same.values()),
             f"{rid} in {time.monotonic() - t0:.0f} s; {same}")
+    R.lake_setup(rid, f"{R.PROJECT}_k2-net")  # the live layout, engine users included, on today's one network
     # 4. the catalog's network made, MinIO and Postgres joined to it in place, no restart
     net = f"{R.PROJECT}_k2-catalog"
     R.sh("docker", "network", "create", "--label", f"com.docker.compose.project={R.PROJECT}",

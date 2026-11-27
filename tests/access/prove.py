@@ -8,7 +8,7 @@ control and asserts how it ends, exiting 1 when the control did not behave.
     prove.py release         access-verify's release scope: no row fails, and exactly the probe rows skip,
                              each for the probe reason (catalog-fence.sh runs them on the stack)
     prove.py live            access-verify's live scope against this lake (K2_SECRETS laid out from the
-                             lake's passwords): only the planted-view, drift and probe rows skip; with one
+                             lake's passwords): only the planted-view, drift, probe and other products' rows skip; with one
                              canary reader's password file gone, exactly that reader's rows fail
     prove.py plant <kind>    view: a definer view by REST, an undeclared name, the publisher's name
                                    forged as its owner, SQL over the base's main
@@ -21,7 +21,7 @@ control and asserts how it ends, exiting 1 when the control did not behave.
                                     its builder, through Trino (the review of S12, C1); no undo
     prove.py unplant <kind>
 
-The product under attack is the release's first dbt or code product, its first output.
+The product under attack is the release's first dbt or code output with a mask and grantees (the canary's).
 """
 
 from __future__ import annotations
@@ -45,8 +45,9 @@ ENV_FILE = Path("/work/env.json")
 TRINO, ENV = av.connect(ENV_FILE)
 RELEASE = Path(ENV["release"])
 M = av.load(RELEASE)
-P = next(p for p in sorted(M.products, key=lambda p: p.id) if any(t.build.kind in ("dbt", "code") for t in p.tables))
-T = next(t for t in P.tables if t.build.kind in ("dbt", "code"))
+# The first dbt or code output with a masking policy: the attacks need a reader role, its mask and its members.
+P, T = next((p, t) for p in sorted(M.products, key=lambda p: p.id) for t in p.tables
+            if t.build.kind in ("dbt", "code") and any(pol.mask for pol in t.policies.values()) and p.grants)
 VIEW = next(model.View(v["relation"], v["base"], tuple(v["columns"]), v["owner"])
             for v in json.loads((RELEASE / model.VIEWS).read_text())["views"] if v["relation"] == model.reader_relation(T))
 CAT = cd.Catalog(f"{ENV['lakekeeper']}/catalog", model.warehouse(P.domain))
@@ -139,8 +140,12 @@ def live() -> int:
     os.environ.pop("K2_CATALOG_URI", None)
     code, rows = run_access_verify("live", "/work/live.json")
     skipped = {n for n, (v, _) in rows.items() if v == "SKIP"}
-    want = {n for n, e in enumerate(M.expectations, 1) if av.planted(e, M) or isinstance(e, model.DriftExpectation)} | probes()
-    say(f"live scope: exit {code}; skipped rows {sorted(skipped)}, the planted-view, drift and probe rows are {sorted(want)}")
+    c = next(p for p in M.products if p.id == av.CANARY_PRODUCT)  # a row on another product's relation is not live's to run
+    canary_ns = {model.reader_namespace(c.name), model.base_namespace(c.name)}
+    foreign = {n for n, e in enumerate(M.expectations, 1) if getattr(e, "table", None) and not e.table.startswith("system.")
+               and e.table.split(".")[1].split("$")[0] not in canary_ns}
+    want = {n for n, e in enumerate(M.expectations, 1) if av.planted(e, M) or isinstance(e, model.DriftExpectation)} | probes() | foreign
+    say(f"live scope: exit {code}; skipped rows {sorted(skipped)}, the planted-view, drift, probe and other products' rows are {sorted(want)}")
     ok = code == 0 and skipped == want
     gone = sorted(canary)[-1]
     (sec / "principals" / f"{gone}.password").unlink()

@@ -337,26 +337,18 @@ def setup(m: model.Model, fixtures: list[Fixture]) -> dict[str, int]:
 
 
 def lake_tables(m: model.Model) -> Table | None:
-    """Every connector table, and its product's landing_files and audit_checks, created empty in
-    warehouse k2 through the REST API (Trino's `lake` is read-only, Spark its writer), so a lake
+    """Every connector table, and its product's landing_files and audit_checks, in warehouse k2: made
+    empty by the release's Spark DDL when the lake came up (scripts/lib/throwaway-lake.sh), so a lake
     denial is a denial and not an absent table. Returns the first connector table."""
-    iceberg = {"varchar": "string", "bigint": "long", "integer": "int", "date": "date", "boolean": "boolean",
-               "varbinary": "binary", "timestamp(6) with time zone": "timestamptz", "timestamp(6)": "timestamp"}
     first = None
     for p in sorted(m.products, key=lambda p: p.id):
-        made = [(t.name, [(c.name, c.physical_type) for c in t.columns]) for t in p.tables if t.build.kind == "connector"]
+        made = [t.name for t in p.tables if t.build.kind == "connector"]
         if not made:
             continue
-        made += [(pt.name, [(c.name, c.type) for c in pt.columns]) for pt in (model.PLATFORM_TABLES[model.LANDING_FILES],
-                                                                          model.PLATFORM_TABLES[model.AUDIT_CHECKS])]
         base, ns = catalog_base(model.LAKE_WAREHOUSE), model.fence(p.name)
-        st, _ = rest("POST", f"{base}/namespaces", {"namespace": [ns]})
-        assert st in (200, 409), f"namespace {ns}: {st}"
-        for name, cols in made:
-            fields = [{"id": i + 1, "name": c, "required": False, "type": ty if ty.startswith("decimal(") else iceberg[ty]}
-                      for i, (c, ty) in enumerate(cols)]
-            st, doc = rest("POST", f"{base}/namespaces/{ns}/tables", {"name": name, "schema": {"type": "struct", "schema-id": 0, "fields": fields}})
-            assert st == 200, f"lake table {ns}.{name}: {st} {doc}"
+        for name in (*made, model.LANDING_FILES, model.AUDIT_CHECKS):
+            st, _ = rest("GET", f"{base}/namespaces/{ns}/tables/{name}")
+            assert st == 200, f"lake table {ns}.{name}: {st}; the release's Spark DDL makes it (throwaway-lake.sh up)"
         first = first or next(t for t in p.tables if t.build.kind == "connector")
     return first
 

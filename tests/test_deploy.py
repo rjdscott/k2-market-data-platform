@@ -590,8 +590,13 @@ sys.exit(f"fake docker: no answer for {A}")
         calls: list[list[str]] = []
         monkeypatch.setattr(deploy, "drift", lambda ctx, rel: {"exit": exit_, "doc": {"pending": pending}, "text": "x"})
         monkeypatch.setattr(deploy, "run", lambda *a, **k: calls.append(list(a)) or subprocess.CompletedProcess(a, 0, "", ""))
+        monkeypatch.setenv("K2_SPARK_S3_SECRET_KEY", "a-secret-of-this-test")
         lines, bad = deploy.s20_checks(world.ctx, r1)
-        assert bool([c for c in calls if "access-verify" in c]) is live_runs and bool(bad) is wrong, (lines, bad)
+        live = [c for c in calls if "/opt/k2/scripts/access_verify.py" in c and "live" in c]
+        assert bool(live) is live_runs and bool(bad) is wrong, (lines, bad)
+        for c in live:  # a tools one-shot; each engine's pair by -e name only, never its value on the command line
+            assert c[:2] == ["docker", "compose"] and "tools" in c and "a-secret-of-this-test" not in " ".join(c)
+            assert ["-e", "K2_SPARK_S3_SECRET_KEY"] == c[c.index("K2_SPARK_S3_SECRET_KEY") - 1:c.index("K2_SPARK_S3_SECRET_KEY") + 1]
         if pending:
             assert any(x.startswith("SKIP access-verify LIVE=1") and "governance.access-canary" in x for x in lines)
 
