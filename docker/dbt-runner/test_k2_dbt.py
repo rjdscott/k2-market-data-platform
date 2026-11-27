@@ -71,7 +71,11 @@ class Fake:
         self.fail_on: str | None = None
         self.meta: dict[int, dict] = {}  # each snapshot's commit time and committing query
         self.queries = iter(range(1, 10**5))
-        self.report_queries = True  # dbt's run_results carry each node's query id
+        self.report_queries = True  # dbt's run_results carry each node's (last statement's) query id
+        self.list_queries = True  # Trino lists the builder's queries with their client tags
+        self.listed: dict[str, list[str]] = {}  # query id: its client tags, as GET /v1/query lists them
+        self.rows = True  # the build's tables have rows; an INSERT of none commits no snapshot
+        self.tags: list[str] = []  # the client tag of each dbt invocation
         self.orphans: list[str] = []  # the builder's queries an earlier run left running
         self.kills: list[str] = []
         self.unkillable = False
@@ -185,13 +189,28 @@ class Fake:
         return [{k: r.get(k) for k in ("run_id", "event", "table_name", "snapshot_before", "snapshot_after")}
                 for r in self.records if r["product_id"] == product and r["task"] == "build"]
 
-    def dbt(self, argv):
+    def query(self, tag):  # one statement of a dbt invocation: its id, listed with the invocation's client tag
+        qid = f"20261127_000000_{next(self.queries):05d}_dbtqy"
+        self.listed[qid] = [tag] if tag else []
+        return qid
+
+    def tagged(self, tag):
+        return {q for q, tags in self.listed.items() if tag in tags} if self.list_queries else set()
+
+    def dbt(self, argv, tag=None):
         self.dbt_calls.append(argv)
+        self.tags.append(tag)
         results = []
         for rel in self.view_of:  # every output is rebuilt; its tests pass only on a passing build
-            qid = f"20261127_000000_{next(self.queries):05d}_dbtqy"
-            self._snap(rel, self.build.get(rel) or (self.tables[rel]["schema"] if rel in self.tables else V1), self.dbt_code == 0, qid)
-            results.append({"status": self.dbt_status, "adapter_response": {"query_id": qid} if self.report_queries else {}})
+            # dbt-trino's table of an enforced contract, as measured on Trino 484: CREATE OR REPLACE
+            # TABLE commits an empty snapshot, then INSERT commits the rows only when there are some;
+            # run_results names the INSERT alone (scripts/verify/run-path.sh, claim `every`).
+            cols = self.build.get(rel) or (self.tables[rel]["schema"] if rel in self.tables else V1)
+            create, insert = self.query(tag), self.query(tag)
+            self._snap(rel, cols, self.dbt_code == 0, create)
+            if self.rows:
+                self._snap(rel, cols, self.dbt_code == 0, insert)
+            results.append({"status": self.dbt_status, "adapter_response": {"query_id": insert} if self.report_queries else {}})
         self._snap("governance_build.access_canary__base.dq_test_results", {"run_id": "varchar"}, True)  # the results hook
         self.check()
         if self.after_dbt:
@@ -301,9 +320,12 @@ def test_the_dbt_environment_is_an_allow_list_and_the_argv_holds_no_secret():
     environ = {"PATH": "/venv/bin", "K2_TRINO_HOST": "trino", "K2_TRINO_INTERNAL_PORT": "8443",
                "K2_TRINO_USER": "dbt_access_canary", "K2_PUB_USER": "pub_access_canary", "K2_RUNS_USER": "svc.runs",
                "K2_CATALOG_URI": "http://lakekeeper:8181/catalog", "K2_RELEASE": RELEASE, "AWS_SECRET_ACCESS_KEY": "x"}
-    env = w.dbt_env(environ, "s3cr3t-builder")
+    env = w.dbt_env(environ, "s3cr3t-builder", "k2-dbt-" + "0" * 32)
     assert set(env) == {"PATH", "HOME", "LANG", "K2_TRINO_HOST", "K2_TRINO_INTERNAL_PORT", "K2_TRINO_USER",
-                        "DBT_ENV_SECRET_K2_TRINO_PASSWORD", "DBT_SEND_ANONYMOUS_USAGE_STATS", "DBT_USE_COLORS"}
+                        "DBT_ENV_SECRET_K2_TRINO_PASSWORD", "K2_DBT_CLIENT_TAG", "DBT_SEND_ANONYMOUS_USAGE_STATS", "DBT_USE_COLORS"}
+    assert env["K2_DBT_CLIENT_TAG"] == "k2-dbt-" + "0" * 32
+    profile = (ROOT / "dbt" / "profiles.yml").read_text()  # the image's profile puts the tag on every statement
+    assert "client_tags: [\"{{ env_var('K2_DBT_CLIENT_TAG', 'k2-dbt-manual') }}\"]" in profile
     assert [k for k, v in env.items() if "s3cr3t" in v] == ["DBT_ENV_SECRET_K2_TRINO_PASSWORD"]
     assert env["K2_TRINO_USER"] == "dbt_access_canary" and env["DBT_USE_COLORS"] == "false"
     argv = w.dbt_argv(ctx(), {INPUT.contract: 7})
@@ -325,10 +347,10 @@ def test_a_failed_test_with_the_schema_unchanged_rolls_back_and_names_the_snapsh
     s0 = fake.seed()
     fake.dbt_code, fake.dbt_status = 1, "fail"
     code, expire = w.run(ctx(), fake)
-    failed = max(fake.tables[OUT]["snaps"])
-    assert code == 1 and fake.tables[OUT]["main"] == s0 and fake.tables[OUT]["tag"] == s0
+    failed = sorted(set(fake.tables[OUT]["snaps"]) - {s0})  # the CREATE's empty snapshot and the INSERT's
+    assert len(failed) == 2 and code == 1 and fake.tables[OUT]["main"] == s0 and fake.tables[OUT]["tag"] == s0
     assert ("builder", f'ALTER TABLE {k2.quote_relation(OUT)} EXECUTE rollback_to_snapshot({s0})') in fake.statements
-    assert expire == [{"table": OUT, "ids": [failed]}]
+    assert expire == [{"table": OUT, "ids": failed}]
     (rb,) = [r for r in fake.records if r["event"] == "rolled_back"]
     assert (rb["snapshot_before"], rb["snapshot_after"], rb["dbt_invocation_id"]) == (s0, s0, UUID)
     assert fake.violations == []
@@ -524,13 +546,41 @@ def test_with_a_query_id_missing_on_one_side_the_dbt_invocations_time_decides(la
     fake = Fake()
     fake.seed()
     unnamed = lambda f: f.meta[f.tables[OUT]["main"]].update(query_id=None)  # noqa: E731
-    fake.report_queries = lacking != "dbt"
+    fake.report_queries = fake.list_queries = lacking != "dbt"
     fake.after_dbt = None if lacking == "dbt" else unnamed
     assert w.run(ctx(), fake)[0] == 0  # committed inside the invocation
     tagged = fake.tables[OUT]["tag"]
     later = datetime.now(timezone.utc) + timedelta(hours=1)
     fake.after_dbt = lambda f: (unnamed(f), f.meta[f.tables[OUT]["main"]].update(committed_at=later))
     assert w.run(ctx(run="access_canary/r2"), fake)[0] == 3  # committed after dbt returned
+    assert fake.tables[OUT]["tag"] == tagged and fake.leaks() == []
+
+
+def test_an_empty_table_published_by_its_create_which_dbt_never_reports_is_its_own_commit():
+    # live, 2026-11-27: governance.quality-results built test_results with no rows; main was the
+    # CREATE OR REPLACE's snapshot, and run_results named only the INSERT, which committed nothing
+    fake = Fake()
+    fake.seed()
+    fake.rows = False
+    assert w.run(ctx(), fake)[0] == 0
+    main = fake.tables[OUT]["main"]
+    assert fake.tables[OUT]["tag"] == main and fake.meta[main]["query_id"] in fake.tagged(fake.tags[-1])
+    assert fake.violations == []
+
+
+def test_each_run_has_its_own_client_tag_so_an_earlier_runs_orphan_is_refused():
+    # run r1's statement outlives it (its client gone) and commits after r2's tests: it carries r1's tag
+    fake = Fake()
+    fake.seed()
+    assert w.run(ctx(), fake)[0] == 0
+    tagged = fake.tables[OUT]["tag"]
+
+    def orphan(f):
+        f.listed[ORPHAN] = [f.tags[0]]
+        f._snap(OUT, V1, False, query_id=ORPHAN)
+    fake.after_dbt = orphan
+    assert w.run(ctx(run="access_canary/r1"), fake)[0] == 3  # a retry of the same run id: a new tag all the same
+    assert fake.tags[0] != fake.tags[1] and all(re.fullmatch(r"k2-dbt-[0-9a-f]{32}", t) for t in fake.tags)
     assert fake.tables[OUT]["tag"] == tagged and fake.leaks() == []
 
 
@@ -575,6 +625,12 @@ def test_the_live_orphan_calls_list_the_builders_own_and_cancel_only_a_query_id(
     monkeypatch.setattr(live, "rest", lambda method, path: sent.append((method, path)) or (listing if method == "GET" else None),
                         raising=False)
     assert live.running() == [ORPHAN] and sent == [("GET", "/v1/query")]
+    tag = "k2-dbt-" + "a" * 32
+    listing[1]["session"]["clientTags"] = [tag]  # this run's statement
+    listing[2]["session"]["clientTags"] = ["k2-dbt-" + "b" * 32]  # an earlier run's
+    listing[3]["session"]["clientTags"] = [tag]  # another user's, the tag copied
+    listing.append({"queryId": "x' OR 1=1", "state": "FINISHED", "session": {"user": "dbt_access_canary", "clientTags": [tag]}})
+    assert live.tagged(tag) == {"20261127_010203_00043_done1"}
     live.kill(ORPHAN)
     assert sent[-1] == ("DELETE", f"/v1/query/{ORPHAN}")
     for bad in ("20261127_010203_00042_orph1/../../v1/node", "", "x"):

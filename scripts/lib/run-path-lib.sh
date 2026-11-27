@@ -177,10 +177,13 @@ claim() {  # claim <name> [args]: the probe's one line, numbered; a FAIL stops t
   local out code
   out=$(probe claim "$@" 2>&1)
   code=$?
+  claimed "$1" "$out" $code
+}
+claimed() {  # claimed <name> <output> <exit>: the output's PASS, FAIL and INFO lines, numbered; a FAIL stops the run
   RP_N=$((RP_N + 1))
-  printf '%s\n' "$out" | grep -E '^(PASS|FAIL|INFO) ' | sed -E "s/^(PASS|FAIL) /\1 $RP_N /" | tee -a "$W/claims"
-  if [ $code != 0 ]; then
-    grep -qE '^FAIL ' <<< "$out" || echo "FAIL $RP_N $1: the probe failed: $(tail -1 <<< "$out")" | tee -a "$W/claims"
+  printf '%s\n' "$2" | grep -E '^(PASS|FAIL|INFO) ' | sed -E "s/^(PASS|FAIL) /\1 $RP_N /" | tee -a "$W/claims"
+  if [ "$3" != 0 ]; then
+    grep -qE '^FAIL ' <<< "$2" || echo "FAIL $RP_N $1: the probe failed: $(tail -1 <<< "$2")" | tee -a "$W/claims"
     finish "stopped at claim $RP_N ($1): the claims after it build on the lake it left"
   fi
 }
@@ -220,4 +223,57 @@ rp_corrupt() {  # the corrupt file; a third batch refused behind it; the clearin
   TRY=2 task "$ID" rp-third load
   spark_py facts facts-corrupt; probe state cleared
   claim corrupt "$ID"
+}
+rp_every() {  # every dbt product of the release through the wrapper, each after the products it reads; its claim
+  local p n=0 runs=()
+  for p in $(python3 - "$STATE/releases/$ID" <<'PY'
+# governance.quality-results last: it reads every builder's results (model.test_results_writers),
+# which no input port declares.
+import json, sys
+from pathlib import Path
+docs = {d["product"]: d for d in (json.loads(f.read_text()) for f in Path(sys.argv[1], "compiled/products").glob("*/pipeline.json"))
+        if (d.get("build") or {}).get("engine") == "dbt"}
+order = []
+def visit(p):
+    if p not in order:
+        for i in docs[p].get("inputs", []):
+            if (q := ".".join(i["contractId"].split(".")[:2])) in docs:
+                visit(q)
+        order.append(p)
+for p in sorted(docs, key=lambda p: p == "governance.quality-results"):
+    visit(p)
+print("\n".join(order))
+PY
+  ); do
+    n=$((n + 1)); runs+=("$p=rp-every-$n")
+    build "$ID" "$p" "rp-every-$n"
+  done
+  claimed every "$(bash "$L" py "$P" - "$ID" "${runs[@]}" 2>&1 <<'PY'
+# Each build exited 0 with XCom exit 0, and each output's audited tag is its main; INFO: main's rows.
+import json, sys
+from pathlib import Path
+sys.path[:0] = ["/src/scripts/verify"]
+import catalog_drift as cd
+rid, runs = sys.argv[1], [a.split("=") for a in sys.argv[2:]]
+lk, rp, bad = json.loads(Path("/work/env.json").read_text())["lakekeeper"] + "/catalog", Path("/work/rp"), []
+for product, run in runs:
+    rc = (rp / f"{run}.build.rc").read_text().strip()
+    out = [x for x in (rp / f"{run}.build.out").read_text().splitlines() if x.strip()]
+    err = [x for x in (rp / f"{run}.build.err").read_text().splitlines() if x.startswith("k2-dbt:")]
+    if rc != "0" or not out or json.loads(out[-1]).get("exit") != 0:
+        bad.append(f"{product} ({run}) exit {rc}: {(err or ['(no k2-dbt line)'])[-1][:300]}")
+        continue
+    for rel in json.loads((Path("/work/releases") / rid / f"compiled/products/{product}/pipeline.json").read_text())["build"]["outputs"]:
+        catalog, ns, table = rel.split(".")
+        meta = cd.Catalog(lk, catalog.removesuffix("_build")).table(ns, table) or {}
+        refs = {k: r["snapshot-id"] for k, r in (meta.get("refs") or {}).items()}
+        main = next((x for x in meta.get("snapshots") or [] if x["snapshot-id"] == refs.get("main")), {})
+        print(f"INFO every {product} {rel}: main {refs.get('main')} holds {main.get('summary', {}).get('total-records')} rows")
+        if refs.get("main") is None or refs.get("audited") != refs["main"]:
+            bad.append(f"{product} {rel}: refs {refs}, not audited on main")
+print(f"{'FAIL' if bad else 'PASS'} every dbt product of the release builds through the wrapper and ends audited on main: "
+      f"{bad[0] if bad else ', '.join(p for p, _ in runs)}")
+sys.exit(1 if bad else 0)
+PY
+)" $?
 }

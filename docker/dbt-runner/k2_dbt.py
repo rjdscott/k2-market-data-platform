@@ -23,8 +23,8 @@ docs/research/2026-11-26-release-spine-spikes.md. In order:
    unit tests inside it (spike d). Any non-zero exit is a failed build.
 5. on a failure, every output whose main moved is restored as the builder, `rolled_back`.
 6. on a pass, as the publisher: each moved main must be this dbt invocation's own commit
-   (built_here()), then views narrowed, one compare-and-set tag commit, views widened, `audited`
-   (publish()).
+   (built_here(): committed by a query that carried this run's client tag, or that dbt reported),
+   then views narrowed, one compare-and-set tag commit, views widened, `audited` (publish()).
 
 Exits: 0 passed and published; 1 tests failed, outputs restored; 2 build error, outputs restored;
 3 a restore, the tag commit, the view sync, the reconcile or the drift check failed (pages); 4 a
@@ -37,8 +37,9 @@ quoted by k2gen's quote_relation; snapshot ids pass snap() (an int, never a stri
 passwords are read from their files at connect time, never logged (log() scrubs every one read),
 never in an argument list. Trino cannot move a tag (spike g), so the tag commit and the current
 view SQL are the two calls to Lakekeeper's REST API, at K2_CATALOG_URI (steps 1 and 6), beside the
-drift check's own reads; listing and cancelling the builder's orphaned queries are the two calls to
-Trino's own REST API (step 1), as the builder.
+drift check's own reads; listing and cancelling the builder's orphaned queries (step 1), and listing
+the queries that carried this run's client tag (step 6), are the calls to Trino's own REST API, as
+the builder.
 
 Imports beyond the standard library: trino, k2gen (platform/k2gen), and catalog_drift
 (scripts/verify/catalog_drift.py), which docker/dbt-runner/Dockerfile puts beside this file, so
@@ -54,6 +55,7 @@ import importlib.util
 import json
 import os
 import re
+import secrets
 import shutil
 import ssl
 import subprocess
@@ -91,6 +93,7 @@ RUN_ID = re.compile(r"([a-z][a-z0-9_]*)/([A-Za-z0-9][A-Za-z0-9_.:+-]{0,200})")
 HOST = re.compile(r"[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?")
 INVOCATION = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 QUERY_ID = re.compile(r"[0-9]{8}_[0-9]{6}_[0-9]{5}_[a-z0-9]{5}")  # Trino's QueryId
+CLIENT_TAG = "K2_DBT_CLIENT_TAG"  # dbt/profiles.yml's client_tags: every statement of the run carries it
 ORPHAN_WAIT = 60  # seconds a killed query has to end (its commit or abort) before reconcile reads
 
 
@@ -412,13 +415,20 @@ def dbt_argv(ctx: Ctx, inputs: dict[str, int | None]) -> list[str]:
             "--target-path", str(WORK / "target"), "--log-path", str(WORK / "logs")]
 
 
-def dbt_env(environ: dict[str, str], builder_password: str) -> dict[str, str]:
+def client_tag() -> str:
+    """This run's own Trino client tag, which every statement of its dbt build carries (the
+    profile's client_tags). Made after stop_orphans and fresh per run, a retry of the same run id
+    included, so no query an earlier run left can carry it."""
+    return f"k2-dbt-{secrets.token_hex(16)}"
+
+
+def dbt_env(environ: dict[str, str], builder_password: str, tag: str) -> dict[str, str]:
     """The dbt subprocess's whole environment: what dbt and dbt/profiles.yml read, the builder's
-    credentials only (never the publisher's, svc.runs's or the catalog's)."""
+    credentials only (never the publisher's, svc.runs's or the catalog's), and the run's client tag."""
     return {"PATH": environ.get("PATH", "/usr/local/bin:/usr/bin:/bin"), "HOME": str(WORK), "LANG": "C.UTF-8",
             "K2_TRINO_HOST": environ["K2_TRINO_HOST"], "K2_TRINO_INTERNAL_PORT": environ["K2_TRINO_INTERNAL_PORT"],
             "K2_TRINO_USER": environ["K2_TRINO_USER"], "DBT_ENV_SECRET_K2_TRINO_PASSWORD": builder_password,
-            "DBT_SEND_ANONYMOUS_USAGE_STATS": "false", "DBT_USE_COLORS": "false"}
+            CLIENT_TAG: tag, "DBT_SEND_ANONYMOUS_USAGE_STATS": "false", "DBT_USE_COLORS": "false"}
 
 
 def verdict(code: int, results: dict[str, Any] | None) -> int:
@@ -454,8 +464,9 @@ def rollback(ctx: Ctx, io: Any, before: dict[str, dict[str, Any]], invocation: s
 
 
 def reported(results: dict[str, Any] | None) -> set[str]:
-    """Every query id dbt-trino reported, one per node: its adapter_response, the node's last
-    statement (dbt-trino splits a contract table's CREATE and INSERT, a merge's MERGE comes last)."""
+    """The query ids dbt-trino reported, one per node: its adapter_response, the node's LAST
+    statement only. A contract table is CREATE OR REPLACE then INSERT, and an INSERT of no rows
+    commits no snapshot, so main is then the CREATE's, which no result names (Live.tagged has it)."""
     ids = {((r.get("adapter_response") or {}).get("query_id")) for r in (results or {}).get("results", [])}
     return {q for q in ids if isinstance(q, str) and QUERY_ID.fullmatch(q)}
 
@@ -463,11 +474,13 @@ def reported(results: dict[str, Any] | None) -> set[str]:
 def built_here(rel: str, meta: dict[str, Any], queries: set[str], window: tuple[datetime, datetime]) -> None:
     """The tested snapshot, a main this run moved, is this dbt invocation's own commit, not a write
     that landed after its tests (an orphaned query of an earlier run, stop_orphans' other end).
-    Trino's Iceberg connector writes the committing query's id into the snapshot summary, and dbt
-    reports each node's: when both sides have one, the snapshot's must be one dbt reported. When
-    either lacks it, only the time can decide: committed inside the dbt invocation. Weaker, since a
-    write after a node's tests but before dbt returns passes it; the log says which was used. A
-    product hook writing {{ this }} after the model (no product has one) would refuse here."""
+    Trino's Iceberg connector writes the committing query's id into the snapshot summary; `queries`
+    is every statement this dbt invocation ran (Live.tagged, by its client tag) and every one dbt
+    reported: the snapshot's must be one of them. When either side lacks ids, only the time can
+    decide: committed inside the dbt invocation. Weaker, since a write after a node's tests but
+    before dbt returns passes it; the log says which was used. A statement of this invocation that
+    writes an output after its tests (a later model's or hook's) is k2gen check's SQL lint's to
+    refuse, not this guard's: it carries the tag."""
     qid = meta.get("query_id")
     if qid and queries:
         if qid not in queries:
@@ -581,9 +594,9 @@ def run(ctx: Ctx, io: Any) -> tuple[int, list[dict[str, Any]]]:
     except Exception as e:
         log(f"started: {type(e).__name__}: {e}")
         return 3, expire
-    window_start = datetime.now(timezone.utc)
+    window_start, tag = datetime.now(timezone.utc), client_tag()
     try:
-        code, results = io.dbt(dbt_argv(ctx, inputs))
+        code, results = io.dbt(dbt_argv(ctx, inputs), tag)
     except Exception as e:
         log(f"dbt: {type(e).__name__}: {e}")
         code, results = 2, None
@@ -596,7 +609,7 @@ def run(ctx: Ctx, io: Any) -> tuple[int, list[dict[str, Any]]]:
             log(f"dbt build {'failed its tests' if outcome == 1 else 'failed'} (exit {code}); restoring the outputs")
             rollback(ctx, io, before, invocation, expire)
             return outcome, expire
-        return publish(ctx, io, before, invocation, reported(results), window), expire
+        return publish(ctx, io, before, invocation, reported(results) | io.tagged(tag), window), expire
     except Exception as e:
         log(f"{'rollback' if outcome else 'publish'}: {type(e).__name__}: {e}")
         return 3, expire
@@ -687,6 +700,17 @@ class Live:
         return sorted(str(q["queryId"]) for q in self.rest("GET", "/v1/query")
                       if (q.get("session") or {}).get("user") == self.ctx.writer and q.get("state") not in ("FINISHED", "FAILED"))
 
+    def tagged(self, tag: str) -> set[str]:
+        """Every query of the builder's that carried the client tag `tag` (GET /v1/query, which lists
+        each query's session with its clientTags): the statements of this run's dbt build.
+        ponytail: Trino lists a finished query for query.min-expire-age (15 min) and after that only
+        while it lists fewer than query.max-history (100), so a build whose untagged-by-dbt commit is
+        older than that at publish is refused, never passed; raise min-expire-age (trino_etc.py) when
+        a build is measured near 15 min."""
+        return {str(q["queryId"]) for q in self.rest("GET", "/v1/query")
+                if (s := q.get("session") or {}).get("user") == self.ctx.writer and tag in (s.get("clientTags") or [])
+                and QUERY_ID.fullmatch(str(q["queryId"]))}
+
     def kill(self, query_id: str) -> None:
         """Cancel one of the builder's own queries (DELETE /v1/query/<id>). Refused credentials
         refuse; any other answer (it ended meanwhile, an unknown id) is left to the wait."""
@@ -727,11 +751,11 @@ class Live:
                                      "WHERE product_id = ? AND task = 'build' ORDER BY recorded_at", [product])
         return [dict(zip(("run_id", "event", "table_name", "snapshot_before", "snapshot_after"), r, strict=True)) for r in rows]
 
-    def dbt(self, argv: list[str]) -> tuple[int, dict[str, Any] | None]:
+    def dbt(self, argv: list[str], tag: str) -> tuple[int, dict[str, Any] | None]:
         results = WORK / "target" / "run_results.json"
         WORK.mkdir(parents=True, exist_ok=True)
         results.unlink(missing_ok=True)
-        done = subprocess.run(argv, env=dbt_env(self.environ, password("builder")), stdin=subprocess.DEVNULL,
+        done = subprocess.run(argv, env=dbt_env(self.environ, password("builder"), tag), stdin=subprocess.DEVNULL,
                               stdout=sys.stderr, stderr=sys.stderr, check=False)
         return done.returncode, json.loads(results.read_text()) if results.exists() else None
 
