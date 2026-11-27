@@ -5,7 +5,7 @@ name: bronze_frames
 version: 1.0.0
 domain: sensor-net
 description:
-  purpose: One row per frame the bronze filter kept, the landing's columns as landed.
+  purpose: One row per frame the bronze filter kept, its envelope decoded.
 team:
   name: sensor-team
 schema:
@@ -29,12 +29,15 @@ schema:
       - name: kafka_timestamp
         physicalType: timestamp(6) with time zone
         description: The record's timestamp.
-      - name: record_key
+      - name: schema_id
+        physicalType: integer
+        description: The frame's writer schema id.
+      - name: stream
+        physicalType: varchar
+        description: The envelope's stream.
+      - name: payload
         physicalType: varbinary
-        description: The key's bytes as read.
-      - name: record_value
-        physicalType: varbinary
-        description: The value's bytes as read.
+        description: The envelope's payload as sent.
       - name: batch_id
         physicalType: varchar
         description: The landing batch that landed the record.

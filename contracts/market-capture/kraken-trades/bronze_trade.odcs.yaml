@@ -6,10 +6,13 @@ version: 1.0.0
 domain: market-capture
 description:
   purpose: >-
-    One row per record of the raw Kraken topic whose envelope stream is trade, the landing's
-    columns as landed (I-1): staged from lake.kraken_trades.landing by offset, so a retry or a
-    kill between the landing commit and the stage adds no row twice and leaves no hole. The
-    connector's audit (accounting, parses, keys_unique) passes before a batch publishes.
+    One row per record of the raw Kraken topic whose envelope stream is trade, its RawMessage
+    envelope decoded by the frame's writer schema id (I-1, 2026-11-28: Trino decodes no Avro, so
+    silver reads these columns, never the frame's bytes, which stay in the landing): staged from
+    lake.kraken_trades.landing by offset, so a retry or a kill between the landing commit and the
+    stage adds no row twice and leaves no hole. The connector's audit (accounting, parses,
+    keys_unique) passes before a batch publishes; parses fails a frame whose writer schema lacks
+    an envelope column or types it otherwise, naming the column.
 team:
   name: capture-team
 schema:
@@ -33,15 +36,30 @@ schema:
       - name: kafka_timestamp
         physicalType: timestamp(6) with time zone
         description: The record's Kafka timestamp, set when the capture produced it.
-      - name: record_key
+      - name: schema_id
+        physicalType: integer
+        description: The frame's Confluent writer schema id, the registry's id for the RawMessage version that wrote it; null for a record that is not Confluent-framed, which the audit's parses fails.
+      - name: exchange
+        physicalType: varchar
+        description: RawMessage.exchange, the venue identifier, decoded by the writer schema.
+      - name: stream
+        physicalType: varchar
+        description: RawMessage.stream, the subscription the frame arrived on; trade for every row the filter kept.
+      - name: symbol
+        physicalType: varchar
+        description: RawMessage.symbol, the instrument as the venue spells it; null for a frame of no single instrument.
+      - name: recv_ts_ns
+        physicalType: bigint
+        description: RawMessage.recv_ts_ns, the capture's receive time, nanoseconds since the Unix epoch.
+      - name: conn_id
+        physicalType: varchar
+        description: RawMessage.conn_id, the WebSocket connection the frame arrived on.
+      - name: conn_msg_seq
+        physicalType: bigint
+        description: RawMessage.conn_msg_seq, the capture's counter of frames on conn_id, from 1.
+      - name: payload
         physicalType: varbinary
-        description: The key's bytes as read, the envelope's symbol as the venue spells it in UTF-8; null for a frame of no single instrument.
-      - name: record_value
-        physicalType: varbinary
-        description: >-
-          The value's bytes as read and never decoded here: a Confluent-framed RawMessage
-          (schemas/avro/raw-message.avsc), the magic byte, the writer schema id, then the Avro body
-          whose payload is the venue's JSON frame.
+        description: RawMessage.payload, the venue's frame byte for byte as it came off the socket.
       - name: batch_id
         physicalType: varchar
         description: The landing batch that landed the record, its k2.batch-id.

@@ -641,7 +641,8 @@ def test_a_kafka_landing_is_restored_and_never_expired_and_a_file_landing_keeps_
         "k2.station_feed.landing", "k2.station_feed.bronze_frames", "k2.station_feed.audit_checks"}
     assert "k2.station_list.landing_files" in retention
     ddl = out[model.ddl_path("spark", "k2", "station_feed", "bronze_frames")]
-    assert '"kafka_partition" INT NOT NULL' in ddl and '"record_value" BINARY' in ddl
+    assert '"kafka_partition" INT NOT NULL' in ddl and '"schema_id" INT,' in ddl and '"payload" BINARY' in ddl
+    assert '"record_value"' not in ddl  # the frame's bytes stay in the landing
 
 
 def test_a_contract_platform_table_is_refused_until_its_ddl_is_decided() -> None:

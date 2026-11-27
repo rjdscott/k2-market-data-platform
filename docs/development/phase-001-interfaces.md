@@ -313,6 +313,26 @@ values `kafka_timestamp`, `record_key` and `record_value`; and the lineage colum
 that staged it is the bronze commit's `k2.batch-id` and `k2.run-id`. A column decoded from the
 envelope would be computed at stage; adding one changes this interface.
 
+2026-11-28 (the envelope decoded at stage): this replaces the columns above and the `values` in
+"What k2gen compiles" below. Trino has no SQL function that decodes Avro, so silver could not read
+the envelope out of `record_value`; bronze therefore carries it decoded, written by Spark at stage,
+which decodes it already for the filter. The landing is unchanged: every record, its bytes as read.
+Bronze's columns, in order: `kafka_partition` integer, `kafka_offset` bigint, `kafka_timestamp`, then
+`schema_id` integer (the frame's Confluent writer schema id), then the envelope's top-level fields by
+name and type as the product's bronze contract declares them (for `RawMessage`: `exchange`,
+`stream`, `symbol`, `recv_ts_ns` bigint, `conn_id`, `conn_msg_seq` bigint, `payload` varbinary, the
+venue frame as sent), then `batch_id`, `landed_at`, `run_id` and `release_id`. `record_key` and
+`record_value` are not in bronze: the landing holds them, and bronze is rebuilt from it. The key
+stays `(kafka_partition, kafka_offset)`; the compiled `values` are `kafka_timestamp`, `schema_id` and
+the envelope columns. Each frame is decoded with the writer schema its id names, fetched from the
+registry by id, so a writer schema with a field added still reads; each column is written by name
+from the decoded record, and one the record lacks, or holds as a type that does not read as the
+column's (equal, or Avro's `int` to `bigint` and `float` to `double`), is written null and fails the
+batch in the audit's `parses`, which reads each staged frame again from the landing and names the
+column. `schema_id` and the envelope columns are never `required`: a frame unframed, of an id that
+is no `RawMessage`, or whose body does not read, is staged with them null and fails `parses`.
+k2gen's `connectors.kafka-bronze-shape` and `pipeline.schema.json` hold this shape.
+
 **The envelope contract.** The capture's `RawMessage` (`schemas/avro/raw-message.avsc`, subject
 `market.crypto.v3.raw.<exchange>-value`) is declared by `market-capture` as the table contract
 `contracts/market-capture/kraken-trades/raw_message.odcs.yaml`, id
@@ -378,6 +398,18 @@ by `compiled/lake/retention.json` and never removes the newest connector snapsho
 the landing's resume point and bronze's staged-through point, and without it the next run lands
 again from the log start, or stages again from offset 0, duplicating both. W1-9 builds it and W0-4c
 proves the resume after a compaction and an expiry.
+
+2026-11-28 (W0-4c, `bash scripts/verify/kafka-path.sh <release> c`, on the throwaway, each pass
+`maintain.py` as the factory's task runs it): `--compact` is skipped, its reason in the result,
+while bronze's `audit` holds an unpublished batch, which then publishes; with 53 small files on each
+table (seeded by 50 runs, `COMPACT_MIN_FILES` unchanged) it writes one `replace` snapshot per table
+carrying `k2.job` `maintenance` and no `k2.kafka-offsets`, every row as before. The default pass's
+continuity check, expiry and `remove_orphan_files` run, deleting no live file: the listing the
+maintenance key makes serves `s3://`, so Iceberg 1.8.1's own listing through Hadoop's FileSystem is
+never needed. Expiry with every snapshot past retention keeps, on each table, main's head and the
+newest connector snapshot under it (`retain_last` 2); the next run starts at that snapshot's end
+offsets and lands and stages each record once. Iceberg's `remove_orphan_files` itself refuses an
+`older_than` under 24 hours before now, the same floor as `ORPHAN_FLOOR`.
 
 **What k2gen compiles for a Kafka product (W1-2).** In `pipeline.json`: `connector` as the product
 file declares it (`kind` `kafka`, `brokers`, `registry`, `topic`, `envelope` `{format, contract}`,

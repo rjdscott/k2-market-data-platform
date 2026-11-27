@@ -12,6 +12,16 @@ host over what they printed.
                                                 SparkLanding.land (before the landing commit) or at
                                                 kafka.stage (after it, before staging): no finally,
                                                 no result line, as a container OOM-kill leaves it
+    cycles  <release> <product> <dag> <n>       group c's small files: n runs in one Spark application, each
+                                                three of the topic's own trade frames produced again
+                                                and kafka.py's load, audit and publish as the DAG's
+                                                tasks call them, so each commit adds small files
+    expire  <release> <product> <days>          maintain.expire_snapshots(), the default pass's expiry
+                                                step, at now + days: every snapshot past retention, so
+                                                only retain_last keeps one (the pass under the DAG
+                                                expires none of a lake minutes old). Its orphan step is
+                                                not run so: Iceberg's remove_orphan_files refuses an
+                                                older_than under 24 hours before now
     claim   <name> <rp dir>                     one PASS or FAIL line (and INFO lines) for a claim
 Synthetic data only; never a key's value.
 """
@@ -34,6 +44,8 @@ def pipeline(release: str, product: str) -> dict:
 
 
 def facts(release: str, product: str) -> dict:
+    import urllib.request
+
     lake_code(release)
     from catalog import broker_offsets, fetch_schema
     from pyspark.sql import functions as F
@@ -53,12 +65,19 @@ def facts(release: str, product: str) -> dict:
             refs = dict(q(f"SELECT name, snapshot_id FROM {t}.refs"))
             out = {"refs": refs, "snapshots": q(f"SELECT snapshot_id, parent_id, committed_at, operation, summary "
                                                 f"FROM {t}.snapshots ORDER BY committed_at"),
-                   "files": [r[0] for r in q(f"SELECT file_path FROM {t}.all_data_files")]}
+                   "files": [r[0] for r in q(f"SELECT file_path FROM {t}.all_data_files")],
+                   "live": [r[0] for r in q(f"SELECT file_path FROM {t}.data_files")]}
             for ref, sid in refs.items():
                 out[ref] = q(f"SELECT kafka_partition, kafka_offset FROM {t} VERSION AS OF {int(sid)} "
                              "ORDER BY kafka_partition, kafka_offset")
             return out
 
+        envelope = ("schema_id", "exchange", "stream", "symbol", "recv_ts_ns", "conn_id", "conn_msg_seq")
+        rows = {ref: q(f"SELECT kafka_partition, kafka_offset, {', '.join(envelope)}, hex(payload) FROM {bronze} "
+                       f"VERSION AS OF {int(sid)} ORDER BY kafka_partition, kafka_offset")
+                for ref, sid in dict(q(f"SELECT name, snapshot_id FROM {bronze}.refs")).items()}
+        with urllib.request.urlopen(f"{c['registry']}/subjects/{c['topic']}-value/versions/latest", timeout=10) as r:
+            registered = json.load(r)["id"]
         earliest, latest, _ = broker_offsets(spark, [c["topic"]], brokers=c["brokers"])
         topic = (spark.read.format("kafka").option("kafka.bootstrap.servers", c["brokers"])
                  .option("subscribe", c["topic"]).option("startingOffsets", "earliest")
@@ -73,7 +92,9 @@ def facts(release: str, product: str) -> dict:
         names = sorted(n for n in os.environ if n.startswith(("K2_", "AWS_", "MINIO_")) and "KEY" in n)
         return {
             "topic": {"earliest": earliest, "latest": latest, "frames": topic.count(), "trades": sorted(trades)},
-            "landing": table(landing), "bronze": table(bronze),
+            "landing": table(landing), "bronze": {**table(bronze), "rows": rows, "registered": registered,
+                                                  "columns": [[x.name, x.dataType.simpleString()]
+                                                              for x in spark.table(bronze).schema]},
             "checks": q(f"SELECT batch_id, snapshot_id, check_name, passed, detail FROM {checks} ORDER BY checked_at"),
             # names only: which key Spark signs with, and which pairs the container holds
             "keys": {"signs": SPARK_KEY[0], "held": names,
@@ -102,6 +123,63 @@ def corrupt(release: str, product: str) -> None:
      .option("kafka.bootstrap.servers", c["brokers"]).option("kafka.acks", "all").option("topic", c["topic"]).save())
     print(f"kafka-path: one corrupt frame (schema id {sid}, a body that is no Avro) onto {c['topic']}")
     spark.stop()
+
+
+def cycles(release: str, product: str, dag: str, n: int) -> None:
+    lake_code(release)
+    import connector as C
+    from catalog import fetch_schema
+    from pyspark.sql import functions as F
+    from pyspark.sql.avro.functions import from_avro
+
+    import wire
+    from spark_conf import lake_session
+
+    p = pipeline(release, product)
+    c = p["connector"]
+    spark = lake_session("kafka-path-cycles", driver_memory="768m")
+    try:
+        topic = (spark.read.format("kafka").option("kafka.bootstrap.servers", c["brokers"]).option("subscribe", c["topic"])
+                 .option("startingOffsets", "earliest").option("endingOffsets", "latest").load()
+                 .withColumn("sid", F.expr(wire.schema_id_guarded_expr("value"))))
+        [(sid,)] = topic.select("sid").where("sid IS NOT NULL").distinct().collect()
+        trades = [tuple(r) for r in topic.where(F.col("sid") == sid).withColumn(
+            "e", from_avro(F.expr(wire.body_expr("value")), fetch_schema(sid, c["registry"]), {"mode": "PERMISSIVE"}))
+            .where("e.stream = 'trade'").select("key", "value").limit(3).collect()]
+        source, lake = C.shells(spark, p)
+        for i in range(n):
+            (spark.createDataFrame(trades, "key binary, value binary").write.format("kafka")
+             .option("kafka.bootstrap.servers", c["brokers"]).option("kafka.acks", "all").option("topic", c["topic"]).save())
+            run = C.Run(release=Path(release).name, product=product, run_id=f"{dag}/manual__cycle-{i:02d}", pipeline=p,
+                        accept_data_loss=False)
+            for task in ("load", "audit", "publish"):
+                for t in (p["landing"]["table"], p["bronze"][0]["table"], p["bronze"][0]["checks"]):
+                    spark.sql(f"REFRESH TABLE {t}")  # publish commits through the catalog's REST API, past Spark's table cache
+                code, _ = C.task_of(task, "kafka")(run, source, lake)
+                if code != C.EXIT_OK:
+                    raise SystemExit(f"kafka-path: cycle {i} {task} exit {code}")
+        print(f"kafka-path: {n} cycles of {len(trades)} trade frames, each landed, staged, audited and published")
+    finally:
+        spark.stop()
+
+
+def expire(release: str, product: str, days: int) -> int:
+    lake_code(release)
+    from datetime import timedelta
+
+    import connector as C
+    import maintain as M
+    from spark_conf import lake_session
+
+    p = pipeline(release, product)
+    retention = json.loads((Path(release) / "compiled/lake/retention.json").read_text())
+    spark = lake_session("kafka-path-expire", key=M.PASS_KEYS["maintain"], catalogs=["lake"])
+    try:
+        code, expired, unbuilt = M.expire_snapshots(p, retention, M.MaintainLake(spark), C.now() + timedelta(days=days))
+    finally:
+        spark.stop()
+    print(json.dumps({"exit": code, "expired": expired, "notBuilt": unbuilt}))
+    return code
 
 
 def kill(when: str, release: str, argv: list[str]) -> int:
@@ -187,6 +265,40 @@ def say(n: int, name: str, bad: list, ok: str, info: list = ()) -> bool:
         print(f"INFO {n} {line}")
     print(f"{'FAIL' if bad else 'PASS'} {n} {name}: {'; '.join(bad) if bad else ok}")
     return not bad
+
+
+BRONZE_COLUMNS = [["kafka_partition", "int"], ["kafka_offset", "bigint"], ["kafka_timestamp", "timestamp"],
+                  ["schema_id", "int"], ["exchange", "string"], ["stream", "string"], ["symbol", "string"],
+                  ["recv_ts_ns", "bigint"], ["conn_id", "string"], ["conn_msg_seq", "bigint"], ["payload", "binary"],
+                  ["batch_id", "string"], ["landed_at", "timestamp"], ["run_id", "string"], ["release_id", "string"]]
+SEEDED = Path(__file__).resolve().parents[2] / "services/capture-rust/tests/fixtures/synthetic-kraken-20s.jsonl"
+
+
+def envelope_problems(f: dict, ref: str = "main") -> tuple[list, list]:
+    """(problems, info) of bronze's rows at `ref` against the seeded file itself: each row's stream
+    trade, its schema id the registered one, its payload the seeded line's byte for byte, and its
+    other envelope fields as kafka_seed.py built them (symbol by the adapter's rule, null when the
+    frame names no one instrument)."""
+    from kafka_seed import EXCHANGE, FIXTURE_CONN_ID, route
+
+    lines = [json.loads(x) for x in SEEDED.read_text().splitlines()]
+    seeded = {d["recv_ts_ns"]: (seq, d["payload"]) for seq, d in enumerate(lines, 1) if route(d["payload"])[0] == "trade"}
+    b, bad = f["bronze"], []
+    if b["columns"] != BRONZE_COLUMNS:
+        bad.append(f"bronze columns {b['columns']}")
+    rows = b["rows"].get(ref, [])
+    for p, o, sid, exchange, stream, symbol, recv, conn, seq, payload in rows:
+        want = seeded.get(recv)
+        got = (sid, exchange, stream, conn, seq, symbol, payload)
+        exp = (b["registered"], EXCHANGE, "trade", FIXTURE_CONN_ID, want and want[0], want and route(want[1])[1],
+               want and want[1].encode().hex().upper())
+        if got != exp:
+            bad.append(f"{p}/{o}: {got[:6]} payload {len(payload or '') // 2} bytes; want {exp[:6]} "
+                       f"{len(exp[6] or '') // 2} bytes")
+    info = [f"bronze {ref}: {len(rows)} rows, stream {sorted({r[4] for r in rows})}, schema id "
+            f"{sorted({r[2] for r in rows})} (registered {b['registered']}), {sum(r[5] is None for r in rows)} symbol "
+            f"null, {len({r[9] for r in rows})} distinct payloads, each the seeded line's bytes"]
+    return bad[:5] + ([f"{len(bad) - 5} more"] if len(bad) > 5 else []), info
 
 
 LANDING_KEYS = {"k2.job", "k2.run-id", "k2.release", "k2.batch-id", "k2.kafka-offsets", "k2.kafka-starts"}
@@ -342,6 +454,124 @@ def claim(name: str, rp: Path) -> bool:
                        f"{f8['bronze']['refs']['main']} -> {f['bronze']['refs']['main']}")
         return say(9, "a corrupt Avro body is counted as not parsing and fails the batch naming partition and offset", bad,
                    f"parses FAIL: {parses[-1][4] if parses else '?'}; audit exit 3, publish exit 3, main not moved")
+    if name == "envelope":  # a 10
+        f8, f = load_json(rp, "facts-k8.json"), load_json(rp, "facts-k9.json")
+        bad, info = envelope_problems(f8)
+        bad += [] if f8["bronze"]["rows"]["main"] else ["bronze main holds no rows"]
+        ends8, ends = topic_ends(f8), topic_ends(f)
+        [(topic, parts)] = ends.items()
+        moved = [(p, o - 1) for p, o in parts.items() if o != ends8[topic][p]]
+        corrupt = [r for r in f["bronze"]["rows"].get("audit", []) if [r[0], r[1]] in [list(m) for m in moved]]
+        if len(corrupt) != 1 or corrupt[0][2] != f["bronze"]["registered"] or any(v is not None for v in corrupt[0][3:]):
+            bad.append(f"the corrupt frame's bronze row {corrupt}")
+        return say(10, "bronze carries the decoded envelope: stream trade only, the seeded payload byte for byte, "
+                   "the registered schema id", bad,
+                   f"{len(f8['bronze']['rows']['main'])} rows of bronze main as the seeded lines; the corrupt frame "
+                   f"staged with schema id {corrupt[0][2] if corrupt else '?'} and every envelope column null, failing "
+                   "parses (claim 9), never a value", info)
+    if name == "envelope-b":  # b 5
+        f = load_json(rp, "facts-b5.json")
+        bad, info = envelope_problems(f)
+        bad += [] if f["bronze"]["rows"]["main"] else ["bronze main holds no rows"]
+        return say(5, "after the gap bronze still carries the decoded envelope as seeded", bad,
+                   f"{len(f['bronze']['rows']['main'])} rows of bronze main as the seeded lines", info)
+    if name == "compact-skip":  # c1
+        f, fs, fp = load_json(rp, "facts-c3.json"), load_json(rp, "facts-c3s.json"), load_json(rp, "facts-c3p.json")
+        r, pub, bad = result(rp, "c3.compact"), result(rp, "c3.publish"), []
+        why = r.get("skipped", {})
+        tables = sorted(f"lake.kafka_fixture.{t}" for t in ("landing", "bronze_frames"))
+        if rc(rp, "c3.compact") != "0" or r.get("compacted") or sorted(why) != tables or not all(
+                "holds batch kafka_fixture/c3, unpublished" in why[t] for t in tables):
+            bad.append(f"compact exit {rc(rp, 'c3.compact')}, result {r}")
+        if any(fs[t]["snapshots"] != f[t]["snapshots"] or fs[t]["refs"] != f[t]["refs"] for t in ("landing", "bronze")):
+            bad.append("the skipped pass changed a table's snapshots or refs")
+        if rc(rp, "c3.publish") != "0" or pub.get("snapshotAfter") != f["bronze"]["refs"].get("audit") \
+                or fp["bronze"]["refs"].get("main") != f["bronze"]["refs"].get("audit"):
+            bad.append(f"publish exit {rc(rp, 'c3.publish')}, {pub.get('snapshotBefore')} -> {pub.get('snapshotAfter')}")
+        return say(1, "compaction is skipped while audit holds an unpublished batch, so that batch still publishes", bad,
+                   f"compact exit 0, compacted nothing: {next(iter(why.values()), '?')[:160]}; no snapshot or ref moved; "
+                   f"c3's publish then moved main {pub.get('snapshotBefore')} -> {pub.get('snapshotAfter')}. Without the "
+                   "skip, main would move to a replace snapshot under the waiting batch: publish requires main to be the "
+                   "snapshot the batch was staged on (connector.publish, staged_on), so it would be refused, exit 2, and "
+                   "every later stage refused behind it until an operator resets audit")
+    if name == "compact":  # c2
+        f0, f, r, bad, info = load_json(rp, "facts-c3p.json"), load_json(rp, "facts-c4.json"), result(rp, "c4.compact"), [], []
+        if rc(rp, "c4.compact") != "0":
+            bad.append(f"compact exit {rc(rp, 'c4.compact')}: {(rp / 'c4.compact.err').read_text().strip()[-300:]}")
+        for t in ("landing", "bronze"):
+            new = [x for x in f[t]["snapshots"] if x[0] not in {y[0] for y in f0[t]["snapshots"]}]
+            keys = {k: v for k, v in (new[0][4] or {}).items() if k.startswith("k2.")} if new else {}
+            if len(new) != 1 or new[0][3] != "replace" or keys != {"k2.job": "maintenance"}:
+                bad.append(f"{t}: new snapshots {[(x[0], x[3], x[4]) for x in new]}")
+            if f[t]["main"] != f0[t]["main"] or (t == "bronze" and f[t]["rows"]["main"] != f0[t]["rows"]["main"]):
+                bad.append(f"{t}: main's rows changed")
+            if not len(f[t]["live"]) < len(f0[t]["live"]):
+                bad.append(f"{t}: live data files {len(f0[t]['live'])} -> {len(f[t]['live'])}")
+            info.append(f"{t}: {len(f0[t]['live'])} live data files -> {len(f[t]['live'])}, snapshot "
+                        f"{new[0][0] if new else '?'} {new[0][3] if new else '?'} {keys}")
+        return say(2, "compaction writes one replace snapshot per table, k2.job maintenance, no k2.kafka-offsets", bad,
+                   f"compact exit 0, {r.get('compacted')}; every row and envelope value as before", info)
+    if name == "maintain":  # c3
+        f0, f, r, bad = load_json(rp, "facts-c4.json"), load_json(rp, "facts-c5.json"), result(rp, "c5.maintain"), []
+        checks = r.get("checks") or [{}]
+        if rc(rp, "c5.maintain") != "0" or not checks[0].get("passed"):
+            bad.append(f"maintain exit {rc(rp, 'c5.maintain')}: {(rp / 'c5.maintain.err').read_text().strip()[-400:]}")
+        removed = r.get("orphansRemoved", {})
+        if sorted(removed) != sorted(["lake.kafka_fixture.landing", "lake.kafka_fixture.bronze_frames",
+                                      "lake.kafka_fixture.audit_checks"]) or any(removed.values()):
+            bad.append(f"orphansRemoved {removed}")
+        for t in ("landing", "bronze"):
+            if f[t]["live"] != f0[t]["live"] or f[t]["main"] != f0[t]["main"]:
+                bad.append(f"{t}: live files or rows changed")
+        listed = [x for x in (rp / "c5.maintain.out").read_text().splitlines() if "orphan files removed" in x]
+        return say(3, "the default pass: continuity passes, expiry and orphan cleanup with the 24-hour floor run, no "
+                   "live file deleted", bad, f"maintain exit 0; {checks[0].get('detail')}; expired {r.get('expired')}; "
+                   f"orphans removed {removed}, every live file still there", listed)
+    if name == "expire":  # c4
+        f0, f, bad, info = load_json(rp, "facts-c5.json"), load_json(rp, "facts-c6.json"), [], []
+        out = (rp / "c6.expire.out").read_text()
+        r = json.loads([x for x in out.splitlines() if x.startswith("{")][-1]) if "{" in out else {}
+        if rc(rp, "c6.expire") != "0":
+            bad.append(f"expire exit {rc(rp, 'c6.expire')}: {(rp / 'c6.expire.err').read_text().strip()[-300:]}")
+        for t in ("landing", "bronze"):
+            snaps0 = {x[0]: x for x in f0[t]["snapshots"]}
+            chain, head = [], f0[t]["refs"]["main"]
+            while head is not None and (head not in snaps0 or (snaps0[head][4] or {}).get("k2.job") != "connector"
+                                        or "k2.kafka-offsets" not in (snaps0[head][4] or {})):
+                chain.append(head)
+                head = snaps0[head][1] if head in snaps0 else None
+            kept = {x[0] for x in f[t]["snapshots"]}
+            if head is None or head not in kept or not set(chain) <= kept or f[t]["refs"] != f0[t]["refs"]:
+                bad.append(f"{t}: the newest connector snapshot {head} or its chain {chain} expired, refs {f[t]['refs']}")
+            if not len(kept) < len(snaps0):
+                bad.append(f"{t}: {len(snaps0)} snapshots -> {len(kept)}, none expired")
+            info.append(f"{t}: {len(snaps0)} snapshots -> {len(kept)}; kept main {f0[t]['refs']['main']} back to the newest "
+                        f"connector snapshot {head} ({len(chain)} offset-less between)")
+        info += [x for x in out.splitlines() if "snapshots expired" in x]
+        return say(4, "expiry past retention keeps the newest connector snapshot of the landing and bronze and the chain to it",
+                   bad, f"maintain.expire_snapshots at now + 30 days exit {r.get('exit')}: expired {r.get('expired')}", info)
+    if name == "resume":  # c5
+        f0, f, r, bad = load_json(rp, "facts-c6.json"), load_json(rp, "facts-c7.json"), result(rp, "c7.load"), []
+        la0 = connector_snapshots(f0["landing"])
+        ends0 = offsets_of(la0[-1][4]) if la0 else {}
+        starts = {t: {int(k): v for k, v in x.items()} for t, x in (r.get("starts") or {}).items()}
+        if any(rc(rp, f"c7.{t}") != "0" for t in ("load", "audit", "publish")) or starts != ends0:
+            bad.append(f"exits {[rc(rp, f'c7.{t}') for t in ('load', 'audit', 'publish')]}, starts {starts}, "
+                       f"the newest connector snapshot's ends {ends0}")
+        new = sum(e - ends0[t][p] for t, x in topic_ends(f).items() for p, e in x.items())
+        if r.get("landed") != new:
+            bad.append(f"landed {r.get('landed')}, the topic had {new} new")
+        bad += every_frame_once(f) + bronze_is_trades(f) + through_is_landing(f)
+        return say(5, "after compaction and expiry the next run resumes from the newest connector snapshot", bad,
+                   f"c7 started at {starts}, the newest connector snapshot's end offsets, landed {r.get('landed')} (all "
+                   f"new) and staged {r.get('rows')}: every offset once, bronze main = every trade once, through-offsets = "
+                   "landing end offsets = the topic's")
+    if name == "continuity":  # c6
+        r = result(rp, "c8.maintain")
+        checks = r.get("checks") or [{}]
+        bad = [] if rc(rp, "c8.maintain") == "0" and checks[0].get("passed") else [
+            f"maintain exit {rc(rp, 'c8.maintain')}, {checks}"]
+        return say(6, "the continuity check passes after the resume", bad, f"{checks[0].get('detail')}")
     if name == "below":  # b1
         f1, f = load_json(rp, "facts-b1.json"), load_json(rp, "facts-b3.json")
         trims, err = load_json(rp, "trims.json"), (rp / "b3.load.err").read_text()
@@ -413,6 +643,10 @@ if __name__ == "__main__":
         print(json.dumps(facts(*args[:2]), default=str))
     elif cmd == "corrupt":
         corrupt(*args[:2])
+    elif cmd == "cycles":
+        cycles(args[0], args[1], args[2], int(args[3]))
+    elif cmd == "expire":
+        sys.exit(expire(args[0], args[1], int(args[2])))
     elif cmd == "kill":
         sys.exit(kill(args[0], args[1], args[2:]))
     elif cmd == "claim":

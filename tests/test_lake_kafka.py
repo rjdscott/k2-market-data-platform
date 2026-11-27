@@ -46,25 +46,38 @@ def ctx(n=0, accept=False, pipeline=PIPELINE):
                  accept_data_loss=accept)
 
 
-def frame(stream):
-    """A record's value: a synthetic stand-in for a framed envelope, the stream readable by the fake
-    lake; None makes bytes that are not framed at all."""
+def frame(stream, sid=1, **fields):
+    """A record's value: a synthetic stand-in for a framed envelope under writer schema `sid`, its
+    fields readable by the fake lake; None makes bytes that are not framed at all."""
     if stream is None:
         return b"not framed"
-    return b"\x00\x00\x00\x00\x01" + json.dumps({"stream": stream}).encode()
+    return b"\x00" + sid.to_bytes(4, "big") + json.dumps({"stream": stream, **fields}).encode()
 
 
-REGISTERED = 1  # the one schema id the fake registry serves as RawMessage
+# The writer schemas the fake registry serves as RawMessage, by id, as Spark types their decoded
+# fields: 1 the current one, 2 one without symbol, 3 one with symbol retyped, 4 one with a field added.
+WRITERS = {1: {"stream": "string", "symbol": "string"}, 2: {"stream": "string"},
+           3: {"stream": "string", "symbol": "bigint"}, 4: {"stream": "string", "symbol": "string", "seq": "bigint"}}
+ENVELOPE_COLUMNS = {"stream": "string", "symbol": "string"}  # the fake bronze's, as its contract declares them
+BRONZE_COLUMNS = [*K.BRONZE_LEAD, *ENVELOPE_COLUMNS, *K.LANDING_RUN]
+
+
+def decode(value):
+    """`(schema id, envelope)`: the id None when unframed; the envelope None as Spark's PERMISSIVE
+    read and decoded_sql have it, for an id the registry does not serve as RawMessage or a body
+    that does not read."""
+    try:
+        sid, body = wire.parse_confluent(value)
+    except ValueError:
+        return None, None
+    try:
+        return sid, (json.loads(body) if sid in WRITERS else None)
+    except ValueError:
+        return sid, None
 
 
 def envelope(value):
-    """The decoded envelope, or None as Spark's PERMISSIVE read has it: unframed, an id the
-    registry does not serve as RawMessage, or a body that does not read."""
-    try:
-        sid, body = wire.parse_confluent(value)
-        return json.loads(body) if sid == REGISTERED else None
-    except ValueError:
-        return None
+    return decode(value)[1]
 
 
 def duck_keep(keep, envelopes):
@@ -173,11 +186,20 @@ class Lake:
     def reset_branch(self, table, snapshot):
         self.refs_[table]["audit"] = snapshot
 
-    def landed(self, landing, snapshot, ranges, keep):
+    def landed(self, landing, snapshot, ranges, keep, bronze):
+        """As SparkLanding.landed: schema_id, and each envelope column by name where the writer
+        schema's field reads as it (kafka.compatible), else null."""
+        assert bronze == BRONZE
         rows = [r for r in self.snaps[snapshot]["rows"]
                 if r["kafka_partition"] in ranges
                 and ranges[r["kafka_partition"]][0] <= r["kafka_offset"] < ranges[r["kafka_partition"]][1]]
-        return [{**r, K.KEPT: k} for r, k in zip(rows, duck_keep(keep, [envelope(r["record_value"]) for r in rows]))]
+        out = []
+        for r, k in zip(rows, duck_keep(keep, [envelope(r["record_value"]) for r in rows])):
+            sid, e = decode(r["record_value"])
+            fields = WRITERS[sid] if e is not None else {}
+            out.append({**r, "schema_id": sid, K.KEPT: k,
+                        **{n: e.get(n) if K.compatible(fields.get(n), t) else None for n, t in ENVELOPE_COLUMNS.items()}})
+        return out
 
     @staticmethod
     def stage_counts(frames):
@@ -189,7 +211,7 @@ class Lake:
         return [(p, *v) for p, v in sorted(out.items())]
 
     def stage_rows(self, table, frames, props):
-        rows = [{k: v for k, v in f.items() if k != K.KEPT} for f in frames if f[K.KEPT]]
+        rows = [{k: f[k] for k in BRONZE_COLUMNS} for f in frames if f[K.KEPT]]  # by name, as Spark's select
         self.refs_[table]["audit"] = self._commit(table, self.refs_[table].get("audit"), rows,
                                                   {**props, "added-records": str(len(rows))})  # as Iceberg adds it
         return len(rows)
@@ -212,17 +234,19 @@ class Lake:
             found.setdefault(r["kafka_partition"], []).append(r["kafka_offset"])
         return [(p, len(o), len(set(o)), min(o), max(o)) for p, o in sorted(found.items())]
 
-    def unparsed(self, table, snapshot, ranges, keep):
-        rows = sorted(self._in(snapshot, ranges), key=lambda r: (r["kafka_partition"], r["kafka_offset"]))
+    def unparsed(self, landing, src, table, snapshot, ranges, keep):
+        """As SparkLanding.unparsed: bronze's frames, their bytes read again from the landing at `src`."""
+        assert landing == LANDING
+        staged = {(r["kafka_partition"], r["kafka_offset"]) for r in self._in(snapshot, ranges)}
+        rows = sorted((r for r in self._in(src, ranges) if (r["kafka_partition"], r["kafka_offset"]) in staged),
+                      key=lambda r: (r["kafka_partition"], r["kafka_offset"]))
         envelopes = [envelope(r["record_value"]) for r in rows]
         bad = []
         for r, e, kept in zip(rows, envelopes, duck_keep(keep, envelopes)):
-            try:
-                sid = wire.parse_confluent(r["record_value"])[0]
-            except ValueError:
-                sid = None
-            if e is None or not kept:
-                bad.append((r["kafka_partition"], r["kafka_offset"], sid, sid == REGISTERED, e is not None))
+            sid = decode(r["record_value"])[0]
+            problem = ", and ".join(K.problems(WRITERS[sid], ENVELOPE_COLUMNS)) or None if e is not None else None
+            if e is None or not kept or problem:
+                bad.append((r["kafka_partition"], r["kafka_offset"], sid, sid in WRITERS, e is not None, problem))
         return len(bad), bad[:K.LISTED]
 
     def append(self, table, records, props):  # audit_checks
@@ -597,6 +621,43 @@ def test_a_frame_that_does_not_parse_fails_naming_partition_and_offset_never_its
     assert K.unparsed_reason(1, True, True) == "the filter does not keep it"
 
 
+def test_bronze_carries_the_decoded_envelope_by_name_and_never_the_frames_bytes():
+    topic, lake = Topic(partitions=1), Lake()
+    topic.produce(0, frame("trade", symbol="A/B"), frame("trade", sid=4, symbol="C/D", seq=9), frame("trade"), None)
+    K.load(ctx(1), topic, lake)
+    rows = lake.rows(BRONZE, "audit")
+    assert all(list(r) == BRONZE_COLUMNS for r in rows)  # no record_key, no record_value
+    assert [(r["schema_id"], r["stream"], r["symbol"]) for r in rows] == [
+        (1, "trade", "A/B"), (4, "trade", "C/D"), (1, "trade", None), (None, None, None)]
+    landed = lake.rows(LANDING)
+    assert [(r["batch_id"], r["landed_at"]) for r in rows] == [(r["batch_id"], r["landed_at"]) for r in landed]
+    passed, detail = audited(lake, 1)[1]["parses"]  # a writer schema with a field added reads; the unframed fails
+    assert not passed and detail == f"1 of 4 frames do not parse: {TOPIC}/0 offset 3: not Confluent-framed"
+
+
+def test_a_writer_schema_lacking_or_retyping_a_bronze_column_fails_parses_naming_it_never_a_silent_null():
+    topic, lake = Topic(partitions=1), Lake()
+    topic.produce(0, frame("trade", symbol="A/B"), frame("trade", sid=2), frame("trade", sid=3, symbol=7))
+    K.load(ctx(1), topic, lake)
+    assert [r["symbol"] for r in lake.rows(BRONZE, "audit")] == ["A/B", None, None]  # staged, nulled
+    code, checks = audited(lake, 1)
+    assert code == C.EXIT_FAILED and checks["parses"] == (False, (
+        f"2 of 3 frames do not parse: {TOPIC}/0 offset 1: its writer schema 2 has no field symbol, which bronze's "
+        f"column symbol takes; {TOPIC}/0 offset 2: its writer schema 3 has field symbol as bigint, which bronze's "
+        "column symbol (string) does not take"))
+    assert checks["accounting"][0] and checks["keys_unique"][0]
+
+
+def test_a_field_reads_as_its_column_when_equal_or_an_avro_promotion():
+    assert K.problems({"a": "int", "b": "float", "c": "binary", "d": "string"},
+                      {"a": "bigint", "b": "double", "c": "binary"}) == []
+    assert K.problems({"a": "bigint", "c": "string"}, {"a": "int", "b": "string", "c": "binary"}) == [
+        "has field a as bigint, which bronze's column a (int) does not take",
+        "has no field b, which bronze's column b takes",
+        "has field c as string, which bronze's column c (binary) does not take"]
+    assert K.envelope_columns({n: "x" for n in BRONZE_COLUMNS}) == {"stream": "x", "symbol": "x"}
+
+
 def test_parses_names_at_most_listed_frames():
     topic, lake = Topic(partitions=1), Lake()
     topic.produce(0, *[None] * (K.LISTED + 5))
@@ -697,6 +758,23 @@ def test_a_body_that_does_not_read_is_kept_for_parses_never_skipped():
         K.decoded_sql(["stream) OR (true"])
 
 
+def test_the_projection_casts_each_column_by_name_and_nulls_what_does_not_read():
+    """project_sql in DuckDB (Spark's backticks as DuckDB's double quotes): a promoted field cast up,
+    a missing or retyped one NULL of its column's type, and no reference to the struct at all for a
+    frame that did not decode."""
+    con = duckdb.connect()
+    con.execute("CREATE TABLE t (envelope STRUCT(stream VARCHAR, seq INTEGER, payload VARCHAR))")
+    con.execute("INSERT INTO t VALUES ({'stream': 'trade', 'seq': 7, 'payload': 'x'})")
+    columns = {"stream": "string", "seq": "bigint", "payload": "binary", "symbol": "string"}
+    sql = K.project_sql({"stream": "string", "seq": "int", "payload": "string"}, columns)
+    got = con.execute(f"SELECT {', '.join(sql).replace('`', chr(34))} FROM t")
+    assert got.fetchall() == [("trade", 7, None, None)]
+    assert [d[1] for d in got.description] == ["VARCHAR", "BIGINT", "BLOB", "VARCHAR"]
+    assert all("envelope" not in x for x in K.project_sql({}, columns))
+    with pytest.raises(ValueError):
+        K.project_sql({}, {"a) OR (true": "string"})
+
+
 def test_the_range_predicate_selects_each_partitions_half_open_range():
     where, args = K.range_sql({0: (2, 4), 1: (0, 1)})
     con = duckdb.connect()
@@ -709,6 +787,7 @@ def test_the_range_predicate_selects_each_partitions_half_open_range():
 def test_the_landing_columns_are_k2gens():
     want = [c.name for c in model.PLATFORM_TABLES[model.KAFKA_LANDING].columns]
     assert [dst for dst, _ in K.LANDING_SOURCE] + list(K.LANDING_RUN) == want
+    assert K.BRONZE_LEAD == (*want[:3], "schema_id")  # bronze's lead: the landing's offset key and timestamp
     assert [src for _, src in K.LANDING_SOURCE] == ["partition", "offset", "timestamp", "key", "value"]
 
 
