@@ -1,0 +1,542 @@
+# Compiled by k2gen (platform/k2gen/k2gen/emit/alerts.py) from the release's contracts: never edit.
+# Per-product alert rules (I-5, docs/development/phase-001-interfaces.md, "Per-product alerts").
+groups:
+  - name: "product:fx-reference.ecb-fx-rates"
+    interval: 30s
+    rules:
+      - alert: ProductRunFailed_ecb_fx_rates
+        expr: |
+          max by (dag_id) (
+            increase(airflow_dagrun_duration_failed_count{dag_id="ecb_fx_rates"}[15m]) > 0
+              or (airflow_dagrun_duration_failed_count{dag_id="ecb_fx_rates"} unless airflow_dagrun_duration_failed_count{dag_id="ecb_fx_rates"} offset 15m)
+          )
+        labels:
+          severity: "critical"
+          product: "fx-reference.ecb-fx-rates"
+          dag_id: "ecb_fx_rates"
+          domain: "fx-reference"
+        annotations:
+          summary: "fx-reference.ecb-fx-rates: a run of DAG ecb_fx_rates failed"
+          description: "A run of ecb_fx_rates ended failed within the last 15m; its task log says which task failed and why."
+          runbook: docs/runbooks/airflow-scheduling.md
+
+      - alert: ProductStale_ecb_fx_rates
+        expr: |
+          (
+            (sum by (dag_id) (increase(airflow_dagrun_duration_success_count{dag_id="ecb_fx_rates"}[9d])) == 0
+              unless on (dag_id) (airflow_dagrun_duration_success_count{dag_id="ecb_fx_rates"} unless airflow_dagrun_duration_success_count{dag_id="ecb_fx_rates"} offset 9d))
+            or absent_over_time(airflow_dagrun_duration_success_count{dag_id="ecb_fx_rates"}[9d])
+          )
+          unless on (dag_id) (airflow_ti_running{dag_id="ecb_fx_rates",task_id=~"maintain|compact"} > 0)
+        for: 2m
+        labels:
+          severity: "critical"
+          product: "fx-reference.ecb-fx-rates"
+          dag_id: "ecb_fx_rates"
+          domain: "fx-reference"
+        annotations:
+          summary: "fx-reference.ecb-fx-rates: no successful run in 9d"
+          description: "No run of ecb_fx_rates (30 15 * * 1-5, UTC) has succeeded in 9d and no maintain or compact task is running: the DAG is paused, held, failing or not being scheduled."
+          runbook: docs/runbooks/airflow-scheduling.md
+
+      - alert: ProductRunSlow_ecb_fx_rates
+        expr: |
+          max by (dag_id) (
+            increase(airflow_dagrun_duration_success_sum{dag_id="ecb_fx_rates"}[3d]) / increase(airflow_dagrun_duration_success_count{dag_id="ecb_fx_rates"}[3d])
+              or (airflow_dagrun_duration_success_sum{dag_id="ecb_fx_rates"} / airflow_dagrun_duration_success_count{dag_id="ecb_fx_rates"} unless airflow_dagrun_duration_success_count{dag_id="ecb_fx_rates"} offset 3d)
+          ) > 480
+        labels:
+          severity: "warning"
+          product: "fx-reference.ecb-fx-rates"
+          dag_id: "ecb_fx_rates"
+          domain: "fx-reference"
+        annotations:
+          summary: "fx-reference.ecb-fx-rates: runs of DAG ecb_fx_rates near its 10-minute timeout"
+          description: "The runs of ecb_fx_rates that succeeded in the last 3d took on average over 480 s, 80% of its 10-minute timeout."
+          runbook: docs/runbooks/airflow-scheduling.md
+
+  - name: "product:governance.access-canary"
+    interval: 30s
+    rules:
+      - alert: ProductRunFailed_access_canary
+        expr: |
+          max by (dag_id) (
+            increase(airflow_dagrun_duration_failed_count{dag_id="access_canary"}[15m]) > 0
+              or (airflow_dagrun_duration_failed_count{dag_id="access_canary"} unless airflow_dagrun_duration_failed_count{dag_id="access_canary"} offset 15m)
+          )
+        labels:
+          severity: "critical"
+          product: "governance.access-canary"
+          dag_id: "access_canary"
+          domain: "governance"
+        annotations:
+          summary: "governance.access-canary: a run of DAG access_canary failed"
+          description: "A run of access_canary ended failed within the last 15m; its task log says which task failed and why."
+          runbook: docs/runbooks/airflow-scheduling.md
+
+      - alert: ProductStale_access_canary
+        expr: |
+          (
+            (sum by (dag_id) (increase(airflow_dagrun_duration_success_count{dag_id="access_canary"}[30m])) == 0
+              unless on (dag_id) (airflow_dagrun_duration_success_count{dag_id="access_canary"} unless airflow_dagrun_duration_success_count{dag_id="access_canary"} offset 30m))
+            or absent_over_time(airflow_dagrun_duration_success_count{dag_id="access_canary"}[30m])
+          )
+          unless on (dag_id) (airflow_ti_running{dag_id="access_canary",task_id=~"maintain|compact"} > 0)
+        for: 2m
+        labels:
+          severity: "critical"
+          product: "governance.access-canary"
+          dag_id: "access_canary"
+          domain: "governance"
+        annotations:
+          summary: "governance.access-canary: no successful run in 30m"
+          description: "No run of access_canary (*/10 * * * *, UTC) has succeeded in 30m and no maintain or compact task is running: the DAG is paused, held, failing or not being scheduled."
+          runbook: docs/runbooks/airflow-scheduling.md
+
+      - alert: ProductRunSlow_access_canary
+        expr: |
+          max by (dag_id) (
+            increase(airflow_dagrun_duration_success_sum{dag_id="access_canary"}[10m]) / increase(airflow_dagrun_duration_success_count{dag_id="access_canary"}[10m])
+              or (airflow_dagrun_duration_success_sum{dag_id="access_canary"} / airflow_dagrun_duration_success_count{dag_id="access_canary"} unless airflow_dagrun_duration_success_count{dag_id="access_canary"} offset 10m)
+          ) > 480
+        labels:
+          severity: "warning"
+          product: "governance.access-canary"
+          dag_id: "access_canary"
+          domain: "governance"
+        annotations:
+          summary: "governance.access-canary: runs of DAG access_canary near its 10-minute schedule interval (it has no timeout)"
+          description: "The runs of access_canary that succeeded in the last 10m took on average over 480 s, 80% of its 10-minute schedule interval (it has no timeout)."
+          runbook: docs/runbooks/airflow-scheduling.md
+
+  - name: "product:governance.quality-results"
+    interval: 30s
+    rules:
+      - alert: ProductRunFailed_quality_results
+        expr: |
+          max by (dag_id) (
+            increase(airflow_dagrun_duration_failed_count{dag_id="quality_results"}[15m]) > 0
+              or (airflow_dagrun_duration_failed_count{dag_id="quality_results"} unless airflow_dagrun_duration_failed_count{dag_id="quality_results"} offset 15m)
+          )
+        labels:
+          severity: "critical"
+          product: "governance.quality-results"
+          dag_id: "quality_results"
+          domain: "governance"
+        annotations:
+          summary: "governance.quality-results: a run of DAG quality_results failed"
+          description: "A run of quality_results ended failed within the last 15m; its task log says which task failed and why."
+          runbook: docs/runbooks/airflow-scheduling.md
+
+      - alert: ProductStale_quality_results
+        expr: |
+          (
+            (sum by (dag_id) (increase(airflow_dagrun_duration_success_count{dag_id="quality_results"}[3h])) == 0
+              unless on (dag_id) (airflow_dagrun_duration_success_count{dag_id="quality_results"} unless airflow_dagrun_duration_success_count{dag_id="quality_results"} offset 3h))
+            or absent_over_time(airflow_dagrun_duration_success_count{dag_id="quality_results"}[3h])
+          )
+          unless on (dag_id) (airflow_ti_running{dag_id="quality_results",task_id=~"maintain|compact"} > 0)
+        for: 2m
+        labels:
+          severity: "critical"
+          product: "governance.quality-results"
+          dag_id: "quality_results"
+          domain: "governance"
+        annotations:
+          summary: "governance.quality-results: no successful run in 3h"
+          description: "No run of quality_results (50 * * * *, UTC) has succeeded in 3h and no maintain or compact task is running: the DAG is paused, held, failing or not being scheduled."
+          runbook: docs/runbooks/airflow-scheduling.md
+
+      - alert: ProductRunSlow_quality_results
+        expr: |
+          max by (dag_id) (
+            increase(airflow_dagrun_duration_success_sum{dag_id="quality_results"}[1h]) / increase(airflow_dagrun_duration_success_count{dag_id="quality_results"}[1h])
+              or (airflow_dagrun_duration_success_sum{dag_id="quality_results"} / airflow_dagrun_duration_success_count{dag_id="quality_results"} unless airflow_dagrun_duration_success_count{dag_id="quality_results"} offset 1h)
+          ) > 2880
+        labels:
+          severity: "warning"
+          product: "governance.quality-results"
+          dag_id: "quality_results"
+          domain: "governance"
+        annotations:
+          summary: "governance.quality-results: runs of DAG quality_results near its 60-minute schedule interval (it has no timeout)"
+          description: "The runs of quality_results that succeeded in the last 1h took on average over 2880 s, 80% of its 60-minute schedule interval (it has no timeout)."
+          runbook: docs/runbooks/airflow-scheduling.md
+
+  - name: "product:market-analytics.candles"
+    interval: 30s
+    rules:
+      - alert: ProductRunFailed_candles
+        expr: |
+          max by (dag_id) (
+            increase(airflow_dagrun_duration_failed_count{dag_id="candles"}[15m]) > 0
+              or (airflow_dagrun_duration_failed_count{dag_id="candles"} unless airflow_dagrun_duration_failed_count{dag_id="candles"} offset 15m)
+          )
+        labels:
+          severity: "critical"
+          product: "market-analytics.candles"
+          dag_id: "candles"
+          domain: "market-analytics"
+        annotations:
+          summary: "market-analytics.candles: a run of DAG candles failed"
+          description: "A run of candles ended failed within the last 15m; its task log says which task failed and why."
+          runbook: docs/runbooks/airflow-scheduling.md
+
+      - alert: ProductStale_candles
+        expr: |
+          (
+            (sum by (dag_id) (increase(airflow_dagrun_duration_success_count{dag_id="candles"}[15m])) == 0
+              unless on (dag_id) (airflow_dagrun_duration_success_count{dag_id="candles"} unless airflow_dagrun_duration_success_count{dag_id="candles"} offset 15m))
+            or absent_over_time(airflow_dagrun_duration_success_count{dag_id="candles"}[15m])
+          )
+          unless on (dag_id) (airflow_ti_running{dag_id="candles",task_id=~"maintain|compact"} > 0)
+        for: 2m
+        labels:
+          severity: "critical"
+          product: "market-analytics.candles"
+          dag_id: "candles"
+          domain: "market-analytics"
+        annotations:
+          summary: "market-analytics.candles: no successful run in 15m"
+          description: "No run of candles (4-59/5 * * * *, UTC) has succeeded in 15m and no maintain or compact task is running: the DAG is paused, held, failing or not being scheduled."
+          runbook: docs/runbooks/airflow-scheduling.md
+
+      - alert: ProductRunSlow_candles
+        expr: |
+          max by (dag_id) (
+            increase(airflow_dagrun_duration_success_sum{dag_id="candles"}[5m]) / increase(airflow_dagrun_duration_success_count{dag_id="candles"}[5m])
+              or (airflow_dagrun_duration_success_sum{dag_id="candles"} / airflow_dagrun_duration_success_count{dag_id="candles"} unless airflow_dagrun_duration_success_count{dag_id="candles"} offset 5m)
+          ) > 480
+        labels:
+          severity: "warning"
+          product: "market-analytics.candles"
+          dag_id: "candles"
+          domain: "market-analytics"
+        annotations:
+          summary: "market-analytics.candles: runs of DAG candles near its 10-minute timeout"
+          description: "The runs of candles that succeeded in the last 5m took on average over 480 s, 80% of its 10-minute timeout."
+          runbook: docs/runbooks/airflow-scheduling.md
+
+  - name: "product:market-analytics.canonical-trades"
+    interval: 30s
+    rules:
+      - alert: ProductRunFailed_canonical_trades
+        expr: |
+          max by (dag_id) (
+            increase(airflow_dagrun_duration_failed_count{dag_id="canonical_trades"}[15m]) > 0
+              or (airflow_dagrun_duration_failed_count{dag_id="canonical_trades"} unless airflow_dagrun_duration_failed_count{dag_id="canonical_trades"} offset 15m)
+          )
+        labels:
+          severity: "critical"
+          product: "market-analytics.canonical-trades"
+          dag_id: "canonical_trades"
+          domain: "market-analytics"
+        annotations:
+          summary: "market-analytics.canonical-trades: a run of DAG canonical_trades failed"
+          description: "A run of canonical_trades ended failed within the last 15m; its task log says which task failed and why."
+          runbook: docs/runbooks/airflow-scheduling.md
+
+      - alert: ProductStale_canonical_trades
+        expr: |
+          (
+            (sum by (dag_id) (increase(airflow_dagrun_duration_success_count{dag_id="canonical_trades"}[15m])) == 0
+              unless on (dag_id) (airflow_dagrun_duration_success_count{dag_id="canonical_trades"} unless airflow_dagrun_duration_success_count{dag_id="canonical_trades"} offset 15m))
+            or absent_over_time(airflow_dagrun_duration_success_count{dag_id="canonical_trades"}[15m])
+          )
+          unless on (dag_id) (airflow_ti_running{dag_id="canonical_trades",task_id=~"maintain|compact"} > 0)
+        for: 2m
+        labels:
+          severity: "critical"
+          product: "market-analytics.canonical-trades"
+          dag_id: "canonical_trades"
+          domain: "market-analytics"
+        annotations:
+          summary: "market-analytics.canonical-trades: no successful run in 15m"
+          description: "No run of canonical_trades (2-59/5 * * * *, UTC) has succeeded in 15m and no maintain or compact task is running: the DAG is paused, held, failing or not being scheduled."
+          runbook: docs/runbooks/airflow-scheduling.md
+
+      - alert: ProductRunSlow_canonical_trades
+        expr: |
+          max by (dag_id) (
+            increase(airflow_dagrun_duration_success_sum{dag_id="canonical_trades"}[5m]) / increase(airflow_dagrun_duration_success_count{dag_id="canonical_trades"}[5m])
+              or (airflow_dagrun_duration_success_sum{dag_id="canonical_trades"} / airflow_dagrun_duration_success_count{dag_id="canonical_trades"} unless airflow_dagrun_duration_success_count{dag_id="canonical_trades"} offset 5m)
+          ) > 480
+        labels:
+          severity: "warning"
+          product: "market-analytics.canonical-trades"
+          dag_id: "canonical_trades"
+          domain: "market-analytics"
+        annotations:
+          summary: "market-analytics.canonical-trades: runs of DAG canonical_trades near its 10-minute timeout"
+          description: "The runs of canonical_trades that succeeded in the last 5m took on average over 480 s, 80% of its 10-minute timeout."
+          runbook: docs/runbooks/airflow-scheduling.md
+
+  - name: "product:market-capture.kraken-instruments"
+    interval: 30s
+    rules:
+      - alert: ProductRunFailed_kraken_instruments
+        expr: |
+          max by (dag_id) (
+            increase(airflow_dagrun_duration_failed_count{dag_id="kraken_instruments"}[15m]) > 0
+              or (airflow_dagrun_duration_failed_count{dag_id="kraken_instruments"} unless airflow_dagrun_duration_failed_count{dag_id="kraken_instruments"} offset 15m)
+          )
+        labels:
+          severity: "warning"
+          product: "market-capture.kraken-instruments"
+          dag_id: "kraken_instruments"
+          domain: "market-capture"
+        annotations:
+          summary: "market-capture.kraken-instruments: a run of DAG kraken_instruments failed"
+          description: "A run of kraken_instruments ended failed within the last 15m; its task log says which task failed and why."
+          runbook: docs/runbooks/airflow-scheduling.md
+
+      - alert: ProductStale_kraken_instruments
+        expr: |
+          (
+            (sum by (dag_id) (increase(airflow_dagrun_duration_success_count{dag_id="kraken_instruments"}[3h])) == 0
+              unless on (dag_id) (airflow_dagrun_duration_success_count{dag_id="kraken_instruments"} unless airflow_dagrun_duration_success_count{dag_id="kraken_instruments"} offset 3h))
+            or absent_over_time(airflow_dagrun_duration_success_count{dag_id="kraken_instruments"}[3h])
+          )
+          unless on (dag_id) (airflow_ti_running{dag_id="kraken_instruments",task_id=~"maintain|compact"} > 0)
+        for: 2m
+        labels:
+          severity: "warning"
+          product: "market-capture.kraken-instruments"
+          dag_id: "kraken_instruments"
+          domain: "market-capture"
+        annotations:
+          summary: "market-capture.kraken-instruments: no successful run in 3h"
+          description: "No run of kraken_instruments (17 * * * *, UTC) has succeeded in 3h and no maintain or compact task is running: the DAG is paused, held, failing or not being scheduled."
+          runbook: docs/runbooks/airflow-scheduling.md
+
+      - alert: ProductRunSlow_kraken_instruments
+        expr: |
+          max by (dag_id) (
+            increase(airflow_dagrun_duration_success_sum{dag_id="kraken_instruments"}[1h]) / increase(airflow_dagrun_duration_success_count{dag_id="kraken_instruments"}[1h])
+              or (airflow_dagrun_duration_success_sum{dag_id="kraken_instruments"} / airflow_dagrun_duration_success_count{dag_id="kraken_instruments"} unless airflow_dagrun_duration_success_count{dag_id="kraken_instruments"} offset 1h)
+          ) > 480
+        labels:
+          severity: "warning"
+          product: "market-capture.kraken-instruments"
+          dag_id: "kraken_instruments"
+          domain: "market-capture"
+        annotations:
+          summary: "market-capture.kraken-instruments: runs of DAG kraken_instruments near its 10-minute timeout"
+          description: "The runs of kraken_instruments that succeeded in the last 1h took on average over 480 s, 80% of its 10-minute timeout."
+          runbook: docs/runbooks/airflow-scheduling.md
+
+  - name: "product:market-capture.kraken-trades"
+    interval: 30s
+    rules:
+      - alert: ProductRunFailed_kraken_trades
+        expr: |
+          max by (dag_id) (
+            increase(airflow_dagrun_duration_failed_count{dag_id="kraken_trades"}[15m]) > 0
+              or (airflow_dagrun_duration_failed_count{dag_id="kraken_trades"} unless airflow_dagrun_duration_failed_count{dag_id="kraken_trades"} offset 15m)
+          )
+        labels:
+          severity: "warning"
+          product: "market-capture.kraken-trades"
+          dag_id: "kraken_trades"
+          domain: "market-capture"
+        annotations:
+          summary: "market-capture.kraken-trades: a run of DAG kraken_trades failed"
+          description: "A run of kraken_trades ended failed within the last 15m; its task log says which task failed and why."
+          runbook: docs/runbooks/airflow-scheduling.md
+
+      - alert: ProductStale_kraken_trades
+        expr: |
+          (
+            (sum by (dag_id) (increase(airflow_dagrun_duration_success_count{dag_id="kraken_trades"}[15m])) == 0
+              unless on (dag_id) (airflow_dagrun_duration_success_count{dag_id="kraken_trades"} unless airflow_dagrun_duration_success_count{dag_id="kraken_trades"} offset 15m))
+            or absent_over_time(airflow_dagrun_duration_success_count{dag_id="kraken_trades"}[15m])
+          )
+          unless on (dag_id) (airflow_ti_running{dag_id="kraken_trades",task_id=~"maintain|compact"} > 0)
+        for: 2m
+        labels:
+          severity: "warning"
+          product: "market-capture.kraken-trades"
+          dag_id: "kraken_trades"
+          domain: "market-capture"
+        annotations:
+          summary: "market-capture.kraken-trades: no successful run in 15m"
+          description: "No run of kraken_trades (*/5 * * * *, UTC) has succeeded in 15m and no maintain or compact task is running: the DAG is paused, held, failing or not being scheduled."
+          runbook: docs/runbooks/airflow-scheduling.md
+
+      - alert: ProductRunSlow_kraken_trades
+        expr: |
+          max by (dag_id) (
+            increase(airflow_dagrun_duration_success_sum{dag_id="kraken_trades"}[5m]) / increase(airflow_dagrun_duration_success_count{dag_id="kraken_trades"}[5m])
+              or (airflow_dagrun_duration_success_sum{dag_id="kraken_trades"} / airflow_dagrun_duration_success_count{dag_id="kraken_trades"} unless airflow_dagrun_duration_success_count{dag_id="kraken_trades"} offset 5m)
+          ) > 480
+        labels:
+          severity: "warning"
+          product: "market-capture.kraken-trades"
+          dag_id: "kraken_trades"
+          domain: "market-capture"
+        annotations:
+          summary: "market-capture.kraken-trades: runs of DAG kraken_trades near its 10-minute timeout"
+          description: "The runs of kraken_trades that succeeded in the last 5m took on average over 480 s, 80% of its 10-minute timeout."
+          runbook: docs/runbooks/airflow-scheduling.md
+
+  - name: "product:reference-data.calendars"
+    interval: 30s
+    rules:
+      - alert: ProductRunFailed_calendars
+        expr: |
+          max by (dag_id) (
+            increase(airflow_dagrun_duration_failed_count{dag_id="calendars"}[15m]) > 0
+              or (airflow_dagrun_duration_failed_count{dag_id="calendars"} unless airflow_dagrun_duration_failed_count{dag_id="calendars"} offset 15m)
+          )
+        labels:
+          severity: "critical"
+          product: "reference-data.calendars"
+          dag_id: "calendars"
+          domain: "reference-data"
+        annotations:
+          summary: "reference-data.calendars: a run of DAG calendars failed"
+          description: "A run of calendars ended failed within the last 15m; its task log says which task failed and why."
+          runbook: docs/runbooks/airflow-scheduling.md
+
+      - alert: ProductStale_calendars
+        expr: |
+          (
+            (sum by (dag_id) (increase(airflow_dagrun_duration_success_count{dag_id="calendars"}[3d])) == 0
+              unless on (dag_id) (airflow_dagrun_duration_success_count{dag_id="calendars"} unless airflow_dagrun_duration_success_count{dag_id="calendars"} offset 3d))
+            or absent_over_time(airflow_dagrun_duration_success_count{dag_id="calendars"}[3d])
+          )
+          unless on (dag_id) (airflow_ti_running{dag_id="calendars",task_id=~"maintain|compact"} > 0)
+        for: 2m
+        labels:
+          severity: "critical"
+          product: "reference-data.calendars"
+          dag_id: "calendars"
+          domain: "reference-data"
+        annotations:
+          summary: "reference-data.calendars: no successful run in 3d"
+          description: "No run of calendars (0 4 * * *, UTC) has succeeded in 3d and no maintain or compact task is running: the DAG is paused, held, failing or not being scheduled."
+          runbook: docs/runbooks/airflow-scheduling.md
+
+      - alert: ProductRunSlow_calendars
+        expr: |
+          max by (dag_id) (
+            increase(airflow_dagrun_duration_success_sum{dag_id="calendars"}[1d]) / increase(airflow_dagrun_duration_success_count{dag_id="calendars"}[1d])
+              or (airflow_dagrun_duration_success_sum{dag_id="calendars"} / airflow_dagrun_duration_success_count{dag_id="calendars"} unless airflow_dagrun_duration_success_count{dag_id="calendars"} offset 1d)
+          ) > 69120
+        labels:
+          severity: "warning"
+          product: "reference-data.calendars"
+          dag_id: "calendars"
+          domain: "reference-data"
+        annotations:
+          summary: "reference-data.calendars: runs of DAG calendars near its 1440-minute schedule interval (it has no timeout)"
+          description: "The runs of calendars that succeeded in the last 1d took on average over 69120 s, 80% of its 1440-minute schedule interval (it has no timeout)."
+          runbook: docs/runbooks/airflow-scheduling.md
+
+  - name: "product:reference-data.currency-master"
+    interval: 30s
+    rules:
+      - alert: ProductRunFailed_currency_master
+        expr: |
+          max by (dag_id) (
+            increase(airflow_dagrun_duration_failed_count{dag_id="currency_master"}[15m]) > 0
+              or (airflow_dagrun_duration_failed_count{dag_id="currency_master"} unless airflow_dagrun_duration_failed_count{dag_id="currency_master"} offset 15m)
+          )
+        labels:
+          severity: "warning"
+          product: "reference-data.currency-master"
+          dag_id: "currency_master"
+          domain: "reference-data"
+        annotations:
+          summary: "reference-data.currency-master: a run of DAG currency_master failed"
+          description: "A run of currency_master ended failed within the last 15m; its task log says which task failed and why."
+          runbook: docs/runbooks/airflow-scheduling.md
+
+      - alert: ProductStale_currency_master
+        expr: |
+          (
+            (sum by (dag_id) (increase(airflow_dagrun_duration_success_count{dag_id="currency_master"}[21d])) == 0
+              unless on (dag_id) (airflow_dagrun_duration_success_count{dag_id="currency_master"} unless airflow_dagrun_duration_success_count{dag_id="currency_master"} offset 21d))
+            or absent_over_time(airflow_dagrun_duration_success_count{dag_id="currency_master"}[21d])
+          )
+          unless on (dag_id) (airflow_ti_running{dag_id="currency_master",task_id=~"maintain|compact"} > 0)
+        for: 2m
+        labels:
+          severity: "warning"
+          product: "reference-data.currency-master"
+          dag_id: "currency_master"
+          domain: "reference-data"
+        annotations:
+          summary: "reference-data.currency-master: no successful run in 21d"
+          description: "No run of currency_master (0 5 * * 1, UTC) has succeeded in 21d and no maintain or compact task is running: the DAG is paused, held, failing or not being scheduled."
+          runbook: docs/runbooks/airflow-scheduling.md
+
+      - alert: ProductRunSlow_currency_master
+        expr: |
+          max by (dag_id) (
+            increase(airflow_dagrun_duration_success_sum{dag_id="currency_master"}[7d]) / increase(airflow_dagrun_duration_success_count{dag_id="currency_master"}[7d])
+              or (airflow_dagrun_duration_success_sum{dag_id="currency_master"} / airflow_dagrun_duration_success_count{dag_id="currency_master"} unless airflow_dagrun_duration_success_count{dag_id="currency_master"} offset 7d)
+          ) > 483840
+        labels:
+          severity: "warning"
+          product: "reference-data.currency-master"
+          dag_id: "currency_master"
+          domain: "reference-data"
+        annotations:
+          summary: "reference-data.currency-master: runs of DAG currency_master near its 10080-minute schedule interval (it has no timeout)"
+          description: "The runs of currency_master that succeeded in the last 7d took on average over 483840 s, 80% of its 10080-minute schedule interval (it has no timeout)."
+          runbook: docs/runbooks/airflow-scheduling.md
+
+  - name: "product:reference-data.security-master"
+    interval: 30s
+    rules:
+      - alert: ProductRunFailed_security_master
+        expr: |
+          max by (dag_id) (
+            increase(airflow_dagrun_duration_failed_count{dag_id="security_master"}[15m]) > 0
+              or (airflow_dagrun_duration_failed_count{dag_id="security_master"} unless airflow_dagrun_duration_failed_count{dag_id="security_master"} offset 15m)
+          )
+        labels:
+          severity: "critical"
+          product: "reference-data.security-master"
+          dag_id: "security_master"
+          domain: "reference-data"
+        annotations:
+          summary: "reference-data.security-master: a run of DAG security_master failed"
+          description: "A run of security_master ended failed within the last 15m; its task log says which task failed and why."
+          runbook: docs/runbooks/airflow-scheduling.md
+
+      - alert: ProductStale_security_master
+        expr: |
+          (
+            (sum by (dag_id) (increase(airflow_dagrun_duration_success_count{dag_id="security_master"}[3h])) == 0
+              unless on (dag_id) (airflow_dagrun_duration_success_count{dag_id="security_master"} unless airflow_dagrun_duration_success_count{dag_id="security_master"} offset 3h))
+            or absent_over_time(airflow_dagrun_duration_success_count{dag_id="security_master"}[3h])
+          )
+          unless on (dag_id) (airflow_ti_running{dag_id="security_master",task_id=~"maintain|compact"} > 0)
+        for: 2m
+        labels:
+          severity: "critical"
+          product: "reference-data.security-master"
+          dag_id: "security_master"
+          domain: "reference-data"
+        annotations:
+          summary: "reference-data.security-master: no successful run in 3h"
+          description: "No run of security_master (37 * * * *, UTC) has succeeded in 3h and no maintain or compact task is running: the DAG is paused, held, failing or not being scheduled."
+          runbook: docs/runbooks/airflow-scheduling.md
+
+      - alert: ProductRunSlow_security_master
+        expr: |
+          max by (dag_id) (
+            increase(airflow_dagrun_duration_success_sum{dag_id="security_master"}[1h]) / increase(airflow_dagrun_duration_success_count{dag_id="security_master"}[1h])
+              or (airflow_dagrun_duration_success_sum{dag_id="security_master"} / airflow_dagrun_duration_success_count{dag_id="security_master"} unless airflow_dagrun_duration_success_count{dag_id="security_master"} offset 1h)
+          ) > 2880
+        labels:
+          severity: "warning"
+          product: "reference-data.security-master"
+          dag_id: "security_master"
+          domain: "reference-data"
+        annotations:
+          summary: "reference-data.security-master: runs of DAG security_master near its 60-minute schedule interval (it has no timeout)"
+          description: "The runs of security_master that succeeded in the last 1h took on average over 2880 s, 80% of its 60-minute schedule interval (it has no timeout)."
+          runbook: docs/runbooks/airflow-scheduling.md

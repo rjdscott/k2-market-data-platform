@@ -83,6 +83,7 @@ adding one with the right signature, leaves it green; a drifted signature fails 
 | `API_PRINCIPALS` | `compiled/api/principals.json`, `{"principals": [id]}` | S14 |
 | `CATALOG_INDEX`, `catalog_path(id)` | `compiled/catalog/index.json`, `compiled/catalog/products/<id>.json` | S18 |
 | (S17) | `compiled/dbt/` | S17 |
+| `emit/alerts.PATH` (added 2026-11-28, I-5) | `compiled/prometheus/product-alerts.yml`: per scheduled product, `ProductRunFailed_<dag>`, `ProductStale_<dag>` and `ProductRunSlow_<dag>`, read through the prometheus pointer (`docs/development/phase-001-interfaces.md`, "Per-product alerts") | W1-17 |
 | `PLATFORM_DIR`, `PLATFORM_CODE` (added 2026-11-27) | `platform/<repository path>`: the set's run code under `docker/airflow/dags/`, `docker/lake/`, `docker/prometheus/rules/`, `domains/`, `platform/runs/` and `platform/catalog-site/` (W3-9), each root's suffixes only (`.py`; `.yml` for the rules; `.sh` and `.json` too under `docker/lake/`: lake-init's `init-lake.sh` and the MinIO policies it grants, run from the release, review R6), never a test, a cache or `conftest.py`; each root is a `DOCUMENT_ROOTS` entry too, so the tag approves the code and `documents/` holds it as well | W1-4 (`release.run_code`) |
 
 `need_of(path)`: `compose/docker-compose.yml` can set `recreate` (the services whose definition
