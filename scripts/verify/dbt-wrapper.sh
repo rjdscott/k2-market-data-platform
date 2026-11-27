@@ -35,9 +35,10 @@
 #   Q1   q1a: a slow INSERT into the output as the builder, its client gone after 2 s: does it
 #        commit? run10 reconciles whatever landed; q1b: the same, and run11's step 1 cancels it
 #        (Trino's REST API as the builder) before reconcile, so no snapshot of it ever exists
-#   Q2   q2a: 100 polls each of the base by tag name, by snapshot id, and of the reader view across
-#        dbt's create-or-replace that drops note then retypes extra; q2b: region and note swapped
-#        by renames on main, read through the view by each canary reader
+#   Q2   q2a: 200 polls each of the base by tag name, by snapshot id, and of the reader view across
+#        four rounds of dbt's create-or-replace that drops note then retypes extra; q2b: note and
+#        extra swapped by renames on main (region, the identity partition's source, Iceberg will
+#        not swap), read through the view by each canary reader
 #
 #   bash scripts/verify/dbt-wrapper.sh        # KEEP=1 keeps the scratch directory
 #
@@ -122,13 +123,16 @@ docker build -q -f docker/dbt-runner/Dockerfile -t "$IMAGE" . > "$W/build.log" 2
 Q3=$W/q3-out; mkdir -p "$Q3"
 q3() {  # q3 <n> <jinja>: one model holding a sandbox escape, compiled by the image's dbt with no network (review Q3)
   local d=$W/q3-$1; mkdir -p "$d/models"
-  printf 'name: w118q3\nversion: "1.0"\nprofile: q3\nconfig-version: 2\n' > "$d/dbt_project.yml"
+  # populate_cache false: compile then opens no connection, so the model is rendered with execute true (at parse,
+  # dbt's lenient Undefined swallows the sandbox's refusal, so a parse alone proves nothing)
+  printf 'name: w118q3\nversion: "1.0"\nprofile: q3\nconfig-version: 2\nflags:\n  populate_cache: false\n' > "$d/dbt_project.yml"
   printf 'q3:\n  target: t\n  outputs:\n    t: {type: trino, method: none, http_scheme: http, host: 127.0.0.1, port: 1, user: x, database: x, schema: x, threads: 1}\n' > "$d/profiles.yml"
   printf 'select %s as x\n' "$2" > "$d/models/m.sql"
   docker run --rm --label "k2.throwaway=$P" --network none --read-only --tmpfs /tmp:rw,size=64m --user "$(id -u):$(id -g)" --pull never \
-    -e HOME=/tmp -e DBT_SEND_ANONYMOUS_USAGE_STATS=false -v "$d:/p:ro" --entrypoint dbt "$IMAGE" \
-    compile --project-dir /p --profiles-dir /p --target-path /tmp/t --log-path /tmp/l --no-partial-parse > "$Q3/q3-$1.out" 2>&1
+    -e HOME=/tmp -e DBT_SEND_ANONYMOUS_USAGE_STATS=false -v "$d:/p:ro" -v "$Q3:/out" --entrypoint dbt "$IMAGE" \
+    compile --project-dir /p --profiles-dir /p --target-path "/out/t$1" --log-path /tmp/l --no-partial-parse > "$Q3/q3-$1.out" 2>&1
   echo $? > "$Q3/q3-$1.rc"
+  cat "$Q3/t$1/compiled/w118q3/models/m.sql" >> "$Q3/q3-$1.out" 2>/dev/null  # what it rendered, had it rendered
 }
 # shellcheck disable=SC2016
 { q3 1 "'{{ cycler.__init__.__globals__.os.popen('id').read() }}'"
@@ -275,6 +279,11 @@ elif cmd == "orphan-end":  # orphan-end <name>: as svc.platform, the orphan's en
     snaps = trino.ok(BUILDER, f"SELECT snapshot_id, CAST(committed_at AS varchar) FROM {quote_relation(OUT + '$snapshots')} "
                               f"WHERE element_at(summary, 'trino_query_id') = {sql_literal(o['query_id'])}")
     o.update(state=row and row[0], error=row and row[1], ms=row and row[2], snapshots=snaps)
+    if snaps:  # the work's own time, start to commit: an abandoned query ends query.client.timeout after it (run 1)
+        qid = sql_literal(o["query_id"])
+        o["work_ms"] = trino.ok("svc.platform", f"SELECT date_diff('millisecond', q.created, s.committed_at) FROM system.runtime.queries q, "
+                                                f"{quote_relation(OUT + '$snapshots')} s WHERE q.query_id = {qid} "
+                                                f"AND element_at(s.summary, 'trino_query_id') = {qid}")[0][0]
     f.write_text(json.dumps(o))
     print(f"dbt-wrapper: orphan {args[0]} ended {o['state']} {o['error'] or ''} after {o['ms']} ms; its snapshots {snaps}", flush=True)
 elif cmd == "q2-poll":  # q2-poll <n>: n polls of each read of the tag while the shell changes main (Q2a)
@@ -291,15 +300,20 @@ elif cmd == "q2-poll":  # q2-poll <n>: n polls of each read of the tag while the
                           "got": f"{a.error}: {a.message[:160]}" if a.error else ",".join(c for c, _ in a.columns)})
         time.sleep(0.05)
     (D / "q2-polls.json").write_text(json.dumps({"tag": tag, "polls": polls}))
-elif cmd == "q2-change":  # as the builder, dbt's contract table twice: CREATE OR REPLACE with the new columns, then INSERT (Q2a)
+elif cmd == "q2-change":  # as the builder, four times from the tagged schema: dbt's contract table, CREATE OR REPLACE with the
+    # new columns then INSERT, dropping note, then retyping extra (Q2a)
     q, marks = quote_relation(OUT), []
-    for step, extra, value in (("drop note", "varchar", "extra"), ("retype extra", "bigint", "7")):
-        for what, sql in (("create or replace", f"CREATE OR REPLACE TABLE {q} (id bigint, region varchar, event_ts timestamp(6) with time zone, "
-                                                f"extra {extra}) WITH (partitioning = ARRAY['region'])"),
-                          ("insert", f"INSERT INTO {q} SELECT id, region, event_ts, {value} FROM {q} FOR VERSION AS OF 'audited'")):
+    tag = int(trino.ok(BUILDER, f"SELECT snapshot_id FROM {quote_relation(OUT + '$refs')} WHERE name = 'audited'")[0][0])
+    for cycle in range(4):
+        steps = [("restore", f"CREATE OR REPLACE TABLE {q} WITH (partitioning = ARRAY['region']) AS SELECT * FROM {q} FOR VERSION AS OF BIGINT '{tag}'")]
+        for step, extra, value in (("drop note", "varchar", "extra"), ("retype extra", "bigint", "7")):
+            steps += [(f"{step}: create or replace", f"CREATE OR REPLACE TABLE {q} (id bigint, region varchar, event_ts timestamp(6) with time zone, "
+                                                     f"extra {extra}) WITH (partitioning = ARRAY['region'])"),
+                      (f"{step}: insert", f"INSERT INTO {q} SELECT id, region, event_ts, {value} FROM {q} FOR VERSION AS OF 'audited'")]
+        for what, sql in steps:
             a = trino.run(BUILDER, sql)
-            marks.append({"t": time.time(), "step": f"{step}: {what}", "got": a.says()})
-        time.sleep(3)
+            marks.append({"t": time.time(), "step": f"cycle {cycle}, {what}", "got": a.says()})
+            time.sleep(0.5)
     (D / "q2-change.json").write_text(json.dumps(marks))
 elif cmd == "q2-swap":  # main back to the tag's rows and schema, then region and note swapped by renames as the builder (Q2b)
     q = quote_relation(OUT)
@@ -309,7 +323,7 @@ elif cmd == "q2-swap":  # main back to the tag's rows and schema, then region an
     def reads():
         out = {}
         for u in ("p.canary-delayed", "p.canary-scoped", "p.canary-full"):
-            a = trino.run(u, f"SELECT id, region, note FROM {quote_relation(VIEW)} ORDER BY id, region")
+            a = trino.run(u, f"SELECT id, region, note, extra FROM {quote_relation(VIEW)} ORDER BY id, region")
             out[u] = a.says() if a.error else a.rows
         for form, at in (("tag name", "'audited'"), ("snapshot id", f"BIGINT '{tag}'")):
             a = trino.run("pub_access_canary", f"SELECT * FROM {quote_relation(READER_BASE)} FOR VERSION AS OF {at} ORDER BY 1 LIMIT 2")
@@ -317,7 +331,7 @@ elif cmd == "q2-swap":  # main back to the tag's rows and schema, then region an
         return out
     before = reads()
     renames = [trino.run(BUILDER, f"ALTER TABLE {q} RENAME COLUMN {quote_ident(a)} TO {quote_ident(b)}").says()
-               for a, b in (("region", "w118_tmp"), ("note", "region"), ("w118_tmp", "note"))]
+               for a, b in (("note", "w118_tmp"), ("extra", "note"), ("w118_tmp", "extra"))]
     (D / "q2-swap.json").write_text(json.dumps({"restore": restore.says(), "renames": renames, "before": before, "after": reads()}, default=str))
 elif cmd == "claims":
     s = {p.stem.removeprefix("state-"): json.loads(p.read_text()) for p in D.glob("state-*.json")}
@@ -415,8 +429,9 @@ elif cmd == "claims":
     q3 = {p.stem: (int(p.with_suffix(".rc").read_text()), p.read_text()) for p in sorted(D.glob("q3-*.out"))}
     for k, (code, out) in q3.items():
         print(f"INFO {k}: exit {code}; {next((x.strip() for x in out.splitlines() if 'unsafe' in x or 'Security' in x or 'uid=' in x), out[-200:])}")
-    claim("Q3 dbt's Jinja sandbox refuses each escape: an error, never the command's output",
-          len(q3) == 4 and all(code != 0 and "uid=" not in out and ("unsafe" in out or "SecurityError" in out) for code, out in q3.values()),
+    claim("Q3 dbt's Jinja sandbox refuses each escape at compile: an error, never the command's output",
+          len(q3) == 4 and all(code != 0 and "uid=" not in out and "Connection refused" not in out
+                               and ("unsafe" in out or "SecurityError" in out) for code, out in q3.values()),
           {k: code for k, (code, _) in q3.items()})
     # Q1: an orphaned build query, observed (q1a), then cancelled by the next run's step 1 (q1b)
     oa, ob = (json.loads((D / f"orphan-{n}.json").read_text()) for n in ("q1a", "q1b"))
@@ -451,10 +466,13 @@ elif cmd == "claims":
     for k in sw["after"]:
         print(f"INFO Q2b {k}: before {sw['before'][k]}; after {sw['after'][k]}")
     delayed, scoped = sw["after"]["p.canary-delayed"], sw["after"]["p.canary-scoped"]
-    claim("Q2b after the swap no reader sees data under a swapped name: the delayed reader no note, the scoped reader no south row",
-          all(isinstance(x, list) for x in (delayed, scoped)) and sw["after"] == sw["before"]
-          and not any("canary-note" in str(r[1]) or r[2] is not None for r in delayed) and all(r[1] == "north" for r in scoped),
-          f"delayed {delayed}; scoped {scoped}")
+    claim("Q2b after note and extra are swapped on main, no reader sees data under a swapped name: the delayed reader no note text",
+          all(isinstance(x, list) for x in (delayed, scoped)) and sw["after"] == sw["before"] and "ok" in str(sw["renames"][-1])
+          and not any("canary-note" in str(r) for r in delayed) and all(r[1] == "north" for r in scoped),
+          f"renames {sw['renames']}; delayed {delayed}; scoped {scoped}")
+    fell_back = [r for r, code in rc.items() if code == 0 and "the dbt invocation's time decides" in err.get(r, "")]
+    claim("every publish matched its tested snapshot's trino_query_id to one dbt reported (none fell back to the time window)",
+          not fell_back and sum(1 for code in rc.values() if code == 0) >= 8, f"fell back: {fell_back}")
     sys.exit(1 if fails else 0)
 PY
 probe() { bash "$L" py "$P" - "$@" < "$W/probe.py"; }
@@ -536,13 +554,13 @@ probe facts
 # run about 90 s, and run11 started at once, whose step 1 must cancel it.
 probe orphan q1a 20 && probe orphan-end q1a
 run "$ID2" run10
-kb=$(python3 -c 'import json, sys; o = json.load(open(sys.argv[1])); print(max(5, min(400, round(o["k"] * 90000 / max(o["ms"] or 1, 1)))))' \
+kb=$(python3 -c 'import json, sys; o = json.load(open(sys.argv[1])); print(max(5, min(400, round(o["k"] * 90000 / max(o.get("work_ms") or o["ms"] or 1, 1)))))' \
   "$STATE/w118/orphan-q1a.json")
 probe orphan q1b "$kb" && run "$ID2" run11
 probe orphan-end q1b
 
 # Q2: reads of the tag across dbt's create-or-replace on main, then the rename swap
-probe q2-poll 100 & poller=$!
+probe q2-poll 200 & poller=$!
 sleep 4; probe q2-change; wait "$poller"
 probe q2-swap
 probe claims "$ID1" | tee "$W/claims"
