@@ -146,3 +146,50 @@ def test_a_scheduler_without_its_password_file_fails():
     vols = doc["services"]["airflow-scheduler"]["volumes"]
     vols[:] = [v for v in vols if not (isinstance(v, dict) and v.get("target") == "/run/k2-secrets/runs.password")]
     assert any("airflow-scheduler mounts secrets" in p for p in airflow_secret_problems(doc))
+
+
+# k2-api reads svc.api's password, the key map and the CA (services/k2-api/k2api/db.py, keys.py), each
+# long-syntax, read-only, never created when missing; api/ by its directory, since make api-key
+# rewrites keys.json in place and a file mount would keep the old inode's content after a rename.
+API_SECRETS = {"/run/k2-secrets/api": "api", "/run/k2-secrets/api.password": "principals/svc.api.password",
+               "/run/k2-secrets/tls/ca.pem": "tls/ca.pem"}
+
+
+def api_secret_problems(compose: dict) -> list[str]:
+    found, mounts = [], {}
+    for v in compose["services"]["k2-api"].get("volumes") or []:
+        if m := ROOT.match(source(v)):
+            if not isinstance(v, dict) or v.get("read_only") is not True or (v.get("bind") or {}).get("create_host_path") is not False:
+                found.append(f"k2-api mounts {source(v)} other than long-syntax, read-only, create_host_path false")
+            mounts[v["target"] if isinstance(v, dict) else str(v)] = source(v)[m.end():].strip("/")
+    if mounts != API_SECRETS:
+        found.append(f"k2-api mounts secrets {mounts}, not {API_SECRETS}")
+    return found
+
+
+def test_k2_api_mounts_exactly_its_three_secret_paths():
+    assert api_secret_problems(yaml.safe_load(COMPOSE.read_text())) == []
+
+
+@pytest.mark.parametrize("volume, says", [
+    ({"type": "bind", "source": "${K2_SECRETS:-${HOME}/k2-secrets}/principals/svc.platform.password",
+      "target": "/run/k2-secrets/platform.password", "read_only": True, "bind": {"create_host_path": False}}, "mounts secrets"),
+    ({"type": "bind", "source": "${K2_SECRETS:-${HOME}/k2-secrets}/trino", "target": "/run/k2-secrets/trino",
+      "read_only": True, "bind": {"create_host_path": False}}, "mounts secrets"),
+    ("${K2_SECRETS:-${HOME}/k2-secrets}/principals/svc.runs.password:/run/k2-secrets/runs.password:ro", "other than long-syntax"),
+])
+def test_a_secret_mount_off_k2_apis_three_fails(volume, says):
+    doc = yaml.safe_load(COMPOSE.read_text())
+    doc["services"]["k2-api"]["volumes"].append(volume)
+    found = api_secret_problems(doc)
+    assert any(says in p for p in found), found
+
+
+def test_k2_api_with_its_key_map_as_a_file_or_writable_fails():
+    for change in ({"source": "${K2_SECRETS:-${HOME}/k2-secrets}/api/keys.json", "target": "/run/k2-secrets/api/keys.json"},
+                   {"read_only": False}):
+        doc = yaml.safe_load(COMPOSE.read_text())
+        for v in doc["services"]["k2-api"]["volumes"]:
+            if v.get("target") == "/run/k2-secrets/api":
+                v.update(change)
+        assert api_secret_problems(doc), change

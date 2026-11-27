@@ -37,7 +37,7 @@ Decided 2026-11-27, for phase 007 to fold into `openapi.yaml`:
 
 - 503 and `not_published` stay as above; the document declares no 5xx and no code for a table
   never tested.
-- Row values: a decimal is its exact string, a time is ISO 8601 in UTC, a bigint is a JSON
+- Row values: a decimal is its exact string, a time is an ISO date and time in UTC, a bigint is a JSON
   number. The snapshot id is a decimal string, as the document says.
 - Rows are sorted by the table's declared primary key (`primaryKeyPosition`, then declaration
   order), so SQL and REST answers compare row for row; a table with no key is not sorted.

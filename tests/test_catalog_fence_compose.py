@@ -358,3 +358,92 @@ def test_prometheus_rules_off_the_pointer_fail(rules):
 @pytest.mark.parametrize("spark", ["", "RUN mkdir /spool && chown 185:185 /spool", "RUN mkdir /spool"])
 def test_a_spark_image_whose_spool_is_not_fetchs_fails(spark):
     assert any("is not fetch's" in p for p in run_path_problems(COMPOSE, PROMETHEUS, spark, DOCKERFILES[1]))
+
+
+# ---- k2-api (W3-5): Trino only, as svc.api; never the catalog, a storage key or the socket ------------
+
+API_ENV = {"K2_TRINO_HOST", "K2_TRINO_INTERNAL_PORT"}  # services/k2-api/k2api/db.py reads these two alone
+API_MOUNTS = {"/k2/releases": "${K2_RELEASES:-${HOME}/k2-releases}",
+              "/run/k2-secrets/api": "${K2_SECRETS:-${HOME}/k2-secrets}/api",
+              "/run/k2-secrets/api.password": "${K2_SECRETS:-${HOME}/k2-secrets}/principals/svc.api.password",
+              "/run/k2-secrets/tls/ca.pem": "${K2_SECRETS:-${HOME}/k2-secrets}/tls/ca.pem"}
+
+
+def api_problems(doc: dict) -> list[str]:
+    s, out = doc["services"]["k2-api"], []
+    if s.get("networks") != ["k2-net"] or s.get("network_mode"):
+        out.append(f"k2-api is on {s.get('networks')} {s.get('network_mode', '')}: k2-net only, never k2-catalog")
+    if env_names(s) != API_ENV:
+        out.append(f"k2-api's environment is {sorted(env_names(s))}, not {sorted(API_ENV)}")
+    mounts = {}
+    for v in s.get("volumes") or []:
+        if not (isinstance(v, dict) and v.get("type") == "bind" and v.get("read_only") is True
+                and (v.get("bind") or {}).get("create_host_path") is False):
+            out.append(f"k2-api mounts {v} other than a long-syntax, read-only bind never created when missing")
+        else:
+            mounts[v["target"]] = v["source"]
+    if mounts != API_MOUNTS:
+        out.append(f"k2-api's mounts are {mounts}, not {API_MOUNTS}")
+    if any("docker.sock" in str(v) for v in s.get("volumes") or []):
+        out.append("k2-api mounts the Docker socket")
+    if s.get("ports") != ["127.0.0.1:${K2_API_PORT:-8095}:8095"]:
+        out.append(f"k2-api publishes {s.get('ports')}, not its one port on loopback")
+    if not re.fullmatch(r"\$\{K2_RUN_UID:\?[^${}]*\}:0", str(s.get("user"))):
+        out.append(f"k2-api runs as {s.get('user')!r}, not K2_RUN_UID with group 0")
+    if not (s.get("read_only") is True and s.get("cap_drop") == ["ALL"]
+            and "no-new-privileges:true" in (s.get("security_opt") or []) and s.get("tmpfs")):
+        out.append("k2-api is not read-only with a tmpfs, without capabilities and new privileges")
+    if s.get("image") != "k2-api:local" or (s.get("build") or {}).get("dockerfile") != "services/k2-api/Dockerfile":
+        out.append(f"k2-api is not the image built from services/k2-api/Dockerfile: {s.get('image')}")
+    return out
+
+
+def test_k2_api_reaches_trino_alone_with_exactly_its_names_and_mounts():
+    assert "k2-api" not in ALLOW and api_problems(COMPOSE) == []
+
+
+def api_vol(target, **change):
+    def mutate(d):
+        for v in d["services"]["k2-api"]["volumes"]:
+            if v["target"] == target:
+                v.update(change)
+                for k in [k for k, x in change.items() if x is None]:
+                    v.pop(k)
+    return mutate
+
+
+@pytest.mark.parametrize("mutate,says", [
+    (svc_set("k2-api", "networks", ["k2-net", "k2-catalog"]), "k2-net only"),
+    (svc_set("k2-api", "networks", ["k2-catalog"]), "k2-net only"),
+    (svc_set("k2-api", "network_mode", "service:trino"), "k2-net only"),
+    (lambda d: d["services"]["k2-api"]["environment"].__setitem__("K2_TRINO_USER", "svc.platform"), "environment is"),
+    (lambda d: d["services"]["k2-api"]["environment"].__setitem__("K2_TRINO_S3_ACCESS_KEY", "x"), "environment is"),
+    (lambda d: d["services"]["k2-api"]["environment"].pop("K2_TRINO_HOST"), "environment is"),
+    (lambda d: d["services"]["k2-api"]["volumes"].append("/var/run/docker.sock:/var/run/docker.sock"), "Docker socket"),
+    (lambda d: d["services"]["k2-api"]["volumes"].append({
+        "type": "bind", "source": "${K2_SECRETS:-${HOME}/k2-secrets}/principals/svc.platform.password",
+        "target": "/run/k2-secrets/platform.password", "read_only": True, "bind": {"create_host_path": False}}), "mounts are"),
+    (lambda d: d["services"]["k2-api"]["volumes"].pop(), "mounts are"),
+    (api_vol("/run/k2-secrets/api", source="${K2_SECRETS:-${HOME}/k2-secrets}"), "mounts are"),
+    (api_vol("/run/k2-secrets/api.password", read_only=False), "other than a long-syntax, read-only"),
+    (api_vol("/run/k2-secrets/tls/ca.pem", bind=None), "other than a long-syntax, read-only"),
+    (api_vol("/k2/releases", source="${K2_RELEASES:-${HOME}/k2-releases}/pointers/k2-api"), "mounts are"),
+    (svc_set("k2-api", "ports", ["8095:8095"]), "not its one port on loopback"),
+    (svc_set("k2-api", "ports", ["127.0.0.1:8095:8095", "127.0.0.1:9095:9095"]), "not its one port on loopback"),
+    (svc_set("k2-api", "user", "0:0"), "not K2_RUN_UID"),
+    (lambda d: d["services"]["k2-api"].pop("read_only"), "not read-only"),
+    (svc_set("k2-api", "cap_drop", ["NET_RAW"]), "not read-only"),
+    (svc_set("k2-api", "security_opt", []), "not read-only"),
+    (svc_set("k2-api", "image", "alpine:3.20"), "not the image built"),
+])
+def test_k2_api_off_its_contract_fails(mutate, says):
+    doc = copy.deepcopy(COMPOSE)
+    mutate(doc)
+    found = api_problems(doc)
+    assert any(says in p for p in found), found
+
+
+def test_k2_api_on_the_catalog_network_breaks_the_fence():
+    doc = copy.deepcopy(COMPOSE)
+    join("k2-api")(doc)
+    assert any("unlisted ['k2-api']" in p for p in problems(doc))
