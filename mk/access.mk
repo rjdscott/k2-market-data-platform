@@ -10,7 +10,7 @@
 #                                              (RELEASE defaults to ${K2_RELEASES}/pointers/trino), in a
 #                                              tools one-shot on the stack's networks, each engine's
 #                                              storage pair by -e name from your environment, each REST
-#                                              row's key from ${K2_SECRETS}/api/<principal>.key
+#                                              row's key from ${K2_SECRETS}/api-keys/<principal>.key
 #                                              (scripts/deploy.py access_live); refused while .env is
 #                                              open to anyone but its owner
 #   make test-access RELEASE=<release dir>     the proofs behind the suite on a throwaway lake

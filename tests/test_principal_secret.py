@@ -157,6 +157,72 @@ def test_an_api_key_is_printed_once_and_only_its_sha256_is_kept(secrets: Path) -
     assert (mode(secrets / "api"), mode(keys)) == (0o700, 0o600)
 
 
+def sha(key: str) -> str:
+    return hashlib.sha256(key.encode()).hexdigest()
+
+
+def test_an_api_key_to_file_lands_in_api_keys_and_is_printed_nowhere(secrets: Path) -> None:
+    before = checkout()
+    code, out, err = run(secrets, "api-key", "PRINCIPAL=p.canary-full", "TO_FILE=1")  # no terminal: the file is the copy
+    assert code == 0 and out == "", err
+    stored = secrets / "api-keys/p.canary-full.key"
+    key = stored.read_text()
+    assert KEY.fullmatch(key) and key not in err and str(stored) in err
+    assert json.loads((secrets / "api/keys.json").read_text()) == {sha(key): "p.canary-full"}
+    assert (mode(secrets / "api-keys"), mode(stored)) == (0o700, 0o600)
+    assert sorted(p.name for p in (secrets / "api").iterdir()) == ["keys.json"]  # k2-api's directory: hashes alone
+    assert checkout() == before and tracked_files_holding(key) == ""
+
+
+def test_an_api_key_rotation_rewrites_its_file_or_removes_one_it_would_leave_stale(secrets: Path) -> None:
+    assert run(secrets, "api-key", "PRINCIPAL=p.canary-full", "TO_FILE=1")[0] == 0
+    stored, keys = secrets / "api-keys/p.canary-full.key", secrets / "api/keys.json"
+    first, inode = stored.read_text(), stored.stat().st_ino
+    code, _, err = run(secrets, "api-key", "PRINCIPAL=p.canary-full", "TO_FILE=1")
+    assert code != 0 and "ROTATE=1" in err and stored.read_text() == first
+
+    assert run(secrets, "api-key", "PRINCIPAL=p.canary-full", "TO_FILE=1", "ROTATE=1")[0] == 0
+    second = stored.read_text()
+    assert second != first and stored.stat().st_ino == inode  # rewritten in place
+    assert json.loads(keys.read_text()) == {sha(second): "p.canary-full"}
+
+    # ROTATE=1 alone: the new key printed once, and the file, which would no longer match keys.json, removed
+    code, out, err = run(secrets, "api-key", "PRINCIPAL=p.canary-full", "ROTATE=1", tty=True)
+    assert code == 0, err
+    (third,) = KEY.findall(out)
+    assert not stored.exists() and "removed" in err and str(stored) in err and second not in out + err
+    assert json.loads(keys.read_text()) == {sha(third): "p.canary-full"}
+
+
+def test_a_removal_deletes_the_key_file_too(secrets: Path) -> None:
+    assert run(secrets, "api-key", "PRINCIPAL=p.canary-full", "TO_FILE=1")[0] == 0
+    code, out, err = run(secrets, "principal-remove", "PRINCIPAL=p.canary-full", "FORCE=1")
+    assert code == 0, err
+    assert not (secrets / "api-keys/p.canary-full.key").exists() and json.loads((secrets / "api/keys.json").read_text()) == {}
+    assert "api-keys/p.canary-full.key" in err and "1 key(s) of api/keys.json" in err and "k2_" not in out + err
+
+
+def test_status_marks_a_key_file_and_names_one_left_stale(secrets: Path) -> None:
+    assert run(secrets, "api-key", "PRINCIPAL=p.canary-full", "TO_FILE=1")[0] == 0
+    stored = secrets / "api-keys/p.canary-full.key"
+    key = stored.read_text()
+    code, out, err = run(secrets, "principals-status")
+    assert code == 0, out + err
+    assert re.search(r"^principal +password +file +api-key +key-file$", out, re.M), out
+    assert re.search(r"^p\.canary-full +no +no +yes +yes$", out, re.M), out
+    assert re.search(r"^svc\.api +no +no +- +-$", out, re.M), out
+    stored.write_text("k2_" + "A" * 43)  # by hand: a key whose sha256 keys.json does not hold
+    (secrets / "api-keys/p.gone.key").write_text("k2_" + "B" * 43)
+    code, out, err = run(secrets, "principals-status")
+    assert code != 0, out + err
+    assert re.search(r"^p\.canary-full +no +no +yes +stale$", out, re.M), out
+    stale = {line.split()[1]: line for line in out.splitlines() if line.startswith("STALE ")}
+    assert sorted(stale) == ["p.canary-full", "p.gone"]
+    assert stale["p.canary-full"].startswith("STALE p.canary-full in api-keys/p.canary-full.key: ") and "TO_FILE=1 ROTATE=1" in stale["p.canary-full"]
+    assert stale["p.gone"].startswith("STALE p.gone in api-keys/p.gone.key: ")
+    assert key not in out and "A" * 20 not in out + err and "B" * 20 not in out + err
+
+
 def test_a_rotation_replaces_one_line_in_place_and_nothing_else(secrets: Path) -> None:
     (secrets / "trino").mkdir(parents=True)
     db = secrets / "trino/password.db"
@@ -264,6 +330,7 @@ def test_a_removal_drops_one_principal_in_place_and_nothing_else(secrets: Path) 
 
     code, _, err = run(secrets, "principal-remove", "PRINCIPAL=dbt_gone")
     assert code == 0 and "nothing to remove" in err and slots(db) == [slot(CANARY), slot(first), slot(second)]
+    assert sorted(p.name for p in secrets.iterdir()) == ["api", "principals", "trino"]  # no api-keys/ made by a removal
 
     # In slots, a removal blanks the user's slot and moves nothing; the next new user takes it.
     with db.open("ab") as f:
@@ -307,8 +374,8 @@ def test_status_lists_names_and_never_a_hash(secrets: Path) -> None:
     code, out, err = run(secrets, "principals-status")
     assert code != 0, err  # a STALE line is a failure, not advice (the script exits 1, make 2)
     rows = {f[0]: f[1:] for f in (line.split() for line in out.splitlines()) if f and f[0] in ("svc.runs", "svc.api", "p.canary-full")}
-    assert rows["svc.runs"] == ["yes", "yes", "-"] and rows["svc.api"] == ["no", "no", "-"]
-    assert rows["p.canary-full"] == ["no", "no", "no"]  # a test principal: its file column counts
+    assert rows["svc.runs"] == ["yes", "yes", "-", "-"] and rows["svc.api"] == ["no", "no", "-", "-"]
+    assert rows["p.canary-full"] == ["no", "no", "no", "no"]  # a test principal: its file column counts
     assert "release canaries" in out and "k2_release_0123456789ab" in out
     stale = {line.split()[1]: line for line in out.splitlines() if line.startswith("STALE ")}
     assert sorted(stale) == ["dbt_gone", "p.gone", "svc.old"]
@@ -382,7 +449,7 @@ def test_a_test_principal_gets_a_password_file_and_a_person_with_a_real_grant_ne
     assert SECRET.fullmatch(stored.read_text()) and mode(stored) == 0o600
     assert bcrypt_checks([(stored.read_text(), lines(secrets)["p.canary-full"])]) == [True]
     code, out, _ = run(secrets, "principals-status")
-    assert re.search(r"^p\.canary-full +yes +yes +no$", out, re.M), out
+    assert re.search(r"^p\.canary-full +yes +yes +no +no$", out, re.M), out
     # Who is a test principal: granted on the access canary and on no other product.
     decided = module("""
 sys.path.insert(0, 'scripts')
@@ -421,8 +488,9 @@ def test_a_checkout_git_cannot_read_is_still_refused(tmp_path: Path) -> None:
 
 def test_every_run_puts_the_directories_back_to_700(secrets: Path) -> None:
     assert run(secrets, "password", "PRINCIPAL=svc.runs", "TO_FILE=1")[0] == 0
-    (secrets / "api").mkdir(mode=0o755)
-    for d in (secrets, secrets / "trino", secrets / "principals", secrets / "api"):
+    dirs = (secrets, secrets / "trino", secrets / "principals", secrets / "api", secrets / "api-keys")
+    for d in dirs:
+        d.mkdir(mode=0o755, exist_ok=True)
         d.chmod(0o755)
     assert run(secrets, "principals-status")[0] == 0
-    assert [mode(d) for d in (secrets, secrets / "trino", secrets / "principals", secrets / "api")] == [0o700] * 4
+    assert [mode(d) for d in dirs] == [0o700] * 5

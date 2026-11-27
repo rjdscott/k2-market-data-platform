@@ -3,7 +3,8 @@ throwaway client container mounts the checkout, whose .env holds the live stack'
 
 tls/ holds ca.key, which no container may ever see (k2gen.model.SECRET_FILES gives it no
 mount), so a service mounts tls/ca.pem or tls/trino.pem by name and never the directory;
-nothing mounts ${K2_SECRETS} itself, ca.key or canary/ (read on the host only). Read from
+nothing mounts ${K2_SECRETS} itself, ca.key or canary/ (read on the host only), nor api-keys/,
+the operator's plaintext API keys (deploy's live access one-shot mounts each by name). Read from
 docker-compose.yml's volumes, short and long syntax, so "never mount tls/" is enforced here
 rather than advised in a runbook.
 """
@@ -48,6 +49,8 @@ def secret_mount_problems(compose: dict) -> list[str]:
                 found.append(f"{name} mounts {under or 'tls'}: only {', '.join(sorted(NAMED_TLS))}, each by name")
             elif parts[0] == "canary" or "ca.key" in parts:
                 found.append(f"{name} mounts {under}, which no container reads")
+            elif parts[0] == "api-keys":  # plaintext keys: deploy's live access one-shot alone gets them, by name
+                found.append(f"{name} mounts {under}, the operator's API keys, which no service may hold")
     return found
 
 
@@ -62,6 +65,9 @@ def test_the_compose_file_mounts_no_secret_directory_it_should_not():
     ("${K2_SECRETS:-${HOME}/k2-secrets}:/run/k2-secrets:ro", "itself"),
     ("${HOME}/k2-secrets/tls:/run/k2-secrets/tls:ro", "tls"),
     ("${K2_SECRETS}/canary:/run/canary:ro", "canary"),
+    ("${K2_SECRETS:-${HOME}/k2-secrets}/api-keys:/run/k2-secrets/api-keys:ro", "api-keys"),
+    ("${K2_SECRETS}/api-keys/p.canary-full.key:/run/k2-secrets/api-keys/p.canary-full.key:ro", "api-keys"),
+    ({"type": "bind", "source": "${K2_SECRETS:-${HOME}/k2-secrets}", "target": "/run/k2-secrets"}, "itself"),
     ({"type": "bind", "source": "${K2_SECRETS:-${HOME}/k2-secrets}/tls", "target": "/run/k2-secrets/tls"}, "tls"),
 ])
 def test_each_forbidden_mount_is_named(volume, named):

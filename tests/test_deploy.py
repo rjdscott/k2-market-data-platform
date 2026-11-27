@@ -654,6 +654,23 @@ sys.exit(f"fake docker: no answer for {A}")
         if pending:
             assert any(x.startswith("SKIP access-verify LIVE=1") and "governance.access-canary" in x for x in lines)
 
+    def test_live_access_verify_mounts_each_operator_key_file_by_name_and_nothing_of_api(world: World,
+                                                                                          monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.undo()
+        r1 = world.release()
+        for f in ("api-keys/p.b.key", "api-keys/p.a.key", "api/keys.json", "api/p.old.key"):
+            (world.secrets / f).parent.mkdir(parents=True, exist_ok=True)
+            (world.secrets / f).write_text("fixture\n")
+        calls: list[list[str]] = []
+        monkeypatch.setattr(deploy, "run", lambda *a, **k: calls.append(list(a)) or subprocess.CompletedProcess(a, 0, "", ""))
+        deploy.access_live(world.ctx, r1, world.ctx.tmp / "access-live.json")
+        (c,) = calls
+        mounts = [c[i + 1] for i, x in enumerate(c) if x == "-v"]
+        # the runner reads K2_SECRETS=/run/k2-secrets, so its default <secrets>/api-keys is where the files land
+        assert c[c.index(f"{model.SECRETS_ENV}=/run/k2-secrets") - 1] == "-e"
+        assert [m for m in mounts if ":/run/k2-secrets/api" in m] == [f"{world.secrets}/api-keys/{n}:/run/k2-secrets/api-keys/{n}:ro"
+                                                     for n in ("p.a.key", "p.b.key")]
+
     GUARDED = ('SELECT "id", "note" FROM "g"."a__base"."e" FOR VERSION AS OF \'audited\' WHERE EXISTS (SELECT 1 FROM '
                '"g"."a__base"."e$refs" WHERE "name" = \'audited\' AND "type" = \'TAG\')')
     STORED = ('SELECT\n  "id"\n, "note"\nFROM\n  "g"."a__base"."e" FOR VERSION AS OF \'audited\'\nWHERE (EXISTS (SELECT 1\n'

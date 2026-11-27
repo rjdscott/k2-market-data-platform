@@ -12,13 +12,14 @@ password:  ## PRINCIPAL=<id> [ROTATE=1] [TO_FILE=1]: a 32-byte password printed 
 	  $$(test "$$ROTATE" = 1 && echo --rotate) $$(test "$$TO_FILE" = 1 && echo --to-file)
 
 .PHONY: api-key
-api-key:  ## PRINCIPAL=<id> [ROTATE=1]: a k2_ key printed once; its sha256 goes to ${K2_SECRETS}/api/keys.json, never the repository
-	@$(PRINCIPAL_SECRET) api-key --principal "$$PRINCIPAL" $$(test "$$ROTATE" = 1 && echo --rotate)
+api-key:  ## PRINCIPAL=<id> [ROTATE=1] [TO_FILE=1]: a k2_ key printed once, or with TO_FILE=1 the operator's ${K2_SECRETS}/api-keys/<id>.key for the access suite; its sha256 goes to ${K2_SECRETS}/api/keys.json, never the repository
+	@$(PRINCIPAL_SECRET) api-key --principal "$$PRINCIPAL" \
+	  $$(test "$$ROTATE" = 1 && echo --rotate) $$(test "$$TO_FILE" = 1 && echo --to-file)
 
 .PHONY: principal-remove
-principal-remove:  ## PRINCIPAL=<id> [FORCE=1]: drop a principal's line in ${K2_SECRETS}/trino/password.db, its keys in api/keys.json and its principals/<id>.password; FORCE=1 for one still declared
+principal-remove:  ## PRINCIPAL=<id> [FORCE=1]: drop a principal's line in ${K2_SECRETS}/trino/password.db, its keys in api/keys.json, its principals/<id>.password and its api-keys/<id>.key; FORCE=1 for one still declared
 	@$(PRINCIPAL_SECRET) remove --principal "$$PRINCIPAL" $$(test "$$FORCE" = 1 && echo --force)
 
 .PHONY: principals-status
-principals-status:  ## Which known principals have a password line, a password file and an API key under ${K2_SECRETS}, and which unknown ones still hold one (STALE): names only
+principals-status:  ## Which known principals have a password line, a password file, an API key and a key file under ${K2_SECRETS}, and which key file no longer matches keys.json or unknown principal still holds one (STALE): names only
 	@$(PRINCIPAL_SECRET) status
