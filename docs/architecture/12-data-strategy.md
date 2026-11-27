@@ -84,8 +84,10 @@ they hold nothing the lake cannot rebuild, and nothing in the lake reads them
 One table in a domain warehouse was history, not a mart: `dq.dbt_test_results`, where each
 domain's writer appended its dbt test results on every run. It was never rebuilt and no row was
 deleted ([ADR-046](../adr/ADR-046-governance-domain-and-quality-results.md)) until the retirement
-dropped it with the marts, after the backup. Which products exist, and who owns each:
-products/all.md.
+dropped it with the marts, after the backup. Which products exist, and who owns each: each product's ODPS document under
+`contracts/`, compiled into the catalog files of a release
+([chapter 21](21-releases-and-deploy.md)); the generated product pages under `docs/products/`
+left git on 2026-11-27.
 
 ## Serving: ClickHouse holds gold, indefinitely
 

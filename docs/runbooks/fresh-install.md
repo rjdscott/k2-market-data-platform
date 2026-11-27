@@ -10,6 +10,21 @@ of the unified platform plan. Use this for a first install, after a Docker wipe,
 release gate's manual twin. It does not cover upgrading a stack that already holds data, nor
 restoring from the host copy ([lake-backup-and-restore.md](./lake-backup-and-restore.md)).
 
+> **Not yet run end to end from an empty host.** Since 2026-11-27 the compose file is in release
+> shape ([ADR-058](../adr/ADR-058-deploy-sealed-releases-by-pointer-swap.md),
+> [chapter 21](../architecture/21-releases-and-deploy.md)): Trino reads its whole etc from a release
+> through `/k2/releases/pointers/trino/compiled/trino/etc` and serves HTTPS only, with password
+> logins under a local CA ([ADR-060](../adr/ADR-060-trino-logins-by-password-over-tls-under-a-local-ca.md));
+> `lake-init` reads the warehouses from that release's `compiled/lake/storage-plan.json`; Lakekeeper
+> is on the network `k2-catalog` only, with no host port
+> ([ADR-059](../adr/ADR-059-access-rules-compiled-default-deny-over-two-catalogs-per-domain.md) part 7).
+> So a fresh clone can no longer `docker compose up` straight away: it needs the release
+> variables in `.env`, the local CA, the service passwords, the catalog's network, a release and
+> a first deploy. The sequence below takes each of those lines from
+> [first-cutover-to-releases.md](./first-cutover-to-releases.md) and
+> [deploy-a-release.md](./deploy-a-release.md), which ran them on a rehearsal of a stack that was
+> already running; nobody has yet run them on a host with no stack. <!-- VERIFY: the whole command sequence from an empty host, zero images and volumes, to `make release-verify` and `make health` passing -->
+
 **Run every command from the repo root with `set -a && . ./.env && set +a` loaded.**
 
 | # | Failure | MTTR target | Measured |
@@ -35,9 +50,10 @@ restoring from the host copy ([lake-backup-and-restore.md](./lake-backup-and-res
   the host does not have fails the container at start with `invalid argument`. The compose
   default uses `-` and not `:-`, so an explicit empty value wins over `12-14`.
   See [`.env.example`](../../.env.example) for the full note.
-- **The published ports free on `127.0.0.1`**: 3000, 4040, 8080, 8081, 8088, 8090, 8123,
-  9000, 9001, 9002, 9090, 9092, 9363, 9644, 15432, 18080, 18181 and 19092 (the `ports:` of
-  `docker-compose.yml`). `K2_AIRFLOW_PORT` (8090) and `K2_TRINO_PORT` (8088) in `.env` move
+- **The published ports free on `127.0.0.1`**: 3000, 4040, 8080, 8081, 8090, 8123, 8443,
+  9000, 9001, 9002, 9090, 9092, 9093, 9363, 9644, 15432, 18080 and 19092 (the `ports:` of
+  `docker-compose.yml`; 8123, 9002 and 9363 only under `hot-gold`). Lakekeeper publishes none
+  since 2026-11-27. `K2_AIRFLOW_PORT` (8090) and `K2_TRINO_PORT` (8443, HTTPS) in `.env` move
   two of them; `K2_AIRFLOW_PORT` also moves the base URL Airflow's UI builds its links from,
   so change the variable, not the mapping alone.
 - **On Docker Desktop, a host with RAM to spare beyond the VM.** The VM grows to its whole
@@ -59,14 +75,38 @@ restoring from the host copy ([lake-backup-and-restore.md](./lake-backup-and-res
 ```bash
 git clone https://github.com/rjdscott/k2-market-data-platform.git
 cd k2-market-data-platform
+git checkout <tag>              # the approved release tag: deploy refuses a checkout whose emitter differs
 cp .env.example .env            # set every change-me value: openssl rand -hex 24 each;
                                 # LAKEKEEPER_ENCRYPTION_KEY: openssl rand -base64 32
+# .env, the release block: K2_COMPOSE_PROJECT=<the project compose gives this checkout: its
+#   directory name>, K2_HOME=<this checkout's absolute path>, K2_TRINO_PORT=8443,
+#   K2_TRINO_SHARED_SECRET=$(openssl rand -hex 32), K2_TRINO_S3_ACCESS_KEY and K2_TRINO_S3_SECRET_KEY
+#   (MinIO's root pair until phase 002's scoped keys)
 set -a && . ./.env && set +a
-make up                         # scripts/check-env.py, then docker compose up -d;
-                                # first run pulls the upstream images and builds 3
+python3 scripts/check-env.py    # what `make up` runs first: names each placeholder left, never its value
+# secrets, outside the checkout (docs/runbooks/tls-and-passwords.md)
+make tls
+for id in svc.runs svc.catalog svc.platform svc.api dbt_access_canary pub_access_canary; do
+  make password PRINCIPAL=$id TO_FILE=1; done
+# the catalog's network, labelled so compose adopts it
+P=$K2_COMPOSE_PROJECT
+docker network create --label com.docker.compose.project=$P --label com.docker.compose.network=k2-catalog ${P}_k2-catalog
+# the release, then the first deploy (deploy-a-release.md sections 1 to 4)
+make release TAG=<tag>          # prints the release id; the first run builds the local images from the tag
+make deploy RELEASE=<release id> PLAN=1
+make deploy RELEASE=<release id>
+make release-verify
 make health                     # every service healthy, every venue delivering to Redpanda in the last 2 min
 docker exec k2-redpanda rpk topic consume market.crypto.v3.trades.binance --num 1
 ```
+
+`make up` alone (`scripts/check-env.py`, then `docker compose up -d`) no longer brings up a
+fresh clone: compose stops on an unset `K2_TRINO_*` value, the releases root it mounts is never
+created by compose, and Trino and `lake-init` read through a pointer that only a deploy sets. A
+first deploy on a stack that is not yet running is the step least proven here: deploy's own
+first-deploy path expects the services to be running already from the checkout's compose
+(`scripts/deploy.py`). Stop at the first surprise and read
+[deploy-a-release.md](./deploy-a-release.md) sections 5 to 7.
 
 The v3 lake's own check, `lake-verify.sh`, retired with it: `make lake-verify` prints a SKIP line
 naming phase 004, where the new platform's product checks return.

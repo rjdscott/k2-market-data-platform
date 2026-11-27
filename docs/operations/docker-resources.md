@@ -167,7 +167,8 @@ Airflow limits are the plan's estimates until ADR-034's measured figures replace
   the same run), so read the 0.25 CPU / 256 MB limit as the number that matters: idle usage is
   well under 50 MiB.
 
-- **Trino costs 2.0 CPU / 5 GiB**, heap 2816M (`docker/trino/etc/jvm.config`), the other
+- **Trino costs 2.0 CPU / 5 GiB**, heap 2816M (`jvm.config` in the release's `compiled/trino/etc/`, written by
+  [`emit/trino_etc.py`](../../platform/k2gen/k2gen/emit/trino_etc.py)), the other
   2.25 GiB of the limit for metaspace, code cache, thread stacks and direct buffers, which
   `jvm.config` does not cap. 4 GiB until 2026-11-26: after the dbt marts' first builds the
   cgroup's `anon` was 4,072,116,224 bytes of 4,294,967,296 (`docker exec k2-trino cat
