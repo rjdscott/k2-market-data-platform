@@ -611,3 +611,231 @@ def test_a_spool_file_is_never_overwritten(tmp_path):
     with pytest.raises(FileExistsError):
         F.write_new(tmp_path / "audits.json", "second")
     assert (tmp_path / "audits.json").read_text() == "first" and sorted(p.name for p in tmp_path.iterdir()) == ["audits.json"]
+
+
+# ── the public-api kind: pages, every request under the same guard ────────
+
+API = f"https://{HOST}/0/public/Pairs"
+JSON_PARSER = "import json\ndef parse(data):\n    return [{'pair': p} for p in json.loads(data)['result']]\n"
+
+
+def api(tmp_path, **connector):
+    """The release with a public-api connector in place of the https-file one."""
+    release(tmp_path, parser=JSON_PARSER)
+    path = tmp_path / "releases" / "r1" / "compiled" / "products" / "fx-test.rates" / "pipeline.json"
+    pipeline = json.loads(path.read_text())
+    pipeline["connector"] = {"kind": "public-api", "url": API, "allowHosts": [HOST, MIRROR], "pagination": "none",
+                             "minIntervalS": 2, "records": "result", "volatileFields": ["serverTime", "updatedAt"],
+                             "parser": "rates", **connector}
+    path.write_text(json.dumps(pipeline))
+
+
+def answer(result, link=None, server_time=1000):
+    """A synthetic response in the publisher's general shape: an error list, a server time, the result."""
+    body = json.dumps({"error": [], "serverTime": server_time, "result": result}).encode()
+    return ok(body, {"Content-Type": "application/json", **({"Link": link} if link else {})})
+
+
+def pages_of(tmp_path, run_id=RUN):
+    return json.loads((spool(tmp_path, run_id) / "fetch.json").read_text())["pages"]
+
+
+def rows_of(tmp_path, run_id=RUN):
+    return [json.loads(line) for line in (spool(tmp_path, run_id) / "rows.jsonl").read_text().splitlines()]
+
+
+PAIRS = {"AAAZBBB": {"altname": "AAABBB", "updatedAt": 1}, "CCCZBBB": {"altname": "CCCBBB", "updatedAt": 1}}
+
+
+@pytest.fixture
+def clock(monkeypatch):
+    """A fake clock only sleep() moves: no test here sleeps."""
+    now = [0.0]
+    monkeypatch.setattr(F, "monotonic", lambda: now[0])
+    monkeypatch.setattr(F, "sleep", lambda s: now.__setitem__(0, now[0] + s))
+    return now
+
+
+@pytest.fixture
+def web_api(web, tmp_path, clock):
+    api(tmp_path)
+    web.pages[API] = answer(PAIRS, link=f'<{API}?cursor=2>; rel="next"')  # pagination none: never followed
+    return web
+
+
+def test_one_page_spools_raw_1_and_a_record_listing_it(web_api, tmp_path, capsys):
+    assert run() == 0
+    entry = spool(tmp_path)
+    assert sorted(p.name for p in entry.iterdir()) == ["audits.json", "fetch.json", "raw.1.json", "rows.jsonl"]
+    body = web_api.pages[API][1]
+    assert (entry / "raw.1.json").read_bytes() == body and web_api.asked == [API]
+    record = json.loads((entry / "fetch.json").read_text())
+    (page,) = record["pages"]
+    assert record == {"fetchedAt": page["fetchedAt"], "pages": [page]}
+    assert {k: page[k] for k in ("page", "url", "finalUrl", "sha256", "bytes", "httpStatus", "address", "raw")} == \
+        {"page": 1, "url": API, "finalUrl": API, "sha256": hashlib.sha256(body).hexdigest(), "bytes": len(body),
+         "httpStatus": 200, "address": PUBLIC, "raw": "raw.1.json"}
+    assert page["contentSha256"] == F.content_sha256(body, {"serverTime", "updatedAt"})
+    assert rows_of(tmp_path) == [{"pair": "AAAZBBB"}, {"pair": "CCCZBBB"}]
+    assert "fetch: page 1," in capsys.readouterr().out
+
+
+def test_next_links_are_followed_and_each_is_resolved_and_checked_again(web, tmp_path, clock, capsys):
+    api(tmp_path, pagination="next-link", maxPages=3)
+    second, third = f"{API}?cursor=b", f"https://{MIRROR}/pairs?cursor=c"
+    web.pages[API] = answer(["P1"], link='</0/public/Pairs?cursor=b>; rel="next"')  # relative
+    web.pages[second] = answer(["P2"], link=f'<{API}?cursor=a>; rel="prev", <{third}>; rel="next"')
+    web.pages[third] = answer(["P3"])
+    assert run() == 0
+    assert web.asked == [API, second, third]
+    assert web.lookups == [HOST, HOST, MIRROR]  # every page through check(), none reusing an answer
+    assert [c[0] for c in web.connects] == [PUBLIC, PUBLIC, PUBLIC_2]
+    assert [p["raw"] for p in pages_of(tmp_path)] == ["raw.1.json", "raw.2.json", "raw.3.json"]
+    for n, url in enumerate([API, second, third], 1):
+        assert (spool(tmp_path) / f"raw.{n}.json").read_bytes() == web.pages[url][1]
+    assert rows_of(tmp_path) == [{"pair": "P1"}, {"pair": "P2"}, {"pair": "P3"}]
+    out = capsys.readouterr().out
+    assert out.count("fetch: GET ") == 3 and "cursor" not in out  # a log line per request, never the query
+
+
+def test_page_pagination_counts_up_until_a_page_holds_no_records(web, tmp_path, clock):
+    api(tmp_path, pagination="page", maxPages=5, params={"day": "{{ds}}"})
+    urls = [f"{API}?day=2026-11-27&page={n}" for n in (1, 2, 3)]
+    for url, result in zip(urls, (["P1A", "P1B"], ["P2A"], [])):
+        web.pages[url] = answer(result)
+    assert run() == 0
+    assert web.asked == urls  # the empty page ends it, and is a page of the run
+    assert [p["raw"] for p in pages_of(tmp_path)] == ["raw.1.json", "raw.2.json", "raw.3.json"]
+    assert rows_of(tmp_path) == [{"pair": "P1A"}, {"pair": "P1B"}, {"pair": "P2A"}]
+
+
+@pytest.mark.parametrize("most, code", [(2, F.EXIT_ERROR), (3, F.EXIT_OK)])
+@pytest.mark.parametrize("mode", ["next-link", "page"])
+def test_more_pages_than_max_pages_fail_the_run_never_truncate_it(web, tmp_path, clock, capsys, mode, most, code):
+    api(tmp_path, pagination=mode, maxPages=most)
+    web.pages[API] = web.pages[f"{API}?page=1"] = answer(["P1"], link=f'<{API}?page=2>; rel="next"')
+    web.pages[f"{API}?page=2"] = answer(["P2"], link=f'<{API}?page=3>; rel="next"')
+    web.pages[f"{API}?page=3"] = answer([])
+    assert run() == code
+    assert len(web.asked) == min(most, 3)  # page 3 never asked for when maxPages is 2
+    if code:
+        assert nothing_left(tmp_path) and "more pages than maxPages, 2" in capsys.readouterr().err
+
+
+def test_min_interval_s_passes_between_every_two_requests(web, tmp_path, clock, monkeypatch):
+    api(tmp_path, pagination="page", maxPages=4, minIntervalS=7)
+    for n, result in ((1, ["P1"]), (2, ["P2"]), (3, [])):
+        web.pages[f"{API}?page={n}"] = answer(result)
+    opened = []
+    monkeypatch.setattr(socket, "create_connection",
+                        lambda *a, **k: (opened.append(clock[0]), web.create_connection(*a, **k))[1])
+    assert run() == 0
+    assert len(opened) == 3 and all(b - a >= 7 for a, b in zip(opened, opened[1:])), opened
+
+
+@pytest.mark.parametrize("link", ["https://other.example.invalid/p2", f"http://{MIRROR}/p2", f"https://{MIRROR}:8443/p2",
+                                  f"https://user:secret@{MIRROR}/p2"])
+def test_a_next_link_off_the_rules_is_refused(web, tmp_path, clock, capsys, link):
+    api(tmp_path, pagination="next-link", maxPages=5)
+    web.pages[API] = answer(["P1"], link=f'<{link}>; rel="next"')
+    assert run() == F.EXIT_REFUSED
+    assert web.asked == [API] and web.lookups == [HOST] and nothing_left(tmp_path)
+    assert "secret" not in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("address", ["10.0.0.7", "169.254.169.254", "::ffff:127.0.0.1", "fd00::7"])
+def test_a_next_link_to_an_allowed_host_on_a_non_public_address_is_refused(web, tmp_path, clock, address):
+    api(tmp_path, pagination="next-link", maxPages=5)
+    web.host(MIRROR, address)
+    web.pages[API] = answer(["P1"], link=f'<https://{MIRROR}/p2>; rel="next"')
+    assert run() == F.EXIT_REFUSED
+    assert [c[0] for c in web.connects] == [PUBLIC] and nothing_left(tmp_path)
+
+
+def test_a_next_link_whose_host_now_answers_a_private_address_is_refused(web, tmp_path, clock):
+    api(tmp_path, pagination="next-link", maxPages=5)
+    web.host(HOST, PUBLIC, "10.0.0.7")  # public for page 1, private for the lookup of page 2
+    web.pages[API] = answer(["P1"], link=f'<{API}?cursor=2>; rel="next"')
+    assert run() == F.EXIT_REFUSED
+    assert [c[0] for c in web.connects] == [PUBLIC] and nothing_left(tmp_path)
+
+
+def test_a_change_only_in_volatile_fields_lands_nothing(web_api, tmp_path):
+    assert run("run-a") == 0
+    web_api.pages[API] = answer({"CCCZBBB": {"updatedAt": 9, "altname": "CCCBBB"},
+                                 "AAAZBBB": {"altname": "AAABBB", "updatedAt": 2}}, server_time=2000)
+    assert run("run-b") == F.EXIT_UNCHANGED
+    assert not spool(tmp_path, "run-b").exists()
+
+
+def test_a_real_change_lands_the_page_whole_volatile_fields_included(web_api, tmp_path):
+    assert run("run-a") == 0
+    web_api.pages[API] = answer({**PAIRS, "AAAZBBB": {"altname": "AAABBX", "updatedAt": 2}}, server_time=2000)
+    assert run("run-b") == 0
+    raw = (spool(tmp_path, "run-b") / "raw.1.json").read_bytes()
+    assert raw == web_api.pages[API][1] and b'"serverTime": 2000' in raw and b'"updatedAt": 2' in raw
+
+
+def test_the_change_test_drops_only_volatile_keys_and_keeps_every_digit():
+    v = {"serverTime"}
+    assert F.content_sha256(b'{"a": 1.10, "serverTime": 1}', v) == F.content_sha256(b'{"serverTime":2,"a":1.10}', v)
+    assert F.content_sha256(b'{"a": [{"serverTime": 1, "b": 2}]}', v) == F.content_sha256(b'{"a": [{"b": 2}]}', v)
+    assert F.content_sha256(b'{"a": 0.30000000000000001}', v) != F.content_sha256(b'{"a": 0.3}', v)  # one double
+    assert F.content_sha256(b'{"a": 1}', v) != F.content_sha256(b'{"a": "1"}', v)
+    assert F.content_sha256(b"<busy/>", v) == hashlib.sha256(b"<busy/>").hexdigest()  # not JSON: every byte counts
+
+
+def test_only_the_pages_that_changed_land_and_every_page_is_listed(web, tmp_path, clock):
+    api(tmp_path, pagination="page", maxPages=4)
+    for n, result in ((1, ["P1"]), (2, ["P2"]), (3, [])):
+        web.pages[f"{API}?page={n}"] = answer(result)
+    assert run("run-a") == 0
+    web.pages[f"{API}?page=1"] = answer(["P1"], server_time=2000)  # volatile only
+    web.pages[f"{API}?page=2"] = answer(["P2", "P2B"])
+    assert run("run-b") == 0
+    entry = spool(tmp_path, "run-b")
+    assert sorted(p.name for p in entry.iterdir()) == ["audits.json", "fetch.json", "raw.2.json", "rows.jsonl"]
+    assert [p["raw"] for p in pages_of(tmp_path, "run-b")] == [None, "raw.2.json", None]
+    assert rows_of(tmp_path, "run-b") == [{"pair": "P2"}, {"pair": "P2B"}]
+
+
+def test_a_run_that_only_lost_its_last_pages_keeps_its_last_page(web, tmp_path, clock):
+    api(tmp_path, pagination="next-link", maxPages=3)
+    web.pages[API] = answer(["P1"], link=f'<{API}?cursor=2>; rel="next"')
+    web.pages[f"{API}?cursor=2"] = answer(["P2"])
+    assert run("run-a") == 0
+    web.pages[API] = answer(["P1"])  # the same body, no next page
+    assert run("run-b") == 0
+    assert [p["raw"] for p in pages_of(tmp_path, "run-b")] == ["raw.1.json"]
+
+
+def test_an_api_page_short_of_its_content_length_is_a_task_error(web, tmp_path, clock, capsys):
+    api(tmp_path, pagination="next-link", maxPages=3)
+    web.pages[API] = answer(["P1"], link=f'<{API}?cursor=2>; rel="next"')
+    body = json.dumps({"error": [], "result": ["P2"]}).encode()
+    web.pages[f"{API}?cursor=2"] = ok(body, {"Content-Length": len(body) + 10})
+    assert run() == F.EXIT_ERROR
+    assert nothing_left(tmp_path) and "short of its Content-Length" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("spare, code", [(0, F.EXIT_OK), (-1, F.EXIT_REFUSED)])
+def test_the_pages_of_a_run_share_one_size_cap(web, tmp_path, clock, monkeypatch, spare, code):
+    api(tmp_path, pagination="next-link", maxPages=3)
+    web.pages[API] = answer(["P1"], link=f'<{API}?cursor=2>; rel="next"')
+    web.pages[f"{API}?cursor=2"] = answer(["P2"])
+    monkeypatch.setattr(F, "MAX_BYTES", len(web.pages[API][1]) + len(web.pages[f"{API}?cursor=2"][1]) + spare)
+    assert run() == code
+    assert nothing_left(tmp_path) == bool(code)
+
+
+@pytest.mark.parametrize("body", [b'{"error": ["EService:Unavailable"]}', b"[1, 2]", b"<html>busy</html>"])
+def test_a_page_without_its_records_field_fails_page_pagination(web, tmp_path, clock, body):
+    api(tmp_path, pagination="page", maxPages=3)
+    web.pages[f"{API}?page=1"] = ok(body)
+    assert run() == F.EXIT_ERROR
+    assert nothing_left(tmp_path)
+
+
+def test_an_auth_header_is_refused_not_ignored(web, tmp_path, clock):
+    api(tmp_path, authHeaderEnv="K2_SOME_TOKEN")
+    assert run() == F.EXIT_ERROR and web.connects == []

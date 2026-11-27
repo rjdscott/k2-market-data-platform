@@ -1,5 +1,5 @@
-"""The fetch container's program: one https-file fetch into the run's spool, then its parse
-(ADR-036 parts 2 and 3; docs/development/phase-001-interfaces.md, "The fetch container").
+"""The fetch container's program: one https-file or public-api fetch into the run's spool, then
+its parse (ADR-036 parts 2 and 3; docs/development/phase-001-interfaces.md, "The fetch container").
 
     fetch.py --release <id> --product <domain>.<product> --run-id <dagId>/<runId> --ds <YYYY-MM-DD>
 
@@ -8,6 +8,19 @@ the product's connector from the release's compiled/products/<product>/pipeline.
 {{ds}} in its url, and downloads the file under the guard below into /spool/<dagId>/<runId>/ as
 raw.<format> and fetch.json. Only then does it load the product's registered parser,
 platform/domains/<domain>/parsers/<parser>.py in the release, and write its rows to rows.jsonl.
+
+A public-api connector fetches pages instead (fetch_api()): its url with {{ds}} rendered and its
+params added, then by pagination `none` (that one page), `next-link` (the rel="next" target of each
+page's Link header) or `page` (params plus page=1, 2, ... until a page's `records` field is empty),
+at most maxPages pages, a page beyond that failing the run, and minIntervalS seconds after each page
+before the next is asked for. Every request is download()'s, under the guard below, and the run's
+pages share the 64 MiB cap. The spool then holds raw.<n>.json, the bytes as they arrived, for each
+page n (from 1) whose content changed from page n of this DAG's newest earlier fetch, and fetch.json,
+{"fetchedAt", "pages": [{"page", <the fetch record>, "contentSha256", "raw": "raw.<n>.json" | null}]},
+every page listed. contentSha256 is the page's canonical JSON with every volatileFields key dropped,
+used for that comparison alone: the bytes written keep every field. A run in which no page changed
+is unchanged (exit 10); one that only lost trailing pages keeps its last page. The parser runs on
+each kept page in order, and rows.jsonl holds their rows.
 
 Then it runs the parser's audits, the bronze tables' `audits` in pipeline.json (ODCS custom checks
 with engine k2-connector): product code, so they run here and never in Spark beside a storage key.
@@ -23,12 +36,14 @@ the exit code, so the batch still lands and fails at bronze.
 
 Exits (phase-001-interfaces.md, the fetch container's table):
   0   fetched and parsed: raw.<ext>, fetch.json, rows.jsonl, audits.json
-  10  unchanged: the sha256 equals that of this DAG's newest earlier fetch.json; nothing new
+  10  unchanged: the sha256 equals that of this DAG's newest earlier fetch.json, or no API page
+      changed but for its volatileFields; nothing new
   20  refused (ADR-036 part 3: scheme, host, redirect, address, size); the message names
       scheme and host only; nothing spooled
   30  parse failed: raw.<ext> and fetch.json kept, no rows.jsonl and no audits.json
   1   anything else is a task error: an unreachable publisher, an HTTP error, the deadline, a
-      spool entry that already exists (never overwritten), a bad argument
+      spool entry that already exists (never overwritten), a bad argument, more pages than
+      maxPages, a `page` page with no records field
 
 The guard, on the source URL and on each of at most five redirects, followed by hand: https on
 port 443, no userinfo, no control character; the host, IDNA-normalised, exactly one of
@@ -56,8 +71,9 @@ import sys
 import tempfile
 import urllib.parse
 from datetime import UTC, date, datetime
+from decimal import Decimal
 from pathlib import Path
-from time import monotonic
+from time import monotonic, sleep
 
 RELEASES = Path("/k2/releases")  # k2gen.model.RELEASES_MOUNT, read-only
 SPOOL = Path("/spool")
@@ -79,6 +95,8 @@ PRODUCT_ID = re.compile(r"[a-z][a-z0-9]*(-[a-z0-9]+)*\.[a-z][a-z0-9]*(-[a-z0-9]+
 RUN_NAME = re.compile(r"[A-Za-z0-9_~:+-][A-Za-z0-9_.~:+-]*")  # Airflow's run id characters; never . or ..
 CONTROL = re.compile(r"[\x00-\x20\x7f]")
 PROXY_VARS = {"http_proxy", "https_proxy", "all_proxy", "no_proxy"}
+PAGINATION = {"none", "next-link", "page"}
+LINK = re.compile(r"<([^>]*)>([^<]*)")  # an RFC 8288 Link header's target and its parameters
 
 
 class Refused(Exception):
@@ -210,7 +228,8 @@ def download(url: str, allow: set[str], cap: int, out: Path) -> dict:
             record = {"url": first, "finalUrl": url, "sha256": digest.hexdigest(), "bytes": size,
                       "fetchedAt": datetime.now(UTC).isoformat(timespec="microseconds"),
                       "httpStatus": resp.status, "address": conn.address}
-            for header, key in (("Content-Type", "contentType"), ("ETag", "etag"), ("Last-Modified", "lastModified")):
+            for header, key in (("Content-Type", "contentType"), ("ETag", "etag"), ("Last-Modified", "lastModified"),
+                                ("Link", "link")):
                 if (value := resp.getheader(header)) is not None:
                     record[key] = value
             return record
@@ -221,10 +240,102 @@ def download(url: str, allow: set[str], cap: int, out: Path) -> dict:
     raise Refused(f"{where(url)}: more than {MAX_REDIRECTS} redirects")
 
 
-def newest_sha256(dag_dir: Path) -> str | None:
-    """The sha256 of this DAG's newest earlier fetch, by fetchedAt."""
+def newest(dag_dir: Path) -> dict:
+    """This DAG's newest earlier fetch record, by fetchedAt; {} if there is none."""
     records = [json.loads(p.read_text()) for p in dag_dir.glob("*/fetch.json") if not p.parent.name.startswith(".")]
-    return max(records, key=lambda r: r["fetchedAt"])["sha256"] if records else None
+    return max(records, key=lambda r: r["fetchedAt"]) if records else {}
+
+
+def newest_sha256(dag_dir: Path) -> str | None:
+    """The sha256 of this DAG's newest earlier https-file fetch (scripts/lib/run_path_probe.py too)."""
+    return newest(dag_dir).get("sha256")
+
+
+def strip(value, names: set[str]):
+    """`value` with every object key in `names` dropped, at any depth."""
+    # ponytail: any depth, so a volatile name also hides a same-named field elsewhere; dotted paths
+    # in volatileFields when a source needs one name kept in one place and ignored in another
+    if isinstance(value, dict):
+        return {k: strip(v, names) for k, v in value.items() if k not in names}
+    if isinstance(value, list):
+        return [strip(v, names) for v in value]
+    return value
+
+
+def content_sha256(data: bytes, volatile: set[str]) -> str:
+    """A page's fingerprint for the change test, never for what is written: the sha256 of its JSON
+    without the volatile keys, canonical (sorted keys, numbers as written, so 1.10 is not 1.1);
+    of its bytes as they are if they are not JSON."""
+    try:
+        value = strip(json.loads(data, parse_float=Decimal), volatile)
+        data = json.dumps(value, sort_keys=True, separators=(",", ":"), default=repr).encode()
+    except (ValueError, RecursionError):
+        pass
+    return hashlib.sha256(data).hexdigest()
+
+
+def next_link(header: str | None) -> str | None:
+    """The rel="next" target of a Link header, as written; None if it names none."""
+    for target, params in LINK.findall(header or ""):
+        rel = re.search(r'\brel\s*=\s*"?([^";,]*)', params, re.IGNORECASE)
+        if rel and "next" in rel.group(1).lower().split():
+            return target
+    return None
+
+
+def has_records(data: bytes, field: str) -> bool:
+    """Whether a page holds records in `field`; `page` pagination stops at the first that holds none."""
+    try:
+        return bool(json.loads(data)[field])
+    except (ValueError, RecursionError, LookupError, TypeError):
+        raise Failed(f"a page is not a JSON object with field {field!r}") from None
+
+
+def fetch_api(connector: dict, ds: str, tmp: Path, before: list[dict]) -> dict:
+    """Fetches a public-api connector's pages into `tmp`, every request through download(), and
+    keeps raw.<n>.json only where page n's content changed from page n of `before`, the pages of
+    this DAG's newest earlier fetch; the fetch record, every page listed, raw null if not kept."""
+    mode, most = connector["pagination"], connector.get("maxPages", 1)
+    if mode not in PAGINATION:
+        raise Failed(f"pagination {mode!r} is not one of {sorted(PAGINATION)}")
+    first = connector["url"].replace("{{ds}}", ds)
+    query = urllib.parse.urlencode({k: v.replace("{{ds}}", ds) for k, v in connector.get("params", {}).items()})
+
+    def numbered(n: int) -> str:
+        q = "&".join(filter(None, (query, f"page={n}" if mode == "page" else "")))
+        return f"{first}{'&' if '?' in first else '?'}{q}" if q else first
+
+    allow, volatile = set(connector["allowHosts"]), set(connector.get("volatileFields", []))
+    pages: list[dict] = []
+    url: str | None = numbered(1)
+    while url:
+        n = len(pages) + 1
+        if n > most:  # a failure, never a silent truncation
+            raise Failed(f"{where(first)}: more pages than maxPages, {most}")
+        if pages:
+            # ponytail: the whole interval after a page ends, so two page requests are always that far
+            # apart; a redirect within one page's request follows at once
+            sleep(connector["minIntervalS"])
+        out = tmp / f"raw.{n}.json"
+        record = download(url, allow, MAX_BYTES - sum(p["bytes"] for p in pages), out)
+        data = out.read_bytes()
+        pages.append({"page": n, **record, "contentSha256": content_sha256(data, volatile)})
+        print(f"fetch: page {n}, {record['bytes']} bytes, sha256 {record['sha256']}", flush=True)
+        if mode == "next-link" and (target := next_link(record.get("link"))):
+            url = urllib.parse.urljoin(record["finalUrl"], target)
+        elif mode == "page" and has_records(data, connector["records"]):
+            url = numbered(n + 1)
+        else:
+            url = None
+    keys, was = [p["contentSha256"] for p in pages], [p.get("contentSha256") for p in before]
+    keep = {i for i, key in enumerate(keys) if was[i:i + 1] != [key]}
+    if not keep and keys != was:  # only trailing pages are gone: the last page carries that change
+        keep = {len(keys) - 1}
+    for i, page in enumerate(pages):
+        page["raw"] = f"raw.{page['page']}.json" if i in keep else None
+        if i not in keep:
+            (tmp / f"raw.{page['page']}.json").unlink()
+    return {"fetchedAt": pages[0]["fetchedAt"], "pages": pages}
 
 
 def write_new(path: Path, text: str) -> None:
@@ -254,16 +365,21 @@ def audit(module, name: str, lines: str) -> dict:
     return {"name": name, "passed": not failures, "failures": len(failures), "detail": detail}
 
 
-def parse(module_path: Path, entry: Path, raw: str, audits: list[str]) -> int:
-    """Runs the registered parser over the spooled bytes and writes rows.jsonl, then its
-    declared audits and audits.json; exit 0 or 30."""
+def parse(module_path: Path, entry: Path, raws: str | list[str], audits: list[str]) -> int:
+    """Runs the registered parser over each spooled file in order and writes their rows to
+    rows.jsonl, then its declared audits and audits.json; exit 0 or 30."""
+    if isinstance(raws, str):  # one file's name, as scripts/lib/run_path_probe.py passes it
+        raws = [raws]
     try:
         spec = importlib.util.spec_from_file_location("k2_parser", module_path)
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
-        rows = module.parse((entry / raw).read_bytes())
-        if not isinstance(rows, list) or not all(isinstance(r, dict) for r in rows):
-            raise TypeError("parse() must return a list of dicts")
+        rows = []
+        for raw in raws:
+            got = module.parse((entry / raw).read_bytes())
+            if not isinstance(got, list) or not all(isinstance(r, dict) for r in got):
+                raise TypeError("parse() must return a list of dicts")
+            rows += got
         lines = "".join(json.dumps(r, ensure_ascii=False, allow_nan=False) + "\n" for r in rows)
     except (Exception, SystemExit) as e:  # a parser's sys.exit(0) is a failure too, never exit 0
         print(f"fetch: parse failed, the bytes are kept: {type(e).__name__}: {e}", file=sys.stderr)
@@ -294,21 +410,33 @@ def main(argv: list[str] | None = None) -> int:
     root = RELEASES / a.release
     pipeline = json.loads((root / "compiled" / "products" / a.product / "pipeline.json").read_text())
     connector = pipeline.get("connector") or {}
-    if connector.get("kind") != "https-file" or dag_id != pipeline["dagId"]:
-        print(f"fetch failed: {a.product} has no https-file connector, or the run is not of DAG "
-              f"{pipeline['dagId']}", file=sys.stderr)
+    kind = connector.get("kind")
+    # authHeaderEnv is refused, not ignored: this container holds no secret
+    if kind not in ("https-file", "public-api") or "authHeaderEnv" in connector or dag_id != pipeline["dagId"]:
+        print(f"fetch failed: {a.product} has no https-file or public-api connector without authHeaderEnv, "
+              f"or the run is not of DAG {pipeline['dagId']}", file=sys.stderr)
         return EXIT_ERROR
-    raw, dag_dir = f"raw.{connector['format']}", SPOOL / dag_id
+    dag_dir = SPOOL / dag_id
     entry = dag_dir / run
     dag_dir.mkdir(parents=True, exist_ok=True)
     tmp = Path(tempfile.mkdtemp(prefix=".fetch-", dir=dag_dir))  # same filesystem, so the rename is atomic
     try:
         tmp.chmod(0o755)  # mkdtemp's 0700 would hide the entry from the Spark task's user
-        record = download(connector["url"].replace("{{ds}}", a.ds), set(connector["allowHosts"]),
-                          min(connector.get("maxBytes", MAX_BYTES), MAX_BYTES), tmp / raw)
-        if record["sha256"] == newest_sha256(dag_dir):
-            print(f"fetch: unchanged, sha256 {record['sha256']}")
-            return EXIT_UNCHANGED
+        if kind == "public-api":
+            record = fetch_api(connector, a.ds, tmp, newest(dag_dir).get("pages", []))
+            raws = [p["raw"] for p in record["pages"] if p["raw"]]
+            done = f"{', '.join(raws)} of {len(record['pages'])} pages"
+            if not raws:
+                print(f"fetch: unchanged, {len(record['pages'])} pages as before but for their volatileFields")
+                return EXIT_UNCHANGED
+        else:
+            raws = [f"raw.{connector['format']}"]
+            record = download(connector["url"].replace("{{ds}}", a.ds), set(connector["allowHosts"]),
+                              min(connector.get("maxBytes", MAX_BYTES), MAX_BYTES), tmp / raws[0])
+            done = f"{record['bytes']} bytes, sha256 {record['sha256']}"
+            if record["sha256"] == newest_sha256(dag_dir):
+                print(f"fetch: unchanged, sha256 {record['sha256']}")
+                return EXIT_UNCHANGED
         (tmp / "fetch.json").write_text(json.dumps(record, indent=1) + "\n")
         tmp.rename(entry)  # raw and record appear together; a non-empty entry refuses the rename
     except Refused as e:
@@ -319,9 +447,9 @@ def main(argv: list[str] | None = None) -> int:
         return EXIT_ERROR
     finally:
         shutil.rmtree(tmp, ignore_errors=True)  # gone already once renamed
-    print(f"fetch: spooled {record['bytes']} bytes, sha256 {record['sha256']}")
+    print(f"fetch: spooled {done}")
     audits = list(dict.fromkeys(a for b in pipeline.get("bronze", []) for a in b["audits"]))
-    return parse(root / PARSER.format(domain=pipeline["domain"], parser=connector["parser"]), entry, raw, audits)
+    return parse(root / PARSER.format(domain=pipeline["domain"], parser=connector["parser"]), entry, raws, audits)
 
 
 if __name__ == "__main__":
