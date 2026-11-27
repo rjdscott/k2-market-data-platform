@@ -12,19 +12,42 @@ import datetime
 import decimal
 import re
 import xml.etree.ElementTree as ET
+import xml.parsers.expat
 
 NS = "{http://www.ecb.int/vocabulary/2002-08-01/eurofxref}"
 ENVELOPE = "{http://www.gesmes.org/xml/2002-08-01}Envelope"
 CURRENCY = re.compile(r"[A-Z]{3}")
 RATE = re.compile(r"-?[0-9]+(\.[0-9]+)?")  # plain decimal; a negative rate is the audit's to catch
 
+# Untrusted bytes from the network, made safe for expat. Duplicated in each parser by design:
+# fetch loads a parser by its file path, so a parser cannot import a sibling module.
+PROLOG = re.compile(r"""<\?xml\s[^>]*?\bencoding\s*=\s*(["'])(.*?)\1""")
+
+
+def _refused(*_) -> None:
+    raise ValueError("DOCTYPE or ENTITY declaration refused")
+
+
+def _text(raw: bytes) -> str:
+    """The document as text: UTF-8 (a UTF-8 BOM allowed) declaring no other encoding, with no
+    DOCTYPE and no entity declaration, as expat itself reports them on this same text. The caller
+    parses this text, never the bytes, so expat cannot switch to an encoding these checks did not read."""
+    text = raw.decode("utf-8-sig")  # strict: UTF-16 or UTF-32 with a BOM, Latin-1 and the rest raise
+    if "\x00" in text:
+        raise ValueError("a NUL character: not UTF-8 (UTF-16 without a BOM?)")
+    if (m := PROLOG.match(text)) and m[2].lower() not in ("utf-8", "us-ascii", "ascii"):
+        raise ValueError(f"declared encoding {m[2]!r} refused: UTF-8 only")
+    check = xml.parsers.expat.ParserCreate()  # ElementTree's C parser does not expose its expat handlers
+    check.StartDoctypeDeclHandler = check.EntityDeclHandler = _refused
+    try:
+        check.Parse(text, True)  # a str is parsed as UTF-8, whatever the prolog says
+    except xml.parsers.expat.ExpatError as e:
+        raise ValueError(f"not well-formed XML: {e}") from None
+    return text
+
 
 def parse(raw: bytes) -> list[dict]:
-    # bytes come from the network: refuse DTDs and entities before any parse
-    head = raw.upper()
-    if b"<!DOCTYPE" in head or b"<!ENTITY" in head:
-        raise ValueError("DOCTYPE or ENTITY declaration refused")
-    root = ET.fromstring(raw)
+    root = ET.fromstring(_text(raw))
     if root.tag != ENVELOPE:
         raise ValueError(f"unexpected root {root.tag}")
     outer = root.findall(f"{NS}Cube")

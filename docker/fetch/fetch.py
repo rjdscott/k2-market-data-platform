@@ -144,7 +144,8 @@ class Pinned(http.client.HTTPSConnection):
 
     def __init__(self, host: str, addresses: list[str]):
         super().__init__(host, 443, timeout=READ_TIMEOUT_S, context=TLS)
-        self.addresses, self.address = addresses, None
+        # tls: the socket itself, kept because getresponse() drops self.sock on a closing response
+        self.addresses, self.address, self.tls = addresses, None, None
 
     def connect(self) -> None:
         error: OSError = OSError("no address")
@@ -156,7 +157,7 @@ class Pinned(http.client.HTTPSConnection):
                 continue
             sock.settimeout(READ_TIMEOUT_S)
             self.address = address
-            self.sock = TLS.wrap_socket(sock, server_hostname=self.host)
+            self.sock = self.tls = TLS.wrap_socket(sock, server_hostname=self.host)
             return
         raise error
 
@@ -186,12 +187,17 @@ def download(url: str, allow: set[str], cap: int, out: Path) -> dict:
                 raise Refused(f"{where(url)}: Content-Length over {cap} bytes")
             digest, size = hashlib.sha256(), 0
             with out.open("xb") as f:
-                while chunk := resp.read(min(CHUNK, cap + 1 - size)):
+                while True:
+                    # read1: what has arrived, one recv at most, under a timeout cut to the time
+                    # left, so a host trickling bytes cannot hold a read past the deadline
+                    if (left := deadline - monotonic()) <= 0:
+                        raise Failed(f"{where(url)}: past the {DEADLINE_S} s deadline")
+                    conn.tls.settimeout(min(READ_TIMEOUT_S, left))
+                    if not (chunk := resp.read1(min(CHUNK, cap + 1 - size))):
+                        break
                     size += len(chunk)
                     if size > cap:
                         raise Refused(f"{where(url)}: more than {cap} bytes")
-                    if monotonic() > deadline:
-                        raise Failed(f"{where(url)}: past the {DEADLINE_S} s deadline")
                     digest.update(chunk)
                     f.write(chunk)
             record = {"url": first, "finalUrl": url, "sha256": digest.hexdigest(), "bytes": size,

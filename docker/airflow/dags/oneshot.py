@@ -19,10 +19,18 @@ in the logged command line.
 
 The scheduler's own environment gives the host side of each mount and the network prefix:
 `K2_RELEASES` and `K2_SECRETS` are host paths (the daemon resolves a bind source on the host, not in
-this container), `K2_COMPOSE_PROJECT` the compose project whose `<project>_k2-net` and
-`<project>_k2-catalog` the networks are and whose `<project>_k2-spool` fetch writes. A kind with
+this container), `K2_COMPOSE_PROJECT` the compose project whose `<project>_k2-net`,
+`<project>_k2-catalog` and `<project>_k2-egress` the networks are and whose `<project>_k2-spool`
+fetch writes. fetch is on `k2-egress` alone, a network no other service joins: its parser reaches
+the internet and no service of the stack. A kind with
 secret mounts runs as `K2_RUN_UID:K2_RUN_GID`, the host user who owns the mode-600 secret files (as
 scripts/deploy.py runs tools with `--user`); fetch, which holds none, runs as its image's USER.
+
+fetch sees its own DAG's spool directory alone, `<project>_k2-spool` subpath `<dagId>` at
+`/spool/<dagId>`: its parser is one product's code and must not read or rewrite another product's
+raw bytes, rows or audits, which the Spark connector trusts. A volume subpath must exist, so a helper
+from the same image, as its user, with no network, runs the image's `mkdir -p /spool/<dagId>` first:
+platform code only, never the parser, and the scheduler itself never mounts the volume.
 """
 
 from __future__ import annotations
@@ -41,20 +49,30 @@ RELEASES_MOUNT = "/k2/releases"  # k2gen.model.RELEASES_MOUNT
 SECRETS_MOUNT = "/run/k2-secrets"  # k2gen.model.SECRETS_MOUNT
 TMPFS = "/tmp:rw,noexec,nosuid,size=64m"  # counted against the kind's memory limit
 PIDS = "256"
-# ponytail: the whole spool volume, so one run's parser could touch another run's spool files;
-# parsers are release-sealed code the tag approved. Mount `<dagId>/<runId>` alone with
-# volume-subpath once `resolve` can create that directory in the volume.
-SPOOL = {"fetch"}  # the kinds that get `<project>_k2-spool` at /spool; fetch makes /spool/<dagId>/<runId>/
+SPOOL = {"fetch"}  # the kinds that get `<project>_k2-spool` subpath <dagId> at /spool/<dagId>; fetch makes <runId>/
+DAG_ID = re.compile(r"[a-z][a-z0-9]*(_[a-z0-9]+)*")  # dags.schema.json's dagId: never empty, `.`, `..`, `/` or `,`
+SPOOL_HELPER = ["--rm", "--pull", "never", "--network", "none", "--read-only", "--cap-drop", "ALL",
+                "--security-opt", "no-new-privileges", "--pids-limit", "16", "--cpus", "0.1", "--memory", "32m"]
 
 KEYS = {"image", "cpus", "memory", "networks", "env", "secrets"}
-NETWORKS = {"k2-net", "k2-catalog"}
+CA = SECRETS_MOUNT + "/tls/ca.pem"
+# What each kind may be given, as k2gen.emit.pipeline.ONESHOT_KINDS (the frozen contract) lists it:
+# a release may list less, never more, so the scheduler's other variables (its database URL, its JWT
+# secret) and other secret files (ca.key, password.db, principals/) never reach a one-shot.
+# docker/airflow/tests/test_oneshot.py holds this equal to k2gen's golden oneshots.json.
+ALLOWED = {
+    "tools": {"networks": {"k2-net", "k2-catalog"}, "env": {"K2_RELEASE"}, "secrets": {CA}},
+    "dbt-runner": {"networks": {"k2-catalog"},
+                   "env": {"K2_TRINO_HOST", "K2_TRINO_INTERNAL_PORT", "K2_TRINO_USER", "K2_PUB_USER", "K2_RUNS_USER",
+                           "K2_CATALOG_URI", "K2_RELEASE"},
+                   "secrets": {f"{SECRETS_MOUNT}/{r}.password" for r in ("builder", "publisher", "runs")} | {CA}},
+    "fetch": {"networks": {"k2-egress"}, "env": {"K2_RELEASE"}, "secrets": set()},  # egress only (A8)
+}
 # manifest.schema.json#/$defs/imageRef: a registry image by digest, or a local build by image id
 IMAGE = re.compile(r"[a-z0-9][a-z0-9._:/-]*@sha256:[0-9a-f]{64}"
                    r"|(k2-airflow|k2-capture|k2-spark-iceberg|tools|fetch|dbt-runner|k2-api):[0-9a-f]{12}")
 CPUS = re.compile(r"[0-9]+(\.[0-9]+)?")
 MEMORY = re.compile(r"[0-9]+[MG]")
-ENV = re.compile(r"[A-Z][A-Z0-9_]*")
-SECRET = re.compile(r"/run/k2-secrets/[a-z0-9._/-]+")
 PASSWORD = re.compile(r"/run/k2-secrets/[a-z0-9_-]+\.password")
 PRINCIPAL = re.compile(r"(dbt|pub)_[a-z0-9_]+|svc\.[a-z0-9_-]+")
 RELEASE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
@@ -90,19 +108,20 @@ def _strings(value: object) -> list[str]:
 
 
 def check_kind(kind: str, spec: object) -> dict:
-    """The kind as oneshots.schema.json gives it, or a refusal naming every problem."""
+    """The kind as oneshots.schema.json gives it, within what ALLOWED lets it have, or a refusal
+    naming every problem."""
+    if kind not in ALLOWED:
+        raise AirflowFailException(f"oneshots.json {kind}: refused: not a one-shot kind ({sorted(ALLOWED)})")
     if not isinstance(spec, dict) or set(spec) != KEYS:
         raise AirflowFailException(f"oneshots.json {kind}: refused: keys {sorted(spec) if isinstance(spec, dict) else spec!r}, "
                                    f"expected {sorted(KEYS)}")
     bad = [f"{k} {spec[k]!r}" for k, pattern in (("image", IMAGE), ("cpus", CPUS), ("memory", MEMORY))
            if not isinstance(spec[k], str) or not pattern.fullmatch(spec[k])]
-    networks, env, secrets = _strings(spec["networks"]), _strings(spec["env"]), _strings(spec["secrets"])
-    if not networks or not set(networks) <= NETWORKS:
-        bad.append(f"networks {networks}")
-    bad += [f"env {e!r}" for e in env if not ENV.fullmatch(e)]
-    bad += [f"secret {s!r}" for s in secrets if not SECRET.fullmatch(s) or ".." in s.split("/")]
-    if kind == "fetch" and (networks != ["k2-net"] or secrets):
-        bad.append("fetch is egress only: k2-net and no secret (A8)")
+    allowed = ALLOWED[kind]
+    if not spec["networks"] or not set(_strings(spec["networks"])) <= allowed["networks"]:
+        bad.append(f"networks {spec['networks']} (at most {sorted(allowed['networks'])}; k2-egress is fetch's alone)")
+    bad += [f"env {e!r}" for e in _strings(spec["env"]) if e not in allowed["env"]]
+    bad += [f"secret {s!r}" for s in _strings(spec["secrets"]) if s not in allowed["secrets"]]
     if bad:
         raise AirflowFailException(f"oneshots.json {kind}: refused: {'; '.join(bad)}")
     return spec
@@ -138,8 +157,9 @@ class OneShotOperator(BaseOperator):
         self.env, self.principals = env or {}, principals or []
         self._name: str | None = None
 
-    def docker_run(self, name: str) -> tuple[list[str], dict[str, str]]:
-        """The argument list and the docker CLI's environment, or a refusal before anything runs."""
+    def docker_run(self, name: str, dag_id: str) -> tuple[list[str], dict[str, str], list[list[str]]]:
+        """The argument list, the docker CLI's environment and the commands to run before it, or a
+        refusal before anything runs."""
         match = re.fullmatch(re.escape(RELEASES_MOUNT) + r"/(.+)", self.release_path)
         if not match or not RELEASE.fullmatch(match[1]) or match[1] == "pointers":
             raise AirflowFailException(f"release_path {self.release_path!r} is not {RELEASES_MOUNT}/<release id>")
@@ -188,17 +208,28 @@ class OneShotOperator(BaseOperator):
             argv += ["-e", e]
         for source, target in mounts:
             argv += ["--mount", f"type=bind,source={source},target={target},readonly"]
+        before = []
         if self.kind in SPOOL:
-            argv += ["--mount", f"type=volume,source={project}_k2-spool,target=/spool"]
-        return [*argv, spec["image"], *self.command], {**os.environ, **{e: values[e] for e in spec["env"]}}
+            if not DAG_ID.fullmatch(dag_id):
+                raise AirflowFailException(f"{self.kind}: refused dag id {dag_id!r}: its spool directory must be one plain name")
+            volume = f"{project}_k2-spool"
+            argv += ["--mount", f"type=volume,source={volume},target=/spool/{dag_id},volume-subpath={dag_id}"]
+            before.append(["docker", "run", *SPOOL_HELPER, "--mount", f"type=volume,source={volume},target=/spool",
+                           spec["image"], "mkdir", "-p", f"/spool/{dag_id}"])
+        return [*argv, spec["image"], *self.command], {**os.environ, **{e: values[e] for e in spec["env"]}}, before
 
     def execute(self, context) -> None:
         ti = context["ti"]
         name = container_name(self.kind, ti.dag_id, ti.try_number)
-        argv, env = self.docker_run(name)
+        argv, env, before = self.docker_run(name, ti.dag_id)
         # A crashed earlier try, or this try's name left by a crashed run, must not run beside this one.
         _tolerate_missing(["docker", "rm", "-f", *(container_name(self.kind, ti.dag_id, t)
                                                    for t in range(1, ti.try_number + 1))], self.log)
+        for step in before:  # exit 0 or the task fails, and the one-shot never starts
+            done = subprocess.run(step, stdin=subprocess.DEVNULL, capture_output=True, text=True)
+            if done.returncode != 0:
+                raise AirflowException(f"{shlex.join(step)} exited {done.returncode}: {' '.join(done.stderr.split())}")
+            self.log.info("%s: exit 0", shlex.join(step))
         self._name = name
         self.log.info("one-shot: %s", shlex.join(argv))
         # stdin is the task supervisor's request socket: never hand it on. stderr goes to the

@@ -4,10 +4,13 @@ Lakekeeper has no authentication: whatever reaches it can plant a view. So it pu
 is on k2-catalog alone, and k2-catalog holds exactly the services in
 tests/access/catalog-fence-allow.txt (the list scripts/verify/catalog-fence.sh checks the running
 stack against). Loopback binding of every published port is scripts/check-budget.py's check, not
-repeated here. Each mutation below breaks the fence one way in the loaded document and must fail.
+repeated here. MinIO publishes no port either (W1-23): the host reaches the lake's objects through
+Trino and its rules alone. Each mutation below breaks the fence one way in the loaded document and
+must fail.
 
 The two run one-shots are held the same way, as the Airflow one-shot operator runs them
-(docker/airflow/dags/oneshot.py): fetch on k2-net alone with no storage key and no secret (A8);
+(docker/airflow/dags/oneshot.py): fetch on k2-egress alone, a plain bridge no other service joins,
+with no storage key and no secret (A8);
 dbt-runner with exactly the wrapper's seven environment names and its four files
 (phase-001-interfaces.md, "The dbt wrapper"); both read-only, without capabilities or the socket.
 """
@@ -25,7 +28,6 @@ ALLOW = {ln.split("#")[0].strip() for ln in (ROOT / "tests/access/catalog-fence-
 # The container ports a member may publish (on 127.0.0.1, check-budget.py), each behind its own login.
 PUBLISHED = {
     "trino": {"8443"},  # the client endpoint: TLS and a password per principal
-    "minio": {"9000", "9001"},  # the S3 API and console: MinIO's own keys
     "spark-iceberg": {"18080", "4040"},  # the history server and job UI: read-only pages, no catalog call
     "prefect-db": {"5432"},  # Postgres: its own passwords; the catalog's database among others
 }
@@ -48,11 +50,11 @@ def problems(doc: dict) -> list[str]:
     # network_mode service:<member> or container:<member> shares a member's interfaces: it is on k2-catalog too
     on = direct | {n for n, s in services.items() if str(s.get("network_mode", "")).partition(":")[2] in reach}
     out = []
-    for n in ("lakekeeper", "lakekeeper-migrate"):
+    for n in ("lakekeeper", "lakekeeper-migrate", "minio"):
         s = services[n]
         if s.get("ports"):
-            out.append(f"{n} publishes {s['ports']}: the catalog has no authentication, so no host port")
-        if nets(s) != {"k2-catalog"} or s.get("network_mode"):
+            out.append(f"{n} publishes {s['ports']}: no host port, so no path to the catalog or the objects around Trino")
+        if n != "minio" and (nets(s) != {"k2-catalog"} or s.get("network_mode")):
             out.append(f"{n} is on {sorted(nets(s))} {s.get('network_mode', '')}: k2-catalog only")
     if on != ALLOW:
         out.append(f"k2-catalog members differ from catalog-fence-allow.txt: unlisted {sorted(on - ALLOW)}, "
@@ -98,8 +100,12 @@ def secret_targets(svc: dict) -> set[str]:
 def oneshot_problems(doc: dict) -> list[str]:
     services, out = doc["services"], []
     fetch, dbt = services["fetch"], services["dbt-runner"]
-    if fetch.get("networks") != ["k2-net"]:
-        out.append(f"fetch is on {fetch.get('networks')}: k2-net only (A8)")
+    if fetch.get("networks") != ["k2-egress"]:
+        out.append(f"fetch is on {fetch.get('networks')}: k2-egress only (A8)")
+    if others := sorted(n for n, s in services.items() if n != "fetch" and "k2-egress" in nets(s)):
+        out.append(f"{others} on k2-egress: fetch's network alone, or a parser reaches them")
+    if (net := doc["networks"].get("k2-egress", "absent")) != {"driver": "bridge"}:
+        out.append(f"network k2-egress is {net}, not a plain bridge: renamed, external or internal breaks the operator or egress")
     if s3 := sorted(e for e in env_names(fetch) if "S3_" in e):
         out.append(f"fetch has storage key names {s3}")
     if any("k2-secrets" in str(v) for v in fetch.get("volumes") or []):
@@ -128,6 +134,13 @@ def svc_set(svc, key, value):
 
 @pytest.mark.parametrize("mutate,says", [
     (svc_set("fetch", "networks", ["k2-net", "k2-catalog"]), "fetch is on"),
+    (svc_set("fetch", "networks", ["k2-net"]), "fetch is on"),
+    (svc_set("fetch", "networks", ["k2-egress", "k2-net"]), "fetch is on"),
+    (svc_set("minio", "networks", ["k2-net", "k2-catalog", "k2-egress"]), "['minio'] on k2-egress"),
+    (svc_set("grafana", "networks", {"k2-net": None, "k2-egress": None}), "['grafana'] on k2-egress"),
+    (lambda d: d["networks"].__setitem__("k2-egress", {"driver": "bridge", "internal": True}), "not a plain bridge"),
+    (lambda d: d["networks"].__setitem__("k2-egress", {"driver": "bridge", "name": "shared"}), "not a plain bridge"),
+    (lambda d: d["networks"].pop("k2-egress"), "not a plain bridge"),
     (svc_set("fetch", "environment", {"K2_RELEASE": None, "K2_SPARK_S3_ACCESS_KEY": "x"}), "storage key names"),
     (svc_set("fetch", "environment", ["K2_RELEASE", "K2_TRINO_S3_SECRET_KEY=x"]), "storage key names"),
     (lambda d: d["services"]["fetch"]["volumes"].append("${K2_SECRETS}/tls/ca.pem:/run/k2-secrets/tls/ca.pem:ro"),
@@ -169,6 +182,8 @@ def join(svc):
     (ports("lakekeeper", "127.0.0.1:65535:65535/udp"), "lakekeeper publishes"),
     (ports("lakekeeper", {"target": 9999, "published": 9999, "host_ip": "127.0.0.1"}), "lakekeeper publishes"),
     (ports("lakekeeper-migrate", "127.0.0.1:5000:5000"), "lakekeeper-migrate publishes"),
+    (ports("minio", "127.0.0.1:9000:9000"), "minio publishes"),
+    (ports("minio", {"target": 9001, "published": 9001, "host_ip": "127.0.0.1"}), "minio publishes"),
     (ports("trino", "127.0.0.1:8080:8080"), "trino is on k2-catalog and publishes ['8080']"),
     (lambda d: d["services"]["lakekeeper"].__setitem__("networks", ["k2-catalog", "k2-net"]), "lakekeeper is on"),
     (lambda d: d["services"]["lakekeeper"].__setitem__("networks", {"k2-catalog": None, "k2-net": None}), "lakekeeper is on"),

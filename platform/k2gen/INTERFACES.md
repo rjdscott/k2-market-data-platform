@@ -66,7 +66,7 @@ adding one with the right signature, leaves it green; a drifted signature fails 
 | A10 roles, principals, grants, policies | `k2-v2.schema.json#/$defs/{roles,principals,grants,policies,rolePolicy}`; `model.py`: `RoleDef`, `Principal`, `Grant`, `RolePolicy`, the secrets table below |
 | A11 catalog JSON | `catalog-product.schema.json`, its `$defs/index` for `index.json`; `model.Product.support`, `.links` (ODPS support and authoritativeDefinitions) |
 | A12 REST | `services/k2-api/openapi.yaml` |
-| A13 one-shots | compose stubs; `oneshots.schema.json` |
+| A13 one-shots | compose stubs; `oneshots.schema.json` (added 2026-11-27: the network `k2-egress`, fetch's alone, in `ONESHOT_KINDS`) |
 | backup set, storage plan | `backup-set.schema.json`, `storage-plan.schema.json` |
 
 ## Release paths

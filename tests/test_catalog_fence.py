@@ -83,7 +83,28 @@ def test_a_breached_structure_fails_and_unresolvable_is_then_no_evidence(tmp_pat
 
 
 def test_an_origin_with_no_network_is_a_failure_not_a_pass(tmp_path):
-    assert probe_lines(run(tmp_path, "refused", 5, origin="fetch"))[0].startswith("FAIL fetch ->")
+    assert probe_lines(run(tmp_path, "refused", 5, origin="tools"))[0].startswith("FAIL tools ->")
+
+
+def test_a_fetch_row_is_dialled_from_k2_egress_the_network_fetch_runs_on(tmp_path):
+    """The real dial, with `docker` faked on PATH: a `fetch` row starts its probe container on
+    <project>_k2-egress (F5/R7), and a name that does not resolve there is refused."""
+    log = tmp_path / "docker.log"
+    bin_ = tmp_path / "bin"
+    bin_.mkdir()
+    fake(bin_, "docker", f'echo "$*" >> {log}\ncase "$1" in run) echo "nc: bad address \'lakekeeper\'"; exit 1 ;; esac\nexit 0')
+    rows = tmp_path / "rows.yaml"
+    rows.write_text('expectations:\n  - {probe: {from: fetch, target: "lakekeeper:8181"}, expect: refused}\n')
+    (tmp_path / "lakekeeper.out").write_text(FENCED)
+    (tmp_path / "members.out").write_text(MEMBERS)
+    inspect = fake(tmp_path, "inspect.sh", 'cat "$(dirname "$0")/$1.out"')
+    r = subprocess.run(["bash", str(SCRIPT), str(rows)], capture_output=True, text=True,
+                       env={**os.environ, "PATH": f"{bin_}:{os.environ['PATH']}", "K2_FENCE_INSPECT": inspect,
+                            "K2_COMPOSE_PROJECT": "k2"})
+    calls = log.read_text().splitlines()
+    assert "network inspect k2_k2-egress" in calls, calls
+    assert [c for c in calls if c.startswith("run ")][0].split("--network ")[1].split()[0] == "k2_k2-egress", calls
+    assert probe_lines(r) == ["PASS fetch -> lakekeeper:8181 refused (name does not resolve on fetch)"], r.stdout
 
 
 def test_no_probe_rows_is_not_a_pass(tmp_path):

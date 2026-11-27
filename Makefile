@@ -177,7 +177,7 @@ screenshots:  ## Capture every dashboard and console into docs/images/dashboards
 	AIRFLOW_PASSWORD=$$(docker exec k2-airflow-api-server cat /opt/airflow/simple_auth_manager_passwords.json.generated \
 	  | python3 -c 'import json, sys; print(json.load(sys.stdin)["admin"])') && export AIRFLOW_PASSWORD && \
 	docker run --rm --network host --ipc=host --user $$(id -u):$$(id -g) -e HOME=/tmp \
-	  -e GRAFANA_PASSWORD -e MINIO_ROOT_USER -e MINIO_ROOT_PASSWORD -e AIRFLOW_PASSWORD \
+	  -e GRAFANA_PASSWORD -e AIRFLOW_PASSWORD \
 	  -e K2_AIRFLOW_PORT -e K2_GIT_SHA -v "$(CURDIR)":/repo -w /repo k2-screenshots:1.65.2 \
 	  python3 scripts/screenshots/capture.py $(if $(ONLY),--only $(ONLY),)
 

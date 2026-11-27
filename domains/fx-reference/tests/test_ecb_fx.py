@@ -63,6 +63,41 @@ def test_bad_input_raises(raw):
         ecb.parse(raw)
 
 
+MOD, GOOD = ecb, doc(("2030-01-01", [("USD", "1.1")]))
+# the entity expands to a valid code, so only the refusal can stop the row
+PLANTED = ('<!DOCTYPE gesmes:Envelope [<!ENTITY a "USD">]>' + GOOD.decode()).replace('"USD"', '"&a;"')
+
+
+ENTITY_DOC = '<!DOCTYPE {root} [<!ENTITY a "Planted">]>'
+
+
+@pytest.mark.parametrize("encoding", ["utf-16", "utf-16-le", "utf-16-be", "utf-32"])
+def test_a_document_that_is_not_utf8_is_refused_before_expat_can_expand_it(encoding):
+    """F6: the old grep read the raw bytes, so UTF-16 passed it and expat expanded the entity."""
+    with pytest.raises(ValueError):
+        MOD.parse(PLANTED.encode(encoding))
+
+
+def test_a_declared_encoding_other_than_utf8_is_refused():
+    for enc in ("ISO-8859-1", "UTF-16", "windows-1252"):
+        with pytest.raises(ValueError, match="encoding"):
+            MOD.parse(f'<?xml version="1.0" encoding="{enc}"?>'.encode() + GOOD)
+    for enc in ("UTF-8", "utf-8", "US-ASCII"):
+        assert MOD.parse(f'<?xml version="1.0" encoding="{enc}"?>'.encode() + GOOD) == MOD.parse(GOOD)
+
+
+def test_a_utf8_bom_is_accepted():
+    assert MOD.parse(b"\xef\xbb\xbf" + GOOD) == MOD.parse(GOOD)
+
+
+@pytest.mark.parametrize("prefix", ["<!DOCTYPE x>", ENTITY_DOC, "<!doctype x>"])
+def test_expat_itself_refuses_any_doctype_or_entity_declaration(prefix):
+    with pytest.raises((ValueError, SyntaxError)):
+        MOD.parse(prefix.format(root="x").encode() + GOOD)
+    with pytest.raises(ValueError, match="DOCTYPE or ENTITY"):
+        MOD.parse(ENTITY_DOC.format(root="x").encode() + GOOD)
+
+
 def test_the_good_fixture_passes_both_audits_on_its_own_newest_day(monkeypatch):
     monkeypatch.setattr(ecb, "today", lambda: ecb.datetime.date(2030, 1, 3))  # the fixture's newest date
     r = rows("ecb-90d-synthetic.xml")

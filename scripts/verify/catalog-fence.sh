@@ -3,7 +3,8 @@
 # Structure: the project's Lakekeeper container publishes no port and is on <project>_k2-catalog
 # alone, and every container on that network is this project's service named in
 # tests/access/catalog-fence-allow.txt. Probes: every `probe` row of tests/access/expectations.yaml
-# (or the file named as $1) is dialled from where its `from` says, and passes when the TCP
+# (or the file named as $1) is dialled from where its `from` says (`fetch`: a container on
+# <project>_k2-egress, the network the fetch one-shot runs on), and passes when the TCP
 # connection is open or refused as its `expect` says. A name that does not resolve counts as
 # refused only when the structure passed; a missing network or a probe container that could not
 # start fails. Exit 0 only when every line passed (and a probe did), 1 otherwise, 2 on usage/no Docker.
@@ -21,11 +22,11 @@ ALLOW=$(sed 's/#.*//' tests/access/catalog-fence-allow.txt | xargs)
 IMAGE='alpine@sha256:f59abe656b692d901e184be3445e084786602108599d2a51d229c0f5a48c71bf'  # alpine:3, busybox nc
 [ -f "$FILE" ] || { echo "usage: $0 [expectations.yaml]" >&2; exit 2; }
 
-dial() {  # $1 origin (host|k2-net|k2-catalog|...), $2 host:port
+dial() {  # $1 origin (host|k2-net|k2-catalog|fetch|...), $2 host:port
   [ -n "${K2_FENCE_DIAL:-}" ] && { $K2_FENCE_DIAL "$@"; return; }
   local h=${2%:*} p=${2##*:} net out rc
   if [ "$1" = host ]; then timeout 3 bash -c "exec 3<>/dev/tcp/$h/$p" 2>/dev/null; return; fi
-  case "$1" in k2-net|k2-catalog) net="${PROJECT}_$1" ;; *) return 5 ;; esac
+  case "$1" in k2-net|k2-catalog) net="${PROJECT}_$1" ;; fetch) net="${PROJECT}_k2-egress" ;; *) return 5 ;; esac
   docker network inspect "$net" >/dev/null 2>&1 || return 4
   out=$(docker run --rm --name "k2-fence-probe-$$-$RANDOM" --network "$net" --memory 32m --cpus 0.1 \
         "$IMAGE" nc -z -w 3 "$h" "$p" 2>&1); rc=$?
