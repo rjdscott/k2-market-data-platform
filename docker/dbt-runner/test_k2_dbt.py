@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import os
 import re
 import sys
 import types
@@ -684,3 +685,101 @@ def test_the_xcom_is_the_last_stdout_line_on_every_exit_path(monkeypatch, capsys
         monkeypatch.setattr(w, "run", lambda c, io, code=code, expire=expire: (code, expire))
         assert w.main(["build", "--release", RELEASE, "--product", "governance.access-canary", "--run-id", "x/y"]) == code
         assert last() == {"exit": code, "expire": expire}
+
+
+# ---- k2-dbt docs (W3-11): the dbt docs site, published as <out>/current, with no warehouse ---------
+
+FAKE_PASSWORD = "fake-Pa55word-in-the-environment"
+FAKE_DBT = """#!{python}
+import json, os, sys
+argv = sys.argv[1:]
+with open({calls!r}, "a") as f:
+    f.write(json.dumps(argv) + "\\n")
+target = argv[argv.index("--target-path") + 1]
+os.makedirs(target, exist_ok=True)
+seen = json.dumps({{"argv": argv, "env": dict(os.environ)}})  # a manifest that leaked its whole environment
+step = "parse" if argv[0] == "parse" else "docs"
+if os.path.exists({fail!r} + step):
+    sys.exit(2)
+if step == "parse":
+    open(os.path.join(target, "manifest.json"), "w").write(seen)
+    open(os.path.join(target, "partial_parse.msgpack"), "w").write("not published")
+else:
+    open(os.path.join(target, "index.html"), "w").write("<html>" + seen + "</html>")
+    open(os.path.join(target, "catalog.json"), "w").write(seen)
+"""
+
+
+@pytest.fixture
+def docs_env(tmp_path, monkeypatch):
+    """A release with a compiled dbt project, a fake dbt on PATH, and an environment holding a password."""
+    (tmp_path / "releases" / RELEASE / "compiled" / "dbt").mkdir(parents=True)
+    (tmp_path / "releases" / RELEASE / "compiled" / "dbt" / "dbt_project.yml").write_text("name: k2\n")
+    monkeypatch.setattr(w, "RELEASES", tmp_path / "releases")
+    monkeypatch.setattr(w, "WORK", tmp_path / "work")
+    monkeypatch.setattr(w, "password", lambda role: pytest.fail(f"k2-dbt docs read the {role} password"))
+    (tmp_path / "bin").mkdir()
+    dbt = tmp_path / "bin" / "dbt"
+    dbt.write_text(FAKE_DBT.format(python=sys.executable, calls=str(tmp_path / "calls"), fail=str(tmp_path / "fail-")))
+    dbt.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{tmp_path / 'bin'}:/usr/bin:/bin")
+    monkeypatch.setenv("DBT_ENV_SECRET_K2_TRINO_PASSWORD", FAKE_PASSWORD)
+    monkeypatch.setenv("K2_TRINO_PASSWORD", FAKE_PASSWORD)
+    return tmp_path
+
+
+def calls(root):
+    return [json.loads(line) for line in (root / "calls").read_text().splitlines()]
+
+
+def test_docs_publishes_the_three_files_behind_current_and_no_secret(docs_env):
+    out = docs_env / "site" / "dbt-docs"
+    assert w.main(["docs", "--release", RELEASE, "--out", str(out)]) == 0
+    tree = out / os.readlink(out / "current")
+    assert os.readlink(out / "current").startswith("tree-") and tree.parent == out  # relative: any mount point
+    assert sorted(p.name for p in tree.iterdir()) == ["catalog.json", "index.html", "manifest.json"]
+    assert oct(tree.stat().st_mode & 0o777) == "0o755" and all(p.stat().st_mode & 0o777 == 0o644 for p in tree.iterdir())
+    for p in tree.iterdir():
+        assert FAKE_PASSWORD not in p.read_text(), p.name
+    project = str(docs_env / "releases" / RELEASE / "compiled" / "dbt")
+    (parse, generate) = calls(docs_env)
+    assert parse[0] == "parse" and generate[:4] == ["docs", "generate", "--no-compile", "--empty-catalog"]
+    for argv in (parse, generate):
+        assert argv[argv.index("--project-dir") + 1] == project
+        assert argv[argv.index("--profiles-dir") + 1] == "/opt/k2/dbt"
+        assert argv[argv.index("--target-path") + 1].startswith(str(docs_env / "work"))
+    seen = json.loads((tree / "manifest.json").read_text())["env"]
+    assert seen["DBT_ENV_SECRET_K2_TRINO_PASSWORD"] == "unused" and "K2_TRINO_PASSWORD" not in seen
+    assert seen["K2_TRINO_HOST"].endswith(".invalid")  # RFC 6761: never resolves, so no Trino is reached
+    assert seen["DBT_SEND_ANONYMOUS_USAGE_STATS"] == "false"
+
+
+def test_docs_keeps_the_tree_before_and_removes_older_ones(docs_env):
+    out = docs_env / "site"
+    trees = []
+    for _ in range(3):
+        assert w.main(["docs", "--release", RELEASE, "--out", str(out)]) == 0
+        trees.append(os.readlink(out / "current"))
+    assert len(set(trees)) == 3
+    assert sorted(p.name for p in out.iterdir()) == sorted(["current", trees[1], trees[2]])
+
+
+@pytest.mark.parametrize("step", ["parse", "docs"])
+def test_a_failed_dbt_step_publishes_nothing_and_the_site_stays(docs_env, step):
+    out = docs_env / "site"
+    assert w.main(["docs", "--release", RELEASE, "--out", str(out)]) == 0
+    before = sorted(p.name for p in out.iterdir()), os.readlink(out / "current")
+    (docs_env / f"fail-{step}").touch()
+    assert w.main(["docs", "--release", RELEASE, "--out", str(out)]) == 1
+    assert (sorted(p.name for p in out.iterdir()), os.readlink(out / "current")) == before
+
+
+def test_docs_refuses_a_bad_release_a_missing_project_or_a_current_that_is_no_link(docs_env, capsys):
+    out = docs_env / "site"
+    assert w.main(["docs", "--release", "../etc", "--out", str(out)]) == 1
+    assert w.main(["docs", "--release", "v2.0.0-0123456789ab", "--out", str(out)]) == 1
+    assert not (docs_env / "calls").exists()  # dbt never ran
+    (out / "current").mkdir(parents=True)
+    assert w.main(["docs", "--release", RELEASE, "--out", str(out)]) == 1
+    assert w.main(["docs", "--release", RELEASE]) == 2
+    assert "is not a symlink" in capsys.readouterr().err
