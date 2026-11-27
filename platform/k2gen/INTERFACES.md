@@ -62,7 +62,7 @@ adding one with the right signature, leaves it green; a drifted signature fails 
 | A6 run records | `run-record.schema.json` (one row, `dbt_invocation_id` and `openlineage_run_id` included); the DDL `platform/runs/run_record.sql` (`model.RUN_RECORD_SQL`), equal column for column (`tests/test_frozen_interfaces.py`) |
 | A7 `k2_input` and the wrapper | `pipeline.schema.json` `build`; `model.View`, `model.VIEWS`; `dbt/macros/k2_input.sql`; the wrapper's contract in the phase page |
 | A8 names | `model.py`: `fence`, the catalog, namespace, builder, publisher, group, DAG, dbt and relation helpers, the principal lists below, `canary_user` |
-| A9 access expectations | `expectations.schema.json` (a statement row may carry `session`, the header form; a read row `mustAppear`, the positive assertion); `model.py`: the five expectation types, `MustAppear` |
+| A9 access expectations | `expectations.schema.json` (a statement row may carry `session`, the header form; a read row `mustAppear`, the positive assertion); `model.py`: the six expectation types (the sixth, `StorageKeyExpectation`, added 2026-11-27 for phase 002), `MustAppear` |
 | A10 roles, principals, grants, policies | `k2-v2.schema.json#/$defs/{roles,principals,grants,policies,rolePolicy}`; `model.py`: `RoleDef`, `Principal`, `Grant`, `RolePolicy`, the secrets table below |
 | A11 catalog JSON | `catalog-product.schema.json`, its `$defs/index` for `index.json`; `model.Product.support`, `.links` (ODPS support and authoritativeDefinitions) |
 | A12 REST | `services/k2-api/openapi.yaml` |

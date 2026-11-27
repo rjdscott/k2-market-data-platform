@@ -21,7 +21,10 @@ row, since none of them is the rules at work. `error` is NOT_SUPPORTED and nothi
 error the schema gives it (a version on a view: "Views do not support versioning"); a row needing
 another class needs a field the frozen schema lacks. A read row reads the relation, gets exactly its `visible` columns, finds every `masked`
 column null in every row, no row younger than `minRowAgeMinutes` by the table's delay column, no
-row matching `mustNotAppear`, and at least `mustAppear.minRows` matching its `where`.
+row matching `mustNotAppear`, and at least `mustAppear.minRows` matching its `where`. A storage-key
+row (phase 002) sends its S3 request from this process to $K2_S3_ENDPOINT (default minio:9000, so
+it runs inside a container on the lake's network) with K2_<ENGINE>_S3_*: `refused` is 403
+AccessDenied on a bucket some key shows exists, never a connection error or a missing bucket.
 
 Where the endpoint and each principal's password come from:
 - scope release (a throwaway lake, scripts/lib/throwaway-lake.sh, run in its tools container):
@@ -57,6 +60,9 @@ from __future__ import annotations
 import argparse
 import base64
 import csv
+import hashlib
+import hmac
+import http.client
 import io
 import json
 import os
@@ -67,7 +73,8 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from collections.abc import Callable
+import uuid
+from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass, field, is_dataclass
 from pathlib import Path
 from typing import Any
@@ -82,6 +89,9 @@ DENIED = "PERMISSION_DENIED"  # an `expect: denied` row passes on this errorName
 UNSUPPORTED = "NOT_SUPPORTED"  # and an `expect: error` row on this one
 SKIP_REST = "via rest: k2-api's REST rows join in phase 003"
 SKIP_PROBE = "a network probe: scripts/verify/catalog-fence.sh (step S22) runs it on the stack"
+S3_ENDPOINT = "http://minio:9000"  # $K2_S3_ENDPOINT overrides, as docker/lake/init-lake.sh and spark_conf.py read it
+PROBE_DIR = "k2-access-probe"  # a write row's object: <prefix>/k2-access-probe/<random hex>, deleted at once
+EMPTY_SHA256 = hashlib.sha256(b"").hexdigest()
 
 
 # ---- Trino ---------------------------------------------------------------------------------------
@@ -164,6 +174,122 @@ def connect(env_file: Path | None) -> tuple[Trino, dict[str, Any]]:
     return Trino(url, os.environ.get("K2_TRINO_CA") or str(root / "tls/ca.pem"), live_password), {"trino": url}
 
 
+# ---- storage keys (phase 002, W0-3) --------------------------------------------------------------
+# One S3 request per step, path style, signed with AWS Signature V4 by the stdlib: neither the tools
+# image nor the throwaway lake's carries an S3 client, and the request runs in this process, so a key
+# is read from its variable and sent in a header, never on a command line, printed or in a result.
+
+def sigv4(method: str, host: str, path: str, query: str, amz_date: str, pair: tuple[str, str]) -> dict[str, str]:
+    """The signed headers of a bodiless request (AWS Signature V4, region us-east-1: MinIO with no
+    region set takes any). `path` and `query` are already in canonical form."""
+    headers = {"host": host, "x-amz-content-sha256": EMPTY_SHA256, "x-amz-date": amz_date}
+    names = ";".join(headers)
+    canonical = "\n".join([method, path, query, *(f"{k}:{v}" for k, v in headers.items()), "", names, EMPTY_SHA256])
+    scope = f"{amz_date[:8]}/us-east-1/s3/aws4_request"
+    key = f"AWS4{pair[1]}".encode()
+    for part in scope.split("/"):
+        key = hmac.new(key, part.encode(), hashlib.sha256).digest()
+    to_sign = f"AWS4-HMAC-SHA256\n{amz_date}\n{scope}\n{hashlib.sha256(canonical.encode()).hexdigest()}"
+    signature = hmac.new(key, to_sign.encode(), hashlib.sha256).hexdigest()
+    return headers | {"Authorization": f"AWS4-HMAC-SHA256 Credential={pair[0]}/{scope}, SignedHeaders={names}, Signature={signature}"}
+
+
+def s3(endpoint: str, pair: tuple[str, str], method: str, bucket: str, key: str = "",
+       query: Mapping[str, str] | None = None) -> tuple[int, str, bytes]:
+    """(HTTP status, S3 error code or "", body); status 0 when nothing answered, the code then the reason."""
+    path = urllib.parse.quote(f"/{bucket}/{key}" if key else f"/{bucket}", safe="/-_.~")
+    q = "&".join(f"{urllib.parse.quote(k, safe='-_.~')}={urllib.parse.quote(v, safe='-_.~')}" for k, v in sorted((query or {}).items()))
+    url = urllib.parse.urlsplit(endpoint)
+    headers = sigv4(method, url.netloc, path, q, time.strftime("%Y%m%dT%H%M%SZ", time.gmtime()), pair)
+    if method == "GET" and key:
+        headers["Range"] = "bytes=0-0"  # a read proves access with one byte
+    req = urllib.request.Request(f"{endpoint.rstrip('/')}{path}{'?' + q if q else ''}", b"" if method == "PUT" else None,
+                                 headers | ({"Content-Type": "application/octet-stream"} if method == "PUT" else {}), method=method)
+    try:
+        with urllib.request.urlopen(req, timeout=10) as r:
+            return r.status, "", r.read()
+    except urllib.error.HTTPError as e:
+        body = e.read()
+        code = re.search(rb"<Code>([A-Za-z]+)</Code>", body)
+        return e.code, code.group(1).decode() if code else "", body
+    except (OSError, http.client.HTTPException) as x:  # URLError, a refused or timed-out connection, an unresolved name, a garbled answer
+        return 0, type(x).__name__, str(getattr(x, "reason", x))[:160].encode()
+
+
+def outcome(status: int, code: str) -> str | None:
+    """allowed (2xx), refused (403 AccessDenied and nothing else), or None for any other answer."""
+    return "allowed" if 200 <= status < 300 else "refused" if (status, code) == (403, "AccessDenied") else None
+
+
+def answered(status: int, code: str, body: bytes) -> str:
+    return f"cannot reach the storage ({code}: {body.decode(errors='replace')})" if status == 0 else f"HTTP {status} {code or ''}".strip()
+
+
+def key_pair(engine: str, environ: Mapping[str, str]) -> tuple[str, str] | list[str]:
+    """The engine's (access, secret) from K2_<ENGINE>_S3_*, or the names of the variables not set."""
+    names = (f"K2_{engine.upper()}_S3_ACCESS_KEY", f"K2_{engine.upper()}_S3_SECRET_KEY")
+    missing = [n for n in names if not environ.get(n)]
+    return missing or (environ[names[0]], environ[names[1]])
+
+
+def bucket_shown(endpoint: str, bucket: str, environ: Mapping[str, str], first: tuple[str, str]) -> tuple[bool, str]:
+    """Whether some key shows the bucket exists (GetBucketLocation answered 2xx), and whose, or why not.
+    MinIO checks a policy before the bucket, so a refusal alone cannot tell a missing bucket from a fenced one."""
+    pairs = {"its own": first}
+    for engine in ("spark", "trino", "maintenance", "backup", "tools"):
+        if isinstance(pair := key_pair(engine, environ), tuple):
+            pairs.setdefault(engine, pair)
+    if environ.get("MINIO_ROOT_USER") and environ.get("MINIO_ROOT_PASSWORD"):
+        pairs["the root"] = (environ["MINIO_ROOT_USER"], environ["MINIO_ROOT_PASSWORD"])
+    for who, pair in pairs.items():
+        status, code, body = s3(endpoint, pair, "GET", bucket, query={"location": ""})
+        if 200 <= status < 300:
+            return True, f"bucket {bucket} shown by {who} key"
+        if status != 403:
+            return False, f"bucket {bucket}: {answered(status, code, body)} to {who} key"
+    return False, f"no key here shows bucket {bucket} exists, so a refusal proves nothing"
+
+
+def storage_key(e: Any, environ: Mapping[str, str] = os.environ) -> tuple[bool, str]:
+    """A storage-key row: the operation, signed with the engine's key, ends as the row expects."""
+    pair = key_pair(e.engine, environ)
+    if isinstance(pair, list):
+        return False, f"no {e.engine} storage key: {' and '.join(pair)} not set"
+    endpoint = environ.get("K2_S3_ENDPOINT") or S3_ENDPOINT
+    bucket, _, prefix = e.target.partition("/")
+    if e.operation == "read":
+        status, code, body = s3(endpoint, pair, "GET", bucket, query={"list-type": "2", "max-keys": "1", "prefix": prefix and f"{prefix}/"})
+        got, did = outcome(status, code), f"list s3://{e.target}/: {answered(status, code, body)}"
+        if got == "allowed" and (first := re.search(rb"<Key>([^<]+)</Key>", body)):
+            obj = first.group(1).decode()
+            status, code, body = s3(endpoint, pair, "GET", bucket, obj)
+            got = "allowed" if outcome(status, code) == "allowed" else None
+            did += f"; 1 object listed and read: {answered(status, code, body)}" if got else f"; listed, but reading {obj}: {answered(status, code, body)}"
+        elif got == "allowed":
+            did += "; 0 objects listed"
+    else:
+        obj = f"{prefix}/{PROBE_DIR}/{uuid.uuid4().hex}" if prefix else f"{PROBE_DIR}/{uuid.uuid4().hex}"
+        status, code, body = s3(endpoint, pair, "PUT", bucket, obj)
+        got, did = outcome(status, code), f"put s3://{bucket}/{obj}: {answered(status, code, body)}"
+        if got == "allowed":
+            gone = s3(endpoint, pair, "DELETE", bucket, obj)
+            if 200 <= gone[0] < 300:
+                did += "; deleted"
+            elif environ.get("MINIO_ROOT_USER") and environ.get("MINIO_ROOT_PASSWORD") and 200 <= s3(
+                    endpoint, (environ["MINIO_ROOT_USER"], environ["MINIO_ROOT_PASSWORD"]), "DELETE", bucket, obj)[0] < 300:
+                did += f"; its own delete answered {answered(*gone)}, removed with the root key"
+            else:
+                return False, f"{did}; left s3://{bucket}/{obj} behind: its delete answered {answered(*gone)} and no root pair is set"
+    if got != e.expect:
+        return False, f"expected {e.expect}, {did}"
+    if got == "refused":
+        there, shown = bucket_shown(endpoint, bucket, environ, pair)
+        if not there:
+            return False, f"{did}; {shown}"
+        did += f"; {shown}"
+    return True, did
+
+
 # ---- the release ---------------------------------------------------------------------------------
 
 def load(release: Path) -> Any:
@@ -231,7 +357,7 @@ def platform_held(m: Any) -> set[str]:
 def live_skip(e: Any, m: Any) -> str | None:
     """Why a row does not run on the live system, or None when it does."""
     from k2gen import model
-    if isinstance(e, model.ProbeExpectation | model.DriftExpectation):
+    if isinstance(e, model.ProbeExpectation | model.DriftExpectation | model.StorageKeyExpectation):
         return None
     if planted(e, m):
         return "it plants a view, which would write the live catalog; it ran on the throwaway lake at release time"
@@ -359,6 +485,9 @@ def verdict(trino: Trino, env: dict[str, Any], m: Any, release: Path, scope: str
         return "SKIP", SKIP_REST
     if isinstance(e, model.ProbeExpectation):
         return "SKIP", SKIP_PROBE
+    if isinstance(e, model.StorageKeyExpectation):
+        passed, why = storage_key(e)
+        return ("PASS" if passed else "FAIL"), why
     if isinstance(e, model.DriftExpectation):
         uri = env.get("lakekeeper") and f"{env['lakekeeper']}/catalog" or os.environ.get("K2_CATALOG_URI")
         if not uri:
@@ -396,6 +525,8 @@ def what(n: int, e: Any) -> str:
         return f"{n:02d} {e.principal}: {e.sql[:100]}{' (session header)' if e.session else ''} is {e.expect}"
     if isinstance(e, model.ProbeExpectation):
         return f"{n:02d} probe from {e.origin} to {e.target} is {e.expect}"
+    if isinstance(e, model.StorageKeyExpectation):
+        return f"{n:02d} the {e.engine} storage key's {e.operation} of s3://{e.target} is {e.expect}"
     return f"{n:02d} catalog drift is {e.expect}"
 
 

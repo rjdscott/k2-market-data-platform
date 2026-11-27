@@ -248,3 +248,200 @@ def test_the_lake_writes_env_json_only_through_lake_env():
     lake = (ROOT / "scripts/lib/throwaway-lake.sh").read_text()
     assert "lake_env.write(Path(\"/work/env.json\")" in lake and "env.json\").write_text" not in lake
     assert "passwordFile" not in (ROOT / "scripts/access_verify.py").read_text()
+
+
+# ---- storage-key rows (phase 002, step W0-3) -----------------------------------------------------
+
+STORAGE_ROWS = r"""
+import json, sys
+from k2gen import model
+rows = {
+    "refused": {"storageKey": {"engine": "tools", "target": "k2-lake/warehouse/governance", "operation": "write"}, "expect": "refused"},
+    "allowed": {"storageKey": {"engine": "trino", "target": "k2-lake/warehouse/governance", "operation": "read"}, "expect": "allowed"},
+    "bucket alone": {"storageKey": {"engine": "backup", "target": "k2-backup", "operation": "write"}, "expect": "allowed"},
+    "unknown engine": {"storageKey": {"engine": "root", "target": "k2-lake", "operation": "read"}, "expect": "allowed"},
+    "no operation": {"storageKey": {"engine": "spark", "target": "k2-lake"}, "expect": "allowed"},
+    "delete": {"storageKey": {"engine": "spark", "target": "k2-lake", "operation": "delete"}, "expect": "allowed"},
+    "s3 url": {"storageKey": {"engine": "spark", "target": "s3://k2-lake/warehouse", "operation": "read"}, "expect": "allowed"},
+    "dot dot": {"storageKey": {"engine": "spark", "target": "k2-lake/../x", "operation": "read"}, "expect": "allowed"},
+    "trailing slash": {"storageKey": {"engine": "spark", "target": "k2-lake/warehouse/", "operation": "read"}, "expect": "allowed"},
+    "open": {"storageKey": {"engine": "spark", "target": "k2-lake", "operation": "read"}, "expect": "open"},
+    "extra field": {"storageKey": {"engine": "spark", "target": "k2-lake", "operation": "read", "key": "x"}, "expect": "allowed"},
+    "with a principal": {"storageKey": {"engine": "spark", "target": "k2-lake", "operation": "read"}, "expect": "allowed", "principal": "svc.api"},
+    "probe": {"probe": {"from": "k2-net", "target": "lakekeeper:8181"}, "expect": "refused"},
+    "probe expecting allowed": {"probe": {"from": "k2-net", "target": "lakekeeper:8181"}, "expect": "allowed"},
+    "drift": {"drift": "catalog", "expect": "clean"},
+    "denied false": {"principal": "svc.api", "table": "governance.c.t", "denied": False},
+    "statement": {"principal": "svc.api", "sql": "SELECT 1", "expect": "ok"},
+}
+errors = {k: model.schema_errors("expectations", {"expectations": [r]}) for k, r in rows.items()}
+parsed = {k: repr(model._expectation(rows[k])) for k in ("refused", "allowed", "probe")}
+print(json.dumps({"errors": errors, "parsed": parsed}))
+"""
+
+
+def test_the_schema_takes_a_storage_key_row_and_the_five_shapes_as_before():
+    out = subprocess.run(["uv", "run", "--project", "platform/k2gen", "--locked", "-q", "python", "-c", STORAGE_ROWS],
+                         cwd=ROOT, capture_output=True, text=True, timeout=300)
+    assert out.returncode == 0, out.stderr
+    got = json.loads(out.stdout.strip().splitlines()[-1])
+    accepted = {k for k, e in got["errors"].items() if not e}
+    assert accepted == {"refused", "allowed", "bucket alone", "probe", "drift", "statement"}, got["errors"]
+    assert got["parsed"]["refused"] == \
+        "StorageKeyExpectation(engine='tools', target='k2-lake/warehouse/governance', operation='write', expect='refused')"
+    assert got["parsed"]["allowed"].startswith("StorageKeyExpectation(engine='trino'")
+    assert got["parsed"]["probe"] == "ProbeExpectation(origin='k2-net', target='lakekeeper:8181', expect='refused')"
+
+
+def test_the_signature_is_aws_signature_v4():
+    """AWS's own worked example (S3 API reference, Signature V4, "GET Bucket (List Objects)")."""
+    auth = av.sigv4("GET", "examplebucket.s3.amazonaws.com", "/", "max-keys=2&prefix=J", "20130524T000000Z",
+                    ("AKIAIOSFODNN7EXAMPLE", "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"))
+    assert auth["Authorization"] == (
+        "AWS4-HMAC-SHA256 Credential=AKIAIOSFODNN7EXAMPLE/20130524/us-east-1/s3/aws4_request, "
+        "SignedHeaders=host;x-amz-content-sha256;x-amz-date, "
+        "Signature=34b48302e7b5fa45bde8084f4b7868a86f0a534bc59db6670ed5711ef69dc6f7")
+
+
+class FakeS3:
+    """MinIO's answers, in memory, by the access key a request is signed with: a policy per key
+    (rw, ro, wo: write but no delete, none) and, as MinIO does, the policy checked before the
+    bucket exists, so a refused key gets AccessDenied on a bucket that is not there; `bad` is a
+    key MinIO does not know."""
+
+    POLICY = {"ak-rw": "rw", "ak-ro": "ro", "ak-wo": "wo", "ak-none": "none", "root-ak": "rw"}
+
+    def __init__(self):
+        import http.server
+        import threading
+        fake = self
+        self.buckets = {"k2-lake": {"warehouse/governance/t-uuid/metadata/v1.json": b"{}"}, "k2-backup": {}}
+        self.seen: list[str] = []
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def log_message(self, *a):
+                pass
+
+            def answer(self, status, code=None, body=b""):
+                if code:
+                    body = f"<Error><Code>{code}</Code><Message>m</Message></Error>".encode()
+                self.send_response(status)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def handle_one(self):
+                fake.seen.append(self.headers.get("Authorization", ""))
+                ak = self.headers.get("Authorization", "").partition("Credential=")[2].partition("/")[0]
+                path, _, query = self.path.partition("?")
+                bucket, _, key = path.lstrip("/").partition("/")
+                policy = fake.POLICY.get(ak)
+                if policy is None:
+                    return self.answer(403, "InvalidAccessKeyId")
+                write = self.command in ("PUT", "DELETE")
+                if policy == "none" or (write and policy == "ro") or (self.command == "DELETE" and policy == "wo") \
+                        or (self.command == "GET" and policy == "wo"):
+                    return self.answer(403, "AccessDenied")
+                if bucket not in fake.buckets:
+                    return self.answer(404, "NoSuchBucket")
+                objects = fake.buckets[bucket]
+                if self.command == "PUT":
+                    objects[urllib.parse.unquote(key)] = self.rfile.read(int(self.headers.get("Content-Length") or 0))
+                    return self.answer(200)
+                if self.command == "DELETE":
+                    objects.pop(urllib.parse.unquote(key), None)
+                    return self.answer(204)
+                if query.startswith("location"):
+                    return self.answer(200, body=b"<LocationConstraint/>")
+                if "list-type=2" in query:
+                    prefix = urllib.parse.parse_qs(query).get("prefix", [""])[0]
+                    keys = "".join(f"<Contents><Key>{k}</Key></Contents>" for k in sorted(objects) if k.startswith(prefix))[:1000]
+                    return self.answer(200, body=f"<ListBucketResult>{keys}</ListBucketResult>".encode())
+                if urllib.parse.unquote(key) in objects:
+                    return self.answer(206, body=objects[urllib.parse.unquote(key)][:1])
+                return self.answer(404, "NoSuchKey")
+
+            do_GET = do_PUT = do_DELETE = handle_one
+
+        self.server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+        self.endpoint = f"http://127.0.0.1:{self.server.server_port}"
+
+
+import urllib.parse  # noqa: E402  (FakeS3's handler)
+from types import SimpleNamespace  # noqa: E402
+
+SECRETS = {"ak-rw": "sk-rw-0123456789", "ak-ro": "sk-ro-0123456789", "ak-wo": "sk-wo-0123456789",
+           "ak-none": "sk-none-0123456789", "bad": "sk-bad-0123456789", "root-ak": "sk-root-0123456789"}
+
+
+@pytest.fixture
+def s3():
+    fake = FakeS3()
+    yield fake
+    fake.server.shutdown()
+
+
+def keys(fake, endpoint=None, **engines) -> dict[str, str]:
+    env = {"K2_S3_ENDPOINT": endpoint or fake.endpoint}
+    for engine, ak in engines.items():
+        env |= {f"K2_{engine.upper()}_S3_ACCESS_KEY": ak, f"K2_{engine.upper()}_S3_SECRET_KEY": SECRETS[ak]}
+    return env
+
+
+def row(engine, target, operation, expect):
+    return SimpleNamespace(engine=engine, target=target, operation=operation, expect=expect)
+
+
+@pytest.mark.parametrize("engines,r,passes,says", [
+    ({"trino": "ak-ro"}, row("trino", "k2-lake/warehouse/governance", "read", "allowed"), True, "1 object listed and read"),
+    ({"trino": "ak-ro"}, row("trino", "k2-lake/warehouse/fx", "read", "allowed"), True, "0 objects listed"),
+    ({"tools": "ak-none", "trino": "ak-ro"}, row("tools", "k2-lake/warehouse/governance", "read", "refused"), True, "AccessDenied"),
+    ({"tools": "ak-ro"}, row("tools", "k2-lake/warehouse/governance", "write", "refused"), True, "AccessDenied"),
+    ({"spark": "ak-rw"}, row("spark", "k2-lake/warehouse/governance", "write", "allowed"), True, "deleted"),
+    ({"spark": "ak-rw"}, row("spark", "k2-lake/warehouse/governance", "write", "refused"), False, "expected refused"),
+    ({"tools": "ak-ro"}, row("tools", "k2-lake/warehouse/governance", "read", "refused"), False, "expected refused"),
+    ({"spark": "ak-none"}, row("spark", "k2-lake/warehouse/governance", "read", "allowed"), False, "AccessDenied"),
+    # a refusal counts only when some key shows the bucket is there
+    ({"tools": "ak-none", "trino": "ak-ro"}, row("tools", "k2-typo/warehouse", "read", "refused"), False, "NoSuchBucket"),
+    ({"tools": "ak-none"}, row("tools", "k2-lake/warehouse/governance", "read", "refused"), False, "no key here shows"),
+    # a key MinIO does not know is a 403 too, but not AccessDenied
+    ({"tools": "bad"}, row("tools", "k2-lake/warehouse/governance", "read", "refused"), False, "InvalidAccessKeyId"),
+    ({"spark": "ak-rw"}, row("spark", "k2-typo", "write", "allowed"), False, "NoSuchBucket"),
+])
+def test_a_storage_key_row_passes_on_its_outcome_alone(s3, engines, r, passes, says, capsys):
+    passed, why = av.storage_key(r, keys(s3, **engines))
+    assert passed is passes and says in why, why
+    assert s3.buckets["k2-lake"].keys() == {"warehouse/governance/t-uuid/metadata/v1.json"}  # no probe object left
+    shown = why + "".join(capsys.readouterr())
+    assert not any(v in shown for v in [*SECRETS.values(), *SECRETS])  # neither half of any pair, ever
+
+
+def test_a_write_probe_is_removed_with_the_root_key_when_its_own_cannot_delete(s3):
+    r = row("backup", "k2-backup", "write", "allowed")
+    passed, why = av.storage_key(r, keys(s3, backup="ak-wo"))
+    assert not passed and "left s3://k2-backup/k2-access-probe/" in why and len(s3.buckets["k2-backup"]) == 1
+    s3.buckets["k2-backup"].clear()
+    env = keys(s3, backup="ak-wo") | {"MINIO_ROOT_USER": "root-ak", "MINIO_ROOT_PASSWORD": SECRETS["root-ak"]}
+    passed, why = av.storage_key(r, env)
+    assert passed and "removed with the root key" in why and s3.buckets["k2-backup"] == {}
+    assert SECRETS["root-ak"] not in why and "root-ak" not in why
+
+
+def test_an_unreachable_storage_fails_a_refused_row(s3):
+    import socket
+    with socket.socket() as s:  # a port nothing listens on
+        s.bind(("127.0.0.1", 0))
+        closed = f"http://127.0.0.1:{s.getsockname()[1]}"
+    passed, why = av.storage_key(row("tools", "k2-lake/warehouse/governance", "read", "refused"), keys(s3, closed, tools="ak-none"))
+    assert not passed and "cannot reach the storage" in why and SECRETS["ak-none"] not in why
+
+
+def test_a_missing_key_fails_its_row_naming_the_variable(s3):
+    env = keys(s3, trino="ak-ro")
+    passed, why = av.storage_key(row("maintenance", "k2-lake/warehouse/governance", "read", "refused"), env)
+    assert not passed and "K2_MAINTENANCE_S3_ACCESS_KEY" in why and "K2_MAINTENANCE_S3_SECRET_KEY" in why
+    del env["K2_TRINO_S3_SECRET_KEY"]
+    passed, why = av.storage_key(row("trino", "k2-lake/warehouse/governance", "read", "allowed"), env)
+    assert not passed and "K2_TRINO_S3_SECRET_KEY" in why and "K2_TRINO_S3_ACCESS_KEY" not in why
+    assert s3.seen == []  # nothing was sent without a full pair
