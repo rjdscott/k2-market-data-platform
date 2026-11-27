@@ -230,10 +230,11 @@ class SparkTask(BaseOperator):
             loss = self.task_id == "load" and data_loss_reason(context["dag_run"], self.kafka)
             return [f"{lake}/connector.py", self.task_id, *common, *(["--accept-data-loss"] if loss else [])]
         if self.task_id == "compact":
-            # W1-21's hook, to join at merge: maintain.py's compaction pass of a Kafka product's
-            # landing and bronze, with the Spark key (maintain.py picks the key by pass; this argv
-            # carries no key), skipping bronze while `audit` is ahead of `main`. `--compact` is the
-            # shape proposed here. Due when maintain is: maintain's skip skips it (all_success).
+            # W1-21: maintain.py --compact, a Kafka product's landing and bronze compacted with the
+            # Spark key (maintain.py picks the key by pass; this argv carries none), the whole pass
+            # skipped while bronze's `audit` is ahead of `main`.
+            # ponytail: daily, due when maintain is (maintain's skip skips it, all_success); every
+            # run is trigger rule none_failed, if W0-12's chain timing leaves room for a Spark start.
             return [f"{lake}/maintain.py", *common, "--compact"]
         if self.task_id == "expire":
             result = ti.xcom_pull(task_ids="build", key="result")
