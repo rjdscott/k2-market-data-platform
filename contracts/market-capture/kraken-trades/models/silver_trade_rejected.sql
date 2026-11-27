@@ -64,13 +64,14 @@ classified as (
     f.kafka_offset,
     f.kafka_timestamp,
     f.payload,
-    case
+    -- cast: a CASE of literals is a bounded varchar, and the contract's column is varchar
+    cast(case
       when f.frame is null then 'payload_not_json'
       when json_extract_scalar(f.frame, '$.channel') is distinct from 'trade' then null
       when try(cast(json_extract(f.frame, '$.data') as array(json))) is null then 'no_trade_array'
       when json_extract_scalar(f.frame, '$.type') is null then 'field_missing:type'
       else b.reason
-    end as reason
+    end as varchar) as reason
   from frames as f
   left join first_bad as b
     on b.kafka_partition = f.kafka_partition and b.kafka_offset = f.kafka_offset
