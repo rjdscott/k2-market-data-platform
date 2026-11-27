@@ -68,6 +68,8 @@ the one whose part a change touches.
 | `dbt-wrapper.sh` | the dbt wrapper in its own image, as the operator runs it, on a throwaway lake: a pass moves the tested tag, a failed test rolls back while a reader polling every 50 ms never sees a failed row, a killed run is reconciled, a changed or retyped column |
 | `catalog-site.sh` | offline: a trial release's catalog site, a page per product, no script, no outside link, no secret-looking text, and a planted secret fails the check; with a release and a site directory, checks that site |
 | `api-schema.sh` | every catalog document k2-api serves validates against the frozen schema, and `/v1/openapi.json` declares OpenAPI 3.1.0; `--release <dir>` checks a release with no k2-api |
+| `kafka-path.sh <release dir> a\|b\|c` | phase 004's Kafka connector, each task the release's own `connector.py`, on a throwaway lake with a Redpanda and the synthetic fixture product `market-capture.kafka-fixture` (frames from `services/capture-rust/tests/fixtures/synthetic-kraken-20s.jsonl`). Group a: one load lands every frame and stages the trades, staged plus skipped equal to landed; kills before and after the landing commit and a retry add nothing twice and leave no hole; Spark's own key; a corrupt frame fails `parses`; bronze carries the decoded envelope; an unaudited batch healed by the next run (a11) and a failed one never reset (a12). Group b: below the log start refused naming each partition; `--accept-data-loss` lands from the log start with the gap in `k2.kafka-gaps`, still there after a further run; a topic trimmed before the first run (b6). Group c: compaction skipped while `audit` holds a batch, then a `replace` per table; expiry keeps the newest connector snapshot; the next run resumes from it. On 2026-11-28: a `10 PASS, 0 FAIL`, b `5 PASS, 0 FAIL`, c `6 PASS, 0 FAIL`, before a11, a12 and b6 were added; their run is pending. Limit: a fixture product and the connector run directly, not through Airflow |
+| `dbt-patterns.sh <release dir>` | three dbt patterns through the real wrapper on a throwaway lake, the fixture product `reference-data.pattern-lab`: (a) type-2 history from a listing as a `table` model, the first version at `1970-01-01`, the open row at `9999-12-31 23:59:59`, a rebuild equal; (b) a held table whose rows move into silver exactly once when they resolve; (c) a `warn` test that publishes and reports `degraded`; claim 12, compaction after the tests to zero delete files and an INSERT after the optimize refused. Its last run printed `10 PASS, 1 FAIL`; the failing claim is fixed since and two claims added, the rerun pending. Limit: fixture products, not phase 004's own |
 
 ## Running them
 
@@ -124,6 +126,14 @@ tests `legacy/v2-kotlin/`.
 No job starts the stack, so nothing in CI exercises a real Redpanda, ClickHouse or
 WebSocket connection. `make test-access` and the deploy rehearsal are not in CI either: they run in
 [`make spine-e2e`](spine-e2e.md), at merge points.
+
+`make test-dbt SELECTOR=<name>` builds one product and the products its input ports name, transitively,
+in their order (`scripts/dbt_order.py`, `tests/test_dbt_order.py`), on the same throwaway lake as the
+whole `make test-dbt`. `SELECTOR=candles` built six products with every test passing on 2026-11-28, on
+empty bronze: it proves the models compile, build in order and pass their unit tests, not that a
+frame's rows reach the candles. `scripts/verify/delete-files.sh` is not a throwaway proof: it reads the
+live release's dbt outputs as `svc.platform` and fails any over 24 delete files, the soak's baseline and
+its end check, and has not run yet.
 
 ## What is not covered
 

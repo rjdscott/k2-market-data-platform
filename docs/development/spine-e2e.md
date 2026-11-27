@@ -188,6 +188,18 @@ It missed two more on the live stack the same day, after that deploy:
    every response shape: length with keep-alive and with close, HTTP/1.0, chunked, read to the close,
    empty, and each after a redirect that closes.
 
+It missed one more, found by review on 2026-11-28 while phase 004 was built, before any deploy:
+
+- **The first run on a trimmed topic.** A Kafka product lands from the log start, and bronze's first
+  stage planned each partition from offset 0, so on a topic whose oldest records the broker had
+  already deleted the first audit would have counted rows that were never there and failed for good.
+  Every throwaway topic a proof had made started at offset 0, so no test could meet it. A partition
+  bronze never staged now starts at the landing's lowest offset in it (review finding D1,
+  [`phase-001-interfaces.md`](./phase-001-interfaces.md)), and what covers it is
+  `scripts/verify/kafka-path.sh` claim b6: the topic trimmed halfway on every partition before the
+  product's first run, which then lands from each log start, every offset once, and audits and
+  publishes. Its run is pending.
+
 ## Alternatives considered
 
 | Alternative | Why not |
