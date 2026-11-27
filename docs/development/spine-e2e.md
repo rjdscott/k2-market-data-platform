@@ -59,8 +59,9 @@ compose file pins it, and `dbt-runner` built from the tree. The same machinery
 Times, each from one recorded run, 2026-11-27, `make spine-e2e`: the fast rehearsal 416 s, then
 605 to 615 s after Spark joined the rehearsal's stack; a full run 1085 s. The first recorded run,
 before the fast rehearsal existed, printed `PASS rules 261s`, `PASS rehearsal 1347s` and a total
-of `1609 s`. The `run` stage, from one recorded run of 2026-11-27, before its REST claim was added: `run-path: 7 PASS, 0 FAIL in
-232 s`, and inside `ONLY="run" make spine-e2e` the same day `PASS run 227s`. No file in the
+of `1609 s`. The `run` stage, from recorded runs of 2026-11-27: `run-path: 7 PASS, 0 FAIL in 232 s` before its REST claim
+was added, then `run-path: 8 PASS, 0 FAIL in 227 s`, and inside `ONLY="run" make spine-e2e` the same day
+`PASS run 232s  run-path: 8 PASS, 0 FAIL in 230 s`. No file in the
 repository records the other stages' times, so none is given. Memory: each throwaway lake refuses
 to start under 6 GiB available (`MIN_GIB` in `throwaway-lake.sh`), and the `run` stage and the
 rehearsal under 10 GiB (`run-path-lib.sh`, `deploy_rehearsal.py`).

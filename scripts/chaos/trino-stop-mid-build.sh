@@ -47,7 +47,9 @@ kind = set(json.loads(Path(oneshots).read_text())["oneshots"]["dbt-runner"]["env
 values = [p.read_text().strip() for p in Path(secrets).rglob("*") if p.is_file() and p.suffix in (".password", ".key")]
 values += [line.split("=", 1)[1] for line in Path(s3env).read_text().splitlines() if "=" in line]
 Path(out).write_text(json.dumps({"names": sorted(env), "kind": sorted(kind), "image": sorted(own),
-                                 "forbidden": sorted(n for n in env if re.search(r"S3|AWS|AIRFLOW|DOCKER|MINIO|SECRET|PASSWORD|KEY", n)),
+                                 # the names the run adds to the image's own (the base image's GPG_KEY is the public
+                                 # fingerprint of Python's release-signing key, not a secret)
+                                 "forbidden": sorted(n for n in set(env) - own if re.search(r"S3|AWS|AIRFLOW|DOCKER|MINIO|SECRET|PASSWORD|KEY", n)),
                                  "secretValues": sum(1 for v in env.values() for s in values if s and s in v)}))
 PY
 docker stop -t 5 "$P-trino" > /dev/null && echo "$P: Trino stopped under rp-stop's build"
