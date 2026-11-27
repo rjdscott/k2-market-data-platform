@@ -1016,6 +1016,7 @@ class Product:
     seeds: Mapping[str, bytes]  # path under seeds/ -> bytes, each declared by the `seeds` property
     support: tuple[Support, ...] = ()  # ODPS support
     links: tuple[Link, ...] = ()  # ODPS authoritativeDefinitions, the licence's included
+    refresh: str | None = None  # the `refresh` property: the product a degraded build starts (W1-6, checks/refresh.py)
 
 
 @dataclass(frozen=True)
@@ -1427,6 +1428,7 @@ def _product(pdir: str, parsed: Mapping[str, Any], documents: Mapping[str, bytes
                 for f, data in sorted(files.items()) if f.startswith("models/") and f.endswith(".sql")},
         unit_tests=unit_tests,
         seeds={s: files[f"seeds/{s}"] for s in sorted(declared & present)},
+        refresh=props.get("refresh"),
         support=tuple(Support(s["channel"], s["url"], s.get("tool"), s.get("scope"), s.get("description"))
                       for s in doc.get("support", ())),
         links=tuple(Link(d["type"], d["url"], d.get("description")) for d in doc.get("authoritativeDefinitions", ())))
