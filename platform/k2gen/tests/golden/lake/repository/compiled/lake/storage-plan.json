@@ -39,7 +39,12 @@
     },
     {
       "name": "market_analytics",
-      "namespaces": [],
+      "namespaces": [
+        "candles",
+        "candles__base",
+        "canonical_trades",
+        "canonical_trades__base"
+      ],
       "remoteSigningEnabled": false
     },
     {

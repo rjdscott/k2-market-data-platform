@@ -1,0 +1,120 @@
+apiVersion: v3.2.0
+kind: DataContract
+id: market-analytics.candles.ohlcv_1d
+name: ohlcv_1d
+version: 1.0.0
+domain: market-analytics
+description:
+  purpose: >-
+    One row per venue, instrument and one-day window holding at least one trade: its open, high,
+    low, close, volume, quote volume and trade count over the window's trades, duplicates
+    excluded, the window half-open [window_start, window_end) in UTC.
+    The day is the UTC day, from 00:00:00 UTC to the next, whatever time zone a reader sets.
+team:
+  name: analytics-team
+schema:
+  - id: ohlcv_1d
+    name: ohlcv_1d
+    physicalName: candles.ohlcv_1d
+    physicalType: table
+    properties:
+      - name: venue
+        physicalType: varchar
+        required: true
+        primaryKey: true
+        primaryKeyPosition: 1
+        description: The venue the trades happened on.
+      - name: instrument_id
+        physicalType: varchar
+        required: true
+        primaryKey: true
+        primaryKeyPosition: 2
+        description: The security master's instrument the trades are of.
+      - name: window_start
+        physicalType: timestamp(6) with time zone
+        required: true
+        primaryKey: true
+        primaryKeyPosition: 3
+        description: The window's first instant, inclusive, in UTC, at midnight.
+        customProperties:
+          - property: time
+            value: event
+      - name: window_end
+        physicalType: timestamp(6) with time zone
+        required: true
+        description: >-
+          The window's end, exclusive, in UTC: window_start plus 1 day. Every trade counted
+          has trade_ts before it, so the delayed_reader's delay on it holds for every trade in the
+          candle.
+        transformSourceObjects: [market-analytics.canonical-trades.trades.trade_ts]
+        customProperties:
+          - property: time
+            value: event
+      - name: open
+        physicalType: decimal(38,18)
+        required: true
+        description: >-
+          The first trade's price, first by trade_ts, ties broken by the venue row's key
+          (kafka_partition, kafka_offset, trade_ordinal): the capture's order, as the archived
+          candles broke ties by receive time and position in the frame.
+      - name: high
+        physicalType: decimal(38,18)
+        required: true
+        description: The highest price.
+      - name: low
+        physicalType: decimal(38,18)
+        required: true
+        description: The lowest price.
+      - name: close
+        physicalType: decimal(38,18)
+        required: true
+        description: The last trade's price, in the order open uses.
+      - name: volume
+        physicalType: decimal(38,18)
+        required: true
+        description: The sum of the trades' quantities, in the base asset, exact.
+      - name: quote_volume
+        physicalType: decimal(38,18)
+        required: true
+        description: >-
+          The sum of price times quantity, in the quote asset: each price rounded half up to 12
+          and each quantity to 10 fractional digits first, the sum to 18.
+      - name: trade_count
+        physicalType: bigint
+        required: true
+        description: The trades counted, each once (is_duplicate false).
+      - name: first_trade_at
+        physicalType: timestamp(6) with time zone
+        required: true
+        description: The earliest trade_ts counted.
+      - name: last_trade_at
+        physicalType: timestamp(6) with time zone
+        required: true
+        description: The latest trade_ts counted.
+      - name: through_load_seq
+        physicalType: bigint
+        required: true
+        description: >-
+          The highest canonical-trades load_seq the build that wrote this row had read: the
+          table's watermark is its highest value, and the next build recomputes the windows of the
+          trades written past it.
+roles:
+  - role: full_reader
+    access: read
+  - role: delayed_reader
+    access: read
+customProperties:
+  - property: layer
+    value: gold
+  - property: build
+    value: dbt
+  - property: backup
+    value: rebuild  # recomputed from canonical-trades
+  - property: partitioning
+    value: [year(window_start)]
+  - property: policies
+    value:
+      delayed_reader:
+        # canonical-trades delays trade_ts 20 minutes; a candle shows once its window ended 20
+        # minutes ago, by then every trade in it is past that delay (access.inherit-delay)
+        delay: {column: window_end, minutes: 20}

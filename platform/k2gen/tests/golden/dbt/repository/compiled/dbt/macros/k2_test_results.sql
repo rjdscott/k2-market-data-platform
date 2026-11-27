@@ -20,6 +20,14 @@ select 'governance.access-canary' as "product_id", "run_id", "dbt_invocation_id"
 union all
 select 'governance.quality-results' as "product_id", "run_id", "dbt_invocation_id", "release_id", "run_started_at", "writer", "unique_id", "test_name", "tested", "status", "failures", "execution_time", "message" from "governance"."quality_results__base"."dq_test_results" where "writer" = 'dbt_quality_results'
 {%- endif %}
+{%- if k2_test_results_exist('market_analytics', 'candles__base') %}
+union all
+select 'market-analytics.candles' as "product_id", "run_id", "dbt_invocation_id", "release_id", "run_started_at", "writer", "unique_id", "test_name", "tested", "status", "failures", "execution_time", "message" from "market_analytics"."candles__base"."dq_test_results" where "writer" = 'dbt_candles'
+{%- endif %}
+{%- if k2_test_results_exist('market_analytics', 'canonical_trades__base') %}
+union all
+select 'market-analytics.canonical-trades' as "product_id", "run_id", "dbt_invocation_id", "release_id", "run_started_at", "writer", "unique_id", "test_name", "tested", "status", "failures", "execution_time", "message" from "market_analytics"."canonical_trades__base"."dq_test_results" where "writer" = 'dbt_canonical_trades'
+{%- endif %}
 {%- if k2_test_results_exist('market_capture', 'kraken_instruments__base') %}
 union all
 select 'market-capture.kraken-instruments' as "product_id", "run_id", "dbt_invocation_id", "release_id", "run_started_at", "writer", "unique_id", "test_name", "tested", "status", "failures", "execution_time", "message" from "market_capture"."kraken_instruments__base"."dq_test_results" where "writer" = 'dbt_kraken_instruments'
