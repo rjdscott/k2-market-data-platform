@@ -110,6 +110,25 @@ if A[0] == "exec":
         print(S.get("mc_out", "")); sys.exit(S.get("mc_rc", 0))
     if A[2] == "readlink":
         print("\n".join(os.readlink(p.replace("/k2/releases", E["FAKE_ROOT"])) for p in A[3:])); sys.exit(0)
+    if A[2] == "airflow":  # Airflow 3.3.2's CLI: piped -o json is one line, every value a string
+        F, argv = S["airflow"], A[3:]
+        log("airflow", *argv)
+        if argv == ["dags", "list", "-o", "json"]:
+            print(json.dumps([{"dag_id": d, "fileloc": "/x/factory.py", "is_paused": str(p)} for d, p in sorted(F["paused"].items())]))
+        elif argv[:2] in (["dags", "pause"], ["dags", "unpause"]) and len(argv) == 3:
+            if argv[2] in F["paused"]:
+                F["paused"][argv[2]] = argv[1] == "pause"
+        elif argv[:2] == ["dags", "list-runs"] and argv[3:] == ["--state", "running", "-o", "json"]:
+            # a paused DAG's run stays running, its later tasks unscheduled, after its task is done
+            print(json.dumps([{"dag_id": argv[2], "run_id": "scheduled__1", "state": "running"}] if argv[2] in F["busy"] else []))
+        elif argv[:2] == ["dags", "states-for-dag-run"] and argv[3:] == ["scheduled__1", "-o", "json"]:
+            n = F["busy"][argv[2]]  # its build runs for n more polls; -1: for ever
+            F["busy"][argv[2]] = n - 1 if n > 0 else n
+            print(json.dumps([{"dag_id": argv[2], "task_id": "resolve", "state": "success"},
+                              {"dag_id": argv[2], "task_id": "build", "state": "running" if n else "success"}]))
+        else:
+            sys.exit(f"fake airflow: no such command {argv}")
+        save(); sys.exit(0)
     log("exec", *A[2:4]); sys.exit(0)
 assert A[0] == "compose", A
 files = [A[i + 1] for i, a in enumerate(A) if a == "-f"]
@@ -175,6 +194,7 @@ sys.exit(f"fake docker: no answer for {A}")
             self.shaped: list[str] = []
             monkeypatch.setattr(deploy, "statements", lambda ctx, rel, v, old, new: self.shaped.append(rel.id) or view_update(v, old, new))
             monkeypatch.setattr(deploy, "REFRESH_S", 0)
+            monkeypatch.setattr(deploy, "DRAIN_POLL_S", 0)
             self.ctx = deploy.Ctx(root=self.root, secrets=self.secrets, home=ROOT, project="k2", trino="https://localhost:1",
                                   operator="tester", faults=set(), tmp=tmp, say=lambda line: None)
             self.n = 0
@@ -248,6 +268,19 @@ sys.exit(f"fake docker: no answer for {A}")
 
         def ups(self) -> list[str]:
             return [e[1] for e in self.timeline() if e[0] == "up"]
+
+        def scheduler(self, paused: dict[str, bool], busy: dict[str, int] | None = None) -> None:
+            """Airflow's scheduler running, with these DAGs (True: paused) and these runs' builds running."""
+            s = self.read()
+            s["containers"].append({"id": "c-airflow-scheduler", "service": "airflow-scheduler", "created": "0",
+                                    "image": "x", "status": "running"})
+            self.write(s | {"airflow": {"paused": paused, "busy": busy or {}}})
+
+        def paused(self) -> dict[str, bool]:
+            return dict(self.read()["airflow"]["paused"])
+
+        def airflow_calls(self) -> list[list[str]]:
+            return [e[1:] for e in self.timeline() if e[0] == "airflow"]
 
         def image_of(self, svc: str) -> str:
             return next(c["image"] for c in self.read()["containers"] if c["service"] == svc)
@@ -766,3 +799,114 @@ sys.exit(f"fake docker: no answer for {A}")
         monkeypatch.setattr(deploy, "run", lambda *a, **k: subprocess.CompletedProcess(a, 0, json.dumps(recorded[:1]), ""))
         with pytest.raises(deploy.Refused, match="no registry digest"):
             deploy.held_ref("sha256:" + "e" * 64, image, image)
+
+    # --- the drain (W1-6, ADR-058) ------------------------------------------------------
+
+    CODE = "docker/airflow/dags/factory.py"  # in a release at platform/docker/airflow/dags/factory.py
+    SR, DL = "station_readings", "daily_load"  # the good set's two DAGs
+
+    def stand_in(tmp: Path, rid: str, dags: dict[str, list[str]], code: str) -> Any:
+        """A release as drain_need reads one: its manifest's files and its dags.json."""
+        (tmp / rid / "compiled/airflow").mkdir(parents=True)
+        (tmp / rid / model.DAGS).write_text(json.dumps({"dags": [{"dagId": d, "tasks": t} for d, t in dags.items()]}))
+        files = {model.DAGS: hashlib.sha256(json.dumps(dags).encode()).hexdigest(),
+                 f"platform/{CODE}": code, "compiled/trino/rules.json": rid}  # the rules move every time: never a drain
+        return type("R", (), {"id": rid, "root": tmp / rid, "manifest": type("M", (), {"files": files})})()
+
+    def test_drain_need_for_each_kind_of_change(tmp_path: Path) -> None:
+        old = stand_in(tmp_path, "v1-a", {"a": ["resolve", "build"], "b": ["resolve", "build"], "c": ["resolve"]}, "h1")
+        new = stand_in(tmp_path, "v1-b", {"a": ["resolve", "fetch", "build"], "c": ["resolve"], "d": ["resolve"]}, "h1")
+        same = stand_in(tmp_path, "v1-c", {"a": ["resolve", "fetch", "build"], "c": ["resolve"], "d": ["resolve"]}, "h1")
+        moved = stand_in(tmp_path, "v1-d", {"a": ["resolve", "build"], "b": ["resolve", "build"], "c": ["resolve"]}, "h2")
+
+        def plan(target: Any, *sources: Any, recreate: tuple[str, ...] = ()) -> Any:
+            return deploy.Plan(target, list(sources), list(recreate), [], False, [], [], [])
+
+        assert deploy.drain_need(plan(new, old)) == ({"a", "b"}, "the task list of a, b changes or goes")  # d is new: no run
+        assert deploy.drain_need(plan(same, new))[0] == set()
+        assert deploy.drain_need(plan(same, new, recreate=("standin", "trino"))) == (None, "Trino restarts")
+        assert deploy.drain_need(plan(new, moved)) == (None, "the DAG code moved since v1-d")
+        assert deploy.drain_need(plan(same, new, moved))[0] is None  # any source the code moved from: all
+        assert deploy.drain_need(plan(new, None))[0] is None  # no release before: its DAGs are unknown
+
+    def drained_world(world: World, paused: dict[str, bool], busy: dict[str, int] | None = None) -> tuple[Any, Any]:
+        """r1 live with the scheduler running; r2 moves the DAG code, so every DAG drains."""
+        r1 = world.release(over={CODE: b"# one\n"})
+        world.live(r1)
+        world.scheduler(paused, busy)
+        return r1, world.release(over={CODE: b"# two\n"})
+
+    def test_a_drain_pauses_only_the_running_dags_waits_for_their_tasks_and_unpauses_exactly_those(world: World) -> None:
+        r1, r2 = drained_world(world, {SR: False, DL: True}, busy={SR: 1})  # an operator paused daily_load
+        said: list[str] = []
+        world.ctx.say = said.append
+        assert world.deploy(r2) == 0
+        runs = [[*p, "--state", "running", "-o", "json"] for p in (["dags", "list-runs", DL], ["dags", "list-runs", SR])]
+        poll = [*runs, ["dags", "states-for-dag-run", SR, "scheduled__1", "-o", "json"]]
+        assert world.airflow_calls() == [["dags", "list", "-o", "json"], ["dags", "pause", SR], *poll, *poll,
+                                         ["dags", "unpause", SR]]  # daily_load's run is asked, its pause kept
+        assert world.paused() == {SR: False, DL: True} and not (world.root / deploy.DRAIN_STATE).exists()
+        t = [e[:3] for e in world.timeline()]
+        assert t.index(["airflow", "dags", "pause"]) < t.index(["tools", "swap", r2.id]) < t.index(["airflow", "dags", "unpause"])
+        assert any("drain: the DAG code moved since" in x for x in said) and any(x.startswith("  drained daily_load, station_readings") for x in said)
+        steps = [r["step"] for r in records(world)]
+        assert steps[steps.index("drain") - 1: steps.index("drain") + 2] == ["backup", "drain", "ddl"]
+
+    def test_a_failed_verify_rolls_back_then_unpauses_the_drained_dags(world: World) -> None:
+        r1, r2 = drained_world(world, {SR: False, DL: True})
+        assert world.deploy(r2, "verify-mismatch") == 1
+        assert world.paused() == {SR: False, DL: True} and not (world.root / deploy.DRAIN_STATE).exists()
+        t = [e[:3] for e in world.timeline()]
+        back = max(i for i, e in enumerate(t) if e[:2] == ["tools", "swap"])  # the rollback's swap, to r1
+        assert t[back][2] == r1.id and back < t.index(["airflow", "dags", "unpause"])
+        assert world.airflow_calls()[-1] == ["dags", "unpause", SR]
+
+    def test_tasks_still_running_at_the_bound_refuse_before_the_swap_unpause_and_the_override_goes_on(
+            world: World, monkeypatch: pytest.MonkeyPatch) -> None:
+        r1, r2 = drained_world(world, {SR: False, DL: False}, busy={SR: -1})
+        monkeypatch.setattr(deploy, "DRAIN_WAIT_S", 0)
+        with pytest.raises(deploy.Refused, match=r"still running after 0 s: station_readings\.build \(run scheduled__1, running\)"):
+            world.deploy(r2)
+        assert world.paused() == {SR: False, DL: False} and world.airflow_calls()[-2:] == [["dags", "unpause", DL], ["dags", "unpause", SR]]
+        assert [e for e in world.timeline() if e[:2] == ["tools", "swap"]] == [] and world.ups() == []
+        assert (records(world)[-1]["step"], records(world)[-1]["outcome"]) == ("drain", "failed")
+        assert deploy.standing(records(world))[1] == []  # a refusal moved nothing: no unfinished attempt
+        world.ctx.allow_running = True
+        assert world.deploy(r2) == 0 and world.paused() == {SR: False, DL: False}
+        steps = [r["step"] for r in records(world)]
+        assert steps[steps.index("allow-running") + 1] == "drain" and steps[-1] == "done"
+
+    def test_the_paused_set_is_written_before_the_first_pause_and_a_rerun_after_a_kill_unpauses_it(
+            world: World, monkeypatch: pytest.MonkeyPatch) -> None:
+        r1, r2 = drained_world(world, {SR: False, DL: True})
+        real, seen = deploy.airflow, []
+
+        def killed(ctx: Any, cid: str, *argv: str) -> Any:
+            out = real(ctx, cid, *argv)
+            if argv[:2] == ("dags", "pause"):
+                seen.append(deploy.paused_by_deploy(ctx))
+                raise KeyboardInterrupt  # the process dies right after Airflow paused it: no except Exception runs
+            return out
+
+        monkeypatch.setattr(deploy, "airflow", killed)
+        with pytest.raises(KeyboardInterrupt):
+            world.deploy(r2)
+        assert seen == [{SR}] and world.paused() == {SR: True, DL: True}
+        monkeypatch.setattr(deploy, "airflow", real)
+        assert world.deploy(r2) == 0  # the rerun finds SR paused, so pauses nothing, and unpauses it at the end
+        assert world.paused() == {SR: False, DL: True} and ["dags", "pause", SR] not in world.airflow_calls()[2:]
+
+    def test_no_drain_no_scheduler_and_no_dags_are_recorded_and_the_deploy_goes_on(world: World) -> None:
+        r1 = world.release(over={CODE: b"# one\n"})
+        world.live(r1)
+        said: list[str] = []
+        world.ctx.say = said.append
+        assert world.deploy(world.release(over={CODE: b"# two\n"})) == 0
+        assert any(x.startswith("  no scheduler: airflow-scheduler is not running") for x in said), said
+        world.scheduler({})
+        assert world.deploy(world.release(over={CODE: b"# three\n"})) == 0
+        assert any(x.startswith("  no DAGs: Airflow has none to drain") for x in said) and world.airflow_calls() == [["dags", "list", "-o", "json"]]
+        assert world.deploy(world.release(over={CODE: b"# three\n", **policy(60)})) == 0
+        assert any(x.startswith("  no drain: no Trino restart and no DAG's task list changes") for x in said)
+        assert len(world.airflow_calls()) == 1  # no change that drains: Airflow not asked
+        assert all(r["outcome"] == "ok" for r in records(world) if r["step"] == "drain")
