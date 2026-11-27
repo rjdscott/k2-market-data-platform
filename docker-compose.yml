@@ -1152,7 +1152,7 @@ services:
       resources:
         limits:
           cpus: '0.25'
-          memory: 128M
+          memory: 256M
     restart: "no"
     labels:
       com.k2.service: "init"
@@ -1696,19 +1696,19 @@ services:
 #
 #   redpanda-init      0.25 | 128M  topics + Avro subjects (docker/redpanda/init.sh)
 #   lakekeeper-migrate 0.5  | 256M  v3 catalog DB schema
-#   lake-init          0.25 | 128M  v3 bucket + catalog + warehouses (docker/lake/init-lake.sh)
+#   lake-init          0.25 | 256M  v3 bucket + catalog + warehouses, engine users (docker/lake/init-lake.sh)
 #   airflow-migrate    0.5  | 1G    airflow role + database, then `airflow db migrate`
 #   ----------------------------------------------------------------------------
-#   one-shot subtotal  1.5  | 1.5G
+#   one-shot subtotal  1.5  | 1.625G
 #
-# Bootstrap peak: 17.30 CPU / 29.250 GiB, all 23 default-profile services,
+# Bootstrap peak: 17.30 CPU / 29.375 GiB, all 23 default-profile services,
 # against the 25 CPU / 48 GiB ceiling ADR-045 sets at the bootstrap peak
 # (superseding ADR-034's 20 CPU / 36 GiB, which superseded ADR-010's 16 CPU /
 # 40 GB). scripts/check-budget.py fails CI over it. Headroom: 7.70 CPU and
-# 18.750 GiB. With `--profile hot-gold` (clickhouse, paused by ADR-057) the
-# peak is 21.30 CPU / 37.250 GiB over 24 services; the script reports that line
+# 18.625 GiB. With `--profile hot-gold` (clickhouse, paused by ADR-057) the
+# peak is 21.30 CPU / 37.375 GiB over 24 services; the script reports that line
 # and gates only the default, as it does for the one-shot profiles tools (17.55 /
-# 29.500 GiB), fetch (17.80 / 29.750 GiB) and build (18.30 / 30.750 GiB). The
+# 29.625 GiB), fetch (17.80 / 29.875 GiB) and build (18.30 / 30.875 GiB). The
 # host gives Docker 28 CPU / 49.5 GiB; 3 cores and 1.5 GiB stay outside the ceiling for the OS and the engine (ADR-045 says why that is enough).
 #
 # History: retiring the three Kotlin feed handlers (ADR-019) gave back the

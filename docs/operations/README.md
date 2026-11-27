@@ -140,8 +140,8 @@ started in.
 
 You need Docker with Compose v2, `git`, `python3`, `jq` (the reads in section 3), and enough
 memory: the Docker engine must
-offer at least 30 GiB, so that every container's declared memory limit fits (29.250 GiB at the
-bootstrap peak, when the one-shots run beside everything else; 37.250 GiB, so 38, with the paused
+offer at least 30 GiB, so that every container's declared memory limit fits (29.375 GiB at the
+bootstrap peak, when the one-shots run beside everything else; 37.375 GiB, so 38, with the paused
 ClickHouse running; `python3 scripts/check-budget.py`, [setup.md](../development/setup.md)),
 and on Docker Desktop the host must have more RAM than the VM's memory setting plus everything
 else it runs ([sizing](../runbooks/docker-vm-oom-kill.md#2-size-the-vm-so-the-host-keeps-enough-memory)).
@@ -811,7 +811,7 @@ it never deletes a table copy, nor anything under `~/k2-backup/drop/` (the copie
 | [observability.md](./observability.md) | Grafana dashboards, capture-tier metrics, the 16 Prometheus alert rules and where an alert goes |
 | [dashboards.md](./dashboards.md) | Every dashboard and console as a screenshot of a live run, in the order the data moves, with what to read from each and the runbook it leads to. Written by `make screenshots` |
 | [latency-budgets.md](./latency-budgets.md) | 7-segment latency budget plus the measured 2026-02-19 p50/p99 numbers |
-| [docker-resources.md](./docker-resources.md) | Per-service CPU/RAM limits, 15.80 CPU / 27.750 GiB across 19 long-running services, +4 one-shot (1.50 / 1.500 GiB), bootstrap peak 17.30 / 29.250 GiB against the 25 / 48 GiB ceiling (`python3 scripts/check-budget.py`); ClickHouse and the run path's one-shots behind profiles, outside them |
+| [docker-resources.md](./docker-resources.md) | Per-service CPU/RAM limits, 15.80 CPU / 27.750 GiB across 19 long-running services, +4 one-shot (1.50 / 1.625 GiB), bootstrap peak 17.30 / 29.375 GiB against the 25 / 48 GiB ceiling (`python3 scripts/check-budget.py`); ClickHouse and the run path's one-shots behind profiles, outside them |
 | [airflow-schedules.md](./airflow-schedules.md) | **Archived** with the v3 lake ingest pipeline, whose four DAGs it listed |
 | [clickhouse-database-standard.md](./clickhouse-database-standard.md) | Why everything served lives in the `gold` database (`k2` was dropped at the Phase E cutover) and how to keep it that way |
 | [adding-new-exchanges.md](./adding-new-exchanges.md) | End-to-end checklist for wiring up a 4th exchange |

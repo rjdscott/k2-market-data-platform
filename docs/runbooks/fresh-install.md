@@ -40,12 +40,12 @@ restoring from the host copy ([lake-backup-and-restore.md](./lake-backup-and-res
 ## Prerequisites
 
 - A Docker engine with **at least 31 GiB of memory** so every declared limit is honoured,
-  including the 29.250 GiB bootstrap peak while the one-shots run, 30.750 GiB while a dbt-runner
+  including the 29.375 GiB bootstrap peak while the one-shots run, 30.875 GiB while a dbt-runner
   one-shot (profile `build`) runs beside it (`python3 scripts/check-budget.py`, 2026-11-27;
   [docker-resources.md](../operations/docker-resources.md) says how the figure is
   computed). ClickHouse is paused behind the
   compose profile `hot-gold` ([ADR-057](../adr/ADR-057-clickhouse-hot-tier-paused-during-platform-build.md)) and a fresh install does not start it; with
-  that profile running the peak is 37.250 GiB, so 38 GiB.
+  that profile running the peak is 37.375 GiB, so 38 GiB.
   Measured usage on a fresh install is far lower (~4.5 GiB RSS total; largest single
   container ClickHouse at 1.13 GiB, on 2026-08-28, when it still started).
 - **Any core count.** `.env.example` ships `K2_CAPTURE_CPUSET=` and `K2_HEAVY_CPUSET=`

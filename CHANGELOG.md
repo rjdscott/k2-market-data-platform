@@ -25,7 +25,7 @@ generated catalog site and the dbt docs are served beside it; the dbt labs teach
   `${K2_SECRETS}/api/`, never shown, and only its sha256 is kept in `keys.json`.
 - Defaults taken in the build, each with its reason (departures from the plan's text):
   - `k2-api` is in the default service set: the phase's exit has every part report its release, and a
-    deploy moves only the default set (17.30 CPU / 29.250 GiB at the bootstrap peak,
+    deploy moves only the default set (17.30 CPU / 29.375 GiB at the bootstrap peak,
     `python3 scripts/check-budget.py`).
   - The data route orders rows by the table's declared key, so a REST page and the same SQL compare row
     for row, and phase 007's cursor has an order.

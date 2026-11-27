@@ -16,7 +16,7 @@ so the desktop and everything else on the host must fit in the remaining 12.1 Gi
 sizing rule in [docker-vm-oom-kill.md](../runbooks/docker-vm-oom-kill.md#2-size-the-vm-so-the-host-keeps-enough-memory).
 
 **As built, steady state: 15.80 CPU / 27.750 GiB across 19 long-running services.**
-**One-shots: 1.50 CPU / 1.500 GiB across 4.** **Bootstrap peak: 17.30 CPU / 29.250 GiB
+**One-shots: 1.50 CPU / 1.625 GiB across 4.** **Bootstrap peak: 17.30 CPU / 29.375 GiB
 across 23**, the one-shots run concurrently with the steady state at `docker compose up`,
 so that peak, not the steady state, is what the host has to absorb at boot, and it is the
 sum the ceiling gates. These figures were computed on 2026-11-27 from the compose file after
@@ -31,15 +31,15 @@ as a rollback, are gone from the compose file and archived in
 **ClickHouse is paused** behind the compose profile `hot-gold`
 ([ADR-057](../adr/ADR-057-clickhouse-hot-tier-paused-during-platform-build.md)), so none of these sums counts it: a plain `docker compose config` leaves out
 a service under a profile that is not named. With the profile running it adds its 4.0 CPU /
-8 GiB: bootstrap peak 21.30 / 37.250 across 24, the `bootstrap hot-gold` line
+8 GiB: bootstrap peak 21.30 / 37.375 across 24, the `bootstrap hot-gold` line
 `python3 scripts/check-budget.py` prints.
 
 **The run path's one-shots are not in the sums either.** `fetch` (profile `fetch`), `dbt-runner`
 (profile `build`) and `tools` (profile `tools`) are started by the Airflow scheduler or by deploy,
 backup and the access suite for one task each, then removed. `python3 scripts/check-budget.py`
 reports each as the bootstrap peak plus that profile, and gates only the default: `bootstrap
-build` 18.30 / 30.750 (both dbt-runner slots, `deploy.replicas: 2`), `bootstrap fetch` 17.80 /
-29.750, `bootstrap tools` 17.55 / 29.500. Airflow's pools hold at most one fetch and two dbt
+build` 18.30 / 30.875 (both dbt-runner slots, `deploy.replicas: 2`), `bootstrap fetch` 17.80 /
+29.875, `bootstrap tools` 17.55 / 29.625. Airflow's pools hold at most one fetch and two dbt
 builds at once (`docker/airflow/dags/factory.py`, `POOLS`).
 
 Both parallel runs are over. The three Kotlin `feed-handler-*` containers are gone from
@@ -73,7 +73,7 @@ for label, oneshot in (("steady", False), ("one-shot", True)):
     gib = sum(int(l["memory"]) for l in lim) / 2**30
     print("%-9s %2d services  %5.2f CPU  %6.3f GiB" % (label, len(lim), cpu, gib))'
 steady    19 services  15.80 CPU  27.750 GiB
-one-shot   4 services   1.50 CPU   1.500 GiB
+one-shot   4 services   1.50 CPU   1.625 GiB
 ```
 
 `docker compose config` normalises every `memory:` to bytes, so **GiB is what the limits
@@ -111,10 +111,10 @@ profile, so these two lines never count `fetch`, `dbt-runner`, `tools` or `click
 | **Steady state (19 long-running services)** | | **15.80** | **5.60** | **27.750 GiB** | **8.625 GiB** |
 | `redpanda-init` | init (one-shot) | 0.25 |, | 128 MB |, |
 | `lakekeeper-migrate` | init (one-shot) | 0.5 |, | 256 MB |, |
-| `lake-init` | init (one-shot) | 0.25 |, | 128 MB |, |
+| `lake-init` | init (one-shot) | 0.25 |, | 256 MB |, |
 | `airflow-migrate` | init (one-shot) | 0.5 |, | 1 GB |, |
-| **One-shot subtotal (4)** | | **1.50** | **, ** | **1.500 GiB** | **, ** |
-| **Bootstrap peak (23 containers)** | | **17.30** | **5.60** | **29.250 GiB** | **8.625 GiB** |
+| **One-shot subtotal (4)** | | **1.50** | **, ** | **1.625 GiB** | **, ** |
+| **Bootstrap peak (23 containers)** | | **17.30** | **5.60** | **29.375 GiB** | **8.625 GiB** |
 | `fetch` | run path (one-shot, profile `fetch`): one product's file fetch and parse, on `k2-egress` alone | 0.5 |, | 512 MB |, |
 | `dbt-runner` | run path (one-shot, profile `build`): the dbt wrapper, two slots (`deploy.replicas: 2`) | 0.5 × 2 |, | 768 MB × 2 |, |
 | `tools` | release, deploy, backup and the access suite (one-shot, profile `tools`) | 0.25 |, | 256 MB |, |
@@ -133,7 +133,7 @@ steady state at `docker compose up`, so the bootstrap peak is the number the hos
 absorb.
 
 Headroom against the 25 CPU / 48 GiB ceiling at the bootstrap peak, where it is gated:
-**7.70 CPU and 18.750 GiB**; 3.70 and 10.750 with the `hot-gold` profile running. The
+**7.70 CPU and 18.625 GiB**; 3.70 and 10.625 with the `hot-gold` profile running. The
 Airflow limits are the plan's estimates until ADR-034's measured figures replace them.
 
 ## Where the budget goes
@@ -219,7 +219,7 @@ dashboard (http://localhost:3000/d/k2-resources). It reads each limit from the c
 cgroup through cAdvisor (`container_spec_cpu_quota` / `container_spec_cpu_period`,
 `container_spec_memory_limit_bytes`), so it shows what Docker enforces, which is what
 `docker compose config` declares once the container has been recreated. Its sums cover
-running containers only: the one-shots have exited, so they sit 1.50 CPU / 1.500 GiB below
+running containers only: the one-shots have exited, so they sit 1.50 CPU / 1.625 GiB below
 the bootstrap peak gated above.
 
 Two known behaviours to expect when comparing declared vs. actual:

@@ -117,7 +117,7 @@ S3_ENV=()
 for n in "${S3_NAMES[@]}"; do S3_ENV+=(-e "$n"); done
 
 lake_init() {  # the real lake-init on this lake: its MinIO image, the release's plan through the pointer
-  docker run --rm --label "$LABEL" --network "$NET" --memory 128m --cpus 0.25 \
+  docker run --rm --label "$LABEL" --network "$NET" --memory 256m --cpus 0.25 \
     -v "$REPO/docker/lake:/init:ro" -v "$STATE/releases:/k2/releases:ro" \
     -e MINIO_ROOT_USER -e MINIO_ROOT_PASSWORD "${S3_ENV[@]}" \
     --entrypoint /bin/bash "$(image 'ghcr.io/rjdscott/minio@sha256:')" /init/init-lake.sh >> "$STATE/lake-init.log" 2>&1 \

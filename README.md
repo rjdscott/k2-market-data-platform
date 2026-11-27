@@ -107,10 +107,10 @@ flowchart TB
 ```
 
 19 long-running services and 4 one-shot init containers, 15.80 CPU / 27.750 GiB of declared
-limits at steady state and 17.30 CPU / 29.250 GiB at the bootstrap peak, under a 25 CPU / 48 GiB
+limits at steady state and 17.30 CPU / 29.375 GiB at the bootstrap peak, under a 25 CPU / 48 GiB
 ceiling (`python3 scripts/check-budget.py`; the run path's fetch, dbt and tools one-shots sit
 behind profiles, and its `bootstrap build` line, both dbt slots beside that peak, is 18.30 /
-30.750; [ADR-045](./docs/adr/ADR-045-ceiling-25-cpu-48-gib.md); [how the numbers are produced](./docs/operations/docker-resources.md#how-these-numbers-are-produced)).
+30.875; [ADR-045](./docs/adr/ADR-045-ceiling-25-cpu-48-gib.md); [how the numbers are produced](./docs/operations/docker-resources.md#how-these-numbers-are-produced)).
 The scheduler Airflow replaced is archived in [`legacy/prefect/`](./legacy/prefect/README.md), with no rollback path in the compose file.
 
 **Read the book.** [`docs/architecture/`](./docs/architecture/README.md) is written as numbered
@@ -164,7 +164,7 @@ measured on that date. Detail per failure: [failure modes](./docs/architecture/1
 ## Quick start
 
 Requires a Docker engine with at least 30 GiB of memory so every declared limit is honoured,
-the 29.250 GiB bootstrap peak included ([setup](./docs/development/setup.md)); measured usage is
+the 29.375 GiB bootstrap peak included ([setup](./docs/development/setup.md)); measured usage is
 far lower. On Docker Desktop the VM grows to its whole memory setting, so the host needs more
 RAM than that setting plus everything else it runs
 ([sizing](./docs/runbooks/docker-vm-oom-kill.md#2-size-the-vm-so-the-host-keeps-enough-memory)).
