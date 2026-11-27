@@ -146,6 +146,8 @@ def version(snapshot: Any) -> str:
 class Output:
     relation: str  # <domain>_build.<fence>__base.<table>: dbt writes it; the run records' table_name
     view: k2.View  # its reader view, compiled/trino/views.json
+    partitioning: tuple[str, ...] = ()  # the contract's, compiled/lake/contract_schemas.json, as dbt sets it
+    sort: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -174,9 +176,10 @@ class Ctx:
 
 
 def ctx_from(release: str, release_path: Path, product: str, run_id: str, pipeline: dict[str, Any],
-             views: list[dict[str, Any]], tables: dict[str, tuple[str, str, str]]) -> Ctx:
-    """The run's context from the release's compiled pipeline.json and views.json; `tables` maps
-    each input's contract id to (input_relation, tested_ref, product status), from k2gen's model."""
+             views: list[dict[str, Any]], tables: dict[str, tuple[str, str, str]], schemas: dict[str, Any]) -> Ctx:
+    """The run's context from the release's compiled pipeline.json, views.json and
+    contract_schemas.json; `tables` maps each input's contract id to (input_relation, tested_ref,
+    product status), from k2gen's model."""
     if not RELEASE_ID.fullmatch(release) or not PRODUCT_ID.fullmatch(product):
         raise Refused(f"release {release!r} or product {product!r} is not an id")
     m = RUN_ID.fullmatch(run_id)
@@ -200,7 +203,10 @@ def ctx_from(release: str, release_path: Path, product: str, run_id: str, pipeli
         if view is None or view.owner != publisher or view.relation != k2.view_relation(domain, name, table):
             raise Refused(f"{product}: output {rel} has no view of its own in {k2.VIEWS}")
         relation(view.relation)
-        outputs.append(Output(rel, view))
+        schema = schemas.get(f"{k2.warehouse(domain)}.{ns}.{table}")
+        if schema is None:
+            raise Refused(f"{product}: output {rel} has no entry in {k2.CONTRACT_SCHEMAS}")
+        outputs.append(Output(rel, view, tuple(schema.get("partitioning", ())), tuple(schema.get("sort", ()))))
     if not outputs:
         raise Refused(f"{product}: its build names no output")
     inputs = []
@@ -224,11 +230,12 @@ def load(release: str, product: str, run_id: str) -> Ctx:
     path = RELEASES / release
     pipeline = json.loads((path / k2.pipeline_path(product)).read_text())
     views = json.loads((path / k2.VIEWS).read_text())["views"]
+    schemas = json.loads((path / k2.CONTRACT_SCHEMAS).read_text())
     m = k2.load(docset.read(path / k2.DOCUMENTS_DIR))
     status = {p.id: p.status for p in m.products}
     tables = {t.contract_id: (k2.input_relation(t), k2.tested_ref(t), status[k2.product_id(p.domain, p.name)])
               for p in m.products for t in p.tables if t.build.kind in k2.LAKE_BUILDS}
-    return ctx_from(release, path, product, run_id, pipeline, views, tables)
+    return ctx_from(release, path, product, run_id, pipeline, views, tables, schemas)
 
 
 # ---- the core: decisions from observed state; `io` does every read and write --------------------
@@ -254,10 +261,13 @@ def record(ctx: Ctx, io: Any, **row: Any) -> None:
 
 
 def restore_statement(rel: str, target: int | None, tagged: bool, at_target: dict[str, str] | None,
-                      now: dict[str, str]) -> str:
+                      now: dict[str, str], partitioning: tuple[str, ...] = (), sort: tuple[str, ...] = ()) -> str:
     """How an output goes back to `target`, as the builder (spike f): no target, DROP TABLE (never a
     tagged table); the same columns and types in the same order, rollback_to_snapshot; otherwise a
-    create-or-replace from the old snapshot, since a rollback restores rows but not the schema."""
+    create-or-replace from the old snapshot, since a rollback restores rows but not the schema. The
+    replace names the contract's partitioning and sort as dbt's build does: without them Trino 484
+    makes the table unpartitioned (measured by scripts/verify/dbt-wrapper.sh), and a row scope's
+    files would no longer be skipped by its partition (ADR-061's Outcome)."""
     q = relation(rel)
     if target is None:
         if tagged:
@@ -265,12 +275,15 @@ def restore_statement(rel: str, target: int | None, tagged: bool, at_target: dic
         return f"DROP TABLE {q}"
     if at_target is not None and list(at_target.items()) == list(now.items()):
         return f"ALTER TABLE {q} EXECUTE rollback_to_snapshot({snap(target)})"
-    return f"CREATE OR REPLACE TABLE {q} AS SELECT * FROM {q} {version(target)}"
+    props = ", ".join(f"{k} = ARRAY[{', '.join(k2.sql_literal(v) for v in vs)}]"
+                      for k, vs in (("partitioning", partitioning), ("sorted_by", sort)) if vs)
+    with_props = f" WITH ({props})" if props else ""
+    return f"CREATE OR REPLACE TABLE {q}{with_props} AS SELECT * FROM {q} {version(target)}"
 
 
-def restore(io: Any, rel: str, target: int | None, tagged: bool) -> None:
-    at_target = io.columns(rel, target) if target is not None else None
-    io.sql("builder", restore_statement(rel, target, tagged, at_target, io.columns(rel, None)))
+def restore(io: Any, o: Output, target: int | None, tagged: bool) -> None:
+    at_target = io.columns(o.relation, target) if target is not None else None
+    io.sql("builder", restore_statement(o.relation, target, tagged, at_target, io.columns(o.relation, None), o.partitioning, o.sort))
 
 
 def reconcile(ctx: Ctx, io: Any) -> None:
@@ -315,7 +328,7 @@ def reconcile(ctx: Ctx, io: Any) -> None:
             start = None if unfinished is None or prev["snapshot_before"] is None else snap(prev["snapshot_before"])
             target = start if start is not None and (start == tag or start in restored.get(o.relation, set())) else tag
             log(f"reconcile {o.relation}: main {main} is not its tag {tag}; restored to {target}")
-            restore(io, o.relation, target, tag is not None)
+            restore(io, o, target, tag is not None)
             record(ctx, io, run_id=unfinished or ctx.run_id, event="reconciled", table_name=o.relation,
                    snapshot_before=main, snapshot_after=heads(io, o.relation)[0] if target is not None else None,
                    detail="main restored to the audited tag's rows" if tag else "dropped: never tagged")
@@ -397,7 +410,7 @@ def rollback(ctx: Ctx, io: Any, before: dict[str, dict[str, Any]], invocation: s
         main, tag = heads(io, o.relation)
         if main != b["main"]:
             log(f"rollback {o.relation}: main {main} back to {b['main']}")
-            restore(io, o.relation, b["main"], tag is not None)
+            restore(io, o, b["main"], tag is not None)
             if b["main"] is not None:
                 main, tag = heads(io, o.relation)
                 if ids := sorted(io.snapshots(o.relation) - b["ids"] - {main, tag}):

@@ -37,7 +37,7 @@ UUID = "0123abcd-0000-4000-8000-000000000000"
 
 def ctx(run="access_canary/r1", inputs=(INPUT,), outputs=((OUT, VIEW),)):
     return w.Ctx(RELEASE, Path(f"/k2/releases/{RELEASE}"), "governance.access-canary", run, "governance", "access_canary",
-                 "dbt_access_canary", "pub_access_canary", tuple(w.Output(r, v) for r, v in outputs), tuple(inputs),
+                 "dbt_access_canary", "pub_access_canary", tuple(w.Output(r, v, ("region",)) for r, v in outputs), tuple(inputs),
                  datetime.now(timezone.utc))
 
 
@@ -144,7 +144,7 @@ class Fake:
         elif m := re.fullmatch(rf"ALTER TABLE {q} EXECUTE rollback_to_snapshot\((\d+)\)", stmt):
             assert role == "builder", "rollback as " + role
             self.tables[".".join(m.groups()[:3])]["main"] = int(m[4])  # rows only: the schema stays (spike f)
-        elif m := re.fullmatch(rf"CREATE OR REPLACE TABLE {q} AS SELECT \* FROM {q} FOR VERSION AS OF BIGINT '(\d+)'", stmt):
+        elif m := re.fullmatch(rf"CREATE OR REPLACE TABLE {q}(?: WITH \(partitioning = ARRAY\['region'\]\))? AS SELECT \* FROM {q} FOR VERSION AS OF BIGINT '(\d+)'", stmt):
             assert role == "builder", "replace as " + role
             rel = ".".join(m.groups()[:3])
             cols, passed = self.tables[rel]["snaps"][int(m[7])]
@@ -348,6 +348,19 @@ def test_a_failed_restore_exits_3():
     fake.seed()
     fake.dbt_code, fake.dbt_status, fake.fail_on = 1, "fail", "rollback_to_snapshot"
     assert w.run(ctx(), fake)[0] == 3
+
+
+def test_a_restore_by_create_or_replace_keeps_the_contracts_partitioning_and_sort():
+    sql = w.restore_statement(OUT, 5, True, V1, V2, ("region", "day(event_ts)"), ("id",))
+    assert sql == (f"CREATE OR REPLACE TABLE {k2.quote_relation(OUT)} WITH (partitioning = ARRAY['region', 'day(event_ts)'], "
+                   f"sorted_by = ARRAY['id']) AS SELECT * FROM {k2.quote_relation(OUT)} FOR VERSION AS OF BIGINT '5'")
+    forged = w.restore_statement(OUT, 5, True, V1, V2, ("x']) AS SELECT 1 --",))
+    assert "ARRAY['x'']) AS SELECT 1 --']" in forged  # one literal, never SQL
+    fake = Fake()
+    fake.seed()
+    fake.build[OUT], fake.dbt_code, fake.dbt_status = V2, 1, "fail"
+    assert w.run(ctx(), fake)[0] == 1
+    assert any("WITH (partitioning = ARRAY['region'])" in s for _, s in fake.statements if s.startswith("CREATE OR REPLACE TABLE"))
 
 
 def test_a_tagged_table_is_never_dropped():
@@ -604,12 +617,17 @@ PIPELINE = {"product": "governance.access-canary", "dagId": "access_canary", "in
 VIEWS = [{"relation": VIEW.relation, "base": VIEW.base, "columns": list(C), "owner": "pub_access_canary"}]
 
 
-def ctx_from(run="access_canary/r1", pipeline=PIPELINE, views=VIEWS):
-    return w.ctx_from(RELEASE, Path("/r"), "governance.access-canary", run, pipeline, views, {})
+SCHEMAS = {"governance.access_canary__base.events": {"columns": [], "partitioning": ["region"], "sort": []}}
+
+
+def ctx_from(run="access_canary/r1", pipeline=PIPELINE, views=VIEWS, schemas=SCHEMAS):
+    return w.ctx_from(RELEASE, Path("/r"), "governance.access-canary", run, pipeline, views, {}, schemas)
 
 
 def test_the_release_is_read_strictly():
-    assert ctx_from().outputs == (w.Output(OUT, VIEW),)
+    assert ctx_from().outputs == (w.Output(OUT, VIEW, ("region",), ()),)
+    with pytest.raises(w.Refused):
+        ctx_from(schemas={})
     for run in ("other/r1", "access_canary/a/b", "access_canary/r 1", "access_canary/"):
         with pytest.raises(w.Refused):
             ctx_from(run=run)
