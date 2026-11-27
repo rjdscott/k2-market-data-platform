@@ -138,8 +138,12 @@ jobs:
       # rehearsal are not here (too slow for every pull request): `make spine-e2e`
       # runs them at merge points.
       - name: access-verify on this tree's release
+        # A run: is `bash -e` without pipefail: set it, or a failing ci-validate
+        # leaves tail's 0 and whatever line it printed last as the release.
         run: |
+          set -euo pipefail
           rel=$(bash scripts/verify/ci-validate.sh "$RUNNER_TEMP/k2-ci" | tail -1)
+          [ -d "$rel" ] || { echo "ci-validate printed no release directory as its last line: '$rel'" >&2; exit 1; }
           make access-verify RELEASE="$rel"
 
   dbt:

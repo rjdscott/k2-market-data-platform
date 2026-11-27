@@ -81,6 +81,7 @@ CANARY_PRODUCT = "governance.access-canary"  # contracts/governance/access-canar
 DENIED = "PERMISSION_DENIED"  # an `expect: denied` row passes on this errorName alone
 UNSUPPORTED = "NOT_SUPPORTED"  # and an `expect: error` row on this one
 SKIP_REST = "via rest: k2-api's REST rows join in phase 003"
+SKIP_PROBE = "a network probe: scripts/verify/catalog-fence.sh (step S22) runs it on the stack"
 
 
 # ---- Trino ---------------------------------------------------------------------------------------
@@ -357,7 +358,7 @@ def verdict(trino: Trino, env: dict[str, Any], m: Any, release: Path, scope: str
     if "sql" not in getattr(e, "via", ("sql",)):
         return "SKIP", SKIP_REST
     if isinstance(e, model.ProbeExpectation):
-        return "SKIP", "a network probe: scripts/verify/catalog-fence.sh (step S22) runs it on the stack"
+        return "SKIP", SKIP_PROBE
     if isinstance(e, model.DriftExpectation):
         uri = env.get("lakekeeper") and f"{env['lakekeeper']}/catalog" or os.environ.get("K2_CATALOG_URI")
         if not uri:
