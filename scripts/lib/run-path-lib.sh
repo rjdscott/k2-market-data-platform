@@ -104,6 +104,7 @@ rp_lake() {  # the lake from the release (and the failing one beside it), the ru
   S=$STATE/secrets/k2
   RP=$STATE/rp  # /work/rp in the tools container: the fixtures, fetch.py, every task's output and the probe's state
   [ -z "$IDF" ] || cp -a "$W/fail/releases/$IDF" "$STATE/releases/"
+  for x in ${RP_MORE:-}; do cp -a "$W/$x/releases/$(cat "$W/$x/id")" "$STATE/releases/"; done  # rp_fail_release's other names
   mkdir -p "$RP" "$STATE/spool"
   cp docker/fetch/fetch.py "$RP/fetch.py"  # the fetch image's program (docker/fetch/Dockerfile copies this file)
   cp "$FIX/ecb-90d-synthetic.xml" "$RP/good.xml"
@@ -138,18 +139,24 @@ PY
 
 # shellcheck disable=SC2016  # factory.WRAPPER, verbatim: $@ and $0 are the shell's in the container
 WRAPPER='python3 "$@" & echo $! > "$0"; wait $!; rc=$?; rm -f "$0"; exit $rc'
-task() {  # task <release id> <run> <load|audit|publish|expire|maintain> [args]: factory.SparkTask's argv; TRY=n labels a rerun
-  local id=$1 run=$2 t=$3 label=$2.$3${TRY:+.$TRY}; shift 3
+task() {  # task <release id> <run> <load|audit|publish|expire|maintain> [args]: factory.SparkTask's argv; TRY=n labels a rerun, TP=<product> runs another product than ECB
+  local id=$1 run=$2 t=$3 label=$2.$3${TRY:+.$TRY} product=${TP:-$ECB} dag t0; shift 3
+  dag=${product#*.} t0=$(date +%s.%N)
   local argv=("/k2/releases/$id/platform/docker/lake/connector.py" "$t")
   case $t in expire|maintain) argv=("/k2/releases/$id/platform/docker/lake/$t.py") ;; esac
-  docker exec "$SPARK" sh -c "$WRAPPER" "/tmp/k2-airflow-$label.pid" "${argv[@]}" --release "$id" --product "$ECB" \
-    --run-id "ecb_fx_rates/$run" "$@" > "$RP/$label.out" 2> "$RP/$label.err"
+  docker exec "$SPARK" sh -c "$WRAPPER" "/tmp/k2-airflow-$label.pid" "${argv[@]}" --release "$id" --product "$product" \
+    --run-id "${dag//-/_}/$run" "$@" > "$RP/$label.out" 2> "$RP/$label.err"
   echo $? > "$RP/$label.rc"
+  timed "$label" "$t0"
   echo "$P: $label exit $(cat "$RP/$label.rc")"
+}
+timed() {  # timed <label> <start>: the task's wall time in $RP/times, "<label> <exit> <seconds>"
+  echo "$1 $(cat "$RP/$1.rc") $(awk "BEGIN {printf \"%.1f\", $(date +%s.%N) - $2}")" >> "$RP/times"
 }
 export K2_TRINO_HOST=trino K2_TRINO_INTERNAL_PORT=8443 K2_RUNS_USER=svc.runs K2_CATALOG_URI=http://lakekeeper:8181/catalog
 build() {  # build <release id> <product> <run>: k2-dbt build as factory.PinnedOneShot and oneshot.py run it
-  local id=$1 product=$2 run=$3 dag writer publisher cpus memory
+  local id=$1 product=$2 run=$3 dag writer publisher cpus memory t0
+  t0=$(date +%s.%N)
   read -r dag writer publisher cpus memory < <(python3 -c '
 import json, sys
 r, p = sys.argv[1], sys.argv[2]
@@ -166,6 +173,7 @@ print(doc["dagId"], doc["build"]["writer"], doc["build"]["publisher"], k["cpus"]
     --mount "type=bind,source=$S/tls/ca.pem,target=/run/k2-secrets/tls/ca.pem,readonly" \
     "$IMAGE" k2-dbt build --release "$id" --product "$product" --run-id "$dag/$run" > "$RP/$run.build.out" 2> "$RP/$run.build.err"
   echo $? > "$RP/$run.build.rc"
+  timed "$run.build" "$t0"
   echo "$P: $run build ($product, $id) exit $(cat "$RP/$run.build.rc")"
 }
 spark_py() {  # spark_py <facts|clear> <label>: scripts/lib/run_path_spark.py in the Spark container, on the release
@@ -187,6 +195,58 @@ claimed() {  # claimed <name> <output> <exit>: the output's PASS, FAIL and INFO 
     grep -qE '^FAIL ' <<< "$2" || echo "FAIL $RP_N $1: the probe failed: $(tail -1 <<< "$2")" | tee -a "$W/claims"
     finish "stopped at claim $RP_N ($1): the claims after it build on the lake it left"
   fi
+}
+
+# The phase 004 chain's tasks (scripts/verify/run-path.sh claims 10 to 17, and the chaos scripts
+# W2-12 to W2-17): the lake started with K2_THROWAWAY_REDPANDA=1.
+KI=market-capture.kraken-instruments SM=reference-data.security-master KT=market-capture.kraken-trades
+CT=market-analytics.canonical-trades CA=market-analytics.candles
+kseed() {  # kseed <frames.jsonl>: frames onto Kraken's raw topic as capture frames them (throwaway-lake.sh seed)
+  bash "$L" seed "$P" "$1" >> "$RP/seed.log" 2>&1 || die "the frames of $1 were not produced: $(tail -3 "$RP/seed.log")"
+  echo "$P: $(tail -1 "$RP/seed.log")"
+}
+listing() {  # listing <run> <response under $RP>: the public-API spool as fetch leaves it, then load, audit, publish
+  probe seed-api "$ID" "$KI" "$2" "$1" > "$RP/$1.seed.log" 2>&1 || die "the spool of $1 was not written: $(tail -3 "$RP/$1.seed.log")"
+  if grep -q '"exit": 10' "$RP/$1.seed.json"; then  # factory: an unchanged fetch (exit 10) skips load, audit and publish; build runs
+    echo "$P: $1 fetch unchanged (exit 10): load, audit and publish skipped"
+  else
+    for t in load audit publish; do TP=$KI task "$ID" "$1" "$t"; done
+  fi
+}
+rp_chain_files() {  # the chain's frames and listings under $RP: the two synthetic fixtures, and what is made from them here
+  cp services/capture-rust/tests/fixtures/synthetic-kraken-20s.jsonl "$RP/frames.jsonl"
+  cp domains/market-capture/tests/fixtures/asset-pairs-synthetic.json "$RP/listing-1.json"
+  python3 - "$RP" <<'PY' || die "the chain's frames and listings could not be made"
+# Synthetic, made at run time from the two fixtures and never committed: the listing again with one
+# more invented pair, DELTA/USD; a trade frame of that symbol, which the first listing lacks; one
+# more BTC/USD trade frame. Each frame line is the fixture's, {"recv_ts_ns", "payload"}, after the
+# fixture's last frame.
+import json, sys
+from pathlib import Path
+rp = Path(sys.argv[1])
+doc = json.loads((rp / "listing-1.json").read_text())
+doc["result"]["DELTAUSD"] = dict(doc["result"]["ALPHAUSD"], altname="DELTAUSD", wsname="DELTA/USD", base="DELTA")
+(rp / "listing-2.json").write_text(json.dumps(doc, indent=2) + "\n")
+def frame(path, at_s, trade):
+    payload = json.dumps({"channel": "trade", "type": "update", "data": [trade]}, separators=(",", ":"))
+    (rp / path).write_text(json.dumps({"recv_ts_ns": 1_000_000_000_000_000_000 + at_s * 1_000_000_000, "payload": payload}) + "\n")
+frame("unknown.jsonl", 30, {"symbol": "DELTA/USD", "side": "buy", "price": 10.5, "qty": 2.0, "ord_type": "limit",
+                            "trade_id": 1, "timestamp": "2001-09-09T01:47:10.000000Z"})
+frame("more.jsonl", 40, {"symbol": "BTC/USD", "side": "sell", "price": 1000.0, "qty": 0.5, "ord_type": "market",
+                        "trade_id": 4, "timestamp": "2001-09-09T01:47:20.000000Z"})
+PY
+}
+rp_times() {  # INFO lines: each chain task's wall time, and one five-minute cycle's sum (kraken-trades' tasks, canonical-trades, candles)
+  local f=$RP/times
+  grep -E '^(ki|sm|kt|ct|ca)-' "$f" | while read -r label code secs; do echo "INFO time $label exit $code ${secs} s"; done | tee -a "$W/claims"
+  for c in 1 4; do
+    awk -v c="$c" '$1 ~ "^(kt|ct|ca)-" c "\\." {n++; s += $3} END {printf "INFO time one five-minute cycle (kt-%s, ct-%s, ca-%s): %d tasks, %.1f s\n", c, c, c, n, s}' "$f"
+  done | tee -a "$W/claims"
+}
+trades() {  # trades <run> [release]: kraken-trades' DAG, load, audit, publish, then the build
+  local t
+  for t in load audit publish; do TP=$KT task "${2:-$ID}" "$1" "$t"; done
+  build "${2:-$ID}" "$KT" "$1"
 }
 
 # The steps more than one script takes, each ending in its claim.

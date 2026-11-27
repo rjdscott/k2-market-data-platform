@@ -8,9 +8,12 @@
 #   test-access    make test-access RELEASE=<it>: the proofs behind the suite (tests/access/prove.sh), own lake
 #   rules          on ONE throwaway lake: scripts/trino_rules_test.py compile, suite, negative, control,
 #                  scripts/trino_rules_c1_test.py and scripts/verify/identity.sh --throwaway
-#   run            scripts/verify/run-path.sh <it>: one product's run path on its own lake, prefix run-path:
-#                  calendars, then ECB from a seeded spool through land, bronze audit and publish, the dbt
-#                  wrapper, a refused batch and its clearing, a rolled-back build, expire and maintain
+#   run            scripts/verify/run-path.sh <it>: the run path on its own lake, prefix run-path, with a
+#                  Redpanda (run-path.sh sets K2_THROWAWAY_REDPANDA=1): calendars, then ECB from a seeded
+#                  spool through land, bronze audit and publish, the dbt wrapper, a refused batch and its
+#                  clearing, a rolled-back build, expire and maintain; then the phase 004 chain with rows,
+#                  instruments from a spooled listing, security master, trades from synthetic frames on the
+#                  topic, canonical trades and candles, a held trade released, a paused input, a failed venue test
 #   rehearsal      make deploy-rehearsal FAST=1: the deploy chain on compose project k2-rehearsal, its
 #                  slow repetitive sections skipped (about 7 min); FULL=1 runs the whole chain (about 25 min)
 #
