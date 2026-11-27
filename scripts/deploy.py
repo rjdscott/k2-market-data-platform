@@ -24,13 +24,18 @@ first failure:
  2 images        every image of the manifest present by its digest (registry images pulled)
  3 plan          k2gen's needs from the live release (and any attempt since it) to this one, printed;
                  PLAN=1 stops here
+   backup        before a one-shot that migrates a database (a service named <database>-migrate), that
+                 database dumped by scripts/backup-lake.sh --dump under <releases root>/backups/<release>/,
+                 its path and sha256 in the record: a rollback never runs a migration backwards
+                 (docs/runbooks/roll-back-a-release.md section 5); a dump that fails refuses the deploy
  4 ddl           the one-shots the plan names (lake-init reads the target's storage plan), the storage plan's missing namespaces, and each table of
                  needs.ddl compared with the catalog: missing is queued, equal is satisfied, different
                  is refused (never an alter or a drop); Spark's tables created now if Spark runs
  5 views-narrow  before any rule can change, each reader view whose contract columns or SQL change loses
                  every column the new contract drops (k2gen.emit.lake.view_update, against the tag), in
                  the target's shape if the old rules admit it, else the old release's shape; each
-                 release's statements come from its own k2gen, in its tools image
+                 release's statements come from its own k2gen, in its tools image. A rollback that finds
+                 Trino not answering swaps and recreates first, then syncs the views (converge)
  6 canary        a fresh password for this release's canary k2_release_<setSha256[:12]>, its line
                  written into trino/password.db in place under the file's lock
  7 swap          every pointer moved to the release from inside the tools container (spike c);
@@ -41,8 +46,9 @@ first failure:
    ddl-late      the queued tables whose engine had to start or load the rules first (Trino's always)
    views-widen   each view up to the new contract's columns the tag holds
    verify        every pointer (in the VM and in each container that mounts the root), the files under
-                 it, each image digest and health check, the drift check in tools and the live access
-                 suite (S20); `make release-verify` adds S13's identity.sh
+                 it, each image digest and health check, every default-profile service running, the
+                 drift check in tools, the live access suite (S20) and the catalog fence's probes
+                 (scripts/verify/catalog-fence.sh); `make release-verify` adds S13's identity.sh
 10 done          the other canaries' lines removed; the release is the good one
 
 A failure at step 5 or later rolls back on its own: the same steps toward the previous release from
@@ -61,6 +67,7 @@ import argparse
 import dataclasses
 import fcntl
 import getpass
+import hashlib
 import importlib.util
 import json
 import os
@@ -109,7 +116,7 @@ HEALTH_WAIT_S = 300  # a recreated service's start, Trino's included
 DISK_FLOOR_GIB = 2.0  # free at the releases root; a release is a few MiB, a pulled image is not
 MEM_FLOOR_GIB = 2.0  # MemAvailable on the host: a recreate starts a container before the old one's memory returns
 DONE = ("done", "rollback-done")
-UNCHANGING = ("preflight", "images", "plan")  # steps that change nothing the platform runs
+UNCHANGING = ("preflight", "images", "plan", "backup")  # steps that change nothing the platform runs
 PASSWORD_DB = "trino/password.db"
 CA = "tls/ca.pem"
 CANARY_SQL = "SELECT 1"  # the canary's one statement (S12's rules)
@@ -153,8 +160,12 @@ class Ctx:
 def ctx_from_env(tmp: Path) -> Ctx:
     env = os.environ
     root = Path(env.get("K2_RELEASES") or Path.home() / "k2-releases").absolute()
+    home = Path(env.get("K2_HOME") or HERE.parent).absolute()
+    # Unset: the project `make up` gives the checkout, its directory's name as compose spells it
+    # (ponytail: lowercased, [a-z0-9_-] kept). Set but empty: refused in _main (review R1 M1).
+    project = env.get("K2_COMPOSE_PROJECT", re.sub(r"[^a-z0-9_-]", "", home.name.lower()))
     return Ctx(root=root, secrets=Path(env.get(model.SECRETS_ENV) or Path.home() / "k2-secrets").absolute(),
-               home=Path(env.get("K2_HOME") or HERE.parent).absolute(), project=env.get("K2_COMPOSE_PROJECT", "k2"),
+               home=home, project=project,
                trino=f"https://{env.get('K2_TRINO_HOST', 'localhost')}:{env.get('K2_TRINO_PORT', '8443')}",
                operator=getpass.getuser(), faults={f for f in env.get("K2_DEPLOY_FAULT", "").split(",") if f}, tmp=tmp)
 
@@ -209,9 +220,9 @@ def secret_sums(ctx: Ctx, services: set[str]) -> dict[str, dict[str, Any]]:
 
 
 def record(ctx: Ctx, target: Release, frm: str | None, step: str, outcome: str, services: set[str],
-           reason: str | None = None) -> None:
+           reason: str | None = None, **extra: Any) -> None:
     line = {"at": now(), "release": target.id, "from": frm, "step": step, "outcome": outcome,
-            "operator": ctx.operator, "secrets": secret_sums(ctx, services)}
+            "operator": ctx.operator, "secrets": secret_sums(ctx, services), **extra}
     if reason:
         line["reason"] = reason[:2000]
     if errors := model.schema_errors("deploy-record", line):
@@ -277,7 +288,7 @@ def compose(ctx: Ctx, rel: Release, *args: str) -> list[str]:
 
 
 def compose_env(ctx: Ctx) -> dict[str, str]:
-    return {**os.environ, "K2_RELEASES": str(ctx.root), model.SECRETS_ENV: str(ctx.secrets)}
+    return {**os.environ, "K2_RELEASES": str(ctx.root), model.SECRETS_ENV: str(ctx.secrets), "K2_COMPOSE_PROJECT": ctx.project}
 
 
 def containers(ctx: Ctx) -> list[dict[str, Any]]:
@@ -538,6 +549,9 @@ def secrets_health(ctx: Ctx) -> None:
 
 def preflight(ctx: Ctx, p: Plan) -> None:
     floors(ctx)
+    if p.sources[0] and (gone := missing_images(p.sources[0])):  # the rollback target (review R1 H3)
+        raise Refused(f"the rollback target {p.sources[0].id} names images this host no longer has: "
+                      f"{', '.join(f'{s} {r}' for s, r in gone)}; {IMAGE_FIX}")
     secrets_health(ctx)
     if missing := required_secrets(ctx, p):
         raise Refused(f"secret files missing under {ctx.secrets}: {', '.join(missing)}")
@@ -549,16 +563,29 @@ def preflight(ctx: Ctx, p: Plan) -> None:
         ctx.say(f"  {line}")
 
 
-def ensure_images(ctx: Ctx, rel: Release) -> None:
+def missing_images(rel: Release) -> list[tuple[str, str]]:
+    """(service, ref) of each image of the release this host lacks: a local build by its id, a registry
+    image by its digest."""
+    out = []
     for service, ref in sorted(rel.manifest.images.items()):
         have = image_id(ref)
+        if not have or (local_build(ref) and not have.startswith(f"sha256:{ref.rsplit(':', 1)[1]}")):
+            out.append((service, ref))
+    return out
+
+
+IMAGE_FIX = ("a registry image comes back with `docker pull <ref>`; a local build cannot be rebuilt to the same id, so "
+             "cut its tag again (make release TAG=<its tag>) and deploy that first; never `docker image prune -a` here "
+             "(docs/runbooks/roll-back-a-release.md)")
+
+
+def ensure_images(ctx: Ctx, rel: Release) -> None:
+    for service, ref in missing_images(rel):
         if local_build(ref):
-            if not have or not have.startswith(f"sha256:{ref.rsplit(':', 1)[1]}"):
-                raise Refused(f"{service}: local build {ref} is not on this host; `make release` builds and tags it, "
-                              "and an image a kept release names is never pruned")
-        elif not have:
-            ctx.say(f"deploy: pulling {ref}")
-            run("docker", "pull", "-q", ref)
+            raise Refused(f"{service}: local build {ref} is not on this host; `make release` builds and tags it, "
+                          "and an image a kept release names is never pruned")
+        ctx.say(f"deploy: pulling {ref}")
+        run("docker", "pull", "-q", ref)
 
 
 # --- step 4, ddl -------------------------------------------------------------------------
@@ -767,35 +794,43 @@ def sync_views(ctx: Ctx, p: Plan, phase: str) -> list[str]:
         return ["a first deploy: no view has been published under a release yet"]
     source = p.sources[0]
     for v in p.views:
-        live = live_view(ctx, v)
-        tag = tagged(ctx, v) if live else None
-        if live is None or tag is None:
-            lines.append(f"{v.relation}: not published yet; the wrapper creates it at its first tag")
-            continue
-        old = {c: tag[c] for c in live if c in tag}
-        narrow, widen = statements(ctx, p.target, v, old, tag)
-        statement = str(narrow if phase == "narrow" else widen)
-        stored = stored_view(ctx, v) or ""
-        if tokens(view_body(statement)) == tokens(stored):
-            pass
-        elif phase == "widen":  # the target's rules are loaded: the target's shape
+        try:
+            lines += _sync_view(ctx, p, phase, source, v)
+        except Exception as e:  # which view could not be synced: after a rollback's swap that is exit 3
+            raise Failed(f"view {v.relation} not synced ({phase}): {type(e).__name__}: {e}") from e
+    return lines
+
+
+def _sync_view(ctx: Ctx, p: Plan, phase: str, source: Release | None, v: View) -> list[str]:
+    lines = []
+    live = live_view(ctx, v)
+    tag = tagged(ctx, v) if live else None
+    if live is None or tag is None:
+        return [f"{v.relation}: not published yet; the wrapper creates it at its first tag"]
+    old = {c: tag[c] for c in live if c in tag}
+    narrow, widen = statements(ctx, p.target, v, old, tag)
+    statement = str(narrow if phase == "narrow" else widen)
+    stored = stored_view(ctx, v) or ""
+    if tokens(view_body(statement)) == tokens(stored):
+        pass
+    elif phase == "widen":  # the target's rules are loaded: the target's shape
+        sql(ctx, v.owner, statement)
+        lines.append(f"{v.relation}: {live} -> {[c for c in v.columns if c in tag]} (the target's shape)")
+    else:  # the source's rules still hold: the target's shape when they admit it, else the source's
+        try:
             sql(ctx, v.owner, statement)
-            lines.append(f"{v.relation}: {live} -> {[c for c in v.columns if c in tag]} (the target's shape)")
-        else:  # the source's rules still hold: the target's shape when they admit it, else the source's
-            try:
-                sql(ctx, v.owner, statement)
-                lines.append(f"{v.relation}: {live} -> {[c for c in v.columns if c in tag and c in live]} (the target's shape)")
-            except k2tools.TrinoError as e:
-                if e.name != "PERMISSION_DENIED" or source is None:
-                    raise
-                legacy = str(statements(ctx, source, v, old, tag)[0])
-                if tokens(view_body(legacy)) != tokens(stored):
-                    sql(ctx, v.owner, legacy)
-                lines.append(f"{v.relation}: {live} -> {[c for c in v.columns if c in tag and c in live]} in the source's shape "
-                             f"(its rules refuse the target's: {str(e)[:90]}); the target's shape after its rules load")
-        if phase == "widen" and (missing := [c for c in v.columns if c not in tag]):
-            lines.append(f"{v.relation}: {', '.join(missing)} failing closed until republished: the contract has "
-                         "them, the tested snapshot does not; SKIP reconcile: phase 002 builds the product pipeline")
+            lines.append(f"{v.relation}: {live} -> {[c for c in v.columns if c in tag and c in live]} (the target's shape)")
+        except k2tools.TrinoError as e:
+            if e.name != "PERMISSION_DENIED" or source is None:
+                raise
+            legacy = str(statements(ctx, source, v, old, tag)[0])
+            if tokens(view_body(legacy)) != tokens(stored):
+                sql(ctx, v.owner, legacy)
+            lines.append(f"{v.relation}: {live} -> {[c for c in v.columns if c in tag and c in live]} in the source's shape "
+                         f"(its rules refuse the target's: {str(e)[:90]}); the target's shape after its rules load")
+    if phase == "widen" and (missing := [c for c in v.columns if c not in tag]):
+        lines.append(f"{v.relation}: {', '.join(missing)} failing closed until republished: the contract has "
+                     "them, the tested snapshot does not; SKIP reconcile: phase 002 builds the product pipeline")
     return lines
 
 
@@ -889,7 +924,21 @@ def verify(ctx: Ctx, target: Release, previous_canary: str | None) -> list[str]:
     more, bad = s20_checks(ctx, target)
     lines, wrong = lines + more, wrong + bad
     svc = services(target)
-    for c in containers(ctx):
+    found = containers(ctx)
+    # Nothing found is never a pass (review R1 M1): a project name that matches no container would
+    # check nothing below. Every default-profile, long-running service of the release runs.
+    expected = {s for s, spec in svc.items() if not spec.get("profiles") and str(spec.get("restart", "no")) != "no"}
+    running = {c["Config"]["Labels"].get("com.docker.compose.service") for c in found if c["State"]["Running"]}
+    if not found:
+        wrong.append(f"no container of compose project {ctx.project!r}: K2_COMPOSE_PROJECT names another project")
+    elif missing := sorted(expected - running):
+        wrong.append(f"{len(running & expected)} of the release's {len(expected)} long-running services run; not running: {', '.join(missing)}")
+    fence = catalog_fence(ctx)
+    if fence.returncode:
+        wrong.append(f"catalog fence exit {fence.returncode}: {tail(fence, 6)}")
+    else:
+        lines.append(tail(fence, 1))
+    for c in found:
         name = c["Config"]["Labels"].get("com.docker.compose.service")
         ref = target.manifest.images.get(name)
         if not ref or name not in svc or (svc[name].get("profiles") and not c["State"]["Running"]):
@@ -901,10 +950,16 @@ def verify(ctx: Ctx, target: Release, previous_canary: str | None) -> list[str]:
             wrong.append(f"{name} is {health}")
         if not c["State"]["Running"] and (str(svc[name].get("restart", "no")) != "no" or c["State"]["ExitCode"] != 0):
             wrong.append(f"{name} is {c['State']['Status']} (exit {c['State']['ExitCode']})")
-    lines.append(f"images and health checked for {sum(1 for c in containers(ctx) if c['Config']['Labels'].get('com.docker.compose.service') in target.manifest.images)} container(s)")
+    lines.append(f"images and health checked for {sum(1 for c in found if c['Config']['Labels'].get('com.docker.compose.service') in target.manifest.images)} container(s)")
     if wrong:
         raise Failed("verify: " + "; ".join(wrong))
     return lines
+
+
+def catalog_fence(ctx: Ctx) -> subprocess.CompletedProcess[str]:
+    """The catalog fence's network probes (scripts/verify/catalog-fence.sh, ADR-059 part 7) on the
+    deploy's project: exit 0 every probe row passed, 1 one failed, 2 no Docker or no rows."""
+    return run("bash", str(ctx.home / "scripts/verify/catalog-fence.sh"), env=compose_env(ctx), check=False)
 
 
 def verify_dir(ctx: Ctx) -> Path:
@@ -1021,8 +1076,9 @@ def identity(ctx: Ctx) -> list[str]:
 # --- the sequence ------------------------------------------------------------------------
 
 
-def step(ctx: Ctx, target: Release, frm: str | None, name: str, svc: set[str], work: Any) -> Any:
-    """Run one step: its work, then the fault hook, then its record."""
+def step(ctx: Ctx, target: Release, frm: str | None, name: str, svc: set[str], work: Any,
+         extra: dict[str, Any] | None = None) -> Any:
+    """Run one step: its work, then the fault hook, then its record (with `extra`, which the work may fill)."""
     t0 = time.monotonic()
     try:
         out = work()
@@ -1033,19 +1089,31 @@ def step(ctx: Ctx, target: Release, frm: str | None, name: str, svc: set[str], w
     if f"kill:{name}" in ctx.faults:
         ctx.say(f"deploy: K2_DEPLOY_FAULT=kill:{name}: killed after the step's work, before its record")
         os.kill(os.getpid(), signal.SIGKILL)
-    record(ctx, target, frm, name, "ok", svc)
+    record(ctx, target, frm, name, "ok", svc, **(extra or {}))
     for line in out if isinstance(out, list) else []:
         ctx.say(f"  {line}")
     ctx.say(f"deploy: {name} ok ({time.monotonic() - t0:.1f} s)")
     return out
 
 
-def converge(ctx: Ctx, p: Plan, frm: str | None, prefix: str = "") -> None:
-    """Steps 5 to 10 toward p.target; any failure propagates (the caller rolls back)."""
+def converge(ctx: Ctx, p: Plan, frm: str | None, prefix: str = "", trino_down: bool = False) -> None:
+    """Steps 5 to 10 toward p.target; any failure propagates (the caller rolls back).
+
+    trino_down (a rollback only, review R1 H2): the views cannot be read or changed, so the pointers move
+    and the services are recreated first, Trino among them, and views-narrow runs right after the
+    recreate, before rules-loaded. With Trino down no reader reads anything. Once it is back on the good
+    release's etc and rules, a column only the failed release masked is readable through a view that
+    still carries it, from Trino healthy until views-narrow's statement for that view, typically under
+    a second (ponytail: no fence for that window; narrowing through Lakekeeper's view endpoint closes
+    it). A view that cannot be synced then fails the rollback (exit 3) naming the view, and nothing is
+    declared done before every view is synced."""
     t, svc = p.target, set(services(p.target))
     canary = model.canary_user(t.manifest.set_sha256)
     old = model.canary_user(p.sources[0].manifest.set_sha256) if p.sources[0] else None
-    step(ctx, t, frm, prefix + "views-narrow", svc, lambda: sync_views(ctx, p, "narrow"))
+    if trino_down and "trino" not in p.recreate:
+        p.recreate.insert(0, "trino")  # it comes back on the good release's etc and rules
+    if not trino_down:  # the source's rules still hold, so a dropped column leaves before they go
+        step(ctx, t, frm, prefix + "views-narrow", svc, lambda: sync_views(ctx, p, "narrow"))
     step(ctx, t, frm, prefix + "canary", svc, lambda: canary_write(ctx, canary) or [f"{canary}: line written in place"])
     swapped: list[float] = []
 
@@ -1071,6 +1139,9 @@ def converge(ctx: Ctx, p: Plan, frm: str | None, prefix: str = "") -> None:
         return out or ["nothing to recreate"]
 
     step(ctx, t, frm, prefix + "recreate", svc, recreate)
+    if trino_down:
+        step(ctx, t, frm, prefix + "views-narrow", svc, lambda: sync_views(ctx, p, "narrow"))
+
     def rules() -> list[str]:
         wait_rules(ctx, canary, old)
         loaded = time.monotonic()
@@ -1094,6 +1165,43 @@ def resolve(ctx: Ctx) -> tuple[Release | None, list[str]]:
         good = os.readlink(ctx.root / "pointers" / "trino").removeprefix("../")
     # else, with no good release, a first deploy that failed: plan again from nothing (every step converges)
     return (open_release(ctx, good) if good else None), since
+
+
+def trino_answers(ctx: Ctx) -> bool:
+    """Any answer from Trino, a refusal included; only no HTTP answer at all is False."""
+    try:
+        sql(ctx, "svc.platform", CANARY_SQL)
+    except k2tools.Unreachable:
+        return False
+    except (k2tools.TrinoError, FileNotFoundError):
+        pass
+    return True
+
+
+def migration_dumps(ctx: Ctx, p: Plan, record: dict[str, Any]) -> list[str]:
+    """Before step 4 runs a one-shot that migrates a database (named <database>-migrate: airflow-migrate,
+    lakekeeper-migrate), that database dumped from the project's prefect-db by scripts/backup-lake.sh's
+    own dump (--dump) to <root>/backups/<release>/, its path and sha256 into `record` (review R1 H1).
+    Skipped only when every release the plan moves from pins the one-shot's image: then no migration
+    can have changed. A failed dump refuses the deploy: nothing has changed yet."""
+    out, dumps = [], {}
+    for s in (s for s in p.oneshots if s.endswith("-migrate")):
+        db, want = s.removesuffix("-migrate"), p.target.manifest.images.get(s)
+        if p.sources[0] and all(src and src.manifest.images.get(s) == want for src in p.sources):
+            out.append(f"SKIP dump of database {db}: {s} runs {want}, the image {p.sources[0].id} pinned, so no migration can have changed")
+            continue
+        c = container(ctx, "prefect-db")
+        if c is None:
+            raise Refused(f"{s} migrates database {db}, and project {ctx.project} has no prefect-db container to dump it from")
+        path = ctx.root / "backups" / p.target.id / f"{db}-{now().replace(':', '')}.sql.gz"
+        done = run("bash", str(ctx.home / "scripts/backup-lake.sh"), "--dump", c["Id"], db, str(path), env=compose_env(ctx), check=False)
+        if done.returncode or not path.is_file():
+            raise Refused(f"the dump of database {db} before {s} failed: {tail(done, 4)}")
+        dumps[db] = {"path": str(path), "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
+        out.append(f"database {db} dumped before {s}: {path} sha256 {dumps[db]['sha256']}")
+    if dumps:
+        record["backups"] = dumps
+    return out or ["no one-shot migrates a database"]
 
 
 def ddl(ctx: Ctx, p: Plan) -> list[str]:
@@ -1131,6 +1239,8 @@ def deploy(ctx: Ctx, rid: str, plan_only: bool) -> int:
     if plan_only:
         ctx.say("deploy: PLAN=1: stopped before any change")
         return EXIT_OK
+    dumped: dict[str, Any] = {}
+    step(ctx, target, frm, "backup", svc, lambda: migration_dumps(ctx, p, dumped), extra=dumped)
     step(ctx, target, frm, "ddl", svc, lambda: ddl(ctx, p))
     try:
         converge(ctx, p, frm)
@@ -1153,7 +1263,10 @@ def rollback_to(ctx: Ctx, good: Release, sources: list[Release], frm: str) -> bo
         p = make_plan(ctx, good, list(sources))
         show(ctx, p, frm)
         ensure_images(ctx, good)
-        converge(ctx, p, frm, prefix="rollback-")
+        down = not trino_answers(ctx)
+        if down:
+            ctx.say("deploy: Trino does not answer: the pointers move and the services are recreated first, then the views")
+        converge(ctx, p, frm, prefix="rollback-", trino_down=down)
     except Exception as e:
         ctx.say(f"deploy: ROLLBACK FAILED: {e}. The platform is between {frm} and {good.id}: page the owner and "
                 "follow docs/runbooks/roll-back-a-release.md")
@@ -1205,6 +1318,11 @@ def status(ctx: Ctx) -> int:
     say(f"  canary lines in {PASSWORD_DB}: {', '.join(canaries) or 'none'}")
     kept = sorted(p.name for p in ctx.root.iterdir() if p.is_dir() and p.name.startswith("v")) if ctx.root.is_dir() else []
     say(f"  releases kept: {', '.join(kept) or 'none'}")
+    if goods:  # a deploy's rollback target, as its preflight checks it (review R1 H3)
+        good = open_release(ctx, goods[-1])
+        gone = missing_images(good)
+        say(f"  rollback images of {good.id}: " + (f"MISSING {', '.join(f'{s} {r}' for s, r in gone)}; {IMAGE_FIX}" if gone
+                                                   else f"all {len(good.manifest.images)} on this host"))
     for r in history(ctx.root)[-12:]:
         say(f"  {r['at']} {r['release']} {r['step']} {r['outcome']} (from {r['from']}, by {r['operator']})")
     return EXIT_OK
@@ -1359,7 +1477,8 @@ def _main(argv: list[str] | None) -> int:
     d.add_argument("--plan", action="store_true")
     d.add_argument("--allow-stateful", default="")
     sub.add_parser("verify")
-    sub.add_parser("rollback")
+    rb = sub.add_parser("rollback")
+    rb.add_argument("--allow-stateful", default="")
     sub.add_parser("status")
     df = sub.add_parser("diff")
     df.add_argument("release")
@@ -1369,6 +1488,10 @@ def _main(argv: list[str] | None) -> int:
         ctx = ctx_from_env(Path(tmp))
         ctx.say = lambda line: print(line, file=sys.stderr, flush=True)
         try:
+            if not ctx.project:
+                raise Refused("K2_COMPOSE_PROJECT is set but empty: set it to the project the running containers carry "
+                              "(docker inspect k2-trino --format '{{index .Config.Labels \"com.docker.compose.project\"}}'), "
+                              "or unset it for this checkout directory's name")
             if args.cmd == "status":
                 return status(ctx)
             if args.cmd == "diff":
@@ -1381,9 +1504,10 @@ def _main(argv: list[str] | None) -> int:
                     return EXIT_OK
                 if args.cmd == "verify":
                     return verify_live(ctx)
+                if args.cmd in ("deploy", "rollback"):
+                    ctx.allow_stateful = {s for s in args.allow_stateful.split(",") if s}
                 if args.cmd == "rollback":
                     return rollback(ctx)
-                ctx.allow_stateful = {s for s in args.allow_stateful.split(",") if s}
                 rid = args.release
                 if not (ctx.root / rid).is_dir():  # a tag: compile it first, as `make release` would
                     with tempfile.TemporaryDirectory(prefix="k2-release-") as rtmp:

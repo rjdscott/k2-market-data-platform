@@ -22,8 +22,8 @@ release-verify:  ## Ask every part which release it runs: pointers in the VM and
 	@$(DEPLOY) verify
 
 .PHONY: rollback
-rollback:  ## Back to the previous good release (or to the good one, after an unfinished deploy), images included, then verify
-	@$(DEPLOY) rollback
+rollback:  ## [ALLOW_STATEFUL=<svc>,...] Back to the previous good release (or to the good one, after an unfinished deploy), images included, then verify; ALLOW_STATEFUL as deploy takes it
+	@$(DEPLOY) rollback $${ALLOW_STATEFUL:+--allow-stateful "$$ALLOW_STATEFUL"}
 
 .PHONY: release-status
 release-status:  ## The good release, the pointers, the canary lines (names only), the releases kept and the last deploy records

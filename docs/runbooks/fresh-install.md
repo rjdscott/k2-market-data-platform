@@ -75,7 +75,8 @@ restoring from the host copy ([lake-backup-and-restore.md](./lake-backup-and-res
 ```bash
 git clone https://github.com/rjdscott/k2-market-data-platform.git
 cd k2-market-data-platform
-git checkout <tag>              # the approved release tag: deploy refuses a checkout whose emitter differs
+git checkout <tag>              # the approved release tag; deploy does not check it, and this tree is what
+                                # every relative bind mount and every script deploy calls reads
 cp .env.example .env            # set every change-me value: openssl rand -hex 24 each;
                                 # LAKEKEEPER_ENCRYPTION_KEY: openssl rand -base64 32
 # .env, the release block: K2_COMPOSE_PROJECT=<the project compose gives this checkout: its
