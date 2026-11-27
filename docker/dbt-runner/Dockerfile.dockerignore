@@ -4,6 +4,10 @@
 !dbt/uv.lock
 !dbt/profiles.yml
 !docker/dbt-runner
+!platform/k2gen/k2gen
+!platform/k2gen/uv.lock
+!contracts/schema
+!scripts/verify/catalog_drift.py
 docker/dbt-runner/Dockerfile*
 docker/dbt-runner/**/test_*
 **/__pycache__

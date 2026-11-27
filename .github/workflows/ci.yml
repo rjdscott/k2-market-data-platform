@@ -265,7 +265,7 @@ jobs:
         run: >-
           docker run --rm --read-only --tmpfs /tmp:rw,noexec,nosuid,size=64m --cap-drop ALL
           --security-opt no-new-privileges --network none --user 12345:12345 dbt-runner:local
-          sh -c 'dbt --version && command -v k2-dbt'
+          sh -c 'dbt --version && command -v k2-dbt && k2-dbt --help'
 
   compose:
     name: Compose (config validation)

@@ -6,9 +6,11 @@
 # the mode-600 password files (docker/airflow/dags/oneshot.py).
 #
 # Holds: Python 3.12, dbt-core and dbt-trino from dbt/uv.lock (the trino client among their
-# locked dependencies, which the run-records client k2runs needs; k2runs itself is read from the
-# release's platform/runs/), dbt/profiles.yml, and the wrapper. No dbt packages: the compiled
-# tree names none, and nothing is fetched at run time. Built from the repository root as context
+# locked dependencies, which the wrapper and the run-records client k2runs need; k2runs itself is
+# read from the release's platform/runs/), dbt/profiles.yml, the wrapper, and what it imports:
+# k2gen's source with contracts/schema, as docker/tools/Dockerfile lays them out, and the catalog
+# drift check beside the wrapper. No dbt packages: the compiled tree names none, and nothing is
+# fetched at run time. Built from the repository root as context
 # (Dockerfile.dockerignore) and tagged dbt-runner:<image id 12> by `make release`.
 # python 3.12.16 and uv 0.13.10 are the pins docker/tools/Dockerfile carries.
 FROM python:3.12.16-slim-bookworm@sha256:44cf1793efa7c7a476bb0f2cff81443f4a072c90c1cb127e2924933daa3e8c64 AS venv
@@ -24,19 +26,32 @@ FROM python:3.12.16-slim-bookworm@sha256:44cf1793efa7c7a476bb0f2cff81443f4a072c9
 
 COPY --from=venv /opt/k2/dbt-venv /opt/k2/dbt-venv
 COPY dbt/profiles.yml /opt/k2/dbt/profiles.yml
+# k2gen (the release's model, emit/lake.view_update, the drift check's expected()): its source in a
+# subset of the tree, since model.REPO is three directories above its module and model.load reads
+# contracts/schema there, on the venv's path by a .pth file. Its runtime dependencies are dbt's
+# lock's, and the build fails unless each is the version platform/k2gen/uv.lock pins.
+COPY platform/k2gen/k2gen /opt/k2/platform/k2gen/k2gen
+COPY platform/k2gen/uv.lock /opt/k2/platform/k2gen/uv.lock
+COPY contracts/schema /opt/k2/contracts/schema
 COPY docker/dbt-runner/ /opt/k2/dbt-runner/
-RUN printf '#!/bin/sh\nexec /opt/k2/dbt-venv/bin/python /opt/k2/dbt-runner/k2_dbt.py "$@"\n' > /usr/local/bin/k2-dbt \
+COPY scripts/verify/catalog_drift.py /opt/k2/dbt-runner/catalog_drift.py
+RUN echo /opt/k2/platform/k2gen > /opt/k2/dbt-venv/lib/python3.12/site-packages/k2gen.pth \
+    && /opt/k2/dbt-venv/bin/python -c "import importlib.metadata as m, tomllib; \
+lock = {p['name']: p['version'] for p in tomllib.load(open('/opt/k2/platform/k2gen/uv.lock', 'rb'))['package']}; \
+bad = [(n, m.version(n), lock[n]) for n in ('jsonschema', 'pyyaml', 'referencing', 'attrs', 'jsonschema-specifications', \
+'rpds-py', 'typing-extensions') if m.version(n) != lock[n]]; assert not bad, bad" \
+    && printf '#!/bin/sh\nexec /opt/k2/dbt-venv/bin/python /opt/k2/dbt-runner/k2_dbt.py "$@"\n' > /usr/local/bin/k2-dbt \
     && chmod 0755 /usr/local/bin/k2-dbt \
-    && /opt/k2/dbt-venv/bin/dbt --version
+    && /opt/k2/dbt-venv/bin/dbt --version \
+    && k2-dbt --help >/dev/null
 
-# Every path dbt writes is on the /tmp tmpfs (target, logs, HOME), so --read-only holds; the
-# wrapper may name a target path of its own. No usage stats: nothing leaves for dbt Labs.
+# dbt's profiles directory, target and log paths are the wrapper's flags (k2_dbt.py dbt_argv:
+# /opt/k2/dbt and /tmp/k2-dbt), and its environment the wrapper's allow-list (dbt_env), so
+# --read-only holds: everything dbt writes is on the /tmp tmpfs. No usage stats: nothing leaves
+# for dbt Labs, for a dbt run by hand here too.
 ENV PATH=/opt/k2/dbt-venv/bin:$PATH \
     PYTHONDONTWRITEBYTECODE=1 \
     HOME=/tmp \
-    DBT_PROFILES_DIR=/opt/k2/dbt \
-    DBT_TARGET_PATH=/tmp/dbt/target \
-    DBT_LOG_PATH=/tmp/dbt/logs \
     DBT_SEND_ANONYMOUS_USAGE_STATS=false
 
 # Non-root. The operator runs it as the host user (--user) to read the password files; this uid

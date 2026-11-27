@@ -35,8 +35,9 @@ view SQL are the two calls to Lakekeeper's REST API, at K2_CATALOG_URI (steps 1 
 drift check's own reads.
 
 Imports beyond the standard library: trino, k2gen (platform/k2gen), and catalog_drift
-(scripts/verify/catalog_drift.py), which the image puts beside this file; k2runs is loaded from the
-release itself (<release>/platform/platform/runs/k2runs.py).
+(scripts/verify/catalog_drift.py), which docker/dbt-runner/Dockerfile puts beside this file, so
+`k2-dbt --help` fails the image's build on a missing one; k2runs is loaded from the release itself
+(<release>/platform/platform/runs/k2runs.py).
 """
 
 from __future__ import annotations
@@ -54,16 +55,18 @@ from pathlib import Path
 from typing import Any
 
 import catalog_drift
+import trino
 from k2gen import model as k2
 from k2gen.emit import lake
+from trino.exceptions import TrinoUserError
 
 SECRETS = "/run/k2-secrets"
 PASSWORDS = {"builder": f"{SECRETS}/builder.password", "publisher": f"{SECRETS}/publisher.password",
              "runs": f"{SECRETS}/runs.password"}
 CA = f"{SECRETS}/tls/ca.pem"
 RELEASES = Path(k2.RELEASES_MOUNT)
-WORK = Path("/tmp/k2-dbt")  # the one-shot's only writable path (docker/airflow/dags/oneshot.py TMPFS)
-PROFILES_DIR = Path(__file__).resolve().parent  # dbt/profiles.yml, which the image puts beside this file
+WORK = Path("/tmp/k2-dbt")  # dbt's target, logs and HOME: the one-shot's only writable path (oneshot.TMPFS)
+PROFILES_DIR = Path("/opt/k2/dbt")  # dbt/profiles.yml in the image (docker/dbt-runner/Dockerfile)
 ENV = ("K2_TRINO_HOST", "K2_TRINO_INTERNAL_PORT", "K2_TRINO_USER", "K2_PUB_USER", "K2_RUNS_USER",
        "K2_CATALOG_URI", "K2_RELEASE")
 RUNS_USER = "svc.runs"
@@ -563,7 +566,6 @@ class Live:
 
     def conn(self, role: str) -> Any:
         if role not in self.conns:
-            import trino
             user = self.environ[self.USERS[role]]
             self.conns[role] = trino.dbapi.connect(
                 host=self.environ["K2_TRINO_HOST"], port=int(self.environ["K2_TRINO_INTERNAL_PORT"]), user=user,
@@ -578,7 +580,6 @@ class Live:
 
     def refs(self, role: str, rel: str) -> dict[str, tuple[str, int]] | None:
         relation(rel)
-        from trino.exceptions import TrinoUserError
         try:
             rows, _ = self.query(role, f"SELECT name, type, snapshot_id FROM {k2.quote_relation(rel + '$refs')}")
         except TrinoUserError as e:
@@ -604,12 +605,16 @@ class Live:
         self.k2runs.record(self.conn("runs"), **row)
 
     def history(self, product: str) -> list[dict[str, Any]]:
+        # ponytail: every build row of the product, unbounded: about 3 rows per output per run, so
+        # 144 runs a day of one output read some 150,000 rows after a year. Bound it by recorded_at
+        # (the partition column) to the retention days when a reconcile's read shows in its time.
         rows, _ = self.query("runs", f"SELECT run_id, event, table_name, snapshot_before, snapshot_after FROM {self.k2runs.TABLE} "
                                      "WHERE product_id = ? AND task = 'build' ORDER BY recorded_at", [product])
         return [dict(zip(("run_id", "event", "table_name", "snapshot_before", "snapshot_after"), r, strict=True)) for r in rows]
 
     def dbt(self, argv: list[str]) -> tuple[int, dict[str, Any] | None]:
         results = WORK / "target" / "run_results.json"
+        WORK.mkdir(parents=True, exist_ok=True)
         results.unlink(missing_ok=True)
         done = subprocess.run(argv, env=dbt_env(self.environ, password("builder")), stdin=subprocess.DEVNULL,
                               stdout=sys.stderr, stderr=sys.stderr, check=False)
@@ -644,14 +649,18 @@ class Live:
 
 
 def main(argv: list[str] | None = None) -> int:
+    argv = sys.argv[1:] if argv is None else argv
+    ap = argparse.ArgumentParser(prog="k2-dbt", description=__doc__.split("\n\n")[0])
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    b = sub.add_parser("build")
+    b.add_argument("--release", required=True)
+    b.add_argument("--product", required=True)
+    b.add_argument("--run-id", required=True)
+    if argv in (["--help"], ["-h"]):  # not a run, so no XCom: the image's build and CI check its imports by it
+        ap.print_help()
+        return 0
     code, expire = 3, []
     try:
-        ap = argparse.ArgumentParser(prog="k2-dbt", description=__doc__.split("\n\n")[0])
-        sub = ap.add_subparsers(dest="cmd", required=True)
-        b = sub.add_parser("build")
-        b.add_argument("--release", required=True)
-        b.add_argument("--product", required=True)
-        b.add_argument("--run-id", required=True)
         try:
             a = ap.parse_args(argv)
         except SystemExit:

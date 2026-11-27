@@ -653,7 +653,9 @@ def test_the_xcom_is_the_last_stdout_line_on_every_exit_path(monkeypatch, capsys
     def last():
         out = capsys.readouterr().out.strip().splitlines()
         return json.loads(out[-1])
+    assert w.main(["--help"]) == 0 and capsys.readouterr().out.startswith("usage: k2-dbt")  # no run, no XCom
     assert w.main(["nonsense"]) == 3 and last() == {"exit": 3, "expire": []}
+    assert w.main(["build", "--help"]) == 3 and last() == {"exit": 3, "expire": []}
     monkeypatch.setattr(w, "load", lambda *a: (_ for _ in ()).throw(FileNotFoundError("no release")))
     assert w.main(["build", "--release", RELEASE, "--product", "governance.access-canary", "--run-id", "access_canary/r1"]) == 3
     assert last() == {"exit": 3, "expire": []}
