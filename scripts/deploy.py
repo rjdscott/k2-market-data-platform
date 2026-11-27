@@ -39,7 +39,7 @@ first failure:
                  paused once one release runs again: done, rolled back, or a failed ddl; on exit 3 they
                  stay paused, and a rerun or `make rollback` that reaches done unpauses them. Never a
                  DAG whose product is held (k2runs.held as svc.platform, under the release that runs
-                 then; unread holds keep them all paused). A DAG new in the release is never paused or
+                 then; unread holds, or no scheduler, keep them all paused: exit 4). A DAG new in the release is never paused or
                  unpaused by deploy: Airflow creates it at its first parse after the swap
  4 ddl           the one-shots the plan names (lake-init reads the target's storage plan), the storage plan's missing namespaces, and each table of
                  needs.ddl compared with the catalog: missing is queued, equal is satisfied, different
@@ -74,7 +74,11 @@ first failure:
 
 A failure at step 5 or later rolls back on its own: the same steps toward the previous release from
 this one (recorded as rollback-<step>), then exit 1; exit 3 if that fails too. Exit 2 is a refusal
-before anything changed. K2_DEPLOY_FAULT, comma-separated, is how the rehearsal breaks a deploy on
+before anything changed. Exit 4: the release is live and verified, never rolled back, but DAGs the
+drain paused are left paused (the holds could not be read, or no scheduler ran), named with the reason
+on the line before the exit line, in <releases root>/deploy-paused.json and by `make release-status`:
+unpause each after checking its holds (UNPAUSE), or let the next deploy or rollback reaching done do it;
+`make rollback` exits 4 the same way. K2_DEPLOY_FAULT, comma-separated, is how the rehearsal breaks a deploy on
 purpose: `verify-mismatch` fails step 9, `kill:<step>` SIGKILLs this process right after that step's
 work and before its record.
 
@@ -170,7 +174,8 @@ SPARK_LAKE = {
     "spark.sql.catalog.lake.s3.endpoint": S3_ENDPOINT,
     "spark.sql.catalog.lake.s3.path-style-access": "true",
 }
-EXIT_OK, EXIT_FAILED, EXIT_REFUSED, EXIT_ROLLBACK_FAILED = 0, 1, 2, 3
+EXIT_OK, EXIT_FAILED, EXIT_REFUSED, EXIT_ROLLBACK_FAILED, EXIT_PAUSED = 0, 1, 2, 3, 4
+UNPAUSE = "docker exec k2-airflow-scheduler airflow dags unpause <dag> -y"  # the scheduler's container_name
 
 
 class Refused(Exception):
@@ -632,11 +637,12 @@ def paused_by_deploy(ctx: Ctx) -> set[str]:
     return set(json.loads(path.read_text())["paused"]) if path.exists() else set()
 
 
-def write_paused(ctx: Ctx, dags: set[str]) -> None:
-    """Written whole and fsynced before it replaces the old one: a kill mid-write leaves either."""
+def write_paused(ctx: Ctx, dags: set[str], why: str | None = None) -> None:
+    """Written whole and fsynced before it replaces the old one: a kill mid-write leaves either. `why`:
+    resume's reason for leaving them paused, for `make release-status`."""
     tmp = ctx.root / f".{DRAIN_STATE}.tmp"
     with open(tmp, "w") as f:
-        f.write(json.dumps({"paused": sorted(dags), "at": now()}) + "\n")
+        f.write(json.dumps({"paused": sorted(dags), "at": now(), **({"why": why} if why else {})}) + "\n")
         f.flush()
         os.fsync(f.fileno())
     os.replace(tmp, ctx.root / DRAIN_STATE)
@@ -689,20 +695,24 @@ def resume(ctx: Ctx, rel: Release | None) -> list[str]:
     one whose product is held (W1-12) under `rel`, the release that runs now: a hold is the operator's,
     so such a DAG is dropped from the set and stays paused until its hold ends. A plain Airflow pause
     of a DAG deploy had paused cannot be told from deploy's own (audit LOW 40): `make hold` is how an
-    operator keeps one paused across a deploy. Holds that cannot be read keep every one paused."""
+    operator keeps one paused across a deploy. Holds that cannot be read, or no scheduler, keep every one
+    paused, the reason written into DRAIN_STATE: left_paused() then makes a done deploy exit 4."""
     paused = sorted(paused_by_deploy(ctx))
     if not paused:
         return []
-    cid = scheduler(ctx)
+    cid, why = scheduler(ctx), None
     if cid is None:
-        raise Failed(f"{SCHEDULER} is not running, so the DAGs deploy paused stay paused: {', '.join(paused)} "
-                     f"({ctx.root / DRAIN_STATE}); the next deploy or rollback that reaches done unpauses them")
-    try:
-        held = holds(ctx, rel, paused)
-    except Exception as e:  # never unpause past a hold that could not be read
-        return [f"kept paused {', '.join(paused)}: the holds could not be read as {HOLDS_READER} ({type(e).__name__}: "
-                f"{str(e)[:160]}), so none is unpaused past one; the next deploy or rollback that reaches done "
-                f"unpauses them ({ctx.root / DRAIN_STATE})"]
+        why = f"{SCHEDULER} is not running, so none can be unpaused"
+    else:
+        try:
+            held = holds(ctx, rel, paused)
+        except Exception as e:  # never unpause past a hold that could not be read
+            why = (f"the holds could not be read as {HOLDS_READER} ({type(e).__name__}: {str(e)[:160]}), "
+                   "so none is unpaused past one")
+    if why:
+        write_paused(ctx, set(paused), why)
+        return [f"kept paused {', '.join(paused)}: {why}; the next deploy or rollback that reaches done unpauses "
+                f"them ({ctx.root / DRAIN_STATE})"]
     for d in (d for d in paused if d not in held):
         airflow(ctx, cid, "dags", "unpause", d, "-y")
     (ctx.root / DRAIN_STATE).unlink()
@@ -711,6 +721,17 @@ def resume(ctx: Ctx, rel: Release | None) -> list[str]:
         lines.append("kept paused, held: " + "; ".join(f"{d} ({h['kind']} hold by {h['held_by']} at {h['held_at']}: {h['reason']})"
                                                        for d, h in sorted(held.items())) + "; each stays paused until its hold is released")
     return lines
+
+
+def left_paused(ctx: Ctx, rid: str) -> int:
+    """After a release reached done and resume ran: EXIT_PAUSED, saying which DAGs deploy left paused and
+    why, while DRAIN_STATE still names any; else EXIT_OK. Never a rollback: the release is verified."""
+    if not (ctx.root / DRAIN_STATE).exists() or not (state := json.loads((ctx.root / DRAIN_STATE).read_text()))["paused"]:
+        return EXIT_OK
+    ctx.say(f"deploy: {rid} is live and verified, but {len(state['paused'])} DAG(s) deploy paused are left paused: "
+            f"{', '.join(state['paused'])} ({state.get('why', 'reason not recorded')}); unpause each after checking "
+            f"its holds: {UNPAUSE}")
+    return EXIT_PAUSED
 
 
 def drain(ctx: Ctx, p: Plan, frm: str | None) -> list[str]:
@@ -1799,7 +1820,7 @@ def deploy(ctx: Ctx, rid: str, plan_only: bool) -> int:
         return EXIT_FAILED if rollback_to(ctx, good, [target, *(s for s in sources[1:] if s)], rid) else EXIT_ROLLBACK_FAILED
     ctx.say(f"deploy: {rid} is live and verified")
     say_all(ctx, resume(ctx, target))
-    return EXIT_OK
+    return left_paused(ctx, rid)
 
 
 def say_all(ctx: Ctx, lines: list[str]) -> None:
@@ -1841,8 +1862,8 @@ def rollback(ctx: Ctx) -> int:
         sources = [goods[-1]]
         if not target:
             raise Refused(f"{goods[-1]} is the only good release in the deploy log")
-    return EXIT_OK if rollback_to(ctx, open_release(ctx, target), [open_release(ctx, s) for s in sources if s != target],
-                                  goods[-1]) else EXIT_ROLLBACK_FAILED
+    return left_paused(ctx, target) if rollback_to(ctx, open_release(ctx, target), [open_release(ctx, s) for s in sources if s != target],
+                                                   goods[-1]) else EXIT_ROLLBACK_FAILED
 
 
 def verify_live(ctx: Ctx) -> int:
@@ -1880,7 +1901,10 @@ def status(ctx: Ctx) -> int:
     db = ctx.secrets / PASSWORD_DB
     canaries = [x.split(":", 1)[0] for x in db.read_text().splitlines() if x.startswith("k2_release_")] if db.exists() else []
     say(f"  canary lines in {PASSWORD_DB}: {', '.join(canaries) or 'none'}")
-    say(f"  DAGs a deploy paused and has not yet unpaused: {', '.join(sorted(paused_by_deploy(ctx))) or 'none'}")
+    drained = json.loads((ctx.root / DRAIN_STATE).read_text()) if (ctx.root / DRAIN_STATE).exists() else {}
+    say(f"  DAGs a deploy paused and has not yet unpaused: {', '.join(drained.get('paused', [])) or 'none'}"
+        + (f" (left paused at {drained['at']}: {drained['why']}; unpause each after checking its holds: {UNPAUSE})"
+           if drained.get("why") else ""))
     kept = sorted(p.name for p in ctx.root.iterdir() if p.is_dir() and p.name.startswith("v")) if ctx.root.is_dir() else []
     say(f"  releases kept: {', '.join(kept) or 'none'}")
     if goods:  # a deploy's rollback target, as its preflight checks it (review R1 H3)
@@ -2022,7 +2046,9 @@ def compile_release(ctx: Ctx, tag: str, images: Path | None) -> str:
 
 
 MEANING = {EXIT_OK: "done", EXIT_FAILED: "failed; back on the previous release, or nothing to undo",
-           EXIT_REFUSED: "refused before any change", EXIT_ROLLBACK_FAILED: "the rollback failed too: page the owner"}
+           EXIT_REFUSED: "refused before any change", EXIT_ROLLBACK_FAILED: "the rollback failed too: page the owner",
+           EXIT_PAUSED: "live and verified, but DAGs left paused (named on the line above and by make release-status): "
+                        "unpause each after checking its holds"}
 
 
 def main(argv: list[str] | None = None) -> int:

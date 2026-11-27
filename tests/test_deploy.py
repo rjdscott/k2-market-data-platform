@@ -1339,9 +1339,26 @@ sys.exit(f"fake docker: no answer for {A}")
         monkeypatch.setattr(deploy, "sql", refused)
         said: list[str] = []
         world.ctx.say = said.append
-        assert world.deploy(r2) == 0  # live and verified; the DAGs wait for the next deploy or rollback that reads them
+        # Review D7: live and verified, never rolled back, but not a clean exit 0: exit 4, the DAGs and why on the
+        # deploy's last line, and in make release-status; they wait for a check of the holds, or the next done.
+        assert world.deploy(r2) == deploy.EXIT_PAUSED
         assert world.paused() == {SR: True, DL: True} and deploy.paused_by_deploy(world.ctx) == {SR, DL}
         assert any(x.startswith("  kept paused daily_load, station_readings: the holds could not be read as svc.platform") for x in said)
+        why = "the holds could not be read as svc.platform (TrinoError"
+        assert said[-1].startswith(f"deploy: {r2.id} is live and verified, but 2 DAG(s) deploy paused are left paused: "
+                                   f"daily_load, station_readings ({why}") and said[-1].endswith(f"its holds: {deploy.UNPAUSE}"), said[-1]
+        assert records(world)[-2]["step"] == "done" and [r["step"] for r in records(world) if r["step"].startswith("rollback")] == []
+        assert "live and verified, but DAGs left paused" in deploy.MEANING[deploy.EXIT_PAUSED]
+        status: list[str] = []
+        world.ctx.say = status.append
+        deploy.status(world.ctx)
+        line = next(x for x in status if "DAGs a deploy paused" in x)
+        assert line.startswith("  DAGs a deploy paused and has not yet unpaused: daily_load, station_readings (left paused at ")
+        assert why in line and deploy.UNPAUSE in line
+        monkeypatch.setattr(deploy, "sql", real)  # the holds readable again: the next done unpauses them and exits 0
+        world.ctx.say = said.append
+        assert world.deploy(world.release(over={CODE: b"# three\n"})) == deploy.EXIT_OK
+        assert world.paused() == {SR: False, DL: False} and not (world.root / deploy.DRAIN_STATE).exists()
 
     def test_a_release_without_the_holds_table_unpauses_without_reading_them(world: World) -> None:
         r1, r2 = drained_world(world, {SR: False, DL: False})
