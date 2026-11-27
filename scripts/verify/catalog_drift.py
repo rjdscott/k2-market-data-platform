@@ -32,8 +32,10 @@ container (scripts/lib/throwaway-lake.sh py).
   still checked. Each tag must equal its table's newest audited run record (newest_audited, read
   as svc.runs; the run records name the table where the builder writes it,
   <domain>_build.<fence>__base.<table>), so a tag moved by anyone but a recorded publish is named.
-  drift() is given that reader by the dbt wrapper's reconcile (docker/dbt-runner/k2_dbt.py); run
-  without one, as the CLI is, each tag prints a SKIP line saying so, never a pass.
+  drift() is given that reader by the dbt wrapper's reconcile (docker/dbt-runner/k2_dbt.py), which
+  checks its own product's namespaces only (drift's `only`: a product running beside it is
+  mid-change for a moment); run without one, as the CLI is, each tag prints a SKIP line saying so,
+  never a pass, and every namespace of the release is checked.
 
 Exits 0 when the catalog equals the release (PENDING and SKIP lines allowed), 1 naming every
 difference on a DRIFT line, 2 when the catalog cannot be reached or the release cannot be read.
@@ -54,7 +56,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from collections import defaultdict
-from collections.abc import Callable
+from collections.abc import Callable, Collection
 from pathlib import Path
 from typing import Any
 
@@ -263,34 +265,45 @@ def expected(release: Path) -> dict[str, Any]:
             "results": results, "sql": generated_sql, "release": release.name}
 
 
-def drift(uri: str, want: dict[str, Any], newest_audited: Callable[[str], int | None] | None = None) -> dict[str, list[str]]:
+def drift(uri: str, want: dict[str, Any], newest_audited: Callable[[str], int | None] | None = None,
+          only: Collection[tuple[str, str]] | None = None) -> dict[str, list[str]]:
     """Every difference between the catalog and `want` (expected()), as named lines. With
     newest_audited (a table's newest audited run record, k2runs.newest_audited), each tag is held
-    to it; without, each tag is a SKIP line."""
+    to it; without, each tag is a SKIP line. `only` limits the check to those (warehouse,
+    namespace) pairs: the dbt wrapper's own product's reader and base namespaces, since another
+    product's run, concurrent with it, plants dbt's transient tables in its base namespace, moves
+    its tags before their audited rows and holds its views narrowed between the tag commit and the
+    widen, each a difference here for that moment. None checks the whole release (release-verify)."""
     found: dict[str, list[str]] = {"differences": [], "pending": [], "skipped": []}
 
     def diff(line: str) -> None:
         found["differences"].append(line)
 
+    def mine(w: str, ns: str) -> bool:
+        return only is None or (w, ns) in only
+
     for w in sorted(want["namespaces"]):
+        if only is not None and w not in {x for x, _ in only}:
+            continue
         cat = Catalog(uri, w)
         present = set(cat.namespaces())
-        for ns in sorted(present - want["namespaces"][w]):
+        for ns in sorted(present - want["namespaces"][w]) if only is None else ():
             diff(f"DRIFT namespace {w}.{ns}: the release declares no such namespace")
-        for ns in sorted(want["namespaces"][w] - present):
+        for ns in sorted(ns for ns in want["namespaces"][w] - present if mine(w, ns)):
             diff(f"DRIFT namespace {w}.{ns}: missing; the release's storage plan declares it")
         # A product has published once any of its outputs carries a tag or a view.
         products: dict[str, list[tuple[str, str, dict[str, Any]]]] = defaultdict(list)
         for (vw, ns), vs in want["views"].items():
             if vw == w:
                 for name, spec in vs.items():
-                    products[spec["base"][0]].append((ns, name, spec))
+                    if mine(w, ns) and mine(w, spec["base"][0]):
+                        products[spec["base"][0]].append((ns, name, spec))
         metas = {(spec["base"]): cat.table(*spec["base"]) if spec["base"][0] in present else None
                  for outs in products.values() for _, _, spec in outs}
         published = {base_ns: any(((metas[spec["base"]] or {}).get("refs") or {}).get("audited")
                                   or (ns in present and name in cat.views(ns)) for ns, name, spec in outs)
                      for base_ns, outs in products.items()}
-        for ns in sorted(present & want["namespaces"][w]):
+        for ns in sorted(ns for ns in present & want["namespaces"][w] if mine(w, ns)):
             here, listed = set(cat.tables(ns)), set(cat.views(ns))
             expect = want["tables"].get((w, ns), set())
             reader = ns in {n for (vw, n) in want["views"] if vw == w}

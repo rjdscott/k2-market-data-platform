@@ -10,7 +10,7 @@ docs/research/2026-11-26-release-spine-spikes.md. In order:
    the tag as the builder (no tag: DROP TABLE), `reconciled`; a tag ahead of the run records, which
    only an unfinished run explains (it died between the tag commit and its `audited` row), gets
    that row; every view is put back to C and the tagged columns; then the catalog drift check,
-   with the run-record comparison, must find nothing.
+   with the run-record comparison, must find nothing in this product's namespaces (Live.drift).
 2. resolve each input's tested snapshot from `t$refs` as svc.runs, the whole set read twice and
    compared (a publish between two reads restarts it, RESOLVE_ATTEMPTS times); a required input
    never tested exits 4.
@@ -632,9 +632,14 @@ class Live:
         return catalog_drift.view_state(meta)["sql"][0] if meta else None
 
     def drift(self) -> dict[str, list[str]]:
+        """The drift check over this product's own namespaces, its tags held to the run records as
+        svc.runs. Another product running beside this one is mid-change for a moment (dbt's
+        transient tables, a tag ahead of its audited row, a narrowed view), so it is left to
+        release-verify, which checks the whole release."""
         runs = self.conn("runs")
+        own = {(self.ctx.warehouse, rel.split(".")[1]) for o in self.ctx.outputs for rel in (o.relation, o.view.relation)}
         found: dict[str, list[str]] = catalog_drift.drift(self.uri, catalog_drift.expected(self.ctx.release_path),
-                                                          newest_audited=lambda t: self.k2runs.newest_audited(runs, t))
+                                                          newest_audited=lambda t: self.k2runs.newest_audited(runs, t), only=own)
         return found
 
 

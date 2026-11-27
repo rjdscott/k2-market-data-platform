@@ -11,6 +11,7 @@ import dataclasses
 import json
 import re
 import sys
+import types
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -557,6 +558,22 @@ def test_after_a_crash_at_each_point_of_the_publish_the_next_run_finishes_it(cra
     assert events(fake, "access_canary/r1")[-1] == (first_run_left, OUT)
     t = fake.tables[OUT]
     assert t["tag"] == t["main"] and fake.views[VIEW.relation] == V2 and fake.drift()["differences"] == []
+
+
+def test_the_reconciles_drift_check_covers_this_product_and_holds_tags_to_svc_runs(monkeypatch):
+    seen = {}
+
+    def drift(uri, want, newest_audited=None, only=None):
+        seen.update(want=want, only=only, recorded=newest_audited(OUT))
+        return {"differences": [], "pending": [], "skipped": []}
+    monkeypatch.setattr(w.catalog_drift, "expected", lambda path: "the release")
+    monkeypatch.setattr(w.catalog_drift, "drift", drift)
+    live = object.__new__(w.Live)
+    live.ctx, live.uri, live.conns = ctx(), "http://lakekeeper:8181/catalog", {"runs": "svc.runs"}
+    live.k2runs = types.SimpleNamespace(newest_audited=lambda conn, table: 5 if (conn, table) == ("svc.runs", OUT) else None)
+    assert live.drift()["differences"] == []
+    assert seen == {"want": "the release", "only": {("governance", "access_canary__base"), ("governance", "access_canary")},
+                    "recorded": 5}
 
 
 def test_a_snapshot_id_from_a_run_record_is_parsed_never_spliced():
