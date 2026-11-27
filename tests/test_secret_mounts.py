@@ -155,15 +155,15 @@ API_SECRETS = {"/run/k2-secrets/api": "api", "/run/k2-secrets/api.password": "pr
                "/run/k2-secrets/tls/ca.pem": "tls/ca.pem"}
 
 
-def api_secret_problems(compose: dict) -> list[str]:
+def api_secret_problems(compose: dict, name: str = "k2-api", want: dict[str, str] = API_SECRETS) -> list[str]:
     found, mounts = [], {}
-    for v in compose["services"]["k2-api"].get("volumes") or []:
+    for v in compose["services"][name].get("volumes") or []:
         if m := ROOT.match(source(v)):
             if not isinstance(v, dict) or v.get("read_only") is not True or (v.get("bind") or {}).get("create_host_path") is not False:
-                found.append(f"k2-api mounts {source(v)} other than long-syntax, read-only, create_host_path false")
+                found.append(f"{name} mounts {source(v)} other than long-syntax, read-only, create_host_path false")
             mounts[v["target"] if isinstance(v, dict) else str(v)] = source(v)[m.end():].strip("/")
-    if mounts != API_SECRETS:
-        found.append(f"k2-api mounts secrets {mounts}, not {API_SECRETS}")
+    if mounts != want:
+        found.append(f"{name} mounts secrets {mounts}, not {want}")
     return found
 
 
@@ -193,3 +193,38 @@ def test_k2_api_with_its_key_map_as_a_file_or_writable_fails():
             if v.get("target") == "/run/k2-secrets/api":
                 v.update(change)
         assert api_secret_problems(doc), change
+
+
+# The tools one-shot reads the catalog site's facts as svc.catalog (platform/catalog-site/k2site.py,
+# W3-11): svc.catalog's password and the CA, each by name, read-only, never created when missing.
+# Every `compose run tools` of deploy gets them; svc.catalog reads only the run records and test
+# results (its rules), less than the storage keys tools already holds.
+TOOLS_SECRETS = {"/run/k2-secrets/catalog.password": "principals/svc.catalog.password", "/run/k2-secrets/tls/ca.pem": "tls/ca.pem"}
+
+
+def test_tools_mounts_exactly_svc_catalogs_password_and_the_ca():
+    assert api_secret_problems(yaml.safe_load(COMPOSE.read_text()), "tools", TOOLS_SECRETS) == []
+
+
+@pytest.mark.parametrize("volume, says", [
+    ({"type": "bind", "source": "${K2_SECRETS:-${HOME}/k2-secrets}/principals/svc.platform.password",
+      "target": "/run/k2-secrets/platform.password", "read_only": True, "bind": {"create_host_path": False}}, "mounts secrets"),
+    ({"type": "bind", "source": "${K2_SECRETS:-${HOME}/k2-secrets}/api", "target": "/run/k2-secrets/api",
+      "read_only": True, "bind": {"create_host_path": False}}, "mounts secrets"),
+    ("${K2_SECRETS:-${HOME}/k2-secrets}/principals/svc.catalog.password:/run/k2-secrets/catalog.password:ro",
+     "other than long-syntax"),
+])
+def test_a_secret_mount_off_tools_two_fails(volume, says):
+    doc = yaml.safe_load(COMPOSE.read_text())
+    doc["services"]["tools"]["volumes"].append(volume)
+    found = api_secret_problems(doc, "tools", TOOLS_SECRETS)
+    assert any(says in p for p in found), found
+
+
+def test_tools_with_the_catalog_password_writable_or_created_when_missing_fails():
+    for change in ({"read_only": False}, {"bind": {"create_host_path": True}}):
+        doc = yaml.safe_load(COMPOSE.read_text())
+        for v in doc["services"]["tools"]["volumes"]:
+            if v.get("target") == "/run/k2-secrets/catalog.password":
+                v.update(change)
+        assert api_secret_problems(doc, "tools", TOOLS_SECRETS), change
