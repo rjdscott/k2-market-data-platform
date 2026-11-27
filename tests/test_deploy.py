@@ -752,3 +752,17 @@ sys.exit(f"fake docker: no answer for {A}")
         made = subprocess.run(["make", "-s", "-f", "mk/release.mk", "rollback", "DEPLOY=echo", "ALLOW_STATEFUL=lakekeeper"],
                               cwd=ROOT, capture_output=True, text=True)
         assert made.stdout.strip() == "rollback --allow-stateful lakekeeper", made.stdout + made.stderr
+
+    @pytest.mark.parametrize("image", [
+        "ghcr.io/acme/minio:RELEASE.1@sha256:" + "a" * 64,  # a tag and a digest: the form the mirror's pin has
+        "ghcr.io/acme/minio:RELEASE.1", "ghcr.io/acme/minio@sha256:" + "a" * 64, "ghcr.io/acme/minio",
+        "localhost:5000/acme/minio:RELEASE.1@sha256:" + "a" * 64,  # a registry port is not a tag
+    ])
+    def test_a_held_service_keeps_the_digest_recorded_for_its_repository(image: str, monkeypatch: pytest.MonkeyPatch) -> None:
+        repo = image.split("@")[0].removesuffix(":RELEASE.1")
+        recorded = ["docker.io/other/minio@sha256:" + "c" * 64, f"{repo}@sha256:" + "b" * 64]
+        monkeypatch.setattr(deploy, "run", lambda *a, **k: subprocess.CompletedProcess(a, 0, json.dumps(recorded), ""))
+        assert deploy.held_ref("sha256:" + "e" * 64, image, image) == f"{repo}@sha256:" + "b" * 64
+        monkeypatch.setattr(deploy, "run", lambda *a, **k: subprocess.CompletedProcess(a, 0, json.dumps(recorded[:1]), ""))
+        with pytest.raises(deploy.Refused, match="no registry digest"):
+            deploy.held_ref("sha256:" + "e" * 64, image, image)
