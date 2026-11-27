@@ -13,11 +13,10 @@
 # The repository's only other product, market-analytics.hot-gold, is a paused serving copy with
 # no Trino name and no grant (its grants.yaml), so it has nothing to grant and no row. There is no
 # second dbt product yet, so no other product's publisher exists to try serving these rows; that
-# row comes with the second product. Two of the gate's row kinds cannot be written in this file's
-# frozen shape: an impersonation that must SUCCEED (a statement row has no "succeeds" outcome),
-# and a user no document declares (k2gen check refuses a row by an undeclared principal). Both
-# are proven by the rules test instead (scripts/trino_rules_test.py, rows "impersonation" and
-# "strangers").
+# row comes with the second product. An impersonation that must SUCCEED can be written since the
+# `ok` outcome exists, and a denial row may name a user no document declares, but the runner does
+# not run such a row yet (tests/access/README.md): both are still proven by the rules test
+# (scripts/trino_rules_test.py, rows "impersonation" and "strangers").
 expectations:
   # Readers see the tagged rows only, each with its role's policy.
   - principal: p.canary-full
