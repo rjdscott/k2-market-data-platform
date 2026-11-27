@@ -109,6 +109,10 @@ def words(paths: list[str], terms=TERMS) -> list[str]:
 #   writes beside its output, with the hash it has there; or
 # - listed by its exact path in NOTICE, with its source and terms.
 #
+# The content sniff skips SOURCE_EXT (but YAML and TOML under a fixtures or
+# samples path, where data lands), and a .json file that parses as one JSON
+# document; any other text file, with an unknown extension or none, is sniffed.
+#
 # Every tracked synthetic-* file is in that manifest too, except the replay
 # tests' golden digests (synthetic-*.sha256), which must be one digest and
 # nothing else: a name is not evidence, the generator's hash is. A committed
@@ -126,6 +130,18 @@ def words(paths: list[str], terms=TERMS) -> list[str]:
 # - any binary file (zip, tar, sqlite, pickle, lz4, parquet, avro, under any
 #   name) fails unless NOTICE lists it, except images under docs/images/ and
 #   KNOWN_BINARY.
+#
+# Two narrow passes, for text only (a binary or an image fails as above):
+#
+# - a file under GOLDEN, the k2gen emitters' expected outputs, which the tests
+#   compare with what each emitter compiles from the synthetic fixture set: only
+#   while GOLDEN_MARKER is tracked and its first line is GOLDEN_MARK, the record
+#   that the directory holds generated test expectations and nothing else;
+# - a product's seed, contracts/<domain>/<product>/seeds/<name>.csv (at the
+#   repository root or inside a fixture set): only when the product file beside
+#   it, product.odps.yaml, declares it synthetic on one line in the flow form
+#   `- {path: seeds/<name>.csv, synthetic: true}` (k2-v2.schema.json#/$defs/seeds).
+#   Real reference data is never a seed; it is listed in NOTICE.
 
 DATA_EXT = {".jsonl", ".ndjson", ".csv", ".tsv", ".parquet", ".avro", ".pcap", ".pcapng",
             ".arrow", ".feather", ".orc", ".gz", ".zst", ".xz", ".bz2"}
@@ -141,7 +157,25 @@ FIXTURE_PATH = re.compile(r"(^|/)(fixtures|samples)/|sample[^/]*$", re.I)
 OLD_EXT = {".json", ".jsonl", ".ndjson", ".csv", ".tsv", ".txt", ".parquet", ".avro", ".pcap", ".pcapng",
            ".bin", ".gz", ".zst", ".sha256"}
 KNOWN_BINARY = {"legacy/v2-kotlin/gradle/wrapper/gradle-wrapper.jar"}  # the archived Gradle wrapper
+# Not sniffed: ruff lints Python, gates b and j read Markdown, and YAML, TOML, SQL and shell are parsed
+# by their own tools and tests; a data file is caught by its extension or, renamed to another, by the sniff.
+SOURCE_EXT = {".py", ".md", ".sql", ".sh", ".yml", ".yaml", ".toml"}
+FIXTURE_SNIFFED = {".yml", ".yaml", ".toml"}  # still sniffed under a fixtures or samples path
 YAML_RECORD = re.compile(r"""-[ \t]+(\{|\[|("[^"]*"|'[^']*'|[^\s#:][^:#]*?)[ \t]*:([ \t]|$))""")
+GOLDEN = "platform/k2gen/tests/golden/"
+GOLDEN_MARKER = GOLDEN + "README.md"
+GOLDEN_MARK = "# Golden files: generated test expectations, synthetic by construction"
+SEED = re.compile(r"((?:.*/)?contracts/[a-z0-9-]+/[a-z0-9-]+/)seeds/([a-z0-9_]+\.csv)")
+
+
+def seed_declared(tracked: dict[str, bytes], path: str) -> bool:
+    """Whether `path` is a seed its product file declares synthetic, in the one flow form."""
+    match = SEED.fullmatch(path)
+    product = tracked.get(match.group(1) + "product.odps.yaml") if match else None
+    if product is None:
+        return False
+    line = re.compile(r"[ \t]*-[ \t]*\{path:[ \t]*seeds/" + re.escape(match.group(2)) + r",[ \t]*synthetic:[ \t]*true[ \t]*\}[ \t]*")
+    return any(line.fullmatch(x) for x in product.decode("utf-8", errors="replace").splitlines())
 
 
 def binary(head: bytes) -> bool:
@@ -200,6 +234,15 @@ def records(path: str, content: bytes) -> bool:
     return False
 
 
+def json_document(content: bytes) -> bool:
+    """Whether the whole file is one JSON document (JSON lines are several, and fail)."""
+    try:
+        json.loads(content)
+    except ValueError:
+        return False
+    return True
+
+
 def notebook_problem(content: bytes) -> str | None:
     try:
         cells = json.loads(content)["cells"]
@@ -217,6 +260,7 @@ def data_problems(tracked: dict[str, bytes], notice: str) -> list[str]:
     for row in tracked.get(MANIFEST, b"").decode().splitlines():
         digest, _, path = row.partition("  ")
         manifest[path] = digest
+    golden = tracked.get(GOLDEN_MARKER, b"").decode("utf-8", errors="replace").split("\n", 1)[0] == GOLDEN_MARK
     problems = []
     for path, content in sorted(tracked.items()):
         name, head = Path(path).name, content[:65536]
@@ -243,12 +287,19 @@ def data_problems(tracked: dict[str, bytes], notice: str) -> list[str]:
             if path not in KNOWN_BINARY and path not in listed:
                 problems.append(f"{path}: a binary file ({sniff(head) or 'format unknown'}) not listed in NOTICE")
             continue
+        if (golden and path.startswith(GOLDEN)) or seed_declared(tracked, path):
+            continue
         under = bool(FIXTURE_PATH.search(path))
         if under and records(path, content):
             problems.append(f"{path}: a list of records under a fixtures or samples path, not in {MANIFEST}")
             continue
         suffix = Path(path).suffix.lower()
-        fmt = "extension" if suffix in DATA_EXT or (under and suffix in OLD_EXT) else sniff(head)
+        if suffix in DATA_EXT or (under and suffix in OLD_EXT):
+            fmt = "extension"
+        elif (suffix in SOURCE_EXT and not (under and suffix in FIXTURE_SNIFFED)) or (suffix == ".json" and json_document(content)):
+            fmt = None
+        else:
+            fmt = sniff(head)
         if fmt and path not in listed:
             problems.append(f"{path}: a data file ({fmt}) neither in {MANIFEST} nor listed by path in NOTICE")
     problems += [f"{MANIFEST}: lists {path}, which is not tracked" for path in sorted(manifest.keys() - tracked.keys())]

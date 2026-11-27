@@ -1,0 +1,23 @@
+{
+  "build": {
+    "engine": "dbt",
+    "outputs": [
+      "governance_build.access_canary__base.events"
+    ],
+    "publisher": "pub_access_canary",
+    "selector": "access_canary",
+    "writer": "dbt_access_canary"
+  },
+  "dagId": "access_canary",
+  "domain": "governance",
+  "fence": "access_canary",
+  "inputs": [],
+  "maintain": {
+    "cron": "15 3 * * *"
+  },
+  "product": "governance.access-canary",
+  "schedule": {
+    "cron": "*/10 * * * *"
+  },
+  "status": "active"
+}

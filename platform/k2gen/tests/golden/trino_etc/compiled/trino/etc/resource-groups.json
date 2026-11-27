@@ -1,0 +1,25 @@
+{
+  "rootGroups": [
+    {
+      "name": "pipeline",
+      "softMemoryLimit": "100%",
+      "hardConcurrencyLimit": 100,
+      "maxQueued": 1000
+    },
+    {
+      "name": "interactive",
+      "softMemoryLimit": "100%",
+      "hardConcurrencyLimit": 100,
+      "maxQueued": 1000
+    }
+  ],
+  "selectors": [
+    {
+      "user": "dbt_.*|pub_.*|svc\\.runs|svc\\.platform|svc\\.catalog",
+      "group": "pipeline"
+    },
+    {
+      "group": "interactive"
+    }
+  ]
+}

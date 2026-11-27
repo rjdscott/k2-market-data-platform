@@ -1,0 +1,30 @@
+{
+  "build": {
+    "engine": "dbt",
+    "outputs": [
+      "ops_insight_build.daily_load__base.gold_daily_load"
+    ],
+    "publisher": "pub_daily_load",
+    "selector": "daily_load",
+    "writer": "dbt_daily_load"
+  },
+  "dagId": "daily_load",
+  "domain": "ops-insight",
+  "fence": "daily_load",
+  "inputs": [
+    {
+      "contractId": "sensor-net.station-readings.silver_readings",
+      "maxLagMinutes": 120,
+      "relation": "sensor_net.station_readings__base.silver_readings",
+      "required": true
+    }
+  ],
+  "maintain": {
+    "cron": "51 4 * * *"
+  },
+  "product": "ops-insight.daily-load",
+  "schedule": {
+    "cron": "30 1 * * *"
+  },
+  "status": "active"
+}

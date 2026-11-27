@@ -26,7 +26,7 @@ def filled(**overrides):
     """Every secret distinct, long and real-looking, users as .env.example ships them
     (the database role keeps its historical name, ADR-034)."""
     env = {n: f"filled-{i}-value-7f3a9c2e" for i, n in enumerate(NAMES)}
-    return {**env, "MINIO_ROOT_USER": USER, "PREFECT_DB_USER": "prefect", **overrides}
+    return {**env, "MINIO_ROOT_USER": USER, "K2_TRINO_S3_ACCESS_KEY": USER, "PREFECT_DB_USER": "prefect", **overrides}
 
 
 def test_the_shipped_example_does_not_pair_minio_user_and_password():
@@ -48,7 +48,7 @@ def test_every_secret_filled_passes():
 
 def test_the_table_names_every_secret_compose_and_the_example_pass():
     compose = (ROOT / "docker-compose.yml").read_text()
-    in_compose = set(re.findall(r"\$\{([A-Z0-9_]*(?:PASSWORD|SECRET|KEY|TOKEN))\b", compose))
+    in_compose = set(re.findall(r"\$\{([A-Z0-9_]*(?:PASSWORD|SECRET|(?<!ACCESS_)KEY|TOKEN))\b", compose))
     assert in_compose and in_compose | set(NAMES) <= guard.CREDENTIALS.keys()
     # every $NAME user the table points at is a variable compose really reads
     users = {u[1:] for u in guard.CREDENTIALS.values() if u and u.startswith("$")}
@@ -114,6 +114,7 @@ def env_text(**overrides):
 def run(tmp_path, text, **shell):
     f = tmp_path / ".env"
     f.write_bytes(text.encode())
+    f.chmod(0o600)
     # Only what reaches the Docker engine, plus the case's own shell variables: a
     # developer shell with .env sourced must not decide the result.
     base = {k: v for k, v in os.environ.items() if k in ("PATH", "HOME") or k.startswith("DOCKER_")}
@@ -154,3 +155,17 @@ def test_a_value_exported_in_the_shell_overrides_the_file(tmp_path):
     assert rc == 1 and "MINIO_ROOT_PASSWORD equals" in out
     rc, _ = run(tmp_path, env_text(MINIO_ROOT_PASSWORD=USER), MINIO_ROOT_PASSWORD="canary-from-the-shell")
     assert rc == 0
+
+
+@pytest.mark.parametrize("mode, fails", [(0o600, False), (0o400, False), (0o640, True), (0o604, True), (0o620, True), (0o664, True)])
+def test_a_file_open_to_its_group_or_others_fails_with_the_fix(tmp_path, mode, fails):
+    f = tmp_path / ".env"
+    f.write_text("A_SECRET=canary-mode-value\n")
+    f.chmod(mode)
+    problem = guard.mode_problem(f)
+    assert (problem is not None) is fails
+    assert not fails or f"chmod 600 {f}" in problem and "canary" not in problem
+    r = subprocess.run([sys.executable, str(ROOT / "scripts/check-env.py"), "--mode-only", "--env-file", str(f)],
+                       capture_output=True, text=True)
+    assert r.returncode == (1 if fails else 0) and "canary" not in r.stdout + r.stderr
+    assert guard.mode_problem(tmp_path / "absent") is None

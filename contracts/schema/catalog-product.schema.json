@@ -1,0 +1,289 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://k2.invalid/schema/catalog-product.schema.json",
+  "title": "The catalog JSON: compiled/catalog/products/<product id>.json, and $defs/index for compiled/catalog/index.json (A11)",
+  "description": "Frozen in phase 001, emitted by k2gen.emit.catalog (S18), rendered by the static catalog site and the body of GET /v1/products/{domain}/{product} (phase 003). Reader names only: a __base name never appears. Run-time facts (the newest audited publish, test results, freshness) are never in a release; k2-api reads them through Trino as svc.api, its one identity, which may read `t$refs` and no other metadata of a base (k2gen.model.REFS_READERS). A release id cannot appear either, since the id hashes these files: the document set's tag does.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "name", "domain", "version", "status", "type", "owner", "purpose", "inputs", "outputs", "lineage", "tag"],
+  "properties": {
+    "id": {"description": "<domain>.<product>.", "$ref": "#/$defs/productId"},
+    "name": {"description": "The product's name.", "type": "string", "pattern": "^[a-z][a-z0-9]*(-[a-z0-9]+)*$"},
+    "domain": {"description": "The product's domain.", "type": "string", "pattern": "^[a-z][a-z0-9]*(-[a-z0-9]+)*$"},
+    "version": {"description": "The product file's version.", "$ref": "#/$defs/semver"},
+    "status": {"description": "Its lifecycle state.", "enum": ["active", "paused", "deprecated", "retired"]},
+    "lifecycleChange": {"description": "Why the state is not active: the page shows a paused product as stale by design, a deprecated one's sunset and successor.", "$ref": "k2-v2.schema.json#/$defs/lifecycleChange"},
+    "type": {"description": "ODPS's architectural type.", "enum": ["sourceAligned", "aggregate", "consumerAligned"]},
+    "owner": {"description": "The owning team.", "type": "string", "minLength": 1},
+    "purpose": {"description": "description.purpose.", "type": "string", "minLength": 1},
+    "limitations": {"description": "description.limitations.", "type": "string", "minLength": 1},
+    "usage": {"description": "description.usage.", "type": "string", "minLength": 1},
+    "terms": {"description": "The terms custom property.", "$ref": "k2-v2.schema.json#/$defs/terms"},
+    "licence": {"description": "The licence page's URL, the product's authoritativeDefinitions entry of type licence.", "type": "string", "pattern": "^https://"},
+    "keywords": {"description": "The product file's tags (DCAT keyword), for search.", "type": "array", "items": {"type": "string", "minLength": 1}},
+    "issued": {"description": "When the set was approved: provenance.json's taggedAt, UTC (DCAT issued). Never the compile's clock.", "$ref": "#/$defs/utc"},
+    "periodicity": {"description": "How often the product is rebuilt: its schedule's cron expression, UTC (DCAT accrualPeriodicity in cron form); absent for a product nothing schedules.", "type": "string", "minLength": 1},
+    "productFile": {"description": "The product file as the tag approved it: a path inside the release, documents/contracts/<domain>/<product>/product.odps.yaml.", "$ref": "#/$defs/document"},
+    "support": {
+      "description": "ODPS support: where to ask about the product and to request access, with each table role's approvers.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["channel", "url"],
+        "properties": {
+          "channel": {"description": "The channel's name.", "type": "string", "minLength": 1},
+          "url": {"description": "Its address (https, mailto).", "type": "string", "minLength": 1},
+          "tool": {"description": "email, slack, ticket, other.", "type": "string", "minLength": 1},
+          "scope": {"description": "interactive, announcements, issues.", "type": "string", "minLength": 1},
+          "description": {"description": "What it is for.", "type": "string", "minLength": 1}
+        }
+      }
+    },
+    "links": {
+      "description": "ODPS authoritativeDefinitions, as the product file states them: its licence, runbooks, glossaries.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["type", "url"],
+        "properties": {
+          "type": {"description": "The kind of link (licence, runbook, businessDefinition).", "type": "string", "minLength": 1},
+          "url": {"description": "Where it points.", "type": "string", "minLength": 1},
+          "description": {"description": "What it is.", "type": "string", "minLength": 1}
+        }
+      }
+    },
+    "inputs": {
+      "description": "The input ports.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["contractId", "relation", "required", "maxLagMinutes"],
+        "properties": {
+          "contractId": {"description": "The input's contract id.", "$ref": "#/$defs/contractId"},
+          "version": {"description": "The input contract's version the product was written against (the input port's version).", "$ref": "#/$defs/semver"},
+          "relation": {"$ref": "#/$defs/relation"},
+          "required": {"description": "Whether a missing input stops the build.", "type": "boolean"},
+          "maxLagMinutes": {"description": "How late the input may be before this product is partial.", "type": ["integer", "null"], "minimum": 0}
+        }
+      }
+    },
+    "outputs": {
+      "description": "The output ports, one per table.",
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["contractId", "relation", "layer", "version", "purpose", "columns", "roles", "readers", "dbtDocs"],
+        "properties": {
+          "contractId": {"description": "The table's contract id.", "$ref": "#/$defs/contractId"},
+          "relation": {"description": "k2gen.model.reader_relation; null for a build serving output, which only its serving copy holds.", "oneOf": [{"$ref": "#/$defs/relation"}, {"type": "null"}]},
+          "serves": {"description": "The output port's serving copy, when it has one.", "$ref": "k2-v2.schema.json#/$defs/serves"},
+          "build": {"description": "What builds the table (the contract's build): connector, dbt, platform, code, or serving for a serving-only copy.", "enum": ["connector", "dbt", "platform", "code", "serving"]},
+          "testedRef": {"description": "k2gen.model.tested_ref: the ref of the table's t$refs whose snapshot is the tested one, audited for a dbt or code output, main for a connector or platform table; null for build serving. k2-api reads the audited snapshot id through it.", "oneOf": [{"enum": ["main", "audited"]}, {"type": "null"}]},
+          "contractFile": {"description": "The table contract as the tag approved it: a path inside the release, documents/contracts/<domain>/<product>/<table>.odcs.yaml.", "$ref": "#/$defs/document"},
+          "partitioning": {"description": "The contract's partition fields, as written (day(read_at)).", "type": "array", "items": {"type": "string", "minLength": 1}},
+          "retentionDays": {"description": "The contract's retention in days; null for the platform's 7-day floor. compiled/lake/retention.json is what maintenance reads.", "type": ["integer", "null"], "minimum": 1},
+          "sla": {
+            "description": "The contract's slaProperties as it states them: a latency is the freshness promise.",
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["property", "value"],
+              "properties": {
+                "property": {"description": "latency, or another ODCS SLA property.", "type": "string", "minLength": 1},
+                "value": {"description": "Its value."},
+                "unit": {"description": "min, h, d.", "type": "string", "minLength": 1},
+                "element": {"description": "<table>.<column> it is measured on.", "type": "string", "minLength": 1}
+              }
+            }
+          },
+          "quality": {
+            "description": "The contract's quality rules, by name and description; never a query, which is the build's.",
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["type"],
+              "properties": {
+                "name": {"description": "The rule's name.", "type": "string", "minLength": 1},
+                "type": {"description": "ODCS's type.", "enum": ["text", "library", "sql", "custom"]},
+                "description": {"description": "What it checks.", "type": "string", "minLength": 1},
+                "metric": {"description": "A library rule's ODCS metric.", "type": "string", "minLength": 1}
+              }
+            }
+          },
+          "layer": {"description": "The table's layer.", "enum": ["bronze", "silver", "gold", "mart"]},
+          "version": {"description": "The table contract's version.", "$ref": "#/$defs/semver"},
+          "purpose": {"description": "The contract's description.purpose.", "type": "string", "minLength": 1},
+          "columns": {
+            "description": "The columns, in order.",
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["name", "type", "required", "primaryKey", "description"],
+              "properties": {
+                "name": {"description": "The column.", "$ref": "#/$defs/column"},
+                "type": {"description": "Its Trino type.", "type": "string", "minLength": 1},
+                "required": {"description": "Never null.", "type": "boolean"},
+                "primaryKey": {"description": "Part of the key.", "type": "boolean"},
+                "description": {"description": "What it holds.", "type": "string", "minLength": 1},
+                "unit": {"description": "Its unit or currency.", "type": "string", "minLength": 1},
+                "logicalType": {"description": "ODCS's logical type, where declared.", "type": "string", "minLength": 1},
+                "primaryKeyPosition": {"description": "Its place in the key, where declared.", "type": "integer", "minimum": 1},
+                "unique": {"description": "Declared unique on its own; absent when not.", "const": true},
+                "classification": {"description": "ODCS's classification, where declared.", "type": "string", "minLength": 1},
+                "time": {"description": "What its time means.", "enum": ["event", "publication", "valid", "known"]},
+                "references": {
+                  "description": "The keys of other products it refers to, by reader name.",
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["relation", "column"],
+                    "properties": {
+                      "relation": {"$ref": "#/$defs/relation"},
+                      "column": {"description": "The referenced column.", "$ref": "#/$defs/column"},
+                      "asOf": {"description": "Join on valid or knowledge time.", "enum": ["valid", "known"]}
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "roles": {
+            "description": "The roles the table offers.",
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["role", "inWords"],
+              "properties": {
+                "role": {"description": "The role.", "$ref": "#/$defs/column"},
+                "policies": {"description": "Its policies, as the contract states them; absent for none.", "$ref": "k2-v2.schema.json#/$defs/rolePolicy"},
+                "inWords": {"description": "The policies in a sentence, for the page: \"rows at least 20 minutes old; note hidden\".", "type": "string", "minLength": 1},
+                "approvers": {"description": "Who approves a request for the role: ODCS firstLevelApprovers.", "type": "string", "minLength": 1}
+              }
+            }
+          },
+          "readers": {
+            "description": "Who holds a role on the product, from its grants.",
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["principal", "role"],
+              "properties": {
+                "principal": {"description": "The principal.", "type": "string", "pattern": "^((p|svc)\\.[a-z0-9]+(-[a-z0-9]+)*|(dbt|pub)_[a-z][a-z0-9]*(_[a-z0-9]+)*)$"},
+                "role": {"description": "The role it holds.", "$ref": "#/$defs/column"}
+              }
+            }
+          },
+          "dbtDocs": {"description": "The table's page on the dbt docs site, relative to the site root (k2gen.model.dbt_docs): dbt-docs/#!/model/model.k2.<fence>__<table>; null for a table dbt does not build.", "oneOf": [{"type": "string", "pattern": "^dbt-docs/#!/model/model\\.k2\\.[a-z][a-z0-9]*(_[a-z0-9]+)*__[a-z][a-z0-9]*(_[a-z0-9]+)*$"}, {"type": "null"}]}
+        }
+      }
+    },
+    "examples": {"description": "The examples custom property.", "$ref": "k2-v2.schema.json#/$defs/examples"},
+    "joinKeys": {
+      "description": "The declared relationships of the outputs, for joining across products.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["from", "to"],
+        "properties": {
+          "from": {"$ref": "#/$defs/columnRef"},
+          "to": {"$ref": "#/$defs/columnRef"},
+          "asOf": {"description": "Join on valid or knowledge time.", "enum": ["valid", "known"]}
+        }
+      }
+    },
+    "lineage": {
+      "description": "Product-level lineage from the ports: nodes are tables by contract id, edges run from an input or a sibling table to the table it feeds.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["nodes", "edges"],
+      "properties": {
+        "nodes": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "product", "relation"],
+            "properties": {
+              "id": {"description": "The table's contract id.", "$ref": "#/$defs/contractId"},
+              "product": {"description": "Its product.", "$ref": "#/$defs/productId"},
+              "relation": {"description": "Its reader name; null for a build serving table.", "oneOf": [{"$ref": "#/$defs/relation"}, {"type": "null"}]}
+            }
+          }
+        },
+        "edges": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["from", "to"],
+            "properties": {
+              "from": {"description": "The feeding table's contract id.", "$ref": "#/$defs/contractId"},
+              "to": {"description": "The fed table's contract id.", "$ref": "#/$defs/contractId"}
+            }
+          }
+        }
+      }
+    },
+    "tag": {"description": "The release tag of the document set the page was compiled from.", "type": "string", "pattern": "^v[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?$"}
+  },
+  "$defs": {
+    "semver": {"description": "major.minor.patch.", "type": "string", "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$"},
+    "productId": {"description": "<domain>.<product>.", "type": "string", "pattern": "^[a-z][a-z0-9]*(-[a-z0-9]+)*\\.[a-z][a-z0-9]*(-[a-z0-9]+)*$"},
+    "contractId": {"description": "<domain>.<product>.<table>.", "type": "string", "pattern": "^[a-z][a-z0-9]*(-[a-z0-9]+)*\\.[a-z][a-z0-9]*(-[a-z0-9]+)*\\.[a-z][a-z0-9_]*$"},
+    "column": {"description": "A column or role name.", "type": "string", "pattern": "^[a-z][a-z0-9_]*$"},
+    "relation": {
+      "description": "A reader name: <domain fence>.<product fence>.<table> for a view, lake.<fence>.<table> for a connector table. Never a __base name.",
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$",
+      "not": {"pattern": "__base"}
+    },
+    "utc": {"description": "A UTC time, seconds precision.", "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"},
+    "document": {"description": "A document's path inside the release: documents/ and its path in the set.", "type": "string", "pattern": "^documents/contracts/[a-z0-9_./-]+\\.yaml$"},
+    "columnRef": {
+      "description": "A column of a table, by reader name.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["relation", "column"],
+      "properties": {"relation": {"$ref": "#/$defs/relation"}, "column": {"$ref": "#/$defs/column"}}
+    },
+    "index": {
+      "description": "compiled/catalog/index.json: one entry per product, for the site's list and search.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tag", "products"],
+      "properties": {
+        "tag": {"description": "As in each product's document.", "type": "string", "pattern": "^v[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?$"},
+        "products": {
+          "description": "Sorted by id.",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "name", "domain", "status", "owner", "purpose"],
+            "properties": {
+              "id": {"$ref": "#/$defs/productId"},
+              "name": {"description": "The product's name.", "type": "string", "minLength": 1},
+              "domain": {"description": "Its domain.", "type": "string", "minLength": 1},
+              "status": {"description": "Its state.", "enum": ["active", "paused", "deprecated", "retired"]},
+              "owner": {"description": "The owning team.", "type": "string", "minLength": 1},
+              "purpose": {"description": "description.purpose.", "type": "string", "minLength": 1}
+            }
+          }
+        }
+      }
+    }
+  }
+}

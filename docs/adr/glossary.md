@@ -283,11 +283,22 @@ Where: [ADR-025](ADR-025-clickhouse-derived-hot-tier.md),
 
 A landing zone is where a fetched source file is kept exactly as downloaded, before anything
 loads it, so every load can be re-run and audited from the same bytes. For the Redpanda feeds
-that role was played by `raw.messages` until the old ingest retired. For file sources (FX rates and the like) the P4 plan puts
-it at `landing/<domain>/<product>/<fetch date>/<sha256>.<ext>` in a versioned, locked bucket;
-that pattern is planned under ADR-036 and not built yet.
-Where: [plan P4](../plans/2026-11-24-governed-self-serve-platform/004-fx-data-product.md);
-the reserved row 036 in [ADR-031](ADR-031-governed-self-serve-platform.md).
+that role was played by `raw.messages` until the old ingest retired. In the target each product
+owns its landing: a file or API response lands at
+`k2-landing/<domain>/<product>/<YYYY-MM-DD>/<sha256>.<ext>` by a [conditional write](#conditional-write),
+with a row in the product's `landing_files` table, and a topic product lands the records it keeps
+in its own landing table. The P4 plan's versioned, locked bucket was tested and does not stop an
+overwrite, so the conditional write is the guarantee. Decided, not built yet.
+Where: [ADR-036](ADR-036-connectors-land-verbatim-then-publish-bronze-after-audit.md) part 4.
+
+### Conditional write
+
+An S3 `PUT` carrying the header `If-None-Match: *` asks the object store to write only if no
+object of that name exists, and to answer 412 Precondition Failed otherwise. Since a landed
+object is named by the sha256 of its bytes, an existing name means the same bytes already landed,
+so the refusal is a harmless no-op, and no write through that path can replace a landed file.
+MinIO at the pinned `RELEASE.2025-09-07T16-13-09Z` was tested to honour it on 2026-11-26.
+Where: [ADR-036](ADR-036-connectors-land-verbatim-then-publish-bronze-after-audit.md) part 4.
 
 ### Lineage columns
 
@@ -546,8 +557,10 @@ Where: `remove_orphans` in [`legacy/v3-lake-ingest/lake/maintenance.py`](../../l
 Three words that nest. A **warehouse** is an area in Lakekeeper (the catalog service) with its
 own storage prefix and its own tables: `k2` is the [producer lake](#producer-lake), and each
 [domain](#data-domain-and-data-product) has one. A **Trino catalog** is Trino's named
-connection to one warehouse, one file under `docker/trino/etc/catalog/`: catalog `lake` opens
-warehouse `k2`, catalog `market_analytics` opens warehouse `market_analytics`. A **schema**
+connection to one warehouse, one file under a release's `compiled/trino/etc/catalog/`, which Trino
+reads through `/k2/releases/pointers/trino/compiled/trino/etc`: catalog `lake` opens warehouse `k2`;
+catalog `market_analytics` (read-only, for readers) and `market_analytics_build` (for its builders
+and publisher) both open warehouse `market_analytics`. A **schema**
 (Iceberg says namespace) is a folder of tables inside one, so a full name is
 `<catalog>.<schema>.<table>`, as in `lake.gold.trades`; `k2.gold.trades` fails.
 Where: [chapter 19](../architecture/19-lakehouse-and-domain-warehouses.md).
@@ -567,20 +580,25 @@ Where: [ADR-044](ADR-044-producer-lake-and-domain-mart-warehouses.md).
 A data domain is a body of data one team owns and answers for; `contracts/domains.yaml` lists
 five (`market-capture`, `reference-data`, `fx-reference`, `market-analytics`, `governance`). A
 data product is one owned unit inside a domain, such as `candles`, described by a contract
-under `contracts/<domain>/<product>/`. Each domain gets its own warehouse, Trino catalog and
-writer from `make generate`, and inside its catalog each product gets its own schema.
+under `contracts/<domain>/<product>/`. Each domain gets its own warehouse and two Trino catalogs,
+a reader and a `_build` writer, compiled into every release by `k2gen release`, and inside its
+catalogs each product gets its own schemas.
 Where: [ADR-033](ADR-033-data-mesh-four-domains.md),
-[chapter 18](../architecture/18-data-mesh.md).
+[chapter 18](../architecture/18-data-mesh.md), [chapter 21](../architecture/21-releases-and-deploy.md).
 
 ### Domain writer
 
-A domain writer is the Trino user `dbt_<domain>` (for example `dbt_market_analytics`), the only
-identity that `docker/trino/etc/rules.json` lets create, drop, insert, update or delete in that
-domain's catalog; everyone reads everything. dbt runs as it by setting `K2_TRINO_USER`. The
-identity is the unauthenticated `X-Trino-User` header on a loopback port, so the fences stop
-mistakes, not someone who lies about who they are.
+Until 2026-11-27 a domain writer was the Trino user `dbt_<domain>` (for example
+`dbt_market_analytics`), the only identity the generated rules let create, drop, insert, update or
+delete in that domain's catalog, while everyone read everything; the identity was the
+unauthenticated `X-Trino-User` header on a loopback port, so the fences stopped mistakes, not
+someone who lied about who they were. Since the cutover to releases each product has its own
+writers instead: a builder `dbt_<fence>` and a publisher `pub_<fence>`, the only identities the
+release's compiled `compiled/trino/rules.json` lets write in that product's schemas of
+`<domain>_build`, and every login is a password over TLS
+([ADR-060](ADR-060-trino-logins-by-password-over-tls-under-a-local-ca.md)).
 Where: [ADR-044](ADR-044-producer-lake-and-domain-mart-warehouses.md);
-[`legacy/v3-lake-ingest/dbt/README.md`](../../legacy/v3-lake-ingest/dbt/README.md), "Identity and catalogs".
+[chapter 22](../architecture/22-access-and-identity.md#identities).
 
 ### Read-only connector
 
@@ -588,8 +606,9 @@ Where: [ADR-044](ADR-044-producer-lake-and-domain-mart-warehouses.md);
 statement that would commit and every [table procedure](#table-procedure), for every user.
 It is the producer lake's fence, chosen because Trino's file-based rules cannot fence table
 procedures, and a stray `rollback_to_snapshot` on `raw.messages` would have made the ingest skip
-offsets for good.
-Where: `docker/trino/etc/catalog/lake.properties`;
+offsets for good. Every domain's reader catalog carries it too.
+Where: a release's `compiled/trino/etc/catalog/lake.properties`
+([`emit/trino_etc.py`](../../platform/k2gen/k2gen/emit/trino_etc.py));
 [ADR-044](ADR-044-producer-lake-and-domain-mart-warehouses.md).
 
 ### Table procedure
@@ -598,8 +617,11 @@ A table procedure is a maintenance command Trino runs on one table as
 `ALTER TABLE ... EXECUTE <name>`: `optimize` (compaction), `expire_snapshots`,
 `remove_orphan_files`, `rollback_to_snapshot`. In Trino 484 no built-in access control limits
 them per user on a writable catalog, so inside the domain catalogs any user can run them (at or
-above the retention floor). That is ADR-044's stated gap, asserted by `make test-trino` so a
-release that closes it is noticed.
+above the retention floor). That is ADR-044's stated gap. Spike (e) found how Trino checks one: as
+`SELECT` on that table, so a user with no privilege on a table cannot run one, and a user allowed
+`SELECT` through a writable catalog can; the compiled rules of
+[ADR-059](ADR-059-access-rules-compiled-default-deny-over-two-catalogs-per-domain.md) therefore give
+nobody `SELECT` on another product's table except through a read-only catalog.
 Where: [ADR-044](ADR-044-producer-lake-and-domain-mart-warehouses.md), "The honest limits".
 
 ### Definer view
@@ -611,6 +633,17 @@ domain's results table through its owner, `dbt_governance`, and it is why `rules
 puts the fences in its schema and table rules: Trino requires a view owner to have `all` on
 each base table's catalog. Views are readable through Trino only.
 Where: [chapter 19](../architecture/19-lakehouse-and-domain-warehouses.md#views).
+
+### Invoker view
+
+A view whose base tables are checked as the reader, not as the owner: the reader needs `SELECT` on
+each base, and the base's own row filters and masks apply. An invoker view over a table's tested
+[tag](#tag) does not keep untested rows from a reader, because a reader allowed the base can read its
+`main` directly; with the base denied, the reader is refused at the base. That is why
+[ADR-061](ADR-061-readers-see-dbt-outputs-through-a-view-over-the-tested-tag.md) uses a
+[definer view](#definer-view) instead.
+Where: [ADR-061](ADR-061-readers-see-dbt-outputs-through-a-view-over-the-tested-tag.md), spike (g) of
+[`2026-11-26-release-spine-spikes.md`](../research/2026-11-26-release-spine-spikes.md).
 
 ---
 
@@ -638,13 +671,13 @@ Where: `legacy/v3-lake-ingest/contracts/market-analytics/candles/product.yaml`; 
 
 ### Selector
 
-A selector is a named set of dbt nodes, defined in `dbt/selectors.yml`, which `make generate`
-writes from the contracts: one per domain, holding its models plus the source tests of every
-lake table its marts read. `dbt build --selector market_analytics`, run as
-`dbt_market_analytics`, therefore builds and tests exactly what that writer may write, and
-Airflow rendered one task group per selector in the retired `dbt_marts` DAG. There are none
-today (`selectors: []`).
-Where: [`dbt/selectors.yml`](../../dbt/selectors.yml); [`dbt/README.md`](../../dbt/README.md).
+A selector is a named set of dbt nodes. A release's dbt project holds `compiled/dbt/selectors.yml`,
+which k2gen compiles from the documents: one selector per product, holding its seeds and models with
+their tests, so `dbt build --selector <product>`, run as that product's builder `dbt_<fence>`, builds
+and tests exactly what that builder may write. The dbt wrapper that runs it arrives in phase 002.
+Until 2026-11-27 a generator wrote one per domain into the checkout as `dbt/selectors.yml`, and
+Airflow rendered one task group per selector in the retired `dbt_marts` DAG.
+Where: [`emit/dbt.py`](../../platform/k2gen/k2gen/emit/dbt.py); [`dbt/README.md`](../../dbt/README.md).
 
 ### Data test
 
@@ -656,10 +689,12 @@ Where: the model YAML files under `dbt/models/`.
 
 ### Source test
 
-A source test is a [data test](#data-test) on a dbt source, a lake table that marts read. K2
-generates them into `dbt/models/_sources.yml`, beside each source's freshness rule from its
+A source test is a [data test](#data-test) on a dbt source, a lake table that marts read. Until
+2026-11-27 K2 generated them into the checkout's `dbt/models/_sources.yml` (a release's dbt project
+now carries its sources in `compiled/dbt/models/_sources.yml`,
+[`emit/dbt.py`](../../platform/k2gen/k2gen/emit/dbt.py)), beside each source's freshness rule from its
 contract (checked by `dbt source freshness`): uniqueness on the table's identifier fields over
-the newest 6 hours only (`_RECENT` in `platform/k2gen/k2gen/generate.py`), because the
+the newest 6 hours only (`_RECENT` in the retired generator), because the
 whole-table version exceeded [Trino's per-node query memory](#trino-per-node-query-memory). The whole-table check stayed with
 Spark's nightly `duplicate_identifiers` audit, retired with the ingest.
 Where: [ADR-035](ADR-035-trino-and-dbt-for-marts.md) Outcome; [`legacy/v3-lake-ingest/dbt/README.md`](../../legacy/v3-lake-ingest/dbt/README.md),
@@ -696,13 +731,16 @@ Where: [`legacy/v3-lake-ingest/airflow/dags/dbt_marts.py`](../../legacy/v3-lake-
 
 ### k2gen, make generate and the drift gate
 
-`k2gen` is K2's contract tool. `k2gen validate` checks every product descriptor and ODCS v3
-table contract under `contracts/` against the standard; `make generate`
-writes the files the contracts imply (the domain catalogs, `rules.json`, `warehouses.txt`,
-`selectors.yml`, `_sources.yml`, `contract_schemas.json`, the product pages). The drift gate is CI running
-`make generate` and failing on any difference, so a generated file cannot be edited by hand or
-left stale.
-Where: [`platform/k2gen/`](../../platform/k2gen/); [ADR-032](ADR-032-odcs-contracts-and-k2gen.md).
+`k2gen` is K2's contract tool. Until 2026-11-27 `k2gen validate` checked every product descriptor
+and ODCS v3 table contract under `contracts/`, `make generate` wrote the files the contracts implied
+into git (the domain catalogs, `rules.json`, `warehouses.txt`, `selectors.yml`, `_sources.yml`,
+`contract_schemas.json`, the product pages), and the drift gate was CI running `make generate` and
+failing on any difference. All three retired that day with the generated files. Today `k2gen check`
+runs the checks on a tag's document set and `k2gen release` (`make release TAG=<tag>`) compiles it
+into a sealed release outside git, which `make deploy RELEASE=<id>` puts live by pointer swap;
+`make test-k2gen` holds the checks and emitters to their fixtures and goldens in CI.
+Where: [`platform/k2gen/`](../../platform/k2gen/); [chapter 21](../architecture/21-releases-and-deploy.md);
+[ADR-058](ADR-058-deploy-sealed-releases-by-pointer-swap.md).
 
 ### Paused table
 
@@ -711,7 +749,9 @@ table whose contract carries the custom property `paused: {since, adr}`. It rece
 by decision and its rows stay readable. k2gen refuses a freshness target on it and prints the
 pause on its product page; a product's `lifecycle` (its maturity) is left as it was. The property
 is removed when the table is fed again.
-Where: `contracts/schema/k2.schema.json` once built.
+Where: nowhere; the schema it would have extended, `contracts/schema/k2.schema.json`, retired on
+2026-11-27. A product's status `paused` in its ODPS document is the mechanism today
+([chapter 22](../architecture/22-access-and-identity.md#rules-compiled-from-documents-default-deny)).
 
 ---
 
@@ -752,12 +792,13 @@ Where: [ADR-027](ADR-027-book-snapshot-and-sequencing.md); `docker/lake/book.py`
 ### Contract schema audit
 
 `contract_schema` was the nightly audit, retired with the ingest, that held each live lake table to its data contract,
-where `k2gen validate` holds the contract only to the DDL file. It compares the table's columns
-(names, Spark SQL types with nested fields, `NOT NULL`, order), its partition spec, sort order
-and identifier fields, as the Iceberg catalog holds them, with what `k2gen generate` wrote to
-`docker/lake/generated/contract_schemas.json`, and files one `audit.checks` row per table. A
-table with no contract fails too, in any namespace but a `scratch_` one, which is not read. It finds a drifted table up to a day after the drift; nothing refuses a bad write when
-it is made.
+where the contract tool of the day held the contract only to the DDL file. It compared the
+table's columns (names, Spark SQL types with nested fields, `NOT NULL`, order), its partition spec,
+sort order and identifier fields, as the Iceberg catalog held them, with the generated
+`contract_schemas.json` (in the checkout until 2026-11-27; a release now carries
+`compiled/lake/contract_schemas.json`), and filed one `audit.checks` row per table. A table with no
+contract failed too, in any namespace but a `scratch_` one, which was not read. It found a drifted
+table up to a day after the drift; nothing refused a bad write when it was made.
 Where: [`legacy/v3-lake-ingest/lake/contract_schema.py`](../../legacy/v3-lake-ingest/lake/contract_schema.py);
 [runbook](../../legacy/v3-lake-ingest/docs/runbooks/lake-audit-failed.md#15-contract_schema-a-live-table-is-not-what-its-contract-states) section 15;
 [chapter 18](../architecture/18-data-mesh.md#where-a-contract-is-enforced-and-when).
@@ -891,7 +932,8 @@ at Trino's default, 30% of the heap, which is 844.80MB at the 2816M heap. K2 run
 so it is the limit for any one query. Exceeding it fails the query with
 `EXCEEDED_LOCAL_MEMORY_LIMIT` ("Query exceeded per-node memory limit of 844.80MB"), which is
 what the whole-table uniqueness test on `gold.trades` did.
-Where: `docker/trino/etc/jvm.config` (the heap); [ADR-035](ADR-035-trino-and-dbt-for-marts.md) Outcome.
+Where: a release's `compiled/trino/etc/jvm.config` (the heap,
+[`emit/trino_etc.py`](../../platform/k2gen/k2gen/emit/trino_etc.py)); [ADR-035](ADR-035-trino-and-dbt-for-marts.md) Outcome.
 
 ### Container memory: limit, anon and RSS
 
@@ -1031,7 +1073,22 @@ A connector is the code that reads one kind of source for one product: `kafka`, 
 `https-file`, `s3-file`, `sftp` or `ftp`. It is configured in the product's ODPS file, lands what
 it read verbatim in the product's own landing, and never shares a landing with another product.
 File and API kinds run in a one-shot fetch container limited to the product's declared hosts.
-Where: [ADR-056](ADR-056-unified-data-product-platform.md) part 3.
+Where: [ADR-056](ADR-056-unified-data-product-platform.md) part 3,
+[ADR-036](ADR-036-connectors-land-verbatim-then-publish-bronze-after-audit.md).
+
+### Fetch container and host allow-list
+
+The fetch container is a one-shot container that runs one fetch for one product: it downloads a
+file or an API response, writes the bytes and a fetch record (URL, final URL, sha256, size, time)
+to the run's spool directory before anything parses them, then parses them with the product's
+registered parser. It holds no storage key and cannot reach MinIO or Lakekeeper. Its **host
+allow-list** is the product's `allowHosts`: it connects only to addresses resolved from those
+names and checked to be public, and follows a redirect only over `https` to a host on the list.
+That stops a **server-side request forgery** (SSRF), where a server is made to request an address
+an outsider chose, such as an internal service behind a redirect. Nothing a source sends is ever
+executed.
+Where: [ADR-036](ADR-036-connectors-land-verbatim-then-publish-bronze-after-audit.md) parts 2
+and 3.
 
 ### Medallion layers of a product
 
@@ -1066,6 +1123,26 @@ compose file and pinned image digests. Services run only a release, never the wo
 `make deploy` moves one pointer per service to it and moves all of them back to the previous
 release if any part reports another.
 Where: [ADR-056](ADR-056-unified-data-product-platform.md) part 6.
+
+### Document set and provenance
+
+A document set is the exact set of product documents a release is compiled from: in 3.0 the
+`git archive` of a release tag's `contracts/` and `domains/`, byte-identical however often it is
+taken. Its **provenance record** says where the set came from: the source (git, or later the
+registry), the tag, commit and tagger, a hash of the whole set and of each document, and each
+document's last commit and pull request. The compiler reads nothing else.
+Where: [ADR-055](ADR-055-products-defined-once-in-odps-and-odcs-documents.md) part 6.
+
+### Lifecycle state and operator hold
+
+A product's lifecycle state is the one value of its ODPS `status`: `active` (scheduled,
+consuming), `paused` (released, consuming nothing, rows still readable), `deprecated` (still
+running, readers told the sunset date and successor) or `retired` (not built, rows kept). Every
+state but `active` records since when, why and by what decision, and the checks refuse a change the
+previous release does not allow, such as retiring a product another declares as an input. An
+**operator hold** is not a state: it stops a product's runs for an incident, without a release, and
+is recorded.
+Where: [ADR-055](ADR-055-products-defined-once-in-odps-and-odcs-documents.md) part 4.
 
 ### Registry and the seam
 
@@ -1123,6 +1200,154 @@ when the fact happened; knowledge time takes the row that could have been known 
 using a rate published after the fact. Both use [ADR-030](ADR-030-scd2-security-master.md)'s
 half-open intervals and `9999-12-31` sentinel.
 Where: [ADR-056](ADR-056-unified-data-product-platform.md) part 8.
+
+### Tested-data view, base namespace and publisher
+
+The target's way of holding SQL readers to tested data. dbt writes each output into the product's
+**base namespace**, `<fence>__base`, which no reader rule names. Readers query a
+[definer view](#definer-view) of the same name in the product's namespace, `<domain>.<fence>.<table>`,
+whose generated SQL selects the contract's columns from the base at its `audited`
+[tag](#tested-data-marker). The view is owned by the **publisher** `pub_<fence>`, the only identity that
+may pass on `SELECT` on that base (`GRANT_SELECT`), and every reader policy is an
+[access rule](#access-rules-and-the-file-group-provider) on the view's exact name.
+Where: [ADR-061](ADR-061-readers-see-dbt-outputs-through-a-view-over-the-tested-tag.md).
+
+### Compare-and-set commit
+
+A write that names the value it expects to replace and is applied only if that is still the value.
+The publish of a product's tested data is one such commit to Lakekeeper's REST API covering every
+output: each requires `main` at the tested snapshot and `audited` at the previous one, and if any
+requirement is stale the catalog answers 409 and moves no tag, so a publisher working from stale
+values cannot overwrite another's move.
+Where: [ADR-061](ADR-061-readers-see-dbt-outputs-through-a-view-over-the-tested-tag.md) point 4.
+
+### Access rules and the file group provider
+
+Trino's file-based access control reads one JSON rules file: ordered lists of rules for catalogs,
+schemas, tables, session properties and queries, where the first rule matching the user or group
+decides. A table rule grants privileges (`SELECT`, `OWNERSHIP`, `GRANT_SELECT` and so on) and may add a
+row filter and column masks, which is how [named access policies](#named-access-policy) are enforced.
+The file group provider reads group membership from a second file; the compiled rules name groups
+`<fence>__<role>`, so a grant is a membership. Trino reloads both within its 5 s refresh period.
+Where: a release's `compiled/trino/rules.json` and `compiled/trino/groups.txt`, read through
+`/k2/releases/pointers/trino/` ([`emit/trino_rules.py`](../../platform/k2gen/k2gen/emit/trino_rules.py));
+[ADR-061](ADR-061-readers-see-dbt-outputs-through-a-view-over-the-tested-tag.md).
+
+### Default deny and exact-name rules
+
+The compiled rules allow nothing that no rule names: no list ends in a rule matching everyone, so an
+unknown user is refused its first statement, and a section left out is left out because Trino's own
+default for it is the stricter one (only built-in functions, no owner transfer). Every name in a rule
+is an exact name with its regex characters escaped, because Trino matches a rule's regex against the
+whole name and an unescaped `.` matches any character. So a rule for table `t` never matches its
+metadata table `t$files`, and a rule for product `station_readings` never matches `station_readings__base`
+or `station_readings_twin`.
+Where: [ADR-059](ADR-059-access-rules-compiled-default-deny-over-two-catalogs-per-domain.md) points 2 and 3.
+
+### Operator principal
+
+`svc.platform`, the one identity allowed to read Trino's `system.runtime` tables (the query history
+holds every statement's text, untested values included), view and kill other users' queries, read
+system information and set every session property, retention floors included. It holds no privilege
+in a reader namespace. A person operating the platform does so as it, from the `tools` container.
+Where: [ADR-059](ADR-059-access-rules-compiled-default-deny-over-two-catalogs-per-domain.md) point 4.
+
+### Impersonation
+
+Logging in as one principal and running a query as another. Trino allows it only where an
+`impersonation` rule names both; the compiled rules let `svc.api`, the REST service's identity, become
+each declared person (`p.*`) by exact name and nobody else, so a REST request runs under its caller's own
+rules and policies.
+Where: [ADR-059](ADR-059-access-rules-compiled-default-deny-over-two-catalogs-per-domain.md) point 4.
+
+### Release canary
+
+`k2_release_<first 12 hex of the document set's sha256>`, a user only one release's rules name: they let
+it execute a query and reach nothing. `SELECT 1` as it succeeds exactly while that release's rules are
+loaded, which is how `release-verify` tells that Trino has read the new rules file.
+Where: [ADR-059](ADR-059-access-rules-compiled-default-deny-over-two-catalogs-per-domain.md) point 4;
+`k2gen.model.canary_user`.
+
+### Catalog fence and drift check
+
+Lakekeeper has no authentication and stores a view's owner as a property, `trino.run-as-owner`, that
+any client of its REST API can set, so a client that reaches it can forge a view or graft a snapshot.
+The **catalog fence** puts Lakekeeper on its own Docker network with only the platform's services and
+no host port. The **drift check** compares the catalog with the release at `release-verify` and at
+every reconcile: reader namespaces hold exactly the generated views, each with its generated SQL and
+its publisher as owner, and every `audited` tag is at the snapshot the publish recorded; anything else
+exits non-zero and names the object. The check detects a forgery; the fence keeps other clients
+from making one.
+Where: [ADR-061](ADR-061-readers-see-dbt-outputs-through-a-view-over-the-tested-tag.md) point 6.
+
+### TLS, certificate and certificate authority
+
+TLS is the encryption under HTTPS. The server shows a **certificate**: its public key and the names it
+answers to (its subject alternative names), signed by a **certificate authority** (CA) the client trusts;
+the client refuses it if the signature is not that CA's, the dates have passed, or the name it asked for is
+not on it. A client says which name it wants in the handshake (**SNI**), and a server holding several
+certificates picks one by it. The platform's CA is local, made by `make tls-init`, and may sign only
+`trino` and `localhost` (a **name constraint**); Trino's certificate lives 90 days and is reissued by
+`make tls-rotate` under the same CA.
+Where: [ADR-060](ADR-060-trino-logins-by-password-over-tls-under-a-local-ca.md) point 2; `scripts/tls.sh`.
+
+### Password file and bcrypt
+
+Trino's file password authenticator reads one `<user>:<hash>` line per principal from
+`${K2_SECRETS}/trino/password.db` and rereads it every 5 s, so a password made, rotated or removed takes
+effect with no restart. The hash is **bcrypt**, a deliberately slow, salted one-way function: Trino can
+check a password against it, nobody can read the password back from it. Cost 10 (2^10 rounds), spelt
+`$2y$` as Trino requires. No line, and no hash, is ever in git or a release.
+Where: [ADR-060](ADR-060-trino-logins-by-password-over-tls-under-a-local-ca.md) point 1; `scripts/principal-secret.py`.
+
+### Local secrets and in-place writes
+
+Every credential lives in files under `${K2_SECRETS:-$HOME/k2-secrets}`, outside every checkout, laid out
+by `k2gen.model.SECRET_FILES`, and a container mounts only the files it reads, read-only. A file a running
+container rereads is rewritten **in place** (same file, new content, under an exclusive lock), never
+replaced by a rename: through Docker Desktop's file sharing a container keeps reading the old file after a
+rename, which is what an editor's save or `mv` does.
+Where: [ADR-060](ADR-060-trino-logins-by-password-over-tls-under-a-local-ca.md) point 3;
+[`docs/development/phase-001-interfaces.md`](../development/phase-001-interfaces.md#local-secrets).
+
+### Internal shared secret
+
+With plain HTTP off, a Trino node reaches itself over HTTPS and signs those requests with a secret every
+node shares, `internal-communication.shared-secret`; Trino also makes its internal certificate from it. It is
+read from the environment (`K2_TRINO_SHARED_SECRET` in `.env`, 32 random bytes) and never written into a
+release, since whoever holds it can pose as the node.
+Where: [ADR-060](ADR-060-trino-logins-by-password-over-tls-under-a-local-ca.md) point 3.
+
+### Release pointer and the tools swap
+
+A pointer is a symbolic link `<releases root>/pointers/<service>` to `../<release id>`, one each for
+`trino`, `airflow`, `spark`, `prometheus` and `k2-api`; a service reads its configuration through it, so
+moving the link changes what the service reads without restarting it. On Docker Desktop a link renamed on
+the host is never seen by the containers, so a deploy moves the links from inside the **tools** one-shot,
+the only container that mounts the releases root read-write, as a fresh temporary link renamed over the
+old one.
+Where: [ADR-058](ADR-058-deploy-sealed-releases-by-pointer-swap.md);
+experiment (c) of [`2026-11-26-release-spine-spikes.md`](../research/2026-11-26-release-spine-spikes.md).
+
+### Release canary
+
+A Trino user named after the release's document set, `k2_release_<setSha256[:12]>`, that only that
+release's access rules admit, to run `SELECT 1`. Deploy writes its password line before the swap; once
+Trino admits it and refuses the previous release's canary, Trino is known to have loaded the new rules,
+and only then do views gain new columns. Not a declared principal; its line is removed when the next
+release is verified.
+Where: [ADR-058](ADR-058-deploy-sealed-releases-by-pointer-swap.md), `k2gen.model.canary_user`.
+
+### Deploy needs and the deploy record
+
+**Needs** are what deploying a release over another requires, worked out by the compiler from the two
+releases' files: the compose services whose definition or image differs (recreated, one at a time), a
+Trino restart for a change of its start-up configuration, tables to create, and whether a DAG's tasks
+changed. A release that changes only what is read through a pointer needs nothing. The **deploy record**
+is one line per deploy step in `<releases root>/deploy-log.jsonl`: when, which release, from which, the
+step, its outcome, the operator, and each secret file it found by mode and size, never its content nor a digest of it.
+Where: [ADR-058](ADR-058-deploy-sealed-releases-by-pointer-swap.md), `k2gen.model.NEEDS_BY_PREFIX`,
+`contracts/schema/deploy-record.schema.json`.
 
 ---
 

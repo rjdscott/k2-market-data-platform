@@ -6,6 +6,13 @@ says what that copy holds and what it does not, how to run, schedule and check i
 restore from it. It does not cover the ClickHouse hot tier, which is paused
 ([pause-and-resume-a-serving-product.md](./pause-and-resume-a-serving-product.md)).
 
+The catalog has no host port since 2026-11-27 (it has no authentication, so its network is its
+fence: [ADR-059](../adr/ADR-059-access-rules-compiled-default-deny-over-two-catalogs-per-domain.md)
+part 7). The script asks it from a throwaway `minio/minio` container running `curl` on
+`<project>_k2-catalog`, the network it finds among `k2-minio`'s (MinIO's only network before the
+cutover to releases), at `http://lakekeeper:8181/catalog/v1`, and copies with `mc` from a
+throwaway container on the same network. The `pg_dump`s run through `docker exec k2-prefect-db`.
+
 > **The four tables it copied retired with the v3 lake ingest pipeline on 2026-11-26** and were
 > dropped with that lake's namespaces ([`legacy/v3-lake-ingest/`](../../legacy/v3-lake-ingest/),
 > [ADR-056](../adr/ADR-056-unified-data-product-platform.md)). `TABLES` at the top of the script
@@ -157,7 +164,8 @@ make backup && make health
 
 > **Not yet drilled; a drill is phase 004's** (its first restore drill). Every step below is
 > written from the Lakekeeper 0.13.9 catalog OpenAPI
-> (`http://127.0.0.1:18181/api-docs/catalog/v1/openapi.json`) and the copy's layout; no restore
+> (`/api-docs/catalog/v1/openapi.json`, read on the host port 18181 the catalog lost on 2026-11-27;
+> it is now served only to containers on `k2-catalog`) and the copy's layout; no restore
 > has been run. Read the whole section before starting, and stop at the first surprise.
 
 **3a. A table: not until phase 002.** No table is in the backup set, so there is none to restore.
@@ -180,7 +188,8 @@ table from the copy `make drop` took.
 > While the catalog holds no table (until phase 002) there is a simpler path: an empty
 > `lakekeeper` database (step 3's first line), then `docker compose up -d --force-recreate
 > --no-deps lakekeeper-migrate lakekeeper lake-init`, which recreates the schema and then the
-> warehouses from `docker/lake/generated/warehouses.txt`. **Not run.**
+> warehouses of the storage plan in the release the trino pointer names
+> (`compiled/lake/storage-plan.json`, read by `docker/lake/init-lake.sh`). **Not run.**
 
 ```bash
 # 1. The restore point: the dump files of the last successful run.

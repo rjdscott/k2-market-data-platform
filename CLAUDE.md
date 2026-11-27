@@ -9,7 +9,19 @@ marts are retired to `legacy/v3-lake-ingest/` and their tables dropped: no live
 crypto data lands in the lake until phase 004, and Airflow runs no DAG until phase 002.
 Trino 484 serves SQL over the lake through a catalog that is read-only at the
 connector (ADR-035), and writes only in one Lakekeeper warehouse per data domain
-generated from `contracts/domains.yaml` by `make generate` (ADR-044).
+of `contracts/domains.yaml` (ADR-044), under default-deny rules (ADR-059); readers see a
+dbt output only through a guarded view over its tested tag (ADR-061). It serves HTTPS only,
+on `127.0.0.1:${K2_TRINO_PORT:-8443}`, with password logins under a local CA (ADR-060:
+`make tls`, `make password PRINCIPAL=<id>`; secrets under `${K2_SECRETS}`, default
+`~/k2-secrets`, never in the repo). Its etc and rules are not in the checkout: `k2gen`
+compiles a tag's documents into a sealed release (`make release TAG=<annotated tag>`),
+`make deploy RELEASE=<id>` swaps it in by pointer, `make release-verify` checks it and
+`make rollback` undoes it (ADR-058). Airflow, Spark and Prometheus mount the releases root
+too, but the DAGs, Spark jobs and alert rules they would read through a pointer arrive in
+phase 002. Lakekeeper has no authentication, so it is on network `k2-catalog` alone with no
+host port (ADR-059 part 7; `make catalog-fence` probes it). A fresh clone does not start
+with `docker compose up`: `docs/runbooks/first-cutover-to-releases.md` and
+`deploy-a-release.md` give the order.
 The v2 ClickHouse medallion is **gone**: the Kotlin handlers that fed it retired
 in ADR-019 and the `k2.*` database was dropped at the Phase E cutover on
 2026-08-27 — `SHOW DATABASES` lists `gold` and nothing else. Its DDL is archived,
@@ -96,6 +108,10 @@ considered before committing*.
   Never "if needed".
 - **`make test` before every PR**, plus the verification commands of whatever
   you touched. CI runs rust / python / docker / docs / security; keep it green.
+- **`make spine-e2e` at every merge point.** Run it after every merge into a phase
+  branch and before every tag (not per step; per step, the tests of what the step
+  touched). A red stage is read and fixed before anything else builds on the branch;
+  rerun that one stage with `ONLY="<stage>"`. `docs/development/spine-e2e.md`.
 
 ### Immutability
 
@@ -130,8 +146,8 @@ considered before committing*.
   silently at the ingest boundary, not at build time. `tests/test_wire_format.py`
   is that rule made executable — run it.
   A lake table's columns, partitioning and sort live in its contract under
-  `contracts/` alone (the old `lake.sql` is archived): `make test-k2gen`, then
-  `make generate`.
+  `contracts/` alone (the old `lake.sql` is archived): `make test-k2gen`, then a
+  tag and `make release`; the DDL is compiled into the release, never committed.
 - **Resource-limit changes** update the ADR-010 Outcome section *and* the
   summary comment in `docker-compose.yml`. The 25 CPU / 48 GiB ceiling at the
   bootstrap peak (ADR-045, gated by `scripts/check-budget.py`) is a stated
@@ -142,17 +158,27 @@ considered before committing*.
   does not pick it up. Directory mounts go stale too: switching the live
   checkout to a commit without `docker/airflow/dags/` and back left both Airflow
   containers an empty DAG folder and no runs for 35 minutes (2026-11-25); recreate
-  `airflow-scheduler` and `airflow-dag-processor` after any such switch.
+  `airflow-scheduler` and `airflow-dag-processor` after any such switch. The
+  releases root (`${K2_RELEASES}`, default `~/k2-releases`) is therefore mounted
+  whole, read-only, at `/k2/releases`, created once and never recreated, and a
+  pointer is moved only inside the `tools` container: on this Docker Desktop host a
+  link renamed on the host was never seen inside a container (ADR-058).
 
 ## Tests
 
 ```bash
-make test          # everything CI runs: python + rust + clickhouse + trino + dbt
+make test          # python + rust + clickhouse + trino + dbt + notebooks + k2gen + airflow
 make test-python   # uv run --no-project --with pytest==9.2.0 --with pyyaml==6.0.4 --with fastavro==1.12.2 --with duckdb==1.4.4 pytest tests -q
 make test-rust     # rust:1.100.0-bookworm container; no local cargo needed
 make test-clickhouse  # the gold DDL + assertions on a throwaway 24.3 server
-make test-trino    # docker/trino/etc starts; lake refuses every commit; only a domain's writer changes its catalog
+make test-trino    # a compiled release's Trino etc and rules on a throwaway lake, HTTPS logins: each role sees only its policy
 make test-dbt      # dbt/ (its own uv project): lint, parse and compile; no marts until phase 002
+make test-k2gen    # k2gen's checks, its emitters against their goldens, each check made to fail; no stack
+make test-dbt-tree # the dbt tree k2gen compiles from its fixtures and contracts/: parse, compile, ls --selector
+make access-verify RELEASE=<dir>  # every tests/access/expectations.yaml row on a throwaway lake; LIVE=1: the stack's
+make test-access RELEASE=<dir>    # the suite's own proofs: a loosened rule must fail its row
+make catalog-fence # dial every probe row from its network: Lakekeeper refused or open as expected
+make spine-e2e     # the release and rules spine end to end from a scratch clone; run at merge points
 ```
 
 - The v2 Kotlin tier retired to `legacy/v2-kotlin/` (ADR-019). Its tests are

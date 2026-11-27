@@ -1,4 +1,4 @@
-.PHONY: chaos help up down logs ps health backup backup-install gates test test-python test-rust test-airflow record-fixtures test-notebooks test-legacy-kotlin dev-up check-docs check-alerts build-capture lint lake-verify test-clickhouse test-trino test-dbt parity-ohlcv parity-bars test-k2gen generate new-product screenshots
+.PHONY: chaos help up down logs ps health backup backup-install gates test test-python test-rust test-airflow record-fixtures test-notebooks test-legacy-kotlin dev-up check-docs check-alerts build-capture lint lake-verify test-clickhouse test-trino test-dbt parity-ohlcv parity-bars test-k2gen screenshots
 
 # Stamped into the capture binary's k2_capture_build_info gauge. `git describe`
 # and not `rev-parse`: an image built from a dirty tree must not claim to be the
@@ -8,7 +8,7 @@ export K2_GIT_SHA
 .DEFAULT_GOAL := help
 
 help:  ## Show available targets
-	@grep -E '^[a-z-]+:.*##' $(MAKEFILE_LIST) | sed 's/:.*## /\t/'
+	@grep -h -E '^[a-z-]+:.*##' $(MAKEFILE_LIST) | sed 's/:.*## /\t/'
 
 up:  ## Start the full stack (builds images on first run); refuses a .env with placeholder or guessable secrets
 	python3 scripts/check-env.py
@@ -96,7 +96,7 @@ test-airflow:  ## Every test under docker/airflow/tests (today the image's dbt a
 test-clickhouse:  ## gold schema semantics on a throwaway clickhouse:24.3 (OHLCV regression, FINAL dedup, BBO math, quant user)
 	bash scripts/clickhouse-schema-test.sh
 
-test-trino:  ## Trino on a throwaway trinodb/trino, no stack: etc/ starts, catalog lake refuses every commit (table procedures too), only a domain's writer changes its tables with SQL statements
+test-trino:  ## The rules suite on a throwaway lake (Trino over TLS, Lakekeeper, MinIO), no stack: a release compiled from fixtures starts, each role sees exactly its policy, the base is fenced, a negative control fails
 	bash scripts/trino-rules-test.sh
 
 test-dbt:  ## dbt/ with no stack and no Trino: sqlfluff lint, dbt parse and compile, the manifest check (scripts/dbt-test.sh); the build on a throwaway Trino SKIPs until phase 002 brings a model
@@ -150,7 +150,7 @@ check-alerts:  ## promtool: syntax-check every rule file and run the alert unit 
 
 # platform/k2gen is checked with the ruff and mypy pinned in its own lock, as CI's contracts job does.
 lint:  ## Ruff over docker/lake, the Airflow image tests, the gate scripts and other scripts/ Python, and the tests; ruff and mypy (strict) over platform/k2gen
-	uv run --no-project --with ruff==0.17.6 ruff check docker/lake docker/airflow scripts/screenshots scripts/check_docs.py scripts/check-budget.py scripts/check-env.py scripts/make-synthetic-fixtures.py tests
+	uv run --no-project --with ruff==0.17.6 ruff check docker/lake docker/airflow scripts/screenshots scripts/check_docs.py scripts/check-budget.py scripts/check-env.py scripts/make-synthetic-fixtures.py scripts/principal-secret.py scripts/deploy.py scripts/access_verify.py scripts/trino_rules_test.py scripts/trino_rules_c1_test.py scripts/verify docker/tools tests
 	cd platform/k2gen && uv run --locked -q ruff check . && uv run --locked -q mypy
 
 # Stood down, not deleted: the old lake ingest, the tables these gates read and
@@ -163,15 +163,8 @@ test-notebooks:  ## SKIP until phase 004: notebooks/ is archived with the old la
 	@echo "SKIP test-notebooks: notebooks/ is archived with the old lake ingest (legacy/v3-lake-ingest/notebooks/); returns in phase 004"
 
 # --locked: a pyproject.toml edited without `uv lock` fails here, not in someone else's sync.
-test-k2gen:  ## k2gen: contracts/ against ODCS v3 and the K2 schema, plus each check made to fail (no stack needed)
+test-k2gen:  ## k2gen: the checks, the emitters against their goldens, the compiler and each check made to fail (no stack needed)
 	cd platform/k2gen && uv run --locked -q pytest -q
-
-# CI runs this and fails on any diff or untracked file: generated files are never edited by hand.
-generate:  ## Validate contracts/, then rewrite docker/lake/ddl/generated/, docker/lake/generated/{retention.json,contract_schemas.json,warehouses.txt}, docs/products/, and the per-domain Trino catalogs and rules.json under docker/trino/
-	cd platform/k2gen && uv run --locked -q k2gen generate
-
-new-product:  ## Scaffold contracts/DOMAIN/NAME/: a descriptor and one contract with inline columns that validates (DOMAIN=x NAME=y)
-	cd platform/k2gen && uv run --locked -q k2gen new "$(DOMAIN)" "$(NAME)"
 
 # Read-only against the LIVE stack: logs in and opens pages
 # (scripts/screenshots/capture.py). Secrets go from .env and the Airflow
@@ -213,3 +206,12 @@ chaos:  ## Inject each capture failure, wait for its alert, measure recovery (LO
 .PHONY: drop
 drop:  ## Copy, compare, then drop TARGET=<warehouse>.<namespace>[.<table>] or TARGET=bucket:<name>; DRY_RUN=1 lists only (docs/runbooks/drop-and-rebuild.md)
 	bash scripts/drop.sh
+
+# One file per owning step of phase 001, so parallel steps never edit this file
+# (docs/development/phase-001-interfaces.md). A target already defined above is
+# never redefined there. `help` greps every included file (-h: no file names).
+include mk/*.mk
+
+.PHONY: catalog-fence
+catalog-fence:  ## Dial every probe row of tests/access/expectations.yaml from its network: the catalog fence, refused or open as expected (ADR-059 part 7; FILE=<other expectations.yaml>)
+	bash scripts/verify/catalog-fence.sh $(FILE)

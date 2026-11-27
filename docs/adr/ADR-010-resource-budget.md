@@ -706,3 +706,53 @@ PASS: bootstrap default within 25 CPU / 48 GiB; limits, pins and loopback ports 
 Headroom at the gated peak: 8.30 CPU and 19.312 GiB. The summary comment at the end of
 `docker-compose.yml` carries the same sums. The phase 000 plan named 17.30 CPU / 29.812 GiB as
 its exit figure; that was the peak with these two services still in it.
+
+### Outcome addendum (2026-11-26, the phase 001 stubs behind profiles)
+
+Four stubs join the compose file behind profiles that nothing starts by default, so the budget gate
+counts and pin-checks them before their steps build them
+([phase 001 interfaces](../development/phase-001-interfaces.md), A13): `tools` (profile `tools`,
+0.25 CPU / 256M), `fetch` (`fetch`, 0.5 / 512M), `dbt-runner` (`build`, 0.5 / 768M, two
+replicas) and `k2-api` (`api`, 0.5 / 512M). No default-profile limit changes, and no
+default-profile service definition changes (`docker compose config --hash '*'` prints the same
+21 hashes before and after).
+
+```
+$ python3 scripts/check-budget.py
+steady default         17 services   15.20 CPU   27.188 GiB
+bootstrap default      21 services   16.70 CPU   28.688 GiB
+bootstrap api          22 services   17.20 CPU   29.188 GiB
+bootstrap build        22 services   17.70 CPU   30.188 GiB
+bootstrap fetch        22 services   17.20 CPU   29.188 GiB
+bootstrap hot-gold     22 services   20.70 CPU   36.688 GiB
+bootstrap tools        22 services   16.95 CPU   28.938 GiB
+PASS: bootstrap default within 25 CPU / 48 GiB; limits, pins and loopback ports hold across 4 Dockerfiles and 51 scripts and workflows
+```
+
+Headroom at the gated peak is unchanged: 8.30 CPU and 19.312 GiB. The summary comment at the end
+of `docker-compose.yml` carries the same sums.
+
+### Outcome addendum (2026-11-26, Alertmanager)
+
+`alertmanager` (prom/alertmanager v0.35.1, pinned by digest; 0.1 CPU / 64M, long-running) joins the
+default profile, to route every firing alert to Slack
+([where-an-alert-goes.md](../runbooks/where-an-alert-goes.md)). Plan 001 budgeted it at the same
++0.10 CPU / +0.0625 GiB. No other limit changes. A throwaway copy of the service, as compose
+defines it, used 19.5 MiB and CPU near 0 while `make alert-test-standin` drove it on 2026-11-26
+(`docker stats --no-stream k2-alerttest-am`), so 64M leaves it three times that.
+
+```
+$ python3 scripts/check-budget.py
+steady default         18 services   15.30 CPU   27.250 GiB
+bootstrap default      22 services   16.80 CPU   28.750 GiB
+bootstrap api          23 services   17.30 CPU   29.250 GiB
+bootstrap build        23 services   17.80 CPU   30.250 GiB
+bootstrap fetch        23 services   17.30 CPU   29.250 GiB
+bootstrap hot-gold     23 services   20.80 CPU   36.750 GiB
+bootstrap tools        23 services   17.05 CPU   29.000 GiB
+PASS: bootstrap default within 25 CPU / 48 GiB; limits, pins and loopback ports hold across 4 Dockerfiles and 55 scripts and workflows
+```
+
+Headroom at the gated peak: 8.20 CPU and 19.250 GiB. The summary comment at the end of
+`docker-compose.yml` carries the same sums. Plan 001 named 17.40 CPU / 29.875 GiB as its exit
+figure; that was computed before phase 000 retired `lake-metrics` and `lake-ddl`.

@@ -6,6 +6,7 @@ requires-python = ">=3.12,<3.14"
 dependencies = [
     "jsonschema==4.26.0",
     "pyyaml==6.0.4",
+    "referencing==0.37.0",  # already jsonschema's; k2gen.model resolves refs between its schemas with it
 ]
 
 [project.scripts]
@@ -16,8 +17,7 @@ requires = ["uv_build==0.13.9"]
 build-backend = "uv_build"
 
 [tool.uv.build-backend]
-# k2gen/ sits beside this file, not under src/, so tests/conftest.py can put
-# platform/k2gen on sys.path and import k2gen.ddl with nothing installed.
+# k2gen/ sits beside this file, not under src/.
 module-root = ""
 
 [dependency-groups]

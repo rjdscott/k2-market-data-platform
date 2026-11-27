@@ -1,0 +1,16 @@
+# The k2_input macro's render cases with no warehouse (scripts/dbt-test.sh, step 3). Its own
+# project, ignored by the k2 project (dbt/.dbtignore), with macros/k2_input.sql a symlink to
+# the one in dbt/macros/, so the macro tested is the macro shipped. Nothing here connects:
+# the source declares its column types, so compiling the unit test asks no warehouse.
+name: k2_input_test
+version: "0.1.0"
+profile: k2
+config-version: 2
+model-paths: ["models"]
+macro-paths: ["macros"]
+flags:
+  populate_cache: false
+  require_certificate_validation: true
+models:
+  k2_input_test:
+    +materialized: table

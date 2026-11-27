@@ -1,0 +1,57 @@
+apiVersion: v3.2.0
+kind: DataContract
+id: ops-insight.daily-load.gold_daily_load
+name: gold_daily_load
+version: 1.0.0
+domain: ops-insight
+description:
+  purpose: One row per day and station, the count and mean of its readings.
+team:
+  name: insight-team
+schema:
+  - id: gold_daily_load
+    name: gold_daily_load
+    physicalName: daily_load.gold_daily_load
+    physicalType: table
+    properties:
+      - name: load_date
+        physicalType: date
+        required: true
+        primaryKey: true
+        primaryKeyPosition: 1
+        description: The UTC day of the readings.
+        customProperties:
+          - property: time
+            value: event
+      - name: station_id
+        physicalType: varchar
+        required: true
+        primaryKey: true
+        primaryKeyPosition: 2
+        description: The made-up station's code.
+        relationships:
+          - type: foreignKey
+            to: sensor-net/station-readings/silver_readings.odcs.yaml#/schema/silver_readings/properties/station_id
+      - name: readings
+        physicalType: bigint
+        required: true
+        description: How many readings the station took that day.
+      - name: mean_value
+        physicalType: decimal(12,3)
+        description: The mean reading.
+      - name: max_value
+        physicalType: decimal(12,3)
+        description: The largest reading.
+        customProperties:
+          - property: unit
+            value: degree Celsius
+roles:
+  - role: full_reader
+    access: read
+customProperties:
+  - property: layer
+    value: gold
+  - property: build
+    value: dbt
+  - property: backup
+    value: rebuild

@@ -1,0 +1,5 @@
+grants:
+  - principal: p.analyst-full
+    role: full_reader
+  - principal: p.analyst-delayed
+    role: delayed_reader

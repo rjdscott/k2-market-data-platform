@@ -1,0 +1,27 @@
+{
+  "views": [
+    {
+      "base": "ops_insight.daily_load__base.gold_daily_load",
+      "columns": [
+        "load_date",
+        "station_id",
+        "readings",
+        "mean_value"
+      ],
+      "owner": "pub_daily_load",
+      "relation": "ops_insight.daily_load.gold_daily_load"
+    },
+    {
+      "base": "sensor_net.station_readings__base.silver_readings",
+      "columns": [
+        "station_id",
+        "read_at",
+        "value",
+        "region",
+        "operator_note"
+      ],
+      "owner": "pub_station_readings",
+      "relation": "sensor_net.station_readings.silver_readings"
+    }
+  ]
+}

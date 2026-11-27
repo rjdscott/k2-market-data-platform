@@ -247,3 +247,18 @@ logs/
 # Result files the retired scheduler left in a checkout that ran it (ADR-034
 # Outcome). The directory is gone from the tree; the line keeps the leftovers out.
 docker/prefect/
+
+# Local secrets (phase 001, docs/development/phase-001-interfaces.md): they live in
+# ${K2_SECRETS:-$HOME/k2-secrets}, outside any checkout. These lines keep a copy that
+# lands inside one out of git all the same; tests/test_secrets_untracked.py holds both.
+k2-secrets/
+*.password
+password.db
+keys.json
+slack-webhook-url
+*.pem
+*.key
+# Every .env file is the stack's secrets (Trino's shared secret among them) but the template.
+.env*
+!.env.example
+!scripts/lib/

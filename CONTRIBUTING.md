@@ -12,9 +12,12 @@ This is a personal portfolio project. Issues and questions are welcome; pull req
 
 ```bash
 cp .env.example .env     # then change the passwords
-make up                  # first run builds three images; allow several minutes
-make ps
 ```
+
+The stack then starts from a deployed release, not a bare `make up`: `make tls`, the service
+passwords, `make release TAG=<annotated tag>`, `make deploy RELEASE=<id>`, in the order
+[`docs/runbooks/first-cutover-to-releases.md`](docs/runbooks/first-cutover-to-releases.md) and
+[`docs/runbooks/deploy-a-release.md`](docs/runbooks/deploy-a-release.md) give. `make ps` shows it.
 
 `docs/development/setup.md` covers running a single capture process locally, the instrument registry (`config/instruments.yaml`) and the bind-mount gotcha when editing it.
 
@@ -25,10 +28,12 @@ make test                # everything CI runs: Python, Rust, ClickHouse, Trino, 
 make test-rust           # cargo test inside rust:1.100.0-bookworm
 make test-python         # uv run --no-project --with pytest==9.2.0 --with pyyaml==6.0.4 --with fastavro==1.12.2 --with duckdb==1.4.4 pytest tests -q
 make test-clickhouse     # the gold DDL and its assertions on a throwaway 24.3 server
-make lint                # uv run --no-project --with ruff==0.17.6 ruff check docker/lake tests
+make lint                # ruff 0.17.6 over the paths the Makefile lists; ruff and mypy over platform/k2gen
 ```
 
 CI (`.github/workflows/ci.yml`) runs the same three suites plus a Docker build of every image, a compose config check, the doc gates and a Trivy scan.
+
+A change to the compiler, the access rules, identity, compose or the deploy is also expected to pass `make spine-e2e` (about 27 minutes, on throwaway containers; [what it runs and how to read it](docs/development/spine-e2e.md)); a docs-only change does not need it.
 
 `make test-legacy-kotlin` runs the archived v2 Kotlin feed-handler tests against `legacy/v2-kotlin/` ([ADR-019](docs/adr/ADR-019-rust-capture-tier.md)). It needs the `gradle:8.12-jdk21` Docker image and is deliberately outside `make test` and outside CI, that code is archived, not maintained.
 
@@ -42,12 +47,12 @@ in it, and what does not.
 | `.claude/` | the Claude Code skills, one per doc surface | session logs, handoffs, local settings |
 | `.github/` | the CI workflow and Dependabot config | anything no workflow reads |
 | `config/` | registries the services read: instruments, bar thresholds | secrets, host-specific values (those are `.env`) |
-| `contracts/` | the domains file and the contract schemas k2gen validates against | anything `make generate` writes |
+| `contracts/` | the domains file, principals and roles, the products and the schemas k2gen checks them against | anything k2gen compiles: that goes into a release, never git |
 | `dbt/` | the dbt project on Trino, its own uv project | marts that read the retired lake tables (archived) |
 | `docker/` | per-service images, DDL, the lake modules the new connectors reuse, alert rules, dashboards | volumes, backups, warehouse files |
 | `docs/` | the architecture book, ADRs, runbooks, plans, audits, benchmarks, research | progress trackers, phase status files, pasted market data |
 | `legacy/` | v1, the v2 Kotlin tier, v2 ClickHouse DDL, the v2 offload, the scheduler Airflow replaced, the v3 lake ingest: archived, source unchanged since archiving (v1 has had dependency pins bumped, see its README); index in [`legacy/README.md`](legacy/README.md) | new work or fixes |
-| `platform/` | `k2gen`, the contract validator and generator | product definitions (those are `contracts/`) |
+| `platform/` | `k2gen`, the compiler of a tag's documents into a sealed release | product definitions (those are `contracts/`) |
 | `schemas/` | the Avro wire contracts | anything that is not the contract |
 | `scripts/` | gates, health, chaos, the synthetic fixture generator | one-off scripts nobody reruns |
 | `services/` | the Rust capture crate, its tests and synthetic fixtures | recorded venue frames (`tests/recorded/` is git-ignored) |

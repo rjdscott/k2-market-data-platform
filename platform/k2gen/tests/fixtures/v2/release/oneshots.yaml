@@ -1,0 +1,23 @@
+# A hand-written example of compiled/oneshots.json (contracts/schema/oneshots.schema.json). Names only.
+oneshots:
+  fetch:
+    image: fetch:4008294739ab
+    cpus: "0.5"
+    memory: 512M
+    networks: [k2-net]
+    env: [K2_RELEASE]
+    secrets: []
+  dbt-runner:
+    image: dbt-runner:5a6b7c8d9e0f
+    cpus: "0.5"
+    memory: 768M
+    networks: [k2-catalog]
+    env: [K2_TRINO_HOST, K2_TRINO_INTERNAL_PORT, K2_TRINO_USER, K2_PUB_USER, K2_RUNS_USER, K2_CATALOG_URI, K2_RELEASE]
+    secrets: [/run/k2-secrets/builder.password, /run/k2-secrets/publisher.password, /run/k2-secrets/runs.password, /run/k2-secrets/tls/ca.pem]
+  tools:
+    image: tools:0a1b2c3d4e5f
+    cpus: "0.25"
+    memory: 256M
+    networks: [k2-net, k2-catalog]
+    env: [K2_RELEASE]
+    secrets: [/run/k2-secrets/tls/ca.pem]

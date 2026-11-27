@@ -1,18 +1,22 @@
 # 18. Data mesh: domains, products and contracts
 
-> **You will learn** how the lake's tables are grouped into owned data products, what a contract declares, and what `k2gen` checks and writes.
+> **You will learn** how the lake's tables are grouped into owned data products, what a contract declares, and what `k2gen` checks and compiles.
 > **Read this if** you own a product, are adding one, or are reviewing a change under `contracts/`.
 > **Before this** chapters 09, 13, 14.
 
 **Retired, 2026-11-26.** The thirteen products this chapter was written around, and their
 twenty-six contracts, retired with the v3 lake ingest ([ADR-056](../adr/ADR-056-unified-data-product-platform.md);
 archived in [`legacy/v3-lake-ingest/contracts/`](../../legacy/v3-lake-ingest/contracts/)), and their tables and marts were
-dropped after a backup. The five domains stay declared in `contracts/domains.yaml`, with no product
-until the [platform plan](../plans/2026-11-26-unified-product-platform/README.md)'s phases add them in
-the target's product format ([chapter 20](20-target-data-product-platform.md)). `k2gen` now holds every
-contract to its own inline columns: the comparison against the old DDL, `lake.sql`, retired with it, and
-so did the nightly audit of a live table against its contract. The design reasoning below is kept; where
-it names a product, a table or that audit, it is the record of what ran.
+dropped after a backup. The five domains stay declared in `contracts/domains.yaml`. The
+[platform plan](../plans/2026-11-26-unified-product-platform/README.md)'s phases add products in the
+target's format ([chapter 20](20-target-data-product-platform.md)); phase 001 added the first two,
+`governance/access-canary`, synthetic rows that prove access control on every release, and the paused
+`market-analytics/hot-gold` ([ADR-057](../adr/ADR-057-clickhouse-hot-tier-paused-during-platform-build.md)).
+The comparison against the old DDL, `lake.sql`, retired with the ingest, and so did the nightly audit
+of a live table against its contract. Until 2026-11-27 a generator wrote files from the contracts that
+were committed beside them; since then a tag's documents are checked and compiled by `k2gen` into a
+sealed release, which deploy runs ([chapter 21](21-releases-and-deploy.md)). The design reasoning below
+is kept; where it names a product, a table, that audit or the generator, it is the record of what ran.
 
 ## Problem
 
@@ -41,12 +45,14 @@ registered in [`contracts/domains.yaml`](../../contracts/domains.yaml) and route
 by `.github/CODEOWNERS`. Every team maps to the repository's one account today, so the
 boundaries are declared and checked, not yet exercised by a second team.
 
-A **product** is a directory, `contracts/<domain>/<product>/`: a descriptor, `product.yaml`
-(owner, purpose, kind, lifecycle, inputs, outputs, known consumers), and one Open Data
-Contract Standard v3 contract per output table beside it. Until the retirement `k2gen validate`
-reported 13 products and 26 contracts, one for every table in `lake.sql`, the audit table
-included; today it finds none. A product may build only marts, as the retired `delayed-candles`,
-`venue-quality` and `quality-results` did, with `outputs: []`. The thirteen, as they stood:
+A **product** is a directory, `contracts/<domain>/<product>/`: its Open Data Product Standard
+file, `product.odps.yaml` (owner, purpose, kind, lifecycle, input and output ports), one Open Data
+Contract Standard v3 contract per table beside it (`<table>.odcs.yaml`), its `grants.yaml`, and
+its dbt SQL and seeds when it builds with dbt. Until the retirement the old validator reported 13
+products and 26 contracts in the old format (a `product.yaml` descriptor), one for every table in
+`lake.sql`, the audit table included. A product could build only marts, as the retired
+`delayed-candles`, `venue-quality` and `quality-results` did, with `outputs: []`. The thirteen, as
+they stood:
 
 ```mermaid
 flowchart TB
@@ -84,8 +90,9 @@ declares as external inputs (`config/instruments.yaml`, `config/bars.yaml`) are 
 `fx-reference` was declared with its owner and no product; its first, `ecb-fx-rates`, is phase
 002 of the platform plan. The dotted edge was not a contract input: every domain's dbt runs
 recorded their tests in their own catalog, and `quality-results` read those tables as platform
-plumbing (below). The generated [product index](../products/README.md) has a page per product,
-none today.
+plumbing (below). A release carries one catalog document per product and an index (the `catalog`
+emitter, [chapter 21](21-releases-and-deploy.md#the-compiler-and-its-emitters)); the catalog site that
+shows them comes in phase 003.
 
 ## The governance domain
 
@@ -102,97 +109,54 @@ and the view only read ([the dbt README, archived](../../legacy/v3-lake-ingest/d
 ## What a contract declares
 
 Each contract places K2's fields where the standard has a place for them, and the rest in
-`customProperties`, validated by `contracts/schema/k2.schema.json`. The field map is
-[`contracts/schema/README.md`](../../contracts/schema/README.md). Two forms:
-
-- **A table the old `lake.sql` created** referenced it (`authoritativeDefinitions`, url
-  `docker/lake/ddl/lake.sql`) and did not restate its columns; `lake.sql` was the DDL of
-  record, its comments carrying reasons no generated file would keep. With that DDL archived
-  with the ingest, `k2gen` refuses the form.
-- **A new table** carries its columns inline (`schema[0].properties`, each with a Spark SQL
-  `physicalType` and a description), and `k2gen generate` writes its DDL. No contract has this
-  form today; `make new-product` scaffolds one.
+`customProperties`, validated by `contracts/schema/k2-v2.schema.json`. The field map is
+[`contracts/schema/README.md`](../../contracts/schema/README.md). A contract carries its columns
+inline (`schema[0].properties`, each with a physical type and a description); the `lake` emitter
+compiles its DDL into the release. The old form, which referenced `docker/lake/ddl/lake.sql` instead
+of restating its columns, retired with that DDL.
 
 `retention` is snapshot expiry in days, not deletion of data
 ([ADR-028](../adr/ADR-028-non-goals-and-honest-limits.md) §12); the retirement's drop, after a
 backup, is the plan's stated exception for a lab whose data is disposable.
 
-## What `k2gen validate` checks
+## What `k2gen` checks, and what a release holds
 
-In order. A problem in step 1 ends the run, because the later steps assume well-formed files;
-steps 2 to 4 report together.
+`k2gen check` runs four modules over a tag's document set, `docs`, `versions`, `access` and `sql`,
+each finding a code such as `docs.retention-below-floor`; `k2gen release` runs the same checks
+first, refuses on any error, then compiles the set into a sealed, read-only release: Trino's etc and
+rules, the lake DDL, the storage plan with one mart warehouse per domain, the dbt project, the
+pipeline files and the catalog documents. What each check refuses, each emitter and who reads its
+output, the manifest and the deploy are [chapter 21](21-releases-and-deploy.md); who may see what is
+[chapter 22](22-access-and-identity.md). Nothing a release holds is committed: the repository keeps
+the documents, and the release is built from a tag.
 
-1. Every file against its schema: the vendored ODCS v3.2.0 JSON Schema, then K2's profile.
-2. Each product against its place: its directory, its domain's owner and kind, its outputs
-   against the contracts beside it; its name is not one of the schemas every domain catalog
-   keeps for the platform (`staging`, `intermediate`, `dq`).
-3. Each contract against its own columns, which it declares inline: its partitioning and sort
-   read them, and a latency service level names one. A contract that references the old
-   `lake.sql` fails: that DDL retired with the v3 lake ingest. Until then this step held each
-   contract to `lake.sql`'s partitioning and sort, and every table to exactly one contract.
-4. Across products: a table another table reads keeps snapshots for the seven-day floor; a table is at least as restricted as anything it reads; every
-   input resolves to another product's output or a declared external source.
-
-## What `k2gen generate` writes
-
-`generate` runs `validate` first and writes nothing on a problem. It renders every output in
-memory, deletes the directories it owns, and writes them again in sorted order, so two runs
-are byte-identical and a deleted contract leaves nothing behind.
-
-| Output | Path | Read by |
-|---|---|---|
-| Iceberg DDL for contracts with inline columns | `docker/lake/ddl/generated/` (owned) | nothing today: its reader, `apply_ddl.py` in the `lake-ddl` one-shot, retired with the ingest (archived) |
-| Snapshot expiry per table, in days | `docker/lake/generated/retention.json` | nothing: the maintenance job meant to read it retired with the ingest |
-| Each lake table as its contract states it: columns in order with their Spark SQL type and `NOT NULL`, partitioning, sort order, identifier fields | `docker/lake/generated/contract_schemas.json` | nothing today: the nightly `contract_schema` audit that read it retired with the ingest (archived) |
-| A page per product, the index by domain, and every product in one table (`all.md`) | `docs/products/` (owned) | people; check-docs gate (a) checks every link on them |
-| One mart warehouse per domain | `docker/lake/generated/warehouses.txt` | `docker/lake/init-lake.sh`, after the lake's own bootstrap |
-| A writable Trino catalog per domain, and its local twin | `docker/trino/etc/catalog/<domain>.properties`, `docker/trino/test/local/<domain>.properties` (the generated ones; `lake.properties` beside them is hand-written) | Trino; `make test-trino` |
-| Trino's access rules: only a domain's writer creates, changes or drops its tables and rows with SQL statements (table procedures are not fenced per user) | `docker/trino/etc/rules.json` | Trino ([ADR-044](../adr/ADR-044-producer-lake-and-domain-mart-warehouses.md)) |
-| The dbt sources for every lake table a mart reads: Trino column types, freshness from the contract's latency, a uniqueness test on its identifier fields | `dbt/models/_sources.yml` | dbt ([`dbt/`](../../dbt/)); `make test-dbt` |
-| One dbt selector per domain with marts, run as its writer | `dbt/selectors.yml` | dbt; `scripts/dbt_manifest_check.py` holds each mart to its contract |
-
-How those warehouses, catalogs and rules work together, and who may read or write each, is
-[chapter 19](19-lakehouse-and-domain-warehouses.md).
-
-With no inline-column contract, the DDL directory holds only the `README.md` that `generate`
-writes there, which says so. Later phases add outputs (Airflow DAG config, catalog payloads,
-SLO rules) at the paths the
-[phase P1 output map](../plans/2026-11-24-governed-self-serve-platform/001-contracts-generator-mesh.md)
-fixes. How a team adds a product, step by step: [the golden path](../development/golden-path.md).
+Two rules this chapter's design rests on are now `docs` checks: a table another product reads keeps
+at least the seven-day snapshot floor (`docs.retention-below-floor`), and a product or table cannot
+take a name the platform uses (`docs.name-reserved-word`, `docs.table-name-reserved`).
 
 ## Where a contract is enforced, and when
 
 | Check | When | Holds the contract to | Catches |
 |---|---|---|---|
-| `k2gen validate` (CI job `contracts`, `make test-k2gen`) | every pull request | the contract's own columns | a partitioning, sort or latency naming a column the contract does not declare; a contract still pointing at the retired `lake.sql` |
-| The drift gate (`make generate`, then no diff) | every pull request | the generated files | a generated file edited by hand, or left stale |
+| `k2gen check`, which `k2gen release` runs first (`make release TAG=<tag>`) | every release | the tag's document set, and the previous release's | a document its schema rejects, a column a partitioning, sort or policy names that the contract does not declare, a breaking change without a major version, and the rest of [chapter 21](21-releases-and-deploy.md#the-checks) |
+| `make test-k2gen` (CI job `contracts`) | every pull request | each check against its passing and failing fixtures; the repository's own documents against their schemas (`test_repository_documents.py`) | a check that stops refusing what it should; a document under `contracts/` its schema rejects |
 | `contract_schema` in `maintenance.py`, retired with the ingest ([runbook, archived](../../legacy/v3-lake-ingest/docs/runbooks/lake-audit-failed.md#15-contract_schema-a-live-table-is-not-what-its-contract-states) section 15) | nightly, 03:00 UTC, under the writer lock, until 2026-11-26 | the live Iceberg table: columns, types, nullability, order, partition spec, sort order, identifier fields | an `ALTER` run by hand, DDL applied only in part, a contract merged and never applied, a table with no contract outside a `scratch_` namespace |
 
-Each check reports; none refuses anything. The CI checks fail a pull request on an
-unprotected `main`, and until it retired the nightly audit filed a failed row in the lake's
-audit table and fired `LakeAuditFailed`, up to a day after the table moved. **Nothing refuses a bad write at write
-time.** Iceberg and Spark refuse a write that does not fit the live table's schema, but that
-is the live table, which may already differ from its contract; no writer compares what it
-writes with the contract. The nightly audit read catalog metadata only and opened no data file,
-and the archived `contract_schema.py` ran the same comparison from the host, read-only. Until the
-target's audits run ([chapter 20](20-target-data-product-platform.md)), no check compares a live
-table with its contract.
+CI fails a pull request; `k2gen release` refuses to compile, so nothing deploys. Until it retired the
+nightly audit filed a failed row in the lake's audit table and fired `LakeAuditFailed`, up to a day
+after the table moved. **Nothing refuses a bad write at write time.** Iceberg and Spark refuse a
+write that does not fit the live table's schema, but that is the live table, which may already
+differ from its contract; no writer compares what it writes with the contract. Until the target's
+audits run ([chapter 20](20-target-data-product-platform.md)), no check compares a live table with
+its contract.
 
 ## Practices
 
 | Practice | Where it is enforced |
 |---|---|
-| A contract's partitioning and sort name its own columns; none points at the retired `lake.sql` | `k2gen validate` step 3; the tests in `platform/k2gen/tests/test_validate.py` |
-| The live table and its contract agree, column by column | retired with the nightly `contract_schema` audit and its test (archived); `test_contract_schemas_state_every_table_as_its_contract_does` still holds the generated file it compared against |
-| A table another reads keeps the seven-day snapshot floor | `k2gen validate` step 4; `test_a_parent_with_expiry_under_the_floor_fails` |
-| A table is at least as restricted as its inputs | `k2gen validate` step 4; `test_a_table_less_restricted_than_its_input_fails` |
-| Generated files are never edited by hand | CI job `contracts`: `make generate`, then no diff and no untracked file |
-| Generation is repeatable and removes what a deleted contract wrote | `test_a_second_generate_changes_nothing`, `test_a_deleted_contract_removes_its_outputs` |
-| A scaffolded product is valid as written | `test_a_scaffolded_product_validates` |
-| The product table has one row per product, with its owner and its tables and marts | `test_the_product_table_has_one_row_per_product` |
-| A product cannot take a platform schema's name | `k2gen validate` step 2; `test_a_product_named_like_a_platform_schema_is_rejected` |
-| A new domain gets its fence; a removed one takes it; a reserved or malformed domain id is refused | `test_a_new_domain_gets_its_fence`, `test_a_removed_domain_takes_its_catalog_and_leaves_lake_properties`, `test_a_domain_whose_fence_name_is_taken_is_rejected`, `test_a_domain_id_that_is_not_a_slug_is_rejected` |
-| The generator is typed | mypy, strict, pinned in `platform/k2gen/uv.lock`; `make lint` and CI job `contracts` |
+| Every finding code has a failing fixture, and the good fixture set passes | `make test-k2gen`; `platform/k2gen/tests/fixtures/v2/` |
+| One document set compiles to one release on any machine, and a set with an error compiles nothing | `test_two_machines_compile_one_set_to_one_tree`, `test_cli_release_refuses_a_set_with_an_error_finding_and_writes_nothing`; each emitter against its goldens under `platform/k2gen/tests/golden/` |
+| The compiler is typed | mypy, strict, pinned in `platform/k2gen/uv.lock`; `make lint` and CI job `contracts` |
 
 The tests are in [`platform/k2gen/tests/`](../../platform/k2gen/tests/); `make test-k2gen` runs
 them and `make test` includes it.
@@ -211,22 +175,19 @@ them and `make test` includes it.
 - **The live check was nightly, not at the write,** and it retired with the ingest. A table that
   drifted from its contract was found up to a day later, after rows had been written to it; a
   write-time refusal would mean every writer reading the contract before each commit.
-- **`retention.json` is read by nothing.** It was kept current so the old plan's phase P5 could
-  switch `maintenance.py` to it; that job retired with the ingest, and nothing reads the file
-  until a new reader is built.
 
 ## Key points
 
 - The unit of ownership is the product, not the table or the layer: five domains, one owner each; the 13 products of the v3 lake retired with it.
 - Every contract declares its columns inline; `lake.sql`, the DDL of record for the v3 tables, retired with them.
-- Generated files are committed, owned by `k2gen generate`, and CI fails on any drift.
+- Nothing generated is committed: `k2gen release` checks a tag's documents and compiles them into a sealed release ([chapter 21](21-releases-and-deploy.md)).
 
 ## Related
 
-- [ADR-032](../adr/ADR-032-odcs-contracts-and-k2gen.md), the contracts and the generator
+- [ADR-032](../adr/ADR-032-odcs-contracts-and-k2gen.md), the contracts and the generator, its generated files superseded by [ADR-058](../adr/ADR-058-deploy-sealed-releases-by-pointer-swap.md)
 - [ADR-033](../adr/ADR-033-data-mesh-four-domains.md), the four domains and their owners;
   [ADR-046](../adr/ADR-046-governance-domain-and-quality-results.md), the fifth, governance
-- [Product index](../products/README.md), generated: a page per product
+- [Chapter 21](21-releases-and-deploy.md), the checks, the compiler and the release
 - [Golden path](../development/golden-path.md), adding a product
 - [`contracts/schema/README.md`](../../contracts/schema/README.md), where each K2 field sits in an ODCS contract
 - [09-lake-layers.md](09-lake-layers.md), [13-schema-design.md](13-schema-design.md), [14-partitioning-strategy.md](14-partitioning-strategy.md), the tables the retired products were made of

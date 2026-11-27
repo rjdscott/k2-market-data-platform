@@ -1,0 +1,425 @@
+"""Document checks (S05): what makes a document set well formed, before any other check reads it.
+
+Every document is read by model.parse and held to its schemas (model.schema_errors: the vendored
+standard, then K2's profile); a set with any such error stops there, since every rule after it reads
+schema-valid documents. Then, each rule a code in CODES:
+
+- places: a product's documents sit in contracts/<domain>/<product>/ beside its product.odps.yaml,
+  every id, name, domain and physicalName follows from that path, the domain is declared and the
+  product's team is its owner, each customProperties name appears once in a list;
+- names: domains and products as model.domain_name_problem and model.product_name_problem allow, no
+  fence a Trino reserved word (it is a catalog or a namespace), product names unique on the
+  platform, dbt model names (model.dbt_model) unique in the one compiled project, no table named as
+  one of the platform's own (model.RESERVED_TABLE_NAMES);
+- one producer per table: each table contract has exactly one output port, in its own product, and
+  one writer: a connector table its product's connector, a dbt table models/<table>.sql, and no
+  model for anything else; a serving table its port's `serves`, and a serving-only product is
+  paused (ADR-057);
+- columns: every column described, physical types as model.physical_type_problem allows, every
+  column a partitioning, sort, policy or latency element names exists, every port and relationship
+  resolves; a dbt table's foreign key names a table its product builds or reads through an input
+  port, since its dbt test reads that table as the build does;
+- quality: every rule is one K2 runs (k2gen.emit.dbt.quality_test, the one mapping), so none is
+  dropped: a custom dbt, sql or library rule on a dbt table, a k2-connector rule on a connector
+  table, or text;
+- unit tests: a unit test of an incremental model states which branch it tests,
+  `overrides: {macros: {is_incremental: <bool>}}`, which dbt refuses to parse without;
+- layers: bronze is written only by connectors and a connector writes only bronze (ADR-056 part 2);
+  a bronze table is named bronze_<name> and keyed (pipeline.schema.json), and a fetch kind's carries
+  model.LINEAGE_COLUMN;
+- terms before a grant outside the owning team (ADR-055 part 5); a table another product reads
+  keeps at least the retention floor;
+- an incremental dbt table's key holds every partition source column (A7; experiment (a) of
+  docs/research/2026-11-26-release-spine-spikes.md).
+
+Failing fixtures: tests/fixtures/v2/bad/docs/cases.yaml, one or more per code.
+"""
+
+from __future__ import annotations
+
+import re
+import typing
+from collections import Counter
+from collections.abc import Iterator, Mapping
+from dataclasses import dataclass, field
+from typing import Any
+
+from k2gen import model
+from k2gen.emit.dbt import quality_test
+from k2gen.model import DocumentSet, Finding
+
+CODES = (
+    "docs.unreadable",
+    "docs.schema-invalid",
+    "docs.property-repeated",
+    "docs.orphan-document",
+    "docs.product-misplaced",
+    "docs.contract-misplaced",
+    "docs.physical-name-mismatch",
+    "docs.domain-undeclared",
+    "docs.domain-name-invalid",
+    "docs.product-name-invalid",
+    "docs.name-reserved-word",
+    "docs.product-name-taken",
+    "docs.dbt-model-name-taken",
+    "docs.table-name-reserved",
+    "docs.team-mismatch",
+    "docs.output-port-foreign",
+    "docs.output-port-repeated",
+    "docs.table-unpublished",
+    "docs.reference-unresolved",
+    "docs.connector-mismatch",
+    "docs.model-missing",
+    "docs.model-without-dbt-table",
+    "docs.model-config-unreadable",
+    "docs.unit-test-model-unknown",
+    "docs.unit-test-branch-unstated",
+    "docs.foreign-key-not-read",
+    "docs.quality-unsupported",
+    "docs.serving-without-serves",
+    "docs.serving-only-not-paused",
+    "docs.column-undescribed",
+    "docs.physical-type-invalid",
+    "docs.column-unknown",
+    "docs.layer-build-mismatch",
+    "docs.bronze-name",
+    "docs.bronze-key-missing",
+    "docs.lineage-column-missing",
+    "docs.terms-missing",
+    "docs.retention-below-floor",
+    "docs.incremental-key-misses-partition",
+)
+RETENTION_FLOOR_DAYS = 7  # what model.Table.retention None takes; a table another product reads keeps at least it
+FETCH_KINDS = frozenset(typing.get_args(model.ConnectorKind)) - {"kafka"}  # the kinds the fetch container runs
+SPIKE_A = "experiment (a) of docs/research/2026-11-26-release-spine-spikes.md"
+
+_PRODUCT_PATH = re.compile(r"contracts/([^/]+)/([^/]+)/(.+)")
+_PARTITION_SOURCE = re.compile(r"(?:[a-z]+\()?([a-z][a-z0-9_]*)(?:, ?[0-9]+)?\)?")  # day(ts), bucket(id, 16), ts
+_RELATIONSHIP = re.compile(r"([^/]+)/([^/]+)/([^/]+)\.odcs\.yaml#/schema/([^/]+)/properties/([^/]+)")
+
+
+def _finding(code: str, path: str, message: str) -> Finding:
+    assert code in CODES, code
+    return Finding(code=code, severity="error", path=path, message=message)
+
+
+@dataclass
+class _Dir:
+    """contracts/<domain>/<name>/: one product's documents, parsed."""
+
+    domain: str
+    name: str
+    paths: list[str] = field(default_factory=list)
+    product: Any = None
+    contracts: dict[str, Any] = field(default_factory=dict)  # file stem, the table's name -> contract
+    grants: Any = None
+    models: dict[str, str] = field(default_factory=dict)  # path in the set -> SQL
+    unit_tests: Any = None
+
+    def at(self, file: str) -> str:
+        return f"contracts/{self.domain}/{self.name}/{file}"
+
+    def contract_id(self, table: str) -> str:
+        return model.contract_id(self.domain, self.name, table)
+
+
+def check(docs: DocumentSet, previous: DocumentSet | None) -> list[Finding]:
+    shared, dirs, found = _read(docs.documents)
+    if found:
+        return found  # every rule below reads schema-valid documents
+    return list(_rules(shared, dirs))
+
+
+def _read(documents: Mapping[str, bytes]) -> tuple[dict[str, Any], dict[tuple[str, str], _Dir], list[Finding]]:
+    shared: dict[str, Any] = {}
+    dirs: dict[tuple[str, str], _Dir] = {}
+    found: list[Finding] = []
+    for path, data in sorted(documents.items()):
+        kind = model.document_kind(path)
+        place = _PRODUCT_PATH.fullmatch(path)
+        if place and place[1] in model.RESERVED_DOMAIN_NAMES:
+            place = None
+        if not kind and not place:
+            continue  # schemas, the compose file, parsers: not documents this check reads
+        file = place[3] if place else ""
+        doc: Any = None
+        try:
+            if file.startswith("models/"):
+                doc = data.decode()
+            elif kind or file == "unit_tests.yml":
+                doc = model.parse(path, data)
+        except (model.DocumentError, UnicodeDecodeError) as e:
+            found.append(_finding("docs.unreadable", path, f"$: {str(e).removeprefix(path + ': ')}"))
+            continue
+        if kind:
+            found += [_finding("docs.schema-invalid", path, e) for e in model.schema_errors(kind, doc)]
+        if kind in ("domains", "principals"):
+            shared[kind] = doc
+        if place:
+            d = dirs.setdefault((place[1], place[2]), _Dir(place[1], place[2]))
+            d.paths.append(path)
+            if file == model.V2_PRODUCT_FILE:
+                d.product = doc
+            elif kind == "contract":
+                d.contracts[file.removesuffix(".odcs.yaml")] = doc
+            elif kind == "grants":
+                d.grants = doc
+            elif file.startswith("models/"):
+                d.models[path] = doc
+            elif file == "unit_tests.yml":
+                d.unit_tests = doc
+    return shared, dirs, found
+
+
+def _props(doc: Any) -> dict[str, Any]:
+    return {p["property"]: p["value"] for p in doc.get("customProperties", [])}
+
+
+def _prop_at(doc: Any, name: str) -> str:
+    index = next(i for i, p in enumerate(doc["customProperties"]) if p["property"] == name)
+    return f"$.customProperties[{index}].value"
+
+
+def _build(contract: Any) -> str:
+    build = _props(contract)["build"]
+    return build if isinstance(build, str) else "code"
+
+
+def _columns(contract: Any) -> list[str]:
+    return [c["name"] for c in contract["schema"][0]["properties"]]
+
+
+def _rules(shared: dict[str, Any], dirs: dict[tuple[str, str], _Dir]) -> Iterator[Finding]:
+    domains: dict[str, Any] = shared.get("domains", {}).get("domains", {})
+    owners = {p["id"]: p["owner"] for p in shared.get("principals", {}).get("principals", [])}
+    for name in domains:
+        problem = model.domain_name_problem(name)
+        if problem:
+            yield _finding("docs.domain-name-invalid", model.DOMAINS, f"$.domains.{name}: domain {name}: {problem}; choose another name")
+        elif model.fence(name) in model.TRINO_RESERVED:
+            yield _finding("docs.name-reserved-word", model.DOMAINS, f"$.domains.{name}: {model.fence(name)}, the domain's catalog, is a Trino reserved word (model.TRINO_RESERVED); choose another name")
+    for d in dirs.values():
+        if d.product is None:
+            for path in d.paths:
+                yield _finding("docs.orphan-document", path, f"$: {d.at('')} has no {model.V2_PRODUCT_FILE}; a product's documents sit beside its product file, so add it or move this file")
+    products = [d for d in dirs.values() if d.product is not None]
+    tables = {d.contract_id(t): c for d in products for t, c in d.contracts.items()}
+    read = {port["contractId"] for d in products for port in d.product.get("inputPorts", [])}
+    for d in products:
+        yield from _product(d, domains, owners, tables)
+        for table, contract in d.contracts.items():
+            yield from _table(d, table, contract, tables, read)
+    yield from _taken("docs.product-name-taken", [(d.name, d.at(model.V2_PRODUCT_FILE)) for d in products],
+                      "$.name: {} is also the name of {}; a product's name is unique on the platform, since its fence names its lake namespace, principals and DAG")
+    dbt = [(model.dbt_model(d.name, t), d.at(f"{t}.odcs.yaml")) for d in products for t, c in d.contracts.items() if _build(c) == "dbt"]
+    dbt += [(model.dbt_seed(d.name, s["path"]), d.at(model.V2_PRODUCT_FILE)) for d in products for s in _props(d.product).get("seeds", [])]
+    yield from _taken("docs.dbt-model-name-taken", dbt,
+                      "$.name: dbt model or seed {} is also built from {}; model.dbt_model and model.dbt_seed names are unique in the "
+                      "one compiled dbt project, and each is a table of the product's base namespace")
+
+
+def _taken(code: str, names: list[tuple[str, str]], message: str) -> Iterator[Finding]:
+    first: dict[str, str] = {}
+    for name, path in sorted(names, key=lambda n: n[1]):
+        if name in first:
+            yield _finding(code, path, message.format(name, first[name]))
+        first.setdefault(name, path)
+
+
+def _repeated(path: str, node: Any, at: str = "$") -> Iterator[Finding]:
+    """Each customProperties list names a property once: a second would win or lose silently."""
+    if isinstance(node, list):
+        for i, item in enumerate(node):
+            yield from _repeated(path, item, f"{at}[{i}]")
+    elif isinstance(node, dict):
+        for key, value in node.items():
+            yield from _repeated(path, value, f"{at}.{key}")
+        if isinstance(node.get("customProperties"), list):
+            for name, n in Counter(p.get("property") for p in node["customProperties"]).items():
+                if n > 1:
+                    yield _finding("docs.property-repeated", path, f"{at}.customProperties: {name} appears {n} times; keep one")
+
+
+def _product(d: _Dir, domains: dict[str, Any], owners: dict[str, str], tables: dict[str, Any]) -> Iterator[Finding]:
+    p, path = d.product, d.at(model.V2_PRODUCT_FILE)
+    props, team = _props(p), p["team"]["name"]
+    yield from _repeated(path, p)
+    expect = {"id": model.product_id(d.domain, d.name), "name": d.name, "domain": d.domain}
+    wrong = [f"{k} is {p[k]}" for k, v in expect.items() if p[k] != v]
+    if wrong:
+        yield _finding("docs.product-misplaced", path, f"$: {', '.join(wrong)}; in {d.at('')} a product has id {expect['id']}, name {d.name} and domain {d.domain}: correct the fields or move the directory")
+    problem = model.product_name_problem(d.name)
+    if problem:
+        yield _finding("docs.product-name-invalid", path, f"$.name: product {d.name}: {problem}; choose another name")
+    elif model.fence(d.name) in model.TRINO_RESERVED:
+        yield _finding("docs.name-reserved-word", path, f"$.name: {model.fence(d.name)}, the product's namespace, is a Trino reserved word (model.TRINO_RESERVED); choose another name")
+    if d.domain not in domains:
+        yield _finding("docs.domain-undeclared", path, f"$.domain: domain {d.domain} is not in {model.DOMAINS}; declare it there with its owner, or move the product under a declared domain")
+    elif team != domains[d.domain]["owner"]:
+        yield _finding("docs.team-mismatch", path, f"$.team.name: {team} is not the owner of domain {d.domain}, {domains[d.domain]['owner']} ({model.DOMAINS}); a product's team is its domain's owner")
+
+    own, ports = set(map(d.contract_id, d.contracts)), Counter(port["contractId"] for port in p["outputPorts"])
+    for i, port in enumerate(p["outputPorts"]):
+        if port["contractId"] not in own:
+            yield _finding("docs.output-port-foreign", path, f"$.outputPorts[{i}].contractId: {port['contractId']} is not a contract beside this product file; an output port names a table of its own product, which has one producer")
+    for table in d.contracts:
+        n = ports[d.contract_id(table)]
+        if n == 0:
+            yield _finding("docs.table-unpublished", path, f"$.outputPorts: no output port names {d.contract_id(table)}; add one for every contract beside the product file")
+        elif n > 1:
+            yield _finding("docs.output-port-repeated", path, f"$.outputPorts: {n} output ports name {d.contract_id(table)}; keep one")
+    inputs = [port["contractId"] for port in p.get("inputPorts", [])]
+    for i, cid in enumerate(inputs):
+        if cid not in tables:
+            yield _finding("docs.reference-unresolved", path, f"$.inputPorts[{i}].contractId: no contract in the set has id {cid}; name an existing table, contracts/<domain>/<product>/<table>.odcs.yaml")
+    for i, port in enumerate(p["outputPorts"]):
+        for j, ref in enumerate(port.get("inputContracts", [])):
+            if ref["id"] not in inputs and ref["id"] not in own - {port["contractId"]}:
+                yield _finding("docs.reference-unresolved", path, f"$.outputPorts[{i}].inputContracts[{j}].id: {ref['id']} is neither one of this product's input ports nor another table of it; declare it under inputPorts first")
+
+    builds = {t: _build(c) for t, c in d.contracts.items()}
+    if "connector" in builds.values() and "connector" not in props:
+        yield _finding("docs.connector-mismatch", path, f"$.customProperties: tables {', '.join(t for t, b in builds.items() if b == 'connector')} are built by the connector, and the product declares none; add the connector property or change their build")
+    if "connector" in props and "connector" not in builds.values():
+        yield _finding("docs.connector-mismatch", path, f"{_prop_at(p, 'connector')}: the product declares a connector but no table is built by it; a connector publishes bronze, so add its bronze table or remove the connector")
+    if builds and set(builds.values()) == {"serving"} and p["status"] != "paused":
+        yield _finding("docs.serving-only-not-paused", path, "$.status: every table is build serving, so the product has no lake table and nothing runs it; a serving-only product is valid only paused (ADR-057), so set status paused with its lifecycleChange, or give a table a lake build")
+
+    if d.grants is not None and "terms" not in props:
+        for i, grant in enumerate(d.grants["grants"]):
+            owner = owners.get(grant["principal"])  # an undeclared principal is the access check's
+            if owner is not None and owner != team:
+                yield _finding("docs.terms-missing", d.at("grants.yaml"), f"$.grants[{i}]: {grant['principal']} belongs to {owner}, outside the product's team {team}; record the source's terms in the product's terms property before a grant outside the owning team (ADR-055 part 5)")
+
+    models = {d.at(f"models/{t}.sql") for t, b in builds.items() if b == "dbt"}
+    for model_path in d.models:
+        if model_path not in models:
+            yield _finding("docs.model-without-dbt-table", model_path, f"$: no build dbt table of this product is named by this file; a product's models are models/<table>.sql, one per dbt table ({', '.join(sorted(models)) or 'none'}), so a table has one producer")
+    if d.unit_tests is not None:
+        names = {model.dbt_model(d.name, t) for t, b in builds.items() if b == "dbt"}
+        incremental = {model.dbt_model(d.name, t) for t, b in builds.items() if b == "dbt" and _incremental(d.models.get(d.at(f"models/{t}.sql")))}
+        for i, test in enumerate(d.unit_tests.get("unit_tests", []) if isinstance(d.unit_tests, dict) else []):
+            name = test.get("model") if isinstance(test, dict) else None
+            if name not in names:
+                yield _finding("docs.unit-test-model-unknown", d.at("unit_tests.yml"), f"$.unit_tests[{i}].model: {name} is not a dbt model of this product; name it <fence>__<table> (model.dbt_model): {', '.join(sorted(names)) or 'none'}")
+            elif name in incremental and not isinstance(((test.get("overrides") or {}).get("macros") or {}).get("is_incremental"), bool):
+                yield _finding("docs.unit-test-branch-unstated", d.at("unit_tests.yml"), f"$.unit_tests[{i}].overrides.macros.is_incremental: {name} is incremental, so its unit test states which branch it tests, true or false; dbt refuses to parse a unit test of an incremental model without it")
+
+
+def _incremental(sql: str | None) -> bool:
+    try:
+        return sql is not None and model.model_config(sql).get("materialized") == "incremental"
+    except ValueError:  # docs.model-config-unreadable reports it
+        return False
+
+
+def _table(d: _Dir, table: str, c: Any, tables: dict[str, Any], read: set[str]) -> Iterator[Finding]:
+    path, props, build = d.at(f"{table}.odcs.yaml"), _props(c), _build(c)
+    spec, columns = c["schema"][0], c["schema"][0]["properties"]
+    names = _columns(c)
+    yield from _repeated(path, c)
+    expect = {"id": (c["id"], d.contract_id(table)), "name": (c["name"], table), "domain": (c["domain"], d.domain),
+              "schema[0].id": (spec["id"], table), "schema[0].name": (spec["name"], table)}
+    wrong = [f"{k} is {v[0]}, not {v[1]}" for k, v in expect.items() if v[0] != v[1]]
+    if wrong:
+        yield _finding("docs.contract-misplaced", path, f"$: {'; '.join(wrong)}: a contract's id, name and domain follow its path, contracts/<domain>/<product>/<table>.odcs.yaml")
+    if c["team"]["name"] != d.product["team"]["name"]:
+        yield _finding("docs.team-mismatch", path, f"$.team.name: {c['team']['name']} is not the product's team, {d.product['team']['name']}")
+    if build != "serving" and spec["physicalName"] != f"{model.fence(d.name)}.{table}":
+        yield _finding("docs.physical-name-mismatch", path, f"$.schema[0].physicalName: {spec['physicalName']} is not {model.fence(d.name)}.{table}, the product's fence and the table")
+    if table in model.RESERVED_TABLE_NAMES:
+        yield _finding("docs.table-name-reserved", path, f"$.name: {table} is one of the platform's own tables in a product's lake namespace (model.RESERVED_TABLE_NAMES); choose another name")
+
+    for i, col in enumerate(columns):
+        if not str(col.get("description") or "").strip():
+            yield _finding("docs.column-undescribed", path, f"$.schema[0].properties[{i}]: column {col['name']} has no description; say what one value is, for the catalog page and the dbt docs")
+        problem = model.physical_type_problem(col["physicalType"])
+        if problem:
+            yield _finding("docs.physical-type-invalid", path, f"$.schema[0].properties[{i}].physicalType: {problem}")
+        for j, rel in enumerate(col.get("relationships", [])):
+            to = _RELATIONSHIP.fullmatch(rel["to"])  # the schema's pattern, so it matches
+            target = tables.get(model.contract_id(to[1], to[2], to[3])) if to else None
+            if not to or target is None or target["schema"][0]["id"] != to[4] or to[5] not in _columns(target):
+                yield _finding("docs.reference-unresolved", path, f"$.schema[0].properties[{i}].relationships[{j}].to: {rel['to']} names no column of a contract in the set")
+            elif build == "dbt" and not _readable(d, target):
+                yield _finding("docs.foreign-key-not-read", path, f"$.schema[0].properties[{i}].relationships[{j}].to: {target['id']} is neither a dbt or connector table of {model.product_id(d.domain, d.name)} nor one of its input ports, and the foreign key's dbt test reads the target as the build does; add it as an input port, or drop the relationship")
+
+    for i, entry in enumerate(spec.get("quality", [])):
+        try:
+            quality_test(model.quality_of(entry), build, names)
+        except (ValueError, model.DocumentError) as e:
+            yield _finding("docs.quality-unsupported", path, f"$.schema[0].quality[{i}]: quality rule {entry.get('name') or entry.get('description') or i}: {str(e).removeprefix('implementation: ')}; K2 would run nothing for it")
+
+    named = [(_prop_at(c, "partitioning"), _source(f)) for f in props.get("partitioning", [])]
+    named += [(_prop_at(c, "sort"), s.split()[0]) for s in props.get("sort", [])]
+    for role, policy in props.get("policies", {}).items():
+        at = f"{_prop_at(c, 'policies')}.{role}"
+        named += [(f"{at}.{kind}.column", policy[kind]["column"]) for kind in ("delay", "rowScope") if kind in policy]
+        named += [(f"{at}.mask", m) for m in policy.get("mask", [])]
+    for pointer, name in named:
+        if name not in names:
+            yield _finding("docs.column-unknown", path, f"{pointer}: {name} is not a column of {table}; name one of {', '.join(names)}")
+    for i, sla in enumerate(c.get("slaProperties", [])):
+        if sla.get("property") == "latency" and sla["element"] not in {f"{table}.{n}" for n in names}:
+            yield _finding("docs.column-unknown", path, f"$.slaProperties[{i}].element: {sla['element']} is not {table}.<column> of this table")
+
+    if (props["layer"] == "bronze") != (build == "connector"):
+        yield _finding("docs.layer-build-mismatch", path, f"{_prop_at(c, 'layer')}: layer {props['layer']} with build {build}; bronze is written only by its product's connector and a connector writes only bronze (ADR-056 part 2), so a table is both or neither")
+    if build == "connector":
+        if not table.startswith("bronze_"):
+            yield _finding("docs.bronze-name", path, f"$.name: a connector's table is named bronze_<name> (lake.<fence>.bronze_<name>, pipeline.schema.json); rename {table}")
+        if not any(col.get("primaryKey") for col in columns):
+            yield _finding("docs.bronze-key-missing", path, "$.schema[0].properties: a connector's table has a primaryKey, the key its audit holds rows unique on (pipeline.schema.json bronze key); mark its key columns")
+        connector = _props(d.product).get("connector")
+        if connector and connector["kind"] in FETCH_KINDS and model.LINEAGE_COLUMN not in names:
+            yield _finding("docs.lineage-column-missing", path, f"$.schema[0].properties: the {connector['kind']} connector's bronze table carries {model.LINEAGE_COLUMN}, the landed object's sha256 (model.LINEAGE_COLUMN); add it, physicalType varchar")
+    if d.contract_id(table) in read and props.get("retention", RETENTION_FLOOR_DAYS) < RETENTION_FLOOR_DAYS:
+        yield _finding("docs.retention-below-floor", path, f"{_prop_at(c, 'retention')}: another product reads {table} at a pinned snapshot, so it keeps at least {RETENTION_FLOOR_DAYS} days; raise it or leave it out")
+    if build == "serving":
+        ports = [port for port in d.product["outputPorts"] if port["contractId"] == d.contract_id(table)]
+        if ports and not any("serves" in _props(port) for port in ports):
+            yield _finding("docs.serving-without-serves", d.at(model.V2_PRODUCT_FILE), f"$.outputPorts: {table} is build serving, so its only copy is a serving engine's; its output port says which, with the serves property")
+    if build == "dbt":
+        yield from _dbt(d, table, c, names)
+
+
+def _readable(d: _Dir, target: Any) -> bool:
+    """Whether a dbt table of `d` can test a key into `target`: its own dbt or connector table, or
+    an input port's (k2gen.emit.dbt's relationships test reads it through ref, source or k2_input)."""
+    if target["id"] in {port["contractId"] for port in d.product.get("inputPorts", [])}:
+        return True
+    return target["id"] in {d.contract_id(t) for t in d.contracts} and _build(target) in ("dbt", "connector")
+
+
+def _source(partition_field: str) -> str:
+    """The column a partition field reads: day(read_at) -> read_at, bucket(id, 16) -> id."""
+    match = _PARTITION_SOURCE.fullmatch(partition_field)
+    return match[1] if match else partition_field
+
+
+def _dbt(d: _Dir, table: str, c: Any, names: list[str]) -> Iterator[Finding]:
+    model_path = d.at(f"models/{table}.sql")
+    if model_path not in d.models:
+        yield _finding("docs.model-missing", d.at(f"{table}.odcs.yaml"), f"$: {table} is build dbt and {model_path} does not exist; write the model, or change the build")
+        return
+    try:
+        config = model.model_config(d.models[model_path])
+    except ValueError as e:
+        yield _finding("docs.model-config-unreadable", model_path, f"$: {e}; config() takes literal keyword arguments only, once (model.model_config)")
+        return
+    if config.get("materialized") != "incremental":
+        return
+    sources = [s for s in map(_source, _props(c).get("partitioning", [])) if s in names]
+    key = [col["name"] for col in c["schema"][0]["properties"] if col.get("primaryKey")]
+    why = (f"{SPIKE_A} found that a merge key holding the partition column prunes the MERGE to the partitions a batch "
+           "touches and stays correct, while the incremental_predicates window that would prune it instead inserted a "
+           "late row as a second row with the same key, and dbt reported success")
+    missing = [s for s in sources if s not in key]
+    if missing:
+        yield _finding("docs.incremental-key-misses-partition", d.at(f"{table}.odcs.yaml"), f"{_prop_at(c, 'partitioning')}: {table} is an incremental dbt table partitioned on {', '.join(missing)}, which its primaryKey ({', '.join(key) or 'none'}) does not hold; add it to the key, which is the MERGE's unique_key: {why}")
+    unique_key = config.get("unique_key")
+    if unique_key is not None:
+        held = [unique_key] if isinstance(unique_key, str) else list(unique_key)
+        missing = [s for s in sources if s not in held]
+        if missing:
+            yield _finding("docs.incremental-key-misses-partition", model_path, f"$: config(unique_key=...) lacks {', '.join(missing)}, a partition source column of {table}; hold every one, or leave unique_key out so the model takes the primaryKey: {why}")

@@ -1,0 +1,58 @@
+# Compiled by k2gen (platform/k2gen/k2gen/emit/dbt.py) from the release's documents. Never edit it: change the documents.
+version: 2
+sources:
+- name: station_readings
+  database: lake
+  schema: station_readings
+  tables:
+  - name: bronze_readings
+    description: One row per line of a landed file, typed as the synthetic feed wrote it.
+    meta:
+      k2:
+        contract: sensor-net.station-readings.bronze_readings
+        tested_ref: main
+    columns:
+    - name: station_id
+      data_type: varchar
+      description: The made-up station's code.
+    - name: read_at
+      data_type: timestamp(6) with time zone
+      description: When the station took the reading.
+    - name: value_text
+      data_type: varchar
+      description: The reading as the file wrote it.
+    - name: region
+      data_type: varchar
+      description: The station's region.
+    - name: operator_note
+      data_type: varchar
+      description: Free text the made-up operator attached.
+    - name: source_file_sha256
+      data_type: varchar
+      description: The landed file's sha256.
+- name: station_readings
+  database: sensor_net
+  schema: station_readings__base
+  tables:
+  - name: silver_readings
+    description: One row per station and reading time, the value as a decimal.
+    meta:
+      k2:
+        contract: sensor-net.station-readings.silver_readings
+        tested_ref: audited
+    columns:
+    - name: station_id
+      data_type: varchar
+      description: The made-up station's code.
+    - name: read_at
+      data_type: timestamp(6) with time zone
+      description: When the station took the reading.
+    - name: value
+      data_type: decimal(12,3)
+      description: The reading.
+    - name: region
+      data_type: varchar
+      description: The station's region.
+    - name: operator_note
+      data_type: varchar
+      description: Free text the made-up operator attached.

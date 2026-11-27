@@ -1,0 +1,47 @@
+# Compiled by k2gen (platform/k2gen/k2gen/emit/dbt.py) from the release's documents. Never edit it: change the documents.
+version: 2
+models:
+- name: daily_load__gold_daily_load
+  description: One row per day and station, the count and mean of its readings.
+  config:
+    alias: gold_daily_load
+    meta:
+      k2:
+        contract: ops-insight.daily-load.gold_daily_load
+        reader: ops_insight.daily_load.gold_daily_load
+  columns:
+  - name: load_date
+    description: The UTC day of the readings.
+    data_type: date
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  - name: station_id
+    description: The made-up station's code.
+    data_type: varchar
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+    - k2_input_relationships:
+        arguments:
+          product_fence: station_readings
+          table: silver_readings
+          field: station_id
+  - name: readings
+    description: How many readings the station took that day.
+    data_type: bigint
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  - name: mean_value
+    description: The mean reading.
+    data_type: decimal(12,3)
+  data_tests:
+  - k2_unique_key:
+      arguments:
+        columns:
+        - load_date
+        - station_id

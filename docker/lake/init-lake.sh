@@ -6,7 +6,7 @@
 # Idempotent: every step treats "already exists" as success, so a re-run on a
 # live stack is a no-op.
 #
-# Runs in the `minio/minio` image — the only image already in this stack that
+# Runs in the MinIO image (the project's mirror, docker-compose.yml): the only image already in this stack that
 # ships BOTH `mc` (bucket create) and `curl` (Lakekeeper REST). Using it costs
 # no extra pull; a curl-only image would need a second service to make the
 # bucket, and `minio/mc` has no curl.
@@ -25,10 +25,11 @@ set -euo pipefail
 # script creates what those jobs connect to.
 LK=${K2_LAKEKEEPER_URL:-http://lakekeeper:8181}
 WAREHOUSE=${K2_LAKE_WAREHOUSE:-k2}
-# One warehouse per data domain for its marts (ADR-044), on the same bucket under
-# warehouse/<name>. The list is generated from contracts/domains.yaml by
-# `make generate`, which writes the matching Trino catalogs too; never edit it here.
-DOMAIN_WAREHOUSES="$(dirname "$0")/generated/warehouses.txt"
+# Every warehouse of the release Trino runs (its storage plan, compiled by k2gen from
+# contracts/domains.yaml: `k2` and one per data domain, ADR-044), on the same bucket
+# under warehouse/<name>. Read through the trino pointer, so this service mounts the
+# releases root (docker-compose.yml, x-k2-releases-ro).
+STORAGE_PLAN=${K2_STORAGE_PLAN:-/k2/releases/pointers/trino/compiled/lake/storage-plan.json}
 BUCKET=${K2_LAKE_BUCKET:-k2-lake}
 S3_ENDPOINT=${K2_S3_ENDPOINT:-http://minio:9000}
 S3_REGION=${K2_S3_REGION:-local-01}
@@ -112,12 +113,17 @@ ensure_warehouse "$WAREHOUSE"
 # Last, after the lake's own warehouse, so a failure here cannot leave it half
 # made. It still exits 1, and lake-init failing holds back what waits for it
 # (trino): docker/trino/README.md says what to do.
-echo "[4/4] Domain warehouses ($DOMAIN_WAREHOUSES)"
-domains=()
-# `|| [[ -n $w ]]`: a last line with no newline is still read (the generator writes one).
-while read -r w || [[ -n $w ]]; do
-  [[ -z $w || $w == \#* ]] || domains+=("$w")
-done < "$DOMAIN_WAREHOUSES"
+echo "[4/4] Domain warehouses ($STORAGE_PLAN)"
+[[ -f $STORAGE_PLAN ]] || { echo "  ✗ no storage plan at $STORAGE_PLAN: is the releases root mounted and a release deployed?" >&2; exit 1; }
+# ponytail: no jq or python in this image; every "name" in the plan is a warehouse's
+# (storage-plan.schema.json: namespaces and prefixes are bare strings).
+plan=$(<"$STORAGE_PLAN") domains=()
+re='"name"[[:space:]]*:[[:space:]]*"([^"]+)"'
+while [[ $plan =~ $re ]]; do
+  [[ ${BASH_REMATCH[1]} == "$WAREHOUSE" ]] || domains+=("${BASH_REMATCH[1]}")
+  plan=${plan#*"${BASH_REMATCH[0]}"}
+done
+[[ ${#domains[@]} -gt 0 ]] || { echo "  ✗ $STORAGE_PLAN names no domain warehouse" >&2; exit 1; }
 for w in "${domains[@]}"; do
   ensure_warehouse "$w"
 done

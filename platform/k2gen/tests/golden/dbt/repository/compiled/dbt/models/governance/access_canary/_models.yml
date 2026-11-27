@@ -1,0 +1,56 @@
+# Compiled by k2gen (platform/k2gen/k2gen/emit/dbt.py) from the release's documents. Never edit it: change the documents.
+version: 2
+models:
+- name: access_canary__events
+  description: 'One synthetic canary row per seed row, built so that each reader policy visibly changes what its canary principal
+    reads: some rows younger than the delay, two regions, a note to mask.'
+  config:
+    alias: events
+    properties:
+      partitioning: ARRAY['region']
+    meta:
+      k2:
+        contract: governance.access-canary.events
+        reader: governance.access_canary.events
+  columns:
+  - name: id
+    description: The seed row's number, 1 to 5; a reader shown any other id was shown an untested row.
+    data_type: bigint
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  - name: region
+    description: north or south; public_reader keeps north only. The partition source, so it is in the key, as an incremental
+      build's unique key must hold every partition source column.
+    data_type: varchar
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  - name: note
+    description: A marker a leak can be searched for, canary-note-<id>; delayed_reader reads it as null.
+    data_type: varchar
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  - name: event_ts
+    description: The build's clock minus the seed row's age_minutes; delayed_reader sees a row only once this is 20 minutes
+      old.
+    data_type: timestamp(6) with time zone
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  data_tests:
+  - k2_unique_key:
+      arguments:
+        columns:
+        - id
+        - region
+seeds:
+- name: access_canary__event_offsets
+  description: The synthetic seed contracts/governance/access-canary/seeds/event_offsets.csv.
+  config:
+    alias: event_offsets

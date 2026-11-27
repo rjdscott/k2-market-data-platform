@@ -1,6 +1,8 @@
 # ADR-044: One producer lake, one mart warehouse per domain, fenced per writer
 
-**Status:** Accepted
+**Status:** Accepted; its one writable catalog and one writer per domain, the rules `make generate` wrote and the
+open table procedures **superseded by [ADR-059](ADR-059-access-rules-compiled-default-deny-over-two-catalogs-per-domain.md)**
+with release `v3.0.0-alpha.3` (phase 001); the producer lake, a warehouse per domain and its names stand
 **Date:** 2026-11-25
 **Author:** Rob Scott
 **Category:** Storage layout, Access

@@ -138,11 +138,25 @@ the first product's DAG, the catalog, the object store and Airflow run with noth
 docker exec -e PYTHONWARNINGS=ignore k2-airflow-scheduler airflow dags list -o json 2>/dev/null | tail -n 1
 #   []
 
+```
+
+Lakekeeper has had no host port since 2026-11-27: it has no authentication, so its network
+`k2-catalog` is its fence ([ADR-059](../adr/ADR-059-access-rules-compiled-default-deny-over-two-catalogs-per-domain.md)
+part 7). Ask it from a throwaway container on that network, the route `scripts/backup-lake.sh`
+takes (compose prefixes the network with the project name, hence the `grep`). Not yet run on the
+live stack in this shape. <!-- VERIFY: run the block below on the live stack after the cutover and paste what it printed -->
+
+```bash
 # Catalog health, and what it holds
-curl -s localhost:18181/health | jq .
-PREFIX=$(curl -fsS 'localhost:18181/catalog/v1/config?warehouse=k2' | jq -r '.defaults.prefix')
-curl -fsS "localhost:18181/catalog/v1/$PREFIX/namespaces" | jq -c .
-#   {"namespaces":[]} once the v3 lake's namespaces are dropped
+net=$(docker inspect -f '{{range $k, $v := .NetworkSettings.Networks}}{{$k}} {{end}}' k2-minio | grep -o '[^ ]*_k2-catalog')
+catalog() {  # catalog <path>: a GET to Lakekeeper by name, with no credential
+  docker run --rm --network "$net" --cpus 0.5 --memory 128m \
+    --entrypoint curl ghcr.io/rjdscott/minio:RELEASE.2025-09-07T16-13-09Z@sha256:a1a8bd4ac40ad7881a245bab97323e18f971e4d4cba2c2007ec1bedd21cbaba2 -fsS "http://lakekeeper:8181/$1"
+}
+catalog health
+PREFIX=$(catalog 'catalog/v1/config?warehouse=k2' | jq -r '.defaults.prefix')
+catalog "catalog/v1/$PREFIX/namespaces" | jq -c .
+#   {"namespaces":[]} once the v3 lake's namespaces are dropped (printed on 2026-11-26, from the host port since removed)
 ```
 
 `docker/lake/offsets.py` keeps the exactly-once bookkeeping the v3 ingest wrote into each Iceberg
@@ -152,35 +166,39 @@ connector of phase 004; nothing calls it until then.
 ## Query the lake with Trino
 
 One Trino node reads the lake through the same Lakekeeper catalog as Spark
-([`docker/trino/README.md`](../../docker/trino/README.md),
-[ADR-035](../adr/ADR-035-trino-and-dbt-for-marts.md)). Catalog `lake` is warehouse `k2`,
-read-only at the connector, and its schemas are the lake's namespaces. Each data domain in
-`contracts/domains.yaml` has a catalog and warehouse of its own, named from the domain id
-(`market-analytics` is `market_analytics`), whose tables only its writer `dbt_<domain>` creates,
-changes or drops with SQL statements, and which everyone reads; table procedures are not fenced
-per user ([ADR-044](../adr/ADR-044-producer-lake-and-domain-mart-warehouses.md)). The marts the
-domain catalogs held were dropped with the v3 lake; every catalog is empty until phase 002. The
-user is whatever `--user` says, not authenticated. The session time zone is the client's: the CLI
-inside the container sends UTC, a client on the host sends the host's zone unless told
-(`--timezone UTC`).
+([chapter 22](../architecture/22-access-and-identity.md),
+[ADR-035](../adr/ADR-035-trino-and-dbt-for-marts.md)). Since 2026-11-27 it runs from the deployed
+release's etc (`/k2/releases/pointers/trino/compiled/trino/etc`), serves HTTPS only on
+`127.0.0.1:${K2_TRINO_PORT:-8443}` under the local CA, and takes password logins only
+([ADR-060](../adr/ADR-060-trino-logins-by-password-over-tls-under-a-local-ca.md)); its Web UI is off.
+Catalog `lake` is warehouse `k2`, read-only at the connector, and its schemas are the lake's
+namespaces. Each data domain has a read-only reader catalog named from its id (`market-analytics`
+is `market_analytics`) and a writable `<domain>_build` over the same warehouse; the compiled rules
+let only a product's builder and publisher write there (chapter 22). Every catalog is empty until
+phase 002.
+
+The client runs in a one-off container on Trino's network, by name, verified against `ca.pem`,
+with the password read from its file inside the container. The helper is
+[tls-and-passwords.md](../runbooks/tls-and-passwords.md)'s, which ran it on throwaway lakes on
+2026-11-26; on the live stack `NET` is the project's `<project>_k2-net`, since compose prefixes
+the network name. Not yet run on the live stack.
+<!-- VERIFY: run trino_cli svc.platform 'SHOW CATALOGS' on the live stack after the cutover and paste the output -->
 
 ```bash
-# These ran against k2-trino on the live stack on 2026-11-26.
-docker exec k2-trino trino --execute 'SHOW SCHEMAS FROM lake'
-#   "information_schema" "system" once the v3 lake's namespaces are dropped; every catalog has both
-docker exec -it k2-trino trino --catalog lake                        # interactive
-
-# One fence per domain.
-docker exec k2-trino trino --execute 'SHOW CATALOGS'
-#   "fx_reference" "governance" "lake" "market_analytics" "market_capture" "reference_data" "system"
-docker exec k2-trino trino --user dbt_market_analytics --execute 'CREATE TABLE reference_data.s.t (x integer)'
-#   ... failed: Access Denied: Cannot create table reference_data.s.t
-docker exec k2-trino trino --execute 'SHOW SCHEMAS FROM market_analytics'
-#   "information_schema" "system" once the v3 marts are dropped
+NET=${K2_COMPOSE_PROJECT}_k2-net K2_SECRETS=${K2_SECRETS:-$HOME/k2-secrets}   # with .env loaded
+trino_cli() {  # trino_cli <svc.* principal> <SQL>: Trino's own CLI, by name, verified against ca.pem
+  docker run --rm --network "$NET" --user "$(id -u):$(id -g)" -e K2_USER="$1" -e K2_SQL="$2" \
+    -v "$K2_SECRETS/tls/ca.pem:/run/k2-secrets/tls/ca.pem:ro" \
+    -v "$K2_SECRETS/principals/$1.password:/run/k2-secrets/login.password:ro" --entrypoint bash trinodb/trino:484 \
+    -c 'TRINO_PASSWORD=$(cat /run/k2-secrets/login.password) exec trino --server https://trino:8443 \
+          --truststore-path /run/k2-secrets/tls/ca.pem --user "$K2_USER" --password --execute "$K2_SQL"'
+}
+trino_cli svc.platform 'SHOW CATALOGS'
+trino_cli svc.platform 'SHOW SCHEMAS FROM lake'
 
 # Nothing through catalog lake commits, table procedures included. Needs a table, so not
-# runnable until phase 002 (on 2026-11-25, against a v3 table, it printed the denial below).
-docker exec k2-trino trino --execute 'EXPLAIN ALTER TABLE lake.<namespace>.<table> EXECUTE optimize'
+# runnable until phase 002 (on 2026-11-25, against a v3 table, the CLI of the day printed the denial below).
+trino_cli svc.platform 'EXPLAIN ALTER TABLE lake.<namespace>.<table> EXECUTE optimize'
 #   ... failed: Access Denied: Cannot execute table procedure OPTIMIZE on <namespace>.<table>
 ```
 

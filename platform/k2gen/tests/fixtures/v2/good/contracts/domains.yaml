@@ -1,0 +1,10 @@
+# The v2 fixture set's domains: synthetic, no real source, venue or market.
+domains:
+  sensor-net:
+    owner: sensor-team
+    kind: source-aligned
+    description: Made-up weather-station readings, as a synthetic feed would send them.
+  ops-insight:
+    owner: insight-team
+    kind: consumer-aligned
+    description: Made-up daily summaries derived from the sensor domain.

@@ -295,3 +295,39 @@ def test_the_old_lake_ingest_services_are_gone_and_nothing_waits_on_them():
     old = {"lake-ddl", "lake-metrics"}
     assert old.isdisjoint(services)
     assert [n for n, s in services.items() if old & set(s.get("depends_on") or {})] == []
+
+
+def test_an_included_makefile_is_pin_checked_like_the_makefile():
+    # The Makefile includes mk/*.mk (one file per phase 001 step): a docker run
+    # moved there must not leave the gate.
+    text = "\tdocker run --rm rust:1-bookworm cargo test\n"
+    assert budget.source_pin_problems("mk/release.mk", text) == ["mk/release.mk: docker run rust:1-bookworm is not pinned"]
+
+
+def test_alertmanager_is_pinned_small_on_k2_net_only_and_sees_one_secret_directory():
+    # Phase 001 S09. It must reach Slack, so k2-net, and never the catalog's network
+    # (A8). Of ${K2_SECRETS} it mounts only the directory holding the webhook URL
+    # file, read-only: not the file (a file mount pins the inode, and a rotated URL
+    # would go unseen), and not the passwords and TLS keys beside it.
+    am = yaml.safe_load(COMPOSE.read_text())["services"]["alertmanager"]
+    assert am["image"].startswith("prom/alertmanager:v") and "@sha256:" in am["image"]
+    assert am["networks"] == ["k2-net"]
+    assert am["deploy"]["resources"]["limits"] == {"cpus": "0.1", "memory": "64M"}
+    assert am["ports"] == ["127.0.0.1:9093:9093"]
+    assert [v for v in am["volumes"] if "K2_SECRETS" in v] == [
+        "${K2_SECRETS:-${HOME}/k2-secrets}/alertmanager:/run/k2-secrets:ro"]
+    assert "--cluster.listen-address=" in am["command"]
+
+
+def test_the_webhook_path_and_the_alertmanager_address_agree_everywhere():
+    # The URL file's path inside the container is written in three places, and
+    # Alertmanager's address in two; a drift fails only at the first real alert.
+    root = COMPOSE.parent
+    am = yaml.safe_load((root / "docker/alertmanager/alertmanager.yml").read_text())
+    paths = {c["api_url_file"] for r in am["receivers"] for c in r.get("slack_configs", [])}
+    assert paths == {"/run/k2-secrets/slack-webhook-url"}
+    assert "WEBHOOK_FILE=/run/k2-secrets/slack-webhook-url " in (root / "scripts/alerts.sh").read_text()
+    prom = yaml.safe_load((root / "docker/prometheus/prometheus.yml").read_text())
+    assert prom["alerting"]["alertmanagers"][0]["static_configs"][0]["targets"] == ["alertmanager:9093"]
+    jobs = {j["job_name"]: j["static_configs"][0]["targets"] for j in prom["scrape_configs"]}
+    assert jobs["alertmanager"] == ["alertmanager:9093"]

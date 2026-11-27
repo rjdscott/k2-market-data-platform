@@ -124,8 +124,9 @@ Schemas, stubs and fixtures only, no behaviour, reviewed once:
   disabled. Every principal that reaches Trino has a password: writers, platform services and
   people under their pseudonymous ids. The REST API authenticates its callers by key and queries
   Trino as the caller under an impersonation rule that admits only its own service principal.
-  `make api-key PRINCIPAL=<id>` prints a key once and writes only its sha256 for a pull request;
-  the compiled key map is in the release, read by k2-api in `003`. Every client is moved here:
+  `make api-key PRINCIPAL=<id>` prints a key once and writes only its sha256, to
+  `${K2_SECRETS}/api/keys.json` outside every checkout and release, read by k2-api in `003`
+  (the secrets table of `docs/development/phase-001-interfaces.md`). Every client is moved here:
   the Trino CLI, dbt-trino, the `trino` Python client, Airflow tasks, the access test.
 - **Principals, grants and policies**: `contracts/access/roles.yaml` (`full_reader`,
   `delayed_reader`, `public_reader`), `principals.yaml`, a `grants.yaml` per product, policies
@@ -139,7 +140,7 @@ Schemas, stubs and fixtures only, no behaviour, reviewed once:
   side and proves it by moving the marker by hand on the fixture product; the dbt wrapper in
   `002` moves it after tests pass.
 - **`hot-gold`** declared paused in ODPS, with `serves` naming the paused ClickHouse copy (F20).
-- **Alertmanager** v0.35.0 delivering to the Slack channel through an incoming webhook kept as a
+- **Alertmanager** v0.35.1 delivering to the Slack channel through an incoming webhook kept as a
   local secret (owner decision), so every runbook from here on can follow its alert to where it
   arrives (F18). 0.1 CPU and 64 MiB, counted by the budget gate.
 
@@ -166,7 +167,7 @@ bash scripts/verify/tested-data-marker.sh             # rows past the marker nev
 docker exec k2-alertmanager amtool --alertmanager.url=http://localhost:9093 alert add K2TestAlert severity=info
 curl -s 127.0.0.1:9093/metrics | grep -E 'alertmanager_notifications(_failed)?_total\{integration="slack"\}'
 gh run view <validation run id> --log | grep 'k2gen diff'
-python3 scripts/check-budget.py                       # 17.40 CPU / 29.875 GiB
+python3 scripts/check-budget.py                       # 16.80 CPU / 28.750 GiB
 make test
 make check-docs
 ```

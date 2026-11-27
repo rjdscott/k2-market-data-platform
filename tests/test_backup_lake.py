@@ -1,6 +1,6 @@
 """scripts/backup-lake.sh against fakes on PATH. `docker` plays three parts:
-`inspect` finds k2-minio's network, `exec` is pg_dump, and `run` is the mc
-container, mirroring a scratch "bucket" directory into the bind-mounted backup
+`inspect` finds k2-minio's networks, `exec` is pg_dump, and `run` is either the
+catalog's curl container (handed to the fake `curl`) or the mc container, mirroring a scratch "bucket" directory into the bind-mounted backup
 the way mc RELEASE.2025-08-13 does (verified 2026-11-26 in the image the script
 pins): a missing file is copied, a differing one is refused with a JSON error
 line and exit 0, and only `--overwrite` or `--remove` would replace or delete.
@@ -28,11 +28,15 @@ TABLES = ["landing.events", "landing.checks", "ref.dim_one", "ref.dim_two"]
 FAKE_DOCKER = r"""#!/usr/bin/env bash
 printf '%s\n' "$*" >> "$LOG"
 case "$1" in
-  inspect) echo "k2-test-net " ;;
+  inspect) echo "${NETS:-k2-test-net }" ;;
   exec)
     [ -n "${DUMP_BROKEN:-}" ] && { echo "-- PostgreSQL database dump"; exit 0; }
     printf -- '-- PostgreSQL database dump\nCREATE TABLE t ();\n-- PostgreSQL database dump complete\n\n\\unrestrict x\n' ;;
   run)
+    if [[ " $* " == *" --entrypoint curl "* ]]; then
+      while [[ $1 != ghcr.io/rjdscott/minio:* ]]; do shift; done
+      shift; exec curl "$@"
+    fi
     echo "fake docker: $*" >&2   # a docker that echoes its command line, as some errors do
     [ -n "${MC_DOWN:-}" ] && { echo "mc: MinIO did not answer" >&2; exit 1; }
     [[ "${MC_HOST_k2:-}" == *":$WANT_PASSWORD@minio:9000" ]] || { echo "credential not in the environment" >&2; exit 1; }
@@ -40,7 +44,7 @@ case "$1" in
     while [ $# -gt 0 ]; do
       case "$1" in
         -v) host=${2%:/backup}; shift 2 ;;
-        minio/minio:*) shift; break ;;   # <image> <mc args>
+        ghcr.io/rjdscott/minio:*) shift; break ;;   # <image> <mc args>
         *) shift ;;
       esac
     done
@@ -135,6 +139,16 @@ def test_refuses_a_target_inside_the_checkout(stack, target):
     assert "inside the checkout" in out.stderr
     assert not (stack / "repo/backup").exists() and not (stack / "repo/lake").exists()
     assert docker_calls(stack) == ""
+
+
+def test_runs_on_the_catalogs_network(stack):
+    # Lakekeeper has no host port: the catalog and MinIO are reached from k2-catalog,
+    # whichever of k2-minio's networks docker lists first.
+    out = run(stack, NETS="p_k2-net p_k2-catalog ")
+    assert out.returncode == 0, out.stderr
+    runs = [line for line in docker_calls(stack).splitlines() if line.startswith("run ")]
+    assert any("--entrypoint curl" in r for r in runs) and any("--entrypoint mc" in r for r in runs)
+    assert runs and all("--network p_k2-catalog " in r for r in runs)
 
 
 def test_refuses_below_the_free_space_floor(stack):

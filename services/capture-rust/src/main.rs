@@ -15,7 +15,9 @@
 
 use std::io::Write;
 use std::path::PathBuf;
-use std::time::Duration;
+use std::sync::LazyLock;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use clap::{Args, Parser, Subcommand};
@@ -163,6 +165,85 @@ fn ping_due(exchange: Exchange, last_ping_ns: i64, now_ns: i64) -> bool {
     exchange == Exchange::Binance && now_ns - last_ping_ns >= PING_EVERY.as_nanos() as i64
 }
 
+/// The last-resort rule under the session watchdog: once no session has
+/// delivered a frame for `K2_STALL_EXIT_SECONDS`, the process logs why and
+/// exits with this code, and compose's `restart: unless-stopped` starts a
+/// fresh one.
+///
+/// The watchdog can only recycle a session that exists. On 2026-11-26 the
+/// Coinbase capture's reconnect stalled inside `Feed::connect`, which had no
+/// bound then (`ws::IO_TIMEOUT` is that fix), and the process stayed alive,
+/// scrapeable and silent for 80 minutes, because Docker restarts a container
+/// whose process exits, not one that is `unhealthy`. This rule catches the
+/// next stall nobody has found yet, a blocking call that freezes the runtime
+/// thread included, which is why it runs on its own OS thread and not as a
+/// tokio task.
+///
+/// 600 s by default: twice the longest silence bound (300 s, `trade` and
+/// `market_trades`), so the watchdog always gets its full cycle (300 s, the
+/// 30 s backoff cap, the 10 s connect bound) before this acts. Kraken and
+/// Coinbase heartbeat at 1 Hz, so a healthy process there never comes near it;
+/// on Binance with books off only trades are frames, and ten minutes without a
+/// trade on any instrument costs a restart that loses nothing. The exit loses
+/// nothing either: no frame means no new record, and `message.timeout.ms`
+/// (300 s, sink.rs) has settled every older one.
+const STALL_EXIT_CODE: i32 = 3;
+
+/// When the newest frame arrived from any session, in milliseconds after
+/// `STARTED`. `session` writes it; the stall supervisor thread reads it.
+static LAST_FRAME_MS: AtomicU64 = AtomicU64::new(0);
+static STARTED: LazyLock<Instant> = LazyLock::new(Instant::now);
+
+fn note_frame() {
+    LAST_FRAME_MS.store(STARTED.elapsed().as_millis() as u64, Ordering::Relaxed);
+}
+
+/// How long nothing has arrived, once that is past `bound`. Pure, so the rule
+/// is testable on a fake clock.
+fn stalled(last_frame_ms: u64, now: Duration, bound: Duration) -> Option<Duration> {
+    let silent = now.saturating_sub(Duration::from_millis(last_frame_ms));
+    (silent > bound).then_some(silent)
+}
+
+/// `K2_STALL_EXIT_SECONDS` as a bound, refused at or under the longest silence
+/// bound: there it would restart a process before the watchdog had its turn.
+fn stall_bound(seconds: u64) -> Result<Duration> {
+    let longest = CONTINUOUS.iter().map(|(_, d)| *d).max().unwrap_or_default();
+    let bound = Duration::from_secs(seconds);
+    anyhow::ensure!(
+        bound > longest,
+        "K2_STALL_EXIT_SECONDS={seconds} must exceed the longest stream silence bound, {}s",
+        longest.as_secs()
+    );
+    Ok(bound)
+}
+
+/// Start the clock the rule counts from (now counts as the last frame) and the
+/// thread that enforces it.
+fn spawn_stall_supervisor(bound: Duration) -> Result<()> {
+    LazyLock::force(&STARTED);
+    std::thread::Builder::new()
+        .name("stall-supervisor".into())
+        .spawn(move || {
+            loop {
+                std::thread::sleep(Duration::from_secs(1));
+                let last = LAST_FRAME_MS.load(Ordering::Relaxed);
+                if let Some(silent) = stalled(last, STARTED.elapsed(), bound) {
+                    tracing::error!(
+                        silent_s = silent.as_secs(),
+                        limit_s = bound.as_secs(),
+                        code = STALL_EXIT_CODE,
+                        "no session has delivered a frame within the stall bound; \
+                         exiting so the restart policy starts a fresh process"
+                    );
+                    std::process::exit(STALL_EXIT_CODE);
+                }
+            }
+        })
+        .context("starting the stall supervisor")?;
+    Ok(())
+}
+
 /// Binance closes a WebSocket 24 h after it opens, mid-frame, with no warning.
 /// Pre-empting it at 23 h turns an involuntary disconnect into a scheduled one:
 /// the socket is closed cleanly between frames, the producer queue is not
@@ -234,6 +315,11 @@ struct RunArgs {
     /// Override the venue's public endpoint - a local recorder, or staging.
     #[arg(long, env = "K2_WS_URL")]
     ws_url: Option<String>,
+    /// Exit (code 3) once no session has delivered a frame for this long, so
+    /// the restart policy starts a fresh process. Must exceed the longest
+    /// stream silence bound, 300 s.
+    #[arg(long, env = "K2_STALL_EXIT_SECONDS", default_value_t = 600)]
+    stall_exit_seconds: u64,
 }
 
 #[derive(Args)]
@@ -363,6 +449,7 @@ fn seeded(
 
 async fn run(args: RunArgs) -> Result<()> {
     let exchange = args.exchange;
+    let stall = stall_bound(args.stall_exit_seconds)?;
     let instruments = Instruments::load(&args.instruments_file, exchange)?;
     let book = instruments.book_capture();
     tracing::info!(
@@ -421,6 +508,7 @@ async fn run(args: RunArgs) -> Result<()> {
     let snapshot_interval = Duration::from_millis(args.snapshot_interval_ms);
     let mut backoff = Backoff::new();
     let mut shutdown = Shutdown::new()?;
+    spawn_stall_supervisor(stall)?;
 
     loop {
         let outcome = session(
@@ -525,6 +613,7 @@ async fn session(
                     tracing::info!("peer closed the connection");
                     return Ok(Session::Disconnected);
                 };
+                note_frame();
                 let handled = adapter.handle_frame(&frame.payload, frame.recv_ts_ns);
                 if let Some(slot) = last_frame_ns.get_mut(handled.stream.as_str()) {
                     *slot = frame.recv_ts_ns;
@@ -1138,6 +1227,32 @@ k2_capture_messages_total{exchange=\"kraken\",stream=\"book\"} 12
             silent_stream(&last_frame, 61 * s).map(|(st, _)| st),
             Some("pong")
         );
+    }
+
+    /// The last-resort rule on a fake clock. The 2026-11-26 hang was frames up
+    /// to one instant and then nothing for 80 minutes, process alive.
+    #[test]
+    fn the_stall_rule_fires_past_its_bound_and_not_before() {
+        let s = Duration::from_secs;
+        let bound = stall_bound(600).unwrap();
+        let last = 100_000; // the last frame, 100 s after the supervisor started
+        assert_eq!(stalled(last, s(699), bound), None);
+        assert_eq!(
+            stalled(last, s(700), bound),
+            None,
+            "at the bound is not past it"
+        );
+        assert_eq!(stalled(last, s(701), bound), Some(s(601)));
+        assert_eq!(stalled(last, s(4903), bound), Some(s(4803)), "the incident");
+        assert_eq!(
+            stalled(0, s(601), bound),
+            Some(s(601)),
+            "a process that never got a frame counts from its start"
+        );
+        // Refused where it would restart a quiet market before the watchdog's turn.
+        assert!(stall_bound(300).is_err());
+        assert!(stall_bound(0).is_err());
+        assert_eq!(stall_bound(301).unwrap(), s(301));
     }
 
     #[test]

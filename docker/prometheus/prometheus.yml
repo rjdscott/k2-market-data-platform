@@ -1,7 +1,7 @@
 # K2 Market Data Platform - Prometheus Configuration
 # Scrapes the v3 capture tier plus the shared infrastructure (Redpanda, Grafana,
-# cAdvisor, Airflow's statsd). The Kotlin feed-handler jobs retired with the
-# handlers (ADR-019); ClickHouse is not scraped while its hot tier is paused
+# cAdvisor, Airflow's statsd, Alertmanager), and sends every firing alert to
+# Alertmanager. The Kotlin feed-handler jobs retired with the handlers (ADR-019); ClickHouse is not scraped while its hot tier is paused
 # (ADR-057), so no rule reads a target that is meant to be down. The lake
 # exporter's job retired with the old ingest pipeline (legacy/v3-lake-ingest/);
 # lake metrics return in phase 004.
@@ -13,11 +13,12 @@ global:
     cluster: 'k2-v2'
     environment: 'development'
 
-# Alertmanager configuration (future)
+# Every firing alert goes to Alertmanager, which routes it to Slack
+# (docker/alertmanager/alertmanager.yml, docs/runbooks/where-an-alert-goes.md).
 alerting:
   alertmanagers:
     - static_configs:
-        - targets: []
+        - targets: ['alertmanager:9093']
 
 # Load rules (alerting and recording rules)
 rule_files:
@@ -61,6 +62,16 @@ scrape_configs:
       - source_labels: [__name__]
         regex: 'redpanda_storage_disk_(free|total)_bytes'
         action: keep
+
+  # Alertmanager's own metrics: rules/alertmanager-alerts.yml reads `up` and the
+  # Slack notification counters from this job.
+  - job_name: 'alertmanager'
+    static_configs:
+      - targets: ['alertmanager:9093']
+        labels:
+          service: 'alertmanager'
+          tier: 'observability'
+    metrics_path: '/metrics'
 
   # Grafana
   - job_name: 'grafana'

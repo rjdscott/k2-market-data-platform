@@ -1,0 +1,23 @@
+{
+  "entries": [
+    {
+      "kind": "table",
+      "mode": "rebuild",
+      "ref": "audited",
+      "table": "governance.access_canary__base.events"
+    },
+    {
+      "kind": "table",
+      "mode": "restore",
+      "ref": "main",
+      "table": "governance.run_records.run_record"
+    },
+    {
+      "kind": "lakekeeper-db"
+    },
+    {
+      "kind": "releases"
+    }
+  ],
+  "tag": "v0.1.0"
+}

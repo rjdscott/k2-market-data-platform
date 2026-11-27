@@ -1,0 +1,37 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://k2.invalid/schema/provenance.schema.json",
+  "title": "provenance.json of a document set (A2)",
+  "description": "Frozen in phase 001. Written by k2gen docset beside the documents it reads from the tag's tree, each blob of k2gen.model.DOCUMENT_ROOTS as the tag holds it (git ls-tree and git cat-file, never git archive, whose output follows the checkout's eol and filter settings and can change when refs move), and copied unchanged into each release compiled from that set. The registry, after 3.0, writes the same record with source registry (ADR-055 part 7).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["source", "tag", "commit", "tagger", "taggedAt", "setSha256", "documents"],
+  "properties": {
+    "source": {"description": "Which store the set came from.", "enum": ["git", "registry"]},
+    "tag": {"description": "The release tag: an annotated tag, since its tagger is the approver.", "type": "string", "pattern": "^v[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?$"},
+    "commit": {"description": "The commit the tag names.", "$ref": "#/$defs/sha1"},
+    "tagger": {"description": "Who applied the tag, as git records it: the release's approver.", "type": "string", "minLength": 1},
+    "taggedAt": {"description": "When the tag was applied, UTC.", "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"},
+    "setSha256": {"description": "k2gen.model.set_sha256 over every document: the sha256 of the lines `<sha256>  <path>\\n`, sorted by path, as sha256sum prints them.", "$ref": "#/$defs/sha256"},
+    "documents": {
+      "description": "Every document in the set, sorted by path.",
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "sha256", "lastCommit", "pr"],
+        "properties": {
+          "path": {"description": "The document's path in the repository.", "type": "string", "pattern": "^(?!.*(^|/)\\.\\.?(/|$))[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$"},
+          "sha256": {"description": "The sha256 of the document's bytes.", "$ref": "#/$defs/sha256"},
+          "lastCommit": {"description": "The last commit at or before the tag that changed the document.", "$ref": "#/$defs/sha1"},
+          "pr": {"description": "The pull request of that commit, parsed from its subject's (#NNN); null when the subject names none.", "type": ["integer", "null"], "minimum": 1}
+        }
+      }
+    }
+  },
+  "$defs": {
+    "sha256": {"description": "64 lower-case hex digits.", "type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "sha1": {"description": "A git commit, 40 lower-case hex digits.", "type": "string", "pattern": "^[0-9a-f]{40}$"}
+  }
+}

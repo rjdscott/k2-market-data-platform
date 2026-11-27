@@ -1,0 +1,14 @@
+# A hand-written example of compiled/airflow/dags.json (contracts/schema/dags.schema.json) for the good set.
+dags:
+  - dagId: daily_load
+    product: ops-insight.daily-load
+    status: active
+    schedule: "30 1 * * *"
+    pipeline: compiled/products/ops-insight.daily-load/pipeline.json
+    tasks: [resolve, build, expire, record, maintain]
+  - dagId: station_readings
+    product: sensor-net.station-readings
+    status: active
+    schedule: "15 * * * *"
+    pipeline: compiled/products/sensor-net.station-readings/pipeline.json
+    tasks: [resolve, fetch, load, audit, publish, build, expire, record, maintain]

@@ -142,6 +142,7 @@ report `reason="involuntary"`.
 | `K2_SNAPSHOT_INTERVAL_MS` | `1000` | book sampler cadence |
 | `K2_TOPIC_PREFIX` | `market.crypto.v3` | topic namespace |
 | `K2_WS_URL` | venue default | endpoint override |
+| `K2_STALL_EXIT_SECONDS` | `600` | exit (code 3) once no session has delivered a frame for this long, so the restart policy starts a fresh process; must exceed the longest silence bound, 300 s |
 | `RUST_LOG` | `info` | `tracing-subscriber` filter; logs go to stderr |
 
 Every one is also a `--flag`; `k2-capture run --help` is the authority.
@@ -208,6 +209,18 @@ can be a thin instrument.
 Kraken `trade`'s longest measured gap was 20.4 s over a 3 h window. The same
 table is what the session watchdog recycles the socket on, and what
 `CaptureFeedStale` is written against.
+
+**The way back is bounded too.** The watchdog can only recycle a session that
+exists. Every network await before the first frame, the connect (DNS, TCP, the
+TLS handshake, the HTTP upgrade) and each send, gives up after 10 s
+(`ws::IO_TIMEOUT`) and returns to the backoff loop with a `capture session ended`
+line. Before that bound, on 2026-11-26, a Coinbase reconnect sat inside `connect`
+for 80 minutes with no log line
+([capture-feed-stale.md](../../docs/runbooks/capture-feed-stale.md#failure-modes--incidents)).
+Under both runs one rule on its own OS thread, so a blocked runtime cannot stop
+it: no frame from any session for `K2_STALL_EXIT_SECONDS` (600 s, twice the
+longest silence bound) and the process logs why and exits with code 3, and
+`restart: unless-stopped` starts a fresh one.
 
 ---
 

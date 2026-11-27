@@ -119,8 +119,8 @@ SHOTS = [
         file="14-prometheus-alerts.png", section="Alerting", title="Prometheus: alerts",
         url="http://localhost:9090/alerts", app=None, height=1000,
         ready="text=capture-alerts.yml",
-        read="Every alert rule, grouped by file, with its state. There is no Alertmanager: this page and "
-             "Grafana are where a firing alert is seen, and each rule's annotations name its runbook.",
+        read="Every alert rule, grouped by file, with its state. A firing alert also goes to Slack through "
+             "Alertmanager; each rule's annotations name its runbook.",
         leads_to="docs/runbooks/README.md",
     ),
     dict(

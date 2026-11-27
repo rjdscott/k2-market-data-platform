@@ -1,8 +1,12 @@
 # Observability
 
-Prometheus scrapes the stack, Grafana renders it, and 14 alert rules (10 capture, 2 Airflow, 2 disk)
-cover the things that actually break: capture goes down or silent, sequence gaps and book
-checksum failures, the scheduler stops or a task fails, and the disk the volumes share fills.
+Prometheus scrapes the stack, Grafana renders it, and 16 alert rules (10 capture, 2 Airflow, 2 disk,
+2 Alertmanager) cover the things that actually break: capture goes down or silent, sequence gaps
+and book checksum failures, the scheduler stops or a task fails, the disk the volumes share fills,
+and an alert stops reaching anyone. Alertmanager routes every firing alert to one Slack channel
+([where-an-alert-goes.md](../runbooks/where-an-alert-goes.md)); the webhook URL is a local secret,
+and until it is installed `make alert-test` prints `SKIP alert delivery to Slack: webhook not
+installed`.
 
 **The lake is not observed while it receives no live data.** The old lake ingest retired to
 [`legacy/v3-lake-ingest/`](../../legacy/v3-lake-ingest/) ([ADR-056](../adr/ADR-056-unified-data-product-platform.md)),
@@ -21,10 +25,12 @@ ClickHouse query, and judges each venue from its capture instead (below). They r
 tier, as the serving copy of a product of the new platform, under that platform's alerts.
 
 - Prometheus, http://localhost:9090 (`/targets`, `/alerts`)
+- Alertmanager, http://localhost:9093 (what is firing, grouped as Slack sees it; silences)
 - Grafana, http://localhost:3000, `admin` / `$GRAFANA_PASSWORD`
 
 Config lives in [`docker/prometheus/prometheus.yml`](../../docker/prometheus/prometheus.yml),
-[`docker/prometheus/rules/`](../../docker/prometheus/rules/) and
+[`docker/prometheus/rules/`](../../docker/prometheus/rules/),
+[`docker/alertmanager/alertmanager.yml`](../../docker/alertmanager/alertmanager.yml) and
 [`docker/grafana/dashboards/`](../../docker/grafana/dashboards/), all provisioned at
 container start, no click-ops.
 
@@ -33,6 +39,7 @@ container start, no click-ops.
 | Job | Target | Interval | Source |
 |-----|--------|----------|--------|
 | `prometheus` | `localhost:9090` | 15s | self |
+| `alertmanager` | `alertmanager:9093` | 15s | Alertmanager's own metrics: `up`, Slack notifications sent and failed |
 | `redpanda` | `redpanda:9644` | 10s | Redpanda admin API |
 | `grafana` | `grafana:3000` | 15s | Grafana internal metrics |
 | `capture-{binance,kraken,coinbase}` | `capture-<x>:8082` | 15s | `k2-capture`, see below |
@@ -94,7 +101,7 @@ other service: [dashboards.md](./dashboards.md).
 
 ## Alert rules
 
-14 alert rules across three files, and no recording rules. **Prometheus loads rule files at start and on SIGHUP only**, after editing anything under `docker/prometheus/rules/`, `docker kill -s HUP k2-prometheus` (or a restart); the rules dir is a mount and the file changing is not enough. Found 2026-08-27 when a ClickHouse rule (since removed, ADR-057) could not fire because its group had never been loaded (`curl -s localhost:9090/api/v1/rules | grep -c <AlertName>` is the check). Every annotation carries the diagnostic commands and a
+16 alert rules across four files, and no recording rules. **Prometheus loads rule files at start and on SIGHUP only**, after editing anything under `docker/prometheus/rules/`, `docker kill -s HUP k2-prometheus` (or a restart); the rules dir is a mount and the file changing is not enough. Found 2026-08-27 when a ClickHouse rule (since removed, ADR-057) could not fire because its group had never been loaded (`curl -s localhost:9090/api/v1/rules | grep -c <AlertName>` is the check). Every annotation carries the diagnostic commands and a
 `runbook:` annotation — enforced by `scripts/check-docs.sh` gate (d2), added
 2026-09-03 after the 6 ClickHouse rules were found carrying none while gate (d),
 which only checks that the paths present resolve, passed them. The tables below are the index. The three `FeedHandler*` rules retired with
@@ -164,15 +171,41 @@ host's `/` while this reads low, and that check is by hand
 | `DockerDiskUsageHigh` | warning | `1 - redpanda_storage_disk_free_bytes / redpanda_storage_disk_total_bytes > 0.80` for 15m |
 | `DockerDiskUsageCritical` | critical | the same ratio above 0.90 for 5m |
 
+`DockerDiskUsageCritical` inhibits `DockerDiskUsageHigh` in Alertmanager: past 90 % Slack gets the
+critical only.
+
+### `alertmanager-alerts.yml`: the path to Slack (2)
+
+From Alertmanager's own `/metrics` (job `alertmanager`), with promtool cases in
+`docker/prometheus/rules/tests/alertmanager-alerts_test.yml`. Neither can count on reaching Slack:
+while it holds, Slack is the thing that is not working. Both show in Prometheus and Grafana, and
+`AlertmanagerNotificationsFailing` reaches Slack once the path works again.
+
+| Alert | Severity | Fires when |
+|-------|----------|-----------|
+| `AlertmanagerDown` | critical | `up{job="alertmanager"} == 0` for 2m |
+| `AlertmanagerNotificationsFailing` | critical | `increase(alertmanager_notifications_failed_total{integration="slack"}[15m]) > 0`, per reason, no `for`: a notification Alertmanager gave up on is an alert lost |
+
+### Where an alert goes
+
+Every firing alert goes from Prometheus to Alertmanager (`alertmanager:9093`, the `alerting:` block
+of `prometheus.yml`), which groups it by `alertname` and `component`, waits 30 s for the rest of the
+group, and posts one Slack message per group through the incoming webhook; again at most every 5
+minutes while the group changes, every 4 hours while it does not, and once when it resolves. The
+message carries the rule's name, severity, `summary` annotation, its `runbook` annotation as a
+link to the file on GitHub, and the start time in UTC; nothing else from the rule. The procedure
+(install or rotate the webhook, test, silence, the not-installed state) is
+[where-an-alert-goes.md](../runbooks/where-an-alert-goes.md).
+
 ### Tested rules
 
-Eight of the fourteen carry promtool unit tests, run by `make check-alerts` and by
-`make check-docs` gate (c2): the four `Capture*` rules above, both Airflow rules and both disk
-rules.
+Ten of the sixteen carry promtool unit tests, run by `make check-alerts` and by
+`make check-docs` gate (c2): the four `Capture*` rules above, both Airflow rules, both disk
+rules and both Alertmanager rules.
 
 ```bash
 grep -rhoE 'alertname: [A-Za-z]+' docker/prometheus/tests/*.test.yml \
-  docker/prometheus/rules/tests/*_test.yml | sort -u | wc -l   # 8 on 2026-11-26 with the disk rules; 6 after the lake and old-DAG rules retired, 24 before
+  docker/prometheus/rules/tests/*_test.yml | sort -u | wc -l   # 10 on 2026-11-26 with the Alertmanager rules; 8 with the disk rules; 6 after the lake and old-DAG rules retired, 24 before
 ```
 
 Each case is either "must fire on a synthetic series" or "must not fire on healthy
@@ -246,8 +279,9 @@ container restarts with exit 137; ignore a large file cache.
 
 Honest gaps, in priority order:
 
-1. **No Alertmanager.** `alerting.alertmanagers.targets` is empty, alerts are visible in
-   the Prometheus UI and Grafana but nothing routes to a pager or Slack.
+1. **One Slack channel, no paging.** Every alert goes to one channel through one webhook: no
+   on-call rotation, no escalation, no second route. While Alertmanager is down, or the host is,
+   nothing is routed at all, and no dead man's switch outside the host notices.
 2. **No exporters for MinIO, PostgreSQL or Spark.** Their health is only observable via
    `docker compose ps` and container logs; cAdvisor gives their CPU and memory, not whether
    they answer.

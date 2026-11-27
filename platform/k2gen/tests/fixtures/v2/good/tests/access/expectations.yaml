@@ -1,0 +1,42 @@
+# The v2 fixture set's access expectations: every view and role with a policy, every base
+# table and every denied layer has a row (A9's coverage rule), plus the tested-data rows.
+expectations:
+  - principal: p.analyst-full
+    table: sensor_net.station_readings.silver_readings
+    via: [sql]
+    visible: [station_id, read_at, value, region, operator_note]
+    mustAppear: {minRows: 1}
+  - principal: p.analyst-delayed
+    table: sensor_net.station_readings.silver_readings
+    via: [sql]
+    visible: [station_id, read_at, value, region, operator_note]
+    masked: [operator_note]
+    minRowAgeMinutes: 20
+    mustNotAppear: "region NOT IN ('north', 'south')"
+    mustAppear: {where: "region IN ('north', 'south')", minRows: 1}
+  - principal: svc.load-dashboard
+    table: ops_insight.daily_load.gold_daily_load
+    via: [sql]
+    visible: [load_date, station_id, readings, mean_value]
+    mustAppear: {minRows: 1}
+  - {principal: p.analyst-full, table: sensor_net.station_readings__base.silver_readings, denied: true}
+  - {principal: svc.load-dashboard, table: ops_insight.daily_load__base.gold_daily_load, denied: true}
+  - {principal: p.analyst-full, table: lake.station_readings.bronze_readings, denied: true}
+  - {principal: p.analyst-full, table: lake.station_readings.landing_files, denied: true}
+  - {principal: p.analyst-full, sql: "SELECT * FROM sensor_net.station_readings.silver_readings FOR VERSION AS OF 1", expect: error}
+  - {principal: p.analyst-full, sql: "SHOW STATS FOR sensor_net.station_readings.silver_readings", expect: noBounds}
+  - {principal: p.analyst-full, sql: "SET SESSION sensor_net.statistics_enabled = true", expect: denied}
+  - {principal: dbt_station_readings, sql: "CREATE OR REPLACE VIEW sensor_net_build.station_readings.silver_readings AS SELECT 1 x", expect: denied}
+  - {probe: {from: k2-net, target: "lakekeeper:8181"}, expect: refused}
+  - {probe: {from: host, target: "127.0.0.1:18181"}, expect: refused}
+  - {drift: catalog, expect: clean}
+  # The gate's rows (docs/research/2026-11-26-tested-data-view-gate.md): the publisher's write floor
+  # through the reader catalog (h1.02), svc.platform holding nothing in a reader namespace (h1.33),
+  # owner transfer (h1.19), table_changes (h1.08), a planted view (h1.31) and the session header (h1.24).
+  - {principal: pub_station_readings, sql: "INSERT INTO sensor_net.station_readings__base.silver_readings SELECT * FROM sensor_net.station_readings__base.silver_readings", expect: denied}
+  - {principal: pub_station_readings, sql: "CALL sensor_net.system.rollback_to_snapshot('station_readings__base', 'silver_readings', 1)", expect: denied}
+  - {principal: svc.platform, sql: "CREATE OR REPLACE VIEW sensor_net_build.station_readings.silver_readings AS SELECT 1 x", expect: denied}
+  - {principal: pub_station_readings, sql: "ALTER VIEW sensor_net_build.station_readings.silver_readings SET AUTHORIZATION USER \"svc.platform\"", expect: denied}
+  - {principal: p.analyst-full, sql: "SELECT * FROM TABLE(sensor_net.system.table_changes('station_readings__base', 'silver_readings', 0, 1))", expect: denied}
+  - {principal: p.analyst-full, table: sensor_net.station_readings.foreign_view, denied: true}  # a builder's definer view, planted by the test
+  - {principal: p.analyst-full, sql: "SELECT count(*) FROM sensor_net.station_readings.silver_readings", session: {sensor_net.statistics_enabled: "true"}, expect: denied}

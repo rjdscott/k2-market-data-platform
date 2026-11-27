@@ -1,0 +1,299 @@
+openapi: 3.1.0
+# Frozen in phase 001 (interface A12, docs/development/phase-001-interfaces.md): every /v1
+# route, so phase 003 builds them and phase 007 finishes them without reworking any.
+# Nothing serves it yet; tests/test_frozen_interfaces.py validates it with a pinned validator.
+info:
+  title: K2 data product API
+  version: 1.0.0
+  description: |
+    Read-only REST over the platform's data products, served by k2-api on 127.0.0.1:8095
+    from the release it runs (phase 003). k2-api never decides access: a data request is run
+    on Trino as the caller (impersonated by svc.api), and Trino's rules decide what it sees.
+    A data route reads a product's reader name (k2gen.model.reader_relation): for a dbt or
+    code output the view that shows only the snapshot its `audited` tag names (ADR-061).
+    Metadata routes need no key; they add `access` when one is given. k2-api has one Trino
+    identity, svc.api, which may read a base's `t$refs` and nothing else of it.
+    `/catalog/` and `/dbt-docs/` serve the release's static site (phase 003) and are not part
+    of this document.
+    Phase 003 builds every route here without cursors: a data request matching more rows than
+    `limit` is refused with 422 `result_too_large`, so `next` is null exactly when no row
+    follows. Phase 007 adds cursors (a truncated page then carries a non-null `next`), the
+    product state headers and 410. `as_of` is not offered: the owner decides it in phase 007,
+    and until then any value is refused with 422 `as_of_unavailable`, so a client never
+    silently gets the current rows instead.
+servers:
+  - url: http://127.0.0.1:8095
+security: []
+tags:
+  - name: metadata
+  - name: data
+paths:
+  /healthz:
+    get:
+      operationId: healthz
+      summary: Liveness; reaches nothing but the process
+      responses:
+        "200":
+          description: Alive
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status: {const: ok}
+  /v1/openapi.json:
+    get:
+      operationId: openapi
+      tags: [metadata]
+      summary: This document, as JSON
+      responses:
+        "200":
+          description: The OpenAPI 3.1 document
+          content:
+            application/json:
+              schema: {type: object}
+  /v1/release:
+    get:
+      operationId: release
+      tags: [metadata]
+      summary: The release k2-api serves (release-verify asks every part this)
+      responses:
+        "200":
+          description: The release
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Release"}
+  /v1/products:
+    get:
+      operationId: listProducts
+      tags: [metadata]
+      summary: Every product in the release (the catalog's index.json)
+      responses:
+        "200":
+          description: One entry per product
+          content:
+            application/json:
+              schema:
+                type: array
+                items: {$ref: "#/components/schemas/ProductSummary"}
+  /v1/products/{domain}/{product}:
+    parameters:
+      - $ref: "#/components/parameters/Domain"
+      - $ref: "#/components/parameters/Product"
+    get:
+      operationId: getProduct
+      tags: [metadata]
+      summary: One product's catalog document, plus the caller's access when a key is given
+      security:
+        - {}
+        - apiKey: []
+      responses:
+        "200":
+          description: The product
+          headers:
+            K2-Product-State: {$ref: "#/components/headers/ProductState"}
+            Deprecation: {$ref: "#/components/headers/Deprecation"}
+            Sunset: {$ref: "#/components/headers/Sunset"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Product"}
+        "401": {$ref: "#/components/responses/Unauthorized"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "410": {$ref: "#/components/responses/Gone"}
+  /v1/products/{domain}/{product}/contracts/{table}.odcs.yaml:
+    parameters:
+      - $ref: "#/components/parameters/Domain"
+      - $ref: "#/components/parameters/Product"
+      - $ref: "#/components/parameters/Table"
+    get:
+      operationId: getContract
+      tags: [metadata]
+      summary: One table's ODCS contract, as the release holds it
+      responses:
+        "200":
+          description: The contract
+          headers:
+            K2-Product-State: {$ref: "#/components/headers/ProductState"}
+          content:
+            application/yaml:
+              schema: {type: string}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "410": {$ref: "#/components/responses/Gone"}
+  /v1/data/{domain}/{product}/{table}:
+    parameters:
+      - $ref: "#/components/parameters/Domain"
+      - $ref: "#/components/parameters/Product"
+      - $ref: "#/components/parameters/Table"
+    get:
+      operationId: getData
+      tags: [data]
+      summary: Rows of one output, read through its reader view as the caller
+      description: |
+        The snapshot is the table's tested ref (`audited` for a view, k2gen.model.tested_ref),
+        read from `t$refs` before and after the query; when the two differ the query runs once
+        more. Filters are query parameters named `filter.<column>` (a declared column) with the
+        value to equal, one per column, so no column name collides with `fields`, `limit`,
+        `cursor` or `as_of`; any other parameter name, or an undeclared column, is a 400. When
+        more rows match than `limit`, phase 003 answers 422 `result_too_large` rather than a
+        page that hides the rest; phase 007 answers with a page whose `next` is set.
+      security:
+        - apiKey: []
+      parameters:
+        - name: fields
+          in: query
+          description: Declared columns to return, comma-separated; all of them when absent
+          style: form
+          explode: false
+          schema:
+            type: array
+            items: {type: string}
+        - name: limit
+          in: query
+          schema: {type: integer, minimum: 1, maximum: 10000, default: 10000}
+        - name: cursor
+          in: query
+          description: The `next` of a previous page (phase 007)
+          schema: {type: string}
+        - name: as_of
+          in: query
+          description: Not offered (owner decision in phase 007); any value is refused with 422 as_of_unavailable
+          schema: {type: string}
+      responses:
+        "200":
+          description: One page of rows
+          headers:
+            K2-Product-State: {$ref: "#/components/headers/ProductState"}
+            Deprecation: {$ref: "#/components/headers/Deprecation"}
+            Sunset: {$ref: "#/components/headers/Sunset"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/DataPage"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthorized"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "410": {$ref: "#/components/responses/Gone"}
+        "422": {$ref: "#/components/responses/Unprocessable"}
+components:
+  securitySchemes:
+    apiKey:
+      type: http
+      scheme: bearer
+      description: "`Authorization: Bearer k2_<key>`; k2-api maps the key's sha256 to a principal through ${K2_SECRETS}/api/keys.json, never a file in git or in a release, and serves only the principals the release's compiled/api/principals.json lists"
+  parameters:
+    Domain:
+      name: domain
+      in: path
+      required: true
+      schema: {type: string, pattern: "^[a-z][a-z0-9-]*$"}
+    Product:
+      name: product
+      in: path
+      required: true
+      schema: {type: string, pattern: "^[a-z][a-z0-9-]*$"}
+    Table:
+      name: table
+      in: path
+      required: true
+      schema: {type: string, pattern: "^[a-z][a-z0-9_]*$"}
+  headers:
+    ProductState:
+      description: The product's lifecycle state in the release (phase 007)
+      schema: {type: string, enum: [active, paused, deprecated, retired]}
+    Deprecation:
+      description: Set once the product is deprecated (RFC 9745; phase 007)
+      schema: {type: string}
+    Sunset:
+      description: When a deprecated product retires (RFC 8594; phase 007)
+      schema: {type: string}
+  schemas:
+    Release:
+      type: object
+      required: [release, tag, commit, builtAt]
+      properties:
+        release: {type: string, description: "<tag>-<sha12> (A1)"}
+        tag: {type: string}
+        commit: {type: string}
+        builtAt: {type: string, format: date-time}
+    ProductSummary:
+      type: object
+      required: [id, name, domain, status, owner, purpose]
+      properties:
+        id: {type: string}
+        name: {type: string}
+        domain: {type: string}
+        status: {type: string}
+        owner: {type: string}
+        purpose: {type: string}
+    Product:
+      description: |
+        The product's catalog document (interface A11), whose schema is
+        contracts/schema/catalog-product.schema.json; reader names only. `access`
+        is added for an authenticated caller and absent otherwise.
+      type: object
+      required: [id]
+      properties:
+        id: {type: string}
+        access:
+          type: array
+          items:
+            type: object
+            required: [relation, allowed]
+            properties:
+              relation: {type: string}
+              allowed: {type: boolean}
+      additionalProperties: true
+    DataPage:
+      type: object
+      required: [release, snapshot, rows, next]
+      properties:
+        release: {type: string}
+        snapshot: {type: string, pattern: "^-?[0-9]+$", description: "The tested snapshot id the rows were read at, as a decimal string: an Iceberg id is 64 bits, more than a JavaScript number holds exactly"}
+        rows:
+          type: array
+          items: {type: object}
+        next:
+          description: The cursor of the next page; null exactly when no row follows this page, never null on a truncated one (until phase 007 no page is truncated, see result_too_large)
+          type: [string, "null"]
+    Error:
+      type: object
+      required: [error, message]
+      properties:
+        error: {type: string, description: A stable code, such as as_of_unavailable}
+        message: {type: string}
+  responses:
+    BadRequest:
+      description: A field or filter names a column the contract does not declare, or a value is malformed
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/Error"}
+    Unauthorized:
+      description: No key, or a key the release does not know
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/Error"}
+    Forbidden:
+      description: Trino denied the caller
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/Error"}
+    NotFound:
+      description: No such product or table in the release
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/Error"}
+    Gone:
+      description: The product is retired (phase 007)
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/Error"}
+    Unprocessable:
+      description: "as_of_unavailable: `as_of` was given, and it is not offered (owner decision in phase 007); result_too_large: more rows match than `limit` (phase 003, until cursors in phase 007)"
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/Error"
+              - properties:
+                  error: {enum: [as_of_unavailable, result_too_large]}

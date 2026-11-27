@@ -1,0 +1,32 @@
+# A hand-written example of manifest.json (contracts/schema/manifest.schema.json) for the
+# good set, as YAML so the fixtures gate reads it as a document. Every hash is made up.
+schema: 1
+release: v3.0.0-alpha.3-rc.1-6ee0eb490ff8
+tag: v3.0.0-alpha.3-rc.1
+commit: 0123456789abcdef0123456789abcdef01234567
+builtAt: "2026-11-26T00:00:00Z"
+k2gen: 0.1.0
+previous: null
+setSha256: 6ee0eb490ff832101cf82a3d387c35f29e4230be786978f7acf9e811febf6723
+products:
+  - id: ops-insight.daily-load
+    version: 1.0.0
+    status: active
+    sha256: 3946ca64ff78d93ca61090a437cbb6b3d2ca0d488f5f9ccf3059608368b27693
+  - id: sensor-net.station-readings
+    version: 1.0.0
+    status: active
+    sha256: f64551fcd6f07823cb87971cfb91446425da18286b3ab1ef935e0cbd7a69f68a
+files:
+  provenance.json: dd0c2c70261f62045ff1b8d639a29b945c4bf822d852f96f1d68ee9e05f3bbbc
+  documents/contracts/domains.yaml: 7e6e9877fff0dbcc576df15fd6e6de65a95d6dce6ced8fc47c4cf9dba3484195
+  compose/docker-compose.yml: 3f4e5d6c7b8a99887766554433221100ffeeddccbbaa00998877665544332211
+  compiled/products/sensor-net.station-readings/pipeline.json: 4008294739162e8f0119134dd262e35165d4a3bda08f59f97b6fdb9c5b4e655d
+images:
+  trino: trinodb/trino@sha256:b612467da0474aef0a681e4fa9481311414fa2344b7ff7a4f1f23440fde7535f
+  airflow-scheduler: k2-airflow:e7d3799ecc09
+needs:
+  recreate: [airflow-scheduler]
+  trinoRestart: false
+  dagShapeChange: true
+  ddl: [k2.station_readings.bronze_readings]

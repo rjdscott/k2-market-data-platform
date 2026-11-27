@@ -1,5 +1,5 @@
 """scripts/drop.sh against a fake `docker` on PATH. The fake plays the stack:
-`inspect` finds k2-minio's network and mounts, `run` starts the helper (and
+`inspect` finds k2-minio's networks and mounts, `run` starts the helper (and
 refuses unless the MinIO credential is in its environment), and `exec <helper>`
 is either curl against a fake Lakekeeper catalog (world.json) or mc against a
 fake MinIO (a directory per bucket, plus a version list for a versioned bucket).
@@ -48,7 +48,7 @@ w = json.loads(WORLD.read_text())
 save = lambda: WORLD.write_text(json.dumps(w))
 
 if A[0] == "inspect":
-    print(E.get("MINIO_MOUNT", "/var/lib/docker/volumes/minio-data/_data") if "Mounts" in A[2] else "k2-test-net ")
+    print(E.get("MINIO_MOUNT", "/var/lib/docker/volumes/minio-data/_data") if "Mounts" in A[2] else E.get("NETS", "k2-test-net "))
     sys.exit(0)
 if A[0] == "rm":
     sys.exit(0)
@@ -338,6 +338,14 @@ def test_dry_run_lists_and_changes_nothing(stack):
     assert (stack / "world.json").read_text() == world and tree(stack / "minio") == before
     assert not (stack / "k2-backup").exists()
     assert deletes(stack) == [] and not any(c[3:4] in (["mirror"], ["cp"]) for c in calls(stack))
+
+
+def test_the_helper_runs_on_the_catalogs_network(stack):
+    # Lakekeeper is on k2-catalog alone: the helper joins that one of k2-minio's networks.
+    out = run(stack, "k2.spike", DRY_RUN="1", NETS="p_k2-net p_k2-catalog ")
+    assert out.returncode == 0, out.stderr
+    helper = [c for c in calls(stack) if c[0] == "run"]
+    assert len(helper) == 1 and helper[0][helper[0].index("--network") + 1] == "p_k2-catalog"
 
 
 def test_drops_a_namespace_after_a_matching_copy_in_order(stack):

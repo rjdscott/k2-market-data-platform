@@ -1,0 +1,186 @@
+{
+  "id": "market-analytics.hot-gold",
+  "name": "hot-gold",
+  "domain": "market-analytics",
+  "version": "1.0.0",
+  "status": "paused",
+  "lifecycleChange": {
+    "since": "2026-11-26",
+    "reason": "Nothing the platform build works on reads the hot tier, its share of the resource budget is better left free, and the lake gold it was reloaded from was retired.",
+    "decision": "ADR-057",
+    "resume": "Not where it stopped: it is rebuilt from the tested lake gold of a product of this platform, as that product's serving copy, and the kept rows are not its source. Starting the old copy is an emergency path, whole only until the 7-day offset and topic clocks run out, about 2026-12-03 14:21 UTC."
+  },
+  "type": "consumerAligned",
+  "owner": "analytics-team",
+  "purpose": "The hot tier: a ClickHouse copy of the gold trades of every venue, for dashboards and reads faster than the lake answers them.",
+  "limitations": "Paused since 2026-11-26 (ADR-057). The clickhouse service starts only under the compose profile hot-gold; nothing feeds or reads it, and the rows its kept volume holds are stale. It has no lake table and no reader on Trino. This document declares its trades table, the copy ADR-057 describes; the book, candle, bar and BBO tables in the same volume return only if a product of this platform defines them.",
+  "issued": "2026-01-01T00:00:00Z",
+  "productFile": "documents/contracts/market-analytics/hot-gold/product.odps.yaml",
+  "inputs": [],
+  "outputs": [
+    {
+      "contractId": "market-analytics.hot-gold.trades",
+      "relation": null,
+      "serves": {
+        "engine": "clickhouse",
+        "profile": "hot-gold",
+        "status": "paused"
+      },
+      "build": "serving",
+      "testedRef": null,
+      "contractFile": "documents/contracts/market-analytics/hot-gold/trades.odcs.yaml",
+      "layer": "gold",
+      "version": "1.0.0",
+      "purpose": "One row per logical trade of every venue, deduplicated by ClickHouse's ReplacingMergeTree on the key, the first delivery winning; exact reads use FINAL.",
+      "columns": [
+        {
+          "name": "exchange",
+          "type": "varchar",
+          "required": true,
+          "primaryKey": true,
+          "description": "The venue, binance, kraken or coinbase (LowCardinality(String)).",
+          "primaryKeyPosition": 1
+        },
+        {
+          "name": "symbol",
+          "type": "varchar",
+          "required": true,
+          "primaryKey": false,
+          "description": "The venue's own symbol, as sent (String)."
+        },
+        {
+          "name": "canonical_symbol",
+          "type": "varchar",
+          "required": true,
+          "primaryKey": true,
+          "description": "BASE/QUOTE in upper case, from config/instruments.yaml (LowCardinality(String)).",
+          "primaryKeyPosition": 2
+        },
+        {
+          "name": "trade_id",
+          "type": "varchar",
+          "required": true,
+          "primaryKey": true,
+          "description": "The venue's own trade id, as a string (String).",
+          "primaryKeyPosition": 4
+        },
+        {
+          "name": "price_e8",
+          "type": "bigint",
+          "required": true,
+          "primaryKey": false,
+          "description": "The price in fixed point at 1e-8, the wire value (Int64)."
+        },
+        {
+          "name": "qty_e8",
+          "type": "bigint",
+          "required": true,
+          "primaryKey": false,
+          "description": "The base quantity in fixed point at 1e-8 (Int64)."
+        },
+        {
+          "name": "price",
+          "type": "decimal(38,10)",
+          "required": true,
+          "primaryKey": false,
+          "description": "price_e8 as an exact decimal, computed on read (an ALIAS column, Decimal(38, 10))."
+        },
+        {
+          "name": "qty",
+          "type": "decimal(38,10)",
+          "required": true,
+          "primaryKey": false,
+          "description": "qty_e8 as an exact decimal, computed on read (an ALIAS column, Decimal(38, 10))."
+        },
+        {
+          "name": "side",
+          "type": "varchar",
+          "required": true,
+          "primaryKey": false,
+          "description": "The taker's side, buy or sell (Enum8)."
+        },
+        {
+          "name": "exchange_ts",
+          "type": "timestamp(6) with time zone",
+          "required": true,
+          "primaryKey": true,
+          "description": "The venue's clock, in microseconds, UTC (DateTime64(6, 'UTC')); the monthly partition source.",
+          "time": "event",
+          "primaryKeyPosition": 3
+        },
+        {
+          "name": "recv_ts_ns",
+          "type": "bigint",
+          "required": true,
+          "primaryKey": false,
+          "description": "The capture's receive clock, in nanoseconds since the epoch (Int64)."
+        },
+        {
+          "name": "seq",
+          "type": "bigint",
+          "required": true,
+          "primaryKey": false,
+          "description": "The venue's sequence number; 0 where the stream has none (Int64)."
+        },
+        {
+          "name": "conn_id",
+          "type": "varchar",
+          "required": true,
+          "primaryKey": false,
+          "description": "The capture's WebSocket connection episode (String)."
+        },
+        {
+          "name": "conn_msg_seq",
+          "type": "bigint",
+          "required": true,
+          "primaryKey": false,
+          "description": "The capture's frame counter on conn_id (Int64)."
+        },
+        {
+          "name": "src_topic",
+          "type": "varchar",
+          "required": true,
+          "primaryKey": false,
+          "description": "Lineage, the Kafka topic the row was read from (LowCardinality(String))."
+        },
+        {
+          "name": "src_partition",
+          "type": "decimal(20,0)",
+          "required": true,
+          "primaryKey": false,
+          "description": "Lineage, the topic partition (UInt64)."
+        },
+        {
+          "name": "src_offset",
+          "type": "decimal(20,0)",
+          "required": true,
+          "primaryKey": false,
+          "description": "Lineage, the record's offset in that partition (UInt64)."
+        },
+        {
+          "name": "first_seen",
+          "type": "decimal(20,0)",
+          "required": true,
+          "primaryKey": false,
+          "description": "The ReplacingMergeTree version, the UInt64 maximum minus recv_ts_ns, so the earliest delivery of a trade survives a merge (UInt64)."
+        }
+      ],
+      "retentionDays": null,
+      "roles": [],
+      "readers": [],
+      "dbtDocs": null
+    }
+  ],
+  "joinKeys": [],
+  "lineage": {
+    "nodes": [
+      {
+        "id": "market-analytics.hot-gold.trades",
+        "product": "market-analytics.hot-gold",
+        "relation": null
+      }
+    ],
+    "edges": []
+  },
+  "tag": "v3.0.0-alpha.3-rc.1"
+}

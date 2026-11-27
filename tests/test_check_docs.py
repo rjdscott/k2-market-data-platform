@@ -127,7 +127,8 @@ def test_a_golden_digest_named_synthetic_must_be_only_a_digest():
     ("services/capture-rust/tests/fixtures/kraken-real.jsonl.xz", b"\xfd7zXZ\x00\x00\x04"),
     ("notebooks/out.parquet", b"PAR1\x15\x04"),
     ("docs/research/x/frames.txt", FRAMES),                      # by content, whatever the name
-    ("tests/fixtures/book.yaml", b"ts,px,qty\n1,2,3\n4,5,6\n"),
+    ("tests/fixtures/book.yaml", b"ts,px,qty\n1,2,3\n4,5,6\n"),      # YAML is sniffed on a fixtures path
+    ("tests/fixtures/book.log", b"ts,px,qty\n1,2,3\n4,5,6\n"),
     ("tests/fixtures/book.dat", b"ts\tpx\n1\t2\n3\t4\n"),
     ("docs/x/blob.bin", b"PAR1\x00\x01binary"),
     ("docs/x/rec", b"Obj\x01\x04\x14avro.schema"),
@@ -144,6 +145,36 @@ def test_code_and_config_are_not_data():
     files = tree(**{"scripts__x.py": b'"""doc."""\nimport a, b\n\nx = 1\n', "docker__x.json": b'{\n  "a": [1, 2]\n}\n',
                     "docker__x.yml": b"a: 1\nb: [1, 2]\n", "legacy__v2-kotlin__gradle__wrapper__gradle-wrapper.jar": b"PK\x03\x04\x00"})
     assert problems(files) == []
+
+
+COMMA_DOC = b'"""Read rows, then write them.\nTakes a path, a mode.\nReturns rows, or none.\nRaises on a bad row, always.\nLogs a line, once."""\n'
+
+
+@pytest.mark.parametrize("suffix", [".py", ".md", ".sql", ".sh", ".yml", ".yaml", ".toml"])
+def test_csv_shaped_source_and_documents_are_not_sniffed(suffix):
+    # the workers' case: a docstring whose first five lines carry one comma each
+    assert check_docs.sniff(COMMA_DOC) == "csv"
+    assert problems(tree(**{f"scripts__x{suffix}": COMMA_DOC})) == []
+
+
+@pytest.mark.parametrize("path", ["docs/x/notes", "docs/x/notes.txt", "docs/x/notes.dat"])
+def test_the_same_text_with_no_source_extension_is_still_sniffed(path):
+    assert check_docs.data_problems(tree(**{path.replace("/", "__"): COMMA_DOC}), "") == [
+        f"{path}: a data file (csv) neither in {check_docs.MANIFEST} nor listed by path in NOTICE"]
+
+
+def test_a_json_document_passes_and_json_lines_fail():
+    document = b'{"a": 1, "b": 2,\n "c": 3, "d": 4,\n "e": 5, "f": 6,\n "g": 7, "h": 8,\n "i": 9, "j": [0, 1]}\n'
+    assert check_docs.sniff(document) == "csv"
+    assert problems(tree(**{"docker__x.json": document})) == []
+    lines = b"".join(b'{"px": %d, "qty": 2}\n' % n for n in range(5))
+    assert check_docs.data_problems(tree(**{"docker__x.json": lines}), "") == [
+        f"docker/x.json: a data file (json lines) neither in {check_docs.MANIFEST} nor listed by path in NOTICE"]
+
+
+def test_a_data_extension_fails_whatever_its_content():
+    assert check_docs.data_problems(tree(**{"docs__x__a.csv": b"plain text\n"}), "") == [
+        f"docs/x/a.csv: a data file (extension) neither in {check_docs.MANIFEST} nor listed by path in NOTICE"]
 
 
 def test_a_listing_must_be_the_exact_path():
@@ -235,6 +266,47 @@ def test_the_known_binaries_pass():
                     "docs__images__a.png": b"\x89PNG\r\n\x1a\n\x00"})
     assert problems(files) == []
     assert problems(tree(**{"docs__readme.txt": b"BMW is not a bitmap\n"})) == []  # image magic needs binary
+
+
+GOLDEN_GROUPS = b"station_readings__full_reader:p.analyst-full,p.other\na__b:p.x,p.y\nc__d:p.z,p.w\n"  # CSV to the sniffer
+MARKED = {check_docs.GOLDEN_MARKER: (check_docs.GOLDEN_MARK + "\n\nWhat they are.\n").encode()}
+
+
+def test_a_golden_file_passes_only_under_the_marker():
+    golden = check_docs.GOLDEN + "trino_rules/groups.txt"
+    assert problems(tree(**{golden.replace("/", "__"): GOLDEN_GROUPS})) == [golden]  # no marker
+    assert problems({**tree(**{golden.replace("/", "__"): GOLDEN_GROUPS}), **MARKED}) == []
+    wrong = {check_docs.GOLDEN_MARKER: b"# Golden files\n"}
+    assert problems({**tree(**{golden.replace("/", "__"): GOLDEN_GROUPS}), **wrong}) == [golden]
+    # the marker excuses text only: a binary or an image under it still fails
+    for path, content in ((check_docs.GOLDEN + "lake/x.parquet", b"PAR1\x15\x04"), (check_docs.GOLDEN + "a.png", b"\x89PNG\r\n")):
+        assert problems({**tree(**{path.replace("/", "__"): content}), **MARKED}) == [path]
+    # and only under the golden directory
+    elsewhere = "platform/k2gen/tests/goldenx/groups.txt"
+    assert problems({**tree(**{elsewhere.replace("/", "__"): GOLDEN_GROUPS}), **MARKED}) == [elsewhere]
+
+
+SEED_ROWS = b"station_id,region\ns-1,north\ns-2,south\ns-3,north\n"
+DECLARED = b"customProperties:\n  - property: seeds\n    value:\n      - {path: seeds/station_regions.csv, synthetic: true}\n"
+
+
+@pytest.mark.parametrize("prefix", ["", "platform/k2gen/tests/fixtures/v2/good/"])
+def test_a_seed_passes_only_when_its_product_declares_it_synthetic(prefix):
+    product = f"{prefix}contracts/sensor-net/station-readings/"
+    seed = product + "seeds/station_regions.csv"
+    files = {seed: SEED_ROWS}
+    assert problems(tree(**{k.replace("/", "__"): v for k, v in files.items()})) == [seed]  # no product file
+    declared = {**tree(), seed: SEED_ROWS, product + "product.odps.yaml": DECLARED}
+    assert problems(declared) == []
+    for product_text in (DECLARED.replace(b"true", b"false"), DECLARED.replace(b"station_regions", b"other"),
+                         b"# - {path: seeds/station_regions.csv, synthetic: true} in a comment is not a declaration\n",
+                         b"description: seeds/station_regions.csv, synthetic: true\n"):
+        assert problems({**tree(), seed: SEED_ROWS, product + "product.odps.yaml": product_text}) == [seed], product_text
+    # a seed elsewhere under the product, or a product file in another directory, does not count
+    deeper = product + "seeds/more/station_regions.csv"
+    assert problems({**tree(), deeper: SEED_ROWS, product + "product.odps.yaml": DECLARED}) == [deeper]
+    other = f"{prefix}contracts/sensor-net/other/seeds/station_regions.csv"
+    assert problems({**tree(), other: SEED_ROWS, product + "product.odps.yaml": DECLARED}) == [other]
 
 
 def test_the_tree_as_committed_passes():

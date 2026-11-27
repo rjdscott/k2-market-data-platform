@@ -1,0 +1,126 @@
+{
+  "id": "governance.access-canary",
+  "name": "access-canary",
+  "domain": "governance",
+  "version": "1.0.0",
+  "status": "active",
+  "type": "consumerAligned",
+  "owner": "platform-team",
+  "purpose": "Proves on every release that readers see only tested rows, with their role's policy applied: five synthetic rows that each canary principal sees differently, read through the reader view governance.access_canary.events.",
+  "limitations": "Synthetic, and useful for nothing else. Its event times are the build's own clock minus each seed row's age, so they move with every build: the delay proof needs a build that passed in the last 19 minutes, which the 10-minute schedule gives. A stale canary fails the delayed reader's expectation rather than passing it.",
+  "usage": "At build, rows 1 (north) and 4 (south) are a day old, row 2 (north) 21 minutes, and rows 3 (north) and 5 (south) 1 minute. p.canary-full (full_reader) sees all five; p.canary-delayed (delayed_reader: delay 20 minutes on event_ts, note masked) sees 1, 2 and 4 with note null; p.canary-scoped (public_reader: row scope region north) sees 1, 2 and 3. Any other id is not from the seed, so it was never tested. Each is a row of tests/access/expectations.yaml.",
+  "terms": {
+    "redistribution": "allowed"
+  },
+  "issued": "2026-01-01T00:00:00Z",
+  "periodicity": "*/10 * * * *",
+  "productFile": "documents/contracts/governance/access-canary/product.odps.yaml",
+  "inputs": [],
+  "outputs": [
+    {
+      "contractId": "governance.access-canary.events",
+      "relation": "governance.access_canary.events",
+      "build": "dbt",
+      "testedRef": "audited",
+      "contractFile": "documents/contracts/governance/access-canary/events.odcs.yaml",
+      "layer": "mart",
+      "version": "1.0.0",
+      "purpose": "One synthetic canary row per seed row, built so that each reader policy visibly changes what its canary principal reads: some rows younger than the delay, two regions, a note to mask.",
+      "columns": [
+        {
+          "name": "id",
+          "type": "bigint",
+          "required": true,
+          "primaryKey": true,
+          "description": "The seed row's number, 1 to 5; a reader shown any other id was shown an untested row.",
+          "primaryKeyPosition": 1
+        },
+        {
+          "name": "region",
+          "type": "varchar",
+          "required": true,
+          "primaryKey": true,
+          "description": "north or south; public_reader keeps north only. The partition source, so it is in the key, as an incremental build's unique key must hold every partition source column.",
+          "primaryKeyPosition": 2
+        },
+        {
+          "name": "note",
+          "type": "varchar",
+          "required": true,
+          "primaryKey": false,
+          "description": "A marker a leak can be searched for, canary-note-<id>; delayed_reader reads it as null."
+        },
+        {
+          "name": "event_ts",
+          "type": "timestamp(6) with time zone",
+          "required": true,
+          "primaryKey": false,
+          "description": "The build's clock minus the seed row's age_minutes; delayed_reader sees a row only once this is 20 minutes old.",
+          "time": "event"
+        }
+      ],
+      "partitioning": [
+        "region"
+      ],
+      "retentionDays": 1,
+      "roles": [
+        {
+          "role": "full_reader",
+          "inWords": "every row and column"
+        },
+        {
+          "role": "delayed_reader",
+          "policies": {
+            "delay": {
+              "column": "event_ts",
+              "minutes": 20
+            },
+            "mask": [
+              "note"
+            ]
+          },
+          "inWords": "only rows whose event_ts is at least 20 minutes old; note read as null"
+        },
+        {
+          "role": "public_reader",
+          "policies": {
+            "rowScope": {
+              "column": "region",
+              "values": [
+                "north"
+              ]
+            }
+          },
+          "inWords": "only rows whose region is north"
+        }
+      ],
+      "readers": [
+        {
+          "principal": "p.canary-full",
+          "role": "full_reader"
+        },
+        {
+          "principal": "p.canary-delayed",
+          "role": "delayed_reader"
+        },
+        {
+          "principal": "p.canary-scoped",
+          "role": "public_reader"
+        }
+      ],
+      "dbtDocs": "dbt-docs/#!/model/model.k2.access_canary__events"
+    }
+  ],
+  "joinKeys": [],
+  "lineage": {
+    "nodes": [
+      {
+        "id": "governance.access-canary.events",
+        "product": "governance.access-canary",
+        "relation": "governance.access_canary.events"
+      }
+    ],
+    "edges": []
+  },
+  "tag": "v3.0.0-alpha.3-rc.1"
+}

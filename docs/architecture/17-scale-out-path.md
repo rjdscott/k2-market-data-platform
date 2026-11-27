@@ -230,7 +230,7 @@ reasons are here.
 | **Hot tier** | **measure the rebuild first**, then ClickHouse Cloud (quote) or 2 replicas + 3-node Keeper on EC2 | replication, or none | the only tier where the honest answer is a measurement this design does not have. ADR-025 already makes it derived and rebuildable, so **if the rebuild is fast enough the correct amount of HA here is none** and the money belongs in the lake | connection strings; the `iceberg()` reload path gains an S3 URL and an IAM role. The contract is unchanged |
 | **Orchestration** | **self-hosted on ECS + RDS Multi-AZ** | scheduler, API server and DAG processor tasks, RDS Multi-AZ | after §1.2, `max_active_runs=1` is load-bearing for *correctness*. That belongs in an account you control until the distributed lock replaces it, then a managed Airflow becomes an option | the metadata database URL and the executor. Not the DAGs or the schedules |
 | **SQL serving and marts** | **Trino on ECS**: today's single node (coordinator and worker in one JVM) at 1×, workers added when the queries need them; dbt runs inside the orchestrator's tasks | ECS replaces a failed task; a failed hourly dbt run is rebuilt whole by the next | the fences of ADR-044 are Trino's `rules.json` and its read-only `lake` catalog, and an engine that attaches a warehouse directly reads around them ([ADR-035](../adr/ADR-035-trino-and-dbt-for-marts.md)), so the SQL engine stays Trino. The marts are derived, so, as for the hot tier, restart in place is enough HA | the catalog files' hard-coded endpoints (§3.1); `X-Trino-User` becomes an authenticated identity; each domain writer's storage access scoped to its own prefix, `warehouse/<domain>/` (ADR-044's limits). Not the dbt models, the contracts or `rules.json` |
-| **Observability** | **AMP + AMG** | managed, regional, multi-AZ | Alertmanager finally exists, and everything the repo owns — the rules, the `runbook:` annotations, the promtool tests gated by `scripts/check-docs.sh` — is a file that moves unedited. Caution: at 200× it is **cardinality**, not sample rate, that sets the bill | scrape config becomes remote-write |
+| **Observability** | **AMP + AMG** | managed, regional, multi-AZ | Everything the repo owns (the rules, the `runbook:` annotations, the promtool tests gated by `scripts/check-docs.sh`) is a file that moves unedited. Caution: at 200× it is **cardinality**, not sample rate, that sets the bill | scrape config becomes remote-write |
 | **Notebooks** | SageMaker or any notebook host; SQL through the Trino tier above, where the fences are | none needed | DuckDB reads Iceberg through the same REST catalog it does today (spike S10) | the `ATTACH` endpoint and credentials |
 
 ### 3.1 What flips each endpoint
@@ -253,13 +253,14 @@ not a gap in this page.**
 | `K2_SCHEMA_REGISTRY_URL` | `http://redpanda:8081` | the managed registry | where schema ids resolve |
 | `K2_LAKE_LOCK` | `/tmp/k2-lake-ingest.lock` | **nothing valid** — §1.2 | the ingest mutual exclusion, and the one row here that is not a rename |
 
-**One exception today: Trino's catalog files.** `docker/trino/etc/catalog/lake.properties`
-and every domain catalog `make generate` writes (`platform/k2gen/k2gen/generate.py`) hard-code
-`http://lakekeeper:8181/catalog`, `http://minio:9000`, region `local-01` and path-style
-access, where `docker/lake/` reads each from the environment. By the rule above that is a
-bug, and a small one: Trino already reads the storage keys as `${ENV:MINIO_ROOT_USER}`, so the
-fix is the same substitution for the four values, in `lake.properties` and in the generator's
-template.
+**One exception today: Trino's catalog files.** Every catalog file a release carries under
+`compiled/trino/etc/catalog/`, written by the `trino_etc` emitter
+([`platform/k2gen/k2gen/emit/trino_etc.py`](../../platform/k2gen/k2gen/emit/trino_etc.py),
+[chapter 21](21-releases-and-deploy.md)), hard-codes `http://lakekeeper:8181/catalog`,
+`http://minio:9000`, region `local-01` and path-style access, where `docker/lake/` reads each
+from the environment. By the rule above that is a bug, and a small one: Trino already reads the
+storage keys as `${ENV:K2_TRINO_S3_ACCESS_KEY}` and `${ENV:K2_TRINO_S3_SECRET_KEY}`, so the fix
+is the same substitution for the four values, in the emitter.
 
 Credentials are the other thing that is not a variable rename: `MINIO_ROOT_USER` /
 `MINIO_ROOT_PASSWORD`, read at `spark_conf.py`'s `lake_session()`, become an IAM task

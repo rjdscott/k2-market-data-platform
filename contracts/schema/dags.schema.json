@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://k2.invalid/schema/dags.schema.json",
+  "title": "compiled/airflow/dags.json: the DAGs a release defines (A4)",
+  "description": "Frozen in phase 001. Emitted by k2gen.emit.pipeline (S16); read by the DAG factory (phase 002), by deploy's preflight (S19) and by the compiler, whose needs.dagShapeChange is true when a DAG's tasks differ from the previous release's. One DAG per product with a schedule, sorted by dagId.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["dags"],
+  "properties": {
+    "dags": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["dagId", "product", "status", "schedule", "pipeline", "tasks"],
+        "properties": {
+          "dagId": {"description": "The product's fence (k2gen.model.dag_id).", "type": "string", "pattern": "^[a-z][a-z0-9]*(_[a-z0-9]+)*$"},
+          "product": {"description": "<domain>.<product>.", "type": "string", "pattern": "^[a-z][a-z0-9]*(-[a-z0-9]+)*\\.[a-z][a-z0-9]*(-[a-z0-9]+)*$"},
+          "status": {"description": "The product's state: only an active product's DAG is unpaused.", "enum": ["active", "paused", "deprecated", "retired"]},
+          "schedule": {"description": "The product's cron, UTC.", "type": "string", "pattern": "^\\S+( \\S+){4}$"},
+          "pipeline": {"description": "Its pipeline file in the release, compiled/products/<product>/pipeline.json (k2gen.model.pipeline_path).", "type": "string", "pattern": "^compiled/products/[a-z][a-z0-9-]*\\.[a-z][a-z0-9-]*/pipeline\\.json$"},
+          "tasks": {
+            "description": "The task ids in run order. resolve hands the release to the rest by XCom; the others are the run record's tasks (run-record.schema.json).",
+            "type": "array",
+            "minItems": 1,
+            "uniqueItems": true,
+            "items": {"enum": ["resolve", "fetch", "load", "audit", "publish", "build", "expire", "record", "maintain"]}
+          }
+        }
+      }
+    }
+  }
+}

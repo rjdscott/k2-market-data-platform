@@ -1,0 +1,343 @@
+{
+  "catalogs": [
+    {
+      "user": "pub_daily_load",
+      "catalog": "ops_insight",
+      "allow": "all"
+    },
+    {
+      "user": "dbt_daily_load|pub_daily_load|svc\\.platform",
+      "catalog": "ops_insight_build",
+      "allow": "all"
+    },
+    {
+      "user": "pub_station_readings",
+      "catalog": "sensor_net",
+      "allow": "all"
+    },
+    {
+      "user": "dbt_station_readings|pub_station_readings|svc\\.platform",
+      "catalog": "sensor_net_build",
+      "allow": "all"
+    },
+    {
+      "user": "dbt_station_readings|svc\\.api|svc\\.catalog|svc\\.platform|svc\\.runs",
+      "catalog": "lake",
+      "allow": "read-only"
+    },
+    {
+      "user": "svc\\.api|svc\\.catalog|svc\\.platform|svc\\.runs",
+      "catalog": "ops_insight",
+      "allow": "read-only"
+    },
+    {
+      "user": "dbt_daily_load|svc\\.api|svc\\.catalog|svc\\.platform|svc\\.runs",
+      "catalog": "sensor_net",
+      "allow": "read-only"
+    },
+    {
+      "user": "dbt_daily_load|dbt_station_readings|svc\\.platform",
+      "catalog": "system",
+      "allow": "read-only"
+    },
+    {
+      "group": "daily_load__full_reader",
+      "catalog": "ops_insight",
+      "allow": "read-only"
+    },
+    {
+      "group": "station_readings__delayed_reader|station_readings__full_reader",
+      "catalog": "sensor_net",
+      "allow": "read-only"
+    },
+    {
+      "group": "daily_load__full_reader|station_readings__delayed_reader|station_readings__full_reader",
+      "catalog": "system",
+      "allow": "read-only"
+    },
+    {
+      "catalog": "system",
+      "allow": "none"
+    }
+  ],
+  "schemas": [
+    {
+      "user": "dbt_daily_load",
+      "catalog": "ops_insight_build",
+      "schema": "daily_load__base",
+      "owner": true
+    },
+    {
+      "user": "pub_daily_load",
+      "catalog": "ops_insight_build",
+      "schema": "daily_load",
+      "owner": true
+    },
+    {
+      "user": "dbt_station_readings",
+      "catalog": "sensor_net_build",
+      "schema": "station_readings__base",
+      "owner": true
+    },
+    {
+      "user": "pub_station_readings",
+      "catalog": "sensor_net_build",
+      "schema": "station_readings",
+      "owner": true
+    }
+  ],
+  "tables": [
+    {
+      "user": "svc\\.platform",
+      "catalog": "system",
+      "privileges": [
+        "SELECT"
+      ]
+    },
+    {
+      "user": "svc\\.platform",
+      "catalog": "ops_insight_build",
+      "schema": "daily_load__base",
+      "privileges": [
+        "SELECT"
+      ]
+    },
+    {
+      "user": "svc\\.platform",
+      "catalog": "sensor_net_build",
+      "schema": "station_readings__base",
+      "privileges": [
+        "SELECT"
+      ]
+    },
+    {
+      "user": "dbt_daily_load|dbt_station_readings",
+      "catalog": "system",
+      "schema": "metadata",
+      "table": "analyze_properties|catalogs|column_properties|materialized_view_properties|materialized_views|schema_properties|table_comments|table_properties",
+      "privileges": [
+        "SELECT"
+      ]
+    },
+    {
+      "group": "daily_load__full_reader|station_readings__delayed_reader|station_readings__full_reader",
+      "catalog": "system",
+      "schema": "jdbc",
+      "table": "attributes|catalogs|columns|procedure_columns|procedures|pseudo_columns|schemas|super_tables|super_types|table_types|tables|types|udts",
+      "privileges": [
+        "SELECT"
+      ]
+    },
+    {
+      "group": "daily_load__full_reader|station_readings__delayed_reader|station_readings__full_reader",
+      "catalog": "system",
+      "schema": "metadata",
+      "table": "analyze_properties|catalogs|column_properties|materialized_view_properties|materialized_views|schema_properties|table_comments|table_properties",
+      "privileges": [
+        "SELECT"
+      ]
+    },
+    {
+      "user": "dbt_daily_load",
+      "catalog": "ops_insight_build",
+      "schema": "daily_load__base",
+      "privileges": [
+        "SELECT",
+        "INSERT",
+        "DELETE",
+        "UPDATE",
+        "OWNERSHIP"
+      ]
+    },
+    {
+      "user": "dbt_daily_load",
+      "catalog": "sensor_net",
+      "schema": "station_readings__base",
+      "table": "silver_readings",
+      "privileges": [
+        "SELECT"
+      ]
+    },
+    {
+      "user": "pub_daily_load",
+      "catalog": "ops_insight_build",
+      "schema": "daily_load",
+      "table": "gold_daily_load",
+      "privileges": [
+        "SELECT",
+        "OWNERSHIP"
+      ]
+    },
+    {
+      "user": "pub_daily_load",
+      "catalog": "ops_insight",
+      "schema": "daily_load__base",
+      "table": "gold_daily_load|gold_daily_load\\$refs",
+      "privileges": [
+        "SELECT",
+        "GRANT_SELECT"
+      ]
+    },
+    {
+      "user": "dbt_station_readings",
+      "catalog": "sensor_net_build",
+      "schema": "station_readings__base",
+      "privileges": [
+        "SELECT",
+        "INSERT",
+        "DELETE",
+        "UPDATE",
+        "OWNERSHIP"
+      ]
+    },
+    {
+      "user": "dbt_station_readings",
+      "catalog": "lake",
+      "schema": "station_readings",
+      "table": "bronze_readings",
+      "privileges": [
+        "SELECT"
+      ]
+    },
+    {
+      "user": "pub_station_readings",
+      "catalog": "sensor_net_build",
+      "schema": "station_readings",
+      "table": "silver_readings",
+      "privileges": [
+        "SELECT",
+        "OWNERSHIP"
+      ]
+    },
+    {
+      "user": "pub_station_readings",
+      "catalog": "sensor_net",
+      "schema": "station_readings__base",
+      "table": "silver_readings|silver_readings\\$refs",
+      "privileges": [
+        "SELECT",
+        "GRANT_SELECT"
+      ]
+    },
+    {
+      "user": "svc\\.api|svc\\.catalog|svc\\.platform|svc\\.runs",
+      "catalog": "ops_insight",
+      "schema": "daily_load__base",
+      "table": "gold_daily_load\\$refs",
+      "privileges": [
+        "SELECT"
+      ]
+    },
+    {
+      "user": "svc\\.api|svc\\.catalog|svc\\.platform|svc\\.runs",
+      "catalog": "lake",
+      "schema": "station_readings",
+      "table": "bronze_readings\\$refs",
+      "privileges": [
+        "SELECT"
+      ]
+    },
+    {
+      "user": "svc\\.api|svc\\.catalog|svc\\.platform|svc\\.runs",
+      "catalog": "sensor_net",
+      "schema": "station_readings__base",
+      "table": "silver_readings\\$refs",
+      "privileges": [
+        "SELECT"
+      ]
+    },
+    {
+      "group": "daily_load__full_reader",
+      "catalog": "ops_insight",
+      "schema": "daily_load",
+      "table": "gold_daily_load",
+      "privileges": [
+        "SELECT"
+      ]
+    },
+    {
+      "group": "station_readings__delayed_reader",
+      "catalog": "sensor_net",
+      "schema": "station_readings",
+      "table": "silver_readings",
+      "privileges": [
+        "SELECT"
+      ],
+      "filter": "(\"region\" IN ('north', 'south')) AND (\"read_at\" < current_timestamp - INTERVAL '20' MINUTE)",
+      "columns": [
+        {
+          "name": "operator_note",
+          "mask": "CAST(NULL AS varchar)"
+        }
+      ]
+    },
+    {
+      "group": "station_readings__full_reader",
+      "catalog": "sensor_net",
+      "schema": "station_readings",
+      "table": "silver_readings",
+      "privileges": [
+        "SELECT"
+      ]
+    }
+  ],
+  "system_session_properties": [
+    {
+      "user": "dbt_daily_load|dbt_station_readings|pub_daily_load|pub_station_readings|svc\\.catalog|svc\\.platform|svc\\.runs",
+      "allow": true
+    }
+  ],
+  "catalog_session_properties": [
+    {
+      "user": "svc\\.platform",
+      "allow": true
+    },
+    {
+      "user": "dbt_daily_load|dbt_station_readings|pub_daily_load|pub_station_readings|svc\\.catalog|svc\\.runs",
+      "property": "statistics_enabled",
+      "allow": true
+    }
+  ],
+  "queries": [
+    {
+      "user": "svc\\.platform",
+      "allow": [
+        "execute",
+        "kill",
+        "view"
+      ]
+    },
+    {
+      "user": "dbt_daily_load|dbt_station_readings|k2_release_000000000000|p\\.analyst\\-delayed|p\\.analyst\\-full|pub_daily_load|pub_station_readings|svc\\.api|svc\\.catalog|svc\\.load\\-dashboard|svc\\.runs",
+      "allow": [
+        "execute"
+      ]
+    }
+  ],
+  "impersonation": [
+    {
+      "original_user": "svc\\.api",
+      "new_user": "p\\.analyst\\-delayed|p\\.analyst\\-full",
+      "allow": true
+    }
+  ],
+  "system_information": [
+    {
+      "user": "svc\\.platform",
+      "allow": [
+        "read"
+      ]
+    }
+  ],
+  "procedures": [
+    {
+      "user": "svc\\.platform",
+      "catalog": "system",
+      "schema": "runtime",
+      "procedure": "kill_query",
+      "privileges": [
+        "EXECUTE"
+      ]
+    }
+  ]
+}

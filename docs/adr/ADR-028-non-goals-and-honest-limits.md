@@ -378,3 +378,24 @@ placeholder or guessable `.env` (`scripts/check-env.py`). What § 8 still does n
 other users of the host. The single MinIO root credential every engine holds, exposed on the
 network until then, still has to be rotated and replaced by scoped keys; that is a decision of
 its own, and it will change ADR-044's single-key statement.
+
+## Outcome (2026-11-26, access control through Trino)
+
+**§ 8 is lifted for SQL through Trino** by
+[ADR-059](ADR-059-access-rules-compiled-default-deny-over-two-catalogs-per-domain.md),
+[ADR-060](ADR-060-trino-logins-by-password-over-tls-under-a-local-ca.md) and
+[ADR-061](ADR-061-readers-see-dbt-outputs-through-a-view-over-the-tested-tag.md), from release
+`v3.0.0-alpha.3`. Not by its own trigger: no second person has an account and no port is off
+localhost. It is lifted because the unified platform ([ADR-056](ADR-056-unified-data-product-platform.md))
+serves products to named readers under named policies, which an unchecked user header cannot carry.
+
+What changed: every Trino login is a password over HTTPS, verified against a local CA; the rules are
+compiled from each release's documents, refuse everything no rule names and give each principal at most
+one role per product; readers of a dbt output read only a view over its tested tag; Lakekeeper sits on a
+network of its own with a drift check.
+
+What did not: Lakekeeper still has no login (the fence is a network until the release gate); Spark
+bypasses Trino and every engine still holds the MinIO root key, until a storage key per identity in
+phase 002; the `delay` and `rowScope` policies suit readers the owner trusts not to probe (ADR-061's
+Outcome); and loopback still keeps out other machines, not other users of the host. This is access
+control for one owner's team on one host, not multi-tenancy, which stays a non-goal.

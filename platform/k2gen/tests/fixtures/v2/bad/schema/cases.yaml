@@ -1,0 +1,81 @@
+# Strictness of the frozen schemas: each case is a good fixture with one change, which the
+# schemas of its kind (k2gen.model.SCHEMAS) must refuse with an error containing `error`.
+# `path` is slash-separated keys and list indexes into the document; `remove` deletes what
+# it names, `set` puts `value` there (an unknown field, or a value the schema forbids).
+# tests/test_interfaces.py runs every case; it also removes each required top-level field
+# and adds an unknown one to every good document, so these are the cases that go deeper.
+cases:
+  # product.odps.yaml: ODPS v1.1.0, then K2's profile
+  - {kind: product, file: good/contracts/sensor-net/station-readings/product.odps.yaml, remove: status, error: "'status' is a required property"}
+  - {kind: product, file: good/contracts/sensor-net/station-readings/product.odps.yaml, set: owner, value: sensor-team, error: "Additional properties are not allowed ('owner' was unexpected)"}
+  - {kind: product, file: good/contracts/sensor-net/station-readings/product.odps.yaml, set: customProperties/1/property, value: contact, error: "'contact' is not one of"}
+  - {kind: product, file: good/contracts/sensor-net/station-readings/product.odps.yaml, set: customProperties/1/value/retries, value: 3, error: "Additional properties are not allowed ('retries' was unexpected)"}
+  - {kind: product, file: good/contracts/sensor-net/station-readings/product.odps.yaml, remove: customProperties/0/value/parser, error: "'parser' is a required property"}
+  - {kind: product, file: good/contracts/sensor-net/station-readings/product.odps.yaml, set: customProperties/0/value/url, value: "http://data.example.org/readings.csv", error: "does not match '^https://'"}
+  - {kind: product, file: good/contracts/sensor-net/station-readings/product.odps.yaml, set: status, value: paused, error: "does not contain items matching"}
+  - {kind: product, file: good/contracts/sensor-net/station-readings/product.odps.yaml, set: name, value: station--readings, error: "does not match"}
+  # connector templates admit {{ds}} only (finding 11); a seed is declared synthetic (finding 8)
+  - {kind: product, file: good/contracts/sensor-net/station-readings/product.odps.yaml, set: customProperties/0/value/url, value: "https://data.example.org/{{ var.value.x }}.csv", error: "does not match"}
+  - {kind: product, file: good/contracts/sensor-net/station-readings/product.odps.yaml, set: customProperties/0/value/url, value: "https://data.example.org/{{ conn.minio.password }}.csv", error: "does not match"}
+  - {kind: product, file: good/contracts/sensor-net/station-readings/product.odps.yaml, set: customProperties/3, value: {property: seeds, value: [{path: seeds/station_regions.csv, synthetic: false}]}, error: "True was expected"}
+  # <table>.odcs.yaml: ODCS v3.2.0, then K2's profile
+  - {kind: contract, file: good/contracts/sensor-net/station-readings/silver_readings.odcs.yaml, remove: customProperties/2, error: "does not contain items matching"}
+  - {kind: contract, file: good/contracts/sensor-net/station-readings/silver_readings.odcs.yaml, set: customProperties/6/value/delayed_reader/hide, value: [region], error: "Additional properties are not allowed ('hide' was unexpected)"}
+  - {kind: contract, file: good/contracts/sensor-net/station-readings/silver_readings.odcs.yaml, set: customProperties/0/value, value: raw, error: "'raw' is not one of"}
+  - {kind: contract, file: good/contracts/sensor-net/station-readings/silver_readings.odcs.yaml, set: schema/0/physicalName, value: silver_readings, error: "does not match"}
+  - {kind: contract, file: good/contracts/sensor-net/station-readings/silver_readings.odcs.yaml, remove: schema/0/properties/0/physicalType, error: "'physicalType' is a required property"}
+  - {kind: contract, file: good/contracts/sensor-net/station-readings/silver_readings.odcs.yaml, set: customProperties/1/value, value: {code: event-bars}, error: "is not valid under any of the given schemas"}
+  # the review's attack strings (finding 10): a reserved word, an injected type, a base name, a 300-character name
+  - {kind: contract, file: good/contracts/sensor-net/station-readings/silver_readings.odcs.yaml, set: schema/0/properties/3/name, value: current_user, error: "should not be valid under"}
+  - {kind: contract, file: good/contracts/sensor-net/station-readings/silver_readings.odcs.yaml, set: schema/0/properties/0/physicalType, value: "varchar, injected bigint", error: "does not match"}
+  - {kind: contract, file: good/contracts/sensor-net/station-readings/silver_readings.odcs.yaml, set: name, value: x__base, error: "does not match"}
+  - {kind: contract, file: good/contracts/sensor-net/station-readings/silver_readings.odcs.yaml, set: schema/0/properties/4/name, value: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, error: "is too long"}
+  - {kind: contract, file: good/contracts/sensor-net/station-readings/silver_readings.odcs.yaml, set: customProperties/6/value/delayed_reader/rowScope/values/0, value: "north') OR (1=1", error: "is not valid under any of the given schemas"}
+  - {kind: contract, file: good/contracts/sensor-net/station-readings/silver_readings.odcs.yaml, set: customProperties/1/value, value: spark, error: "is not valid under any of the given schemas"}
+  # grants.yaml
+  - {kind: grants, file: good/contracts/sensor-net/station-readings/grants.yaml, remove: grants/0/role, error: "'role' is a required property"}
+  - {kind: grants, file: good/contracts/sensor-net/station-readings/grants.yaml, set: grants/0/expires, value: "2027-01-01", error: "Additional properties are not allowed ('expires' was unexpected)"}
+  # contracts/access/: no hash or secret field exists (the orchestrator's ruling on Q4)
+  - {kind: principals, file: good/contracts/access/principals.yaml, set: principals/0/trinoBcrypt, value: "$2b$10$abcdefghijklmnopqrstuv", error: "Additional properties are not allowed ('trinoBcrypt' was unexpected)"}
+  - {kind: principals, file: good/contracts/access/principals.yaml, set: principals/2/apiKeySha256, value: 0000000000000000000000000000000000000000000000000000000000000000, error: "Additional properties are not allowed ('apiKeySha256' was unexpected)"}
+  - {kind: principals, file: good/contracts/access/principals.yaml, set: principals/0/id, value: svc.analyst-full, error: "does not match '^p\\\\.'"}
+  - {kind: roles, file: good/contracts/access/roles.yaml, set: roles/delayed_reader/requires, value: [filter], error: "'filter' is not one of"}
+  - {kind: domains, file: good/contracts/domains.yaml, set: domains/sensor-build, value: {owner: sensor-team, kind: source-aligned, description: x}, error: "should not be valid under"}
+  # tests/access/expectations.yaml
+  - {kind: expectations, file: good/tests/access/expectations.yaml, remove: expectations/0/visible, error: "'visible' is a required property"}
+  - {kind: expectations, file: good/tests/access/expectations.yaml, set: expectations/3/denied, value: false, error: "True was expected"}
+  - {kind: expectations, file: good/tests/access/expectations.yaml, set: expectations/7/expect, value: rows, error: "'rows' is not one of"}
+  - {kind: expectations, file: good/tests/access/expectations.yaml, set: expectations/11/sql, value: "SELECT 1", error: "Additional properties are not allowed ('sql' was unexpected)"}
+  - {kind: expectations, file: good/tests/access/expectations.yaml, set: expectations/0/mustAppear, value: {}, error: "should be non-empty"}
+  - {kind: expectations, file: good/tests/access/expectations.yaml, set: expectations/0/mustAppear/minRows, value: 0, error: "less than the minimum of 1"}
+  - {kind: expectations, file: good/tests/access/expectations.yaml, set: expectations/0/mustAppear/ids, value: [1], error: "Additional properties are not allowed ('ids' was unexpected)"}
+  - {kind: expectations, file: good/tests/access/expectations.yaml, set: expectations/20/session, value: {}, error: "should be non-empty"}
+  # release files
+  - {kind: manifest, file: release/manifest.yaml, remove: needs, error: "'needs' is a required property"}
+  - {kind: manifest, file: release/manifest.yaml, set: secrets, value: {}, error: "Additional properties are not allowed ('secrets' was unexpected)"}
+  - {kind: manifest, file: release/manifest.yaml, set: needs/recreate, value: [minio], error: "should not be valid under"}
+  - {kind: manifest, file: release/manifest.yaml, set: images/trino, value: "trinodb/trino:484", error: "is not valid under any of the given schemas"}
+  - {kind: manifest, file: release/manifest.yaml, set: files/.., value: dd0c2c70261f62045ff1b8d639a29b945c4bf822d852f96f1d68ee9e05f3bbbc, error: "does not match"}
+  - {kind: images, file: release/images.yaml, set: fetch, value: "fetch:latest", error: "is not valid under any of the given schemas"}
+  - {kind: provenance, file: release/provenance.yaml, remove: tagger, error: "'tagger' is a required property"}
+  - {kind: provenance, file: release/provenance.yaml, set: documents/0/pr, value: "#1", error: "is not of type 'integer', 'null'"}
+  - {kind: pipeline, file: release/pipeline.yaml, remove: build/publisher, error: "'publisher' is a required property"}
+  - {kind: pipeline, file: release/pipeline.yaml, set: bronze/0/branch, value: main, error: "'audit' was expected"}
+  - {kind: pipeline, file: release/pipeline.yaml, remove: landing, error: "'landing' is a dependency of 'connector'"}
+  - {kind: pipeline, file: release/pipeline.yaml, set: maintain/retainDays, value: 7, error: "Additional properties are not allowed ('retainDays' was unexpected)"}
+  - {kind: pipeline, file: release/pipeline.yaml, set: bronze/0/lineage, value: source_file_sha256, error: "Additional properties are not allowed ('lineage' was unexpected)"}
+  - {kind: catalog-product, file: release/catalog-product.yaml, set: outputs/0/relation, value: ops_insight.daily_load__base.gold_daily_load, error: "is not valid under any of the given schemas"}
+  - {kind: catalog-product, file: release/catalog-product.yaml, set: outputs/0/dbtDocs, value: "dbt-docs/#!/model/model.k2.gold_daily_load", error: "is not valid under any of the given schemas"}
+  - {kind: catalog-index, file: release/catalog-index.yaml, set: products/0/version, value: 1.0.0, error: "Additional properties are not allowed ('version' was unexpected)"}
+  - {kind: backup-set, file: release/backup-set.yaml, set: entries/1/mode, value: copy, error: "'copy' is not one of"}
+  - {kind: backup-set, file: release/backup-set.yaml, set: entries/3/bucket, value: k2-landing, error: "Additional properties are not allowed ('bucket' was unexpected)"}
+  - {kind: run-record, file: release/run-record.yaml, remove: detail, error: "'detail' is a required property"}
+  - {kind: run-record, file: release/run-record.yaml, set: event, value: succeeded, error: "'succeeded' is not one of"}
+  - {kind: run-record, file: release/run-record.yaml, set: dbt_invocation_id, value: "1", error: "does not match"}
+  - {kind: storage-plan, file: release/storage-plan.yaml, set: warehouses/0/remoteSigningEnabled, value: true, error: "False was expected"}
+  - {kind: storage-plan, file: release/storage-plan.yaml, set: warehouses/1/namespaces/1, value: daily_load__audit, error: "does not match"}
+  - {kind: dags, file: release/dags.yaml, set: dags/0/tasks/1, value: deploy, error: "'deploy' is not one of"}
+  - {kind: oneshots, file: release/oneshots.yaml, set: oneshots/fetch/networks, value: [k2-net, k2-catalog], error: "'k2-net' was expected"}
+  - {kind: oneshots, file: release/oneshots.yaml, set: oneshots/fetch/secrets, value: [/run/k2-secrets/tls/ca.pem], error: "is expected to be empty"}
+  - {kind: deploy-record, file: release/deploy-record.yaml, set: outcome, value: maybe, error: "'maybe' is not one of"}
+  - {kind: deploy-record, file: release/deploy-record.yaml, set: release, value: v3.0.0, error: "does not match"}

@@ -13,8 +13,7 @@ docker/
 │   ├── config.xml        # Server config (Kafka Engine, compression, Prometheus exporter)
 │   └── ddl/              # gold tables (10-gold-tables.sql, tested by make test-clickhouse) + Kafka feeds (20-gold-kafka.sql)
 ├── lake/                 # v3 Iceberg lake on Lakekeeper + MinIO (ADR-018); the old ingest is in legacy/v3-lake-ingest/
-│   ├── init-lake.sh      # One-shot bootstrap: bucket, catalog, warehouse k2, the domain warehouses
-│   ├── generated/        # Written by make generate from contracts/ (warehouses.txt and the rest)
+│   ├── init-lake.sh      # One-shot bootstrap: bucket, catalog, warehouse k2, the warehouses of the release's storage plan
 │   ├── offsets.py        # Consumed offsets in the Iceberg snapshot summary (ADR-022)
 │   ├── wire.py           # Confluent framing + schema-registry lookup
 │   ├── bars.py, books.py # Event bars and the book replay, kept for the new connectors
@@ -22,7 +21,7 @@ docker/
 ├── airflow/              # Airflow 3 image and its tests (ADR-034); no DAG until phase 002
 ├── redpanda/             # Topic + Avro subject bootstrap (init.sh, run by redpanda-init)
 ├── spark/                # Spark image (Iceberg 1.8.1, Kafka + Avro jars, pinned by sha256)
-├── trino/                # Trino 484: catalog `lake` (read-only), generated domain catalogs and rules (ADR-035, ADR-044)
+├── trino/                # Notes on Trino 484; its etc and rules are compiled into each release by k2gen (ADR-058, ADR-059)
 ├── grafana/
 │   ├── provisioning/     # Auto-provisioned datasource (Prometheus) + dashboard loader
 │   └── dashboards/       # Dashboard JSON, 4: pipeline overview, k2-l2-capture, k2-airflow, k2-resources
@@ -40,16 +39,16 @@ docker/
 | `redpanda`, `redpanda-console` | long-running | Streaming backbone + web UI |
 | `clickhouse` | profile `hot-gold`, paused | Gold hot tier: Kafka engine feeds into `gold`; not started by `docker compose up` while the platform is built ([ADR-057](../docs/adr/ADR-057-clickhouse-hot-tier-paused-during-platform-build.md)) |
 | `minio` | long-running | S3 object storage, holds the v3 `k2-lake` bucket |
-| `lakekeeper` | long-running | **v3** Iceberg REST catalog ([ADR-018](../docs/adr/ADR-018-v3-lake-first-rust-capture.md)); `127.0.0.1:18181` |
+| `lakekeeper` | long-running | **v3** Iceberg REST catalog ([ADR-018](../docs/adr/ADR-018-v3-lake-first-rust-capture.md)); on network `k2-catalog` only, no host port: it has no authentication, so the network is its fence ([ADR-059](../docs/adr/ADR-059-access-rules-compiled-default-deny-over-two-catalogs-per-domain.md) part 7) |
 | `spark-iceberg` | long-running | Batch engine for the lake; no job runs while the old ingest is retired ([`legacy/v3-lake-ingest/`](../legacy/v3-lake-ingest/)) |
 | `prefect-db` | long-running | PostgreSQL for the Airflow and Lakekeeper metadata; the name is historical, kept from before ADR-034 |
-| `trino` | long-running | SQL over the lake: catalog `lake` (warehouse `k2`, read-only at the connector) and one writable catalog and warehouse per data domain ([ADR-035](../docs/adr/ADR-035-trino-and-dbt-for-marts.md), [ADR-044](../docs/adr/ADR-044-producer-lake-and-domain-mart-warehouses.md), [trino/README.md](trino/README.md)); `127.0.0.1:8088` (`K2_TRINO_PORT`) |
+| `trino` | long-running | SQL over the lake: catalog `lake` (warehouse `k2`, read-only at the connector) and one writable catalog and warehouse per data domain ([ADR-035](../docs/adr/ADR-035-trino-and-dbt-for-marts.md), [ADR-044](../docs/adr/ADR-044-producer-lake-and-domain-mart-warehouses.md), [trino/README.md](trino/README.md)); its etc read through the release pointer `/k2/releases/pointers/trino/compiled/trino/etc` ([ADR-058](../docs/adr/ADR-058-deploy-sealed-releases-by-pointer-swap.md)); HTTPS only with password logins on `127.0.0.1:8443` (`K2_TRINO_PORT`, [ADR-060](../docs/adr/ADR-060-trino-logins-by-password-over-tls-under-a-local-ca.md)) |
 | `airflow-api-server`, `airflow-scheduler`, `airflow-dag-processor`, `airflow-statsd` | long-running | Airflow 3 ([ADR-034](../docs/adr/ADR-034-airflow-3-replaces-prefect.md)); no DAG until phase 002; UI on `127.0.0.1:8090` |
 | `prometheus`, `grafana`, `cadvisor` | long-running | Observability |
 | `capture-{binance,kraken,coinbase}` | long-running | **v3** Rust WebSocket capture (trades + L2 book); metrics on `:8082/metrics` ([ADR-019](../docs/adr/ADR-019-rust-capture-tier.md)) |
 | `redpanda-init` | one-shot | Topics + Avro subjects (`redpanda/init.sh`) |
 | `lakekeeper-migrate` | one-shot | v3 catalog DB schema (`lakekeeper migrate`) |
-| `lake-init` | one-shot | v3 bucket, bootstrap, warehouse `k2`, then one warehouse per domain from `lake/generated/warehouses.txt` (ADR-044) (`lake/init-lake.sh`) |
+| `lake-init` | one-shot | v3 bucket, bootstrap, warehouse `k2`, then every warehouse of the release's `compiled/lake/storage-plan.json`, read through the trino pointer or the release `make deploy` names (ADR-044) (`lake/init-lake.sh`) |
 | `airflow-migrate` | one-shot | `airflow` role and database on `prefect-db`, then `airflow db migrate` (`airflow/init-db.sh`) |
 
 ## The v3 lake
@@ -62,7 +61,6 @@ docker/
 docker exec k2-spark-iceberg python3 /home/iceberg/lake/spark_conf.py --smoke
 # Expect: count=1, a summary containing 'k2.smoke': '1', "✓ lake smoke passed"
 
-curl -s localhost:18181/health          # {"health":"ok", ...}
 docker compose up -d --force-recreate --no-deps lake-init   # re-bootstrap
 ```
 
@@ -88,10 +86,10 @@ summary ([ADR-022](../docs/adr/ADR-022-exactly-once-via-snapshot-offsets.md)) li
 ## Usage
 
 ```bash
-make up            # check-env, then docker compose up -d (refused on a stack built before 2026-11-26)
-make down           # stop and remove the containers (volumes kept)
-make logs           # tail all service logs
-make ps             # show service status
+make deploy RELEASE=<id>   # the stack runs releases: docs/runbooks/deploy-a-release.md (a fresh clone: first-cutover-to-releases.md first)
+make down                  # stop and remove the containers (volumes kept)
+make logs                  # tail all service logs
+make ps                    # show service status
 
 # The DAGs: none until phase 002
 docker exec k2-airflow-scheduler airflow dags list

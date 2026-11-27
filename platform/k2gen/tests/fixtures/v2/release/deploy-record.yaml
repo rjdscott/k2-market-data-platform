@@ -1,0 +1,11 @@
+# A hand-written example of one line of deploy-log.jsonl (contracts/schema/deploy-record.schema.json).
+# The operator is a made-up user name.
+at: "2026-11-26T02:00:00Z"
+release: v3.0.0-alpha.3-rc.1-6ee0eb490ff8
+from: null
+step: preflight
+outcome: ok
+operator: example-operator
+secrets:
+  trino/password.db: {mode: "0600", size: 1280}
+  tls/trino.pem: {mode: "0600", size: 1124}

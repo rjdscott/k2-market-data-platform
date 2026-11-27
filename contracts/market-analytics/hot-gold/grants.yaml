@@ -1,0 +1,3 @@
+# No grant: a serving-only table has no reader name on Trino (k2gen.model.LAKE_BUILDS), and the
+# paused copy offers no role. Readers come back with the product it returns as.
+grants: []

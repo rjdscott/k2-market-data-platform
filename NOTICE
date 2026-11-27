@@ -115,6 +115,23 @@ under the Apache License 2.0 (https://www.apache.org/licenses/LICENSE-2.0). The
 MIT licence above does not cover it. Source commit and sha256 are in
 contracts/schema/README.md.
 
+contracts/schema/odps-json-schema-v1.1.0.json is the JSON Schema of the Open
+Data Product Standard v1.1.0, copyright The Bitol Contributors, from
+https://github.com/bitol-io/open-data-product-standard, vendored unmodified
+under the Apache License 2.0 (https://www.apache.org/licenses/LICENSE-2.0). The
+MIT licence above does not cover it. Source commit and sha256 are in
+contracts/schema/README.md.
+
+Generated test expectations
+===========================
+
+platform/k2gen/tests/golden/ holds what the compiler emits from the synthetic
+fixture set, for its tests to compare against; nothing in it is source data.
+Gate (i) reads its text files as such only while its README.md opens with the
+marker line scripts/check_docs.py names (GOLDEN_MARK). A product's seed,
+contracts/<domain>/<product>/seeds/<name>.csv, passes gate (i) only when its
+product file declares it synthetic; real reference data is listed here instead.
+
 Third-party reference values in code
 ====================================
 
@@ -124,3 +141,15 @@ under docs/research/2026-08-26-v3-spikes/s1-kraken-checksum/) use the worked
 example published in Kraken's WebSocket v2 book documentation,
 https://docs.kraken.com/api/docs/guides/spot-ws-book-v2, as a test vector for
 the checksum algorithm. It is quoted for interoperability testing, not as data.
+
+Mirrored container image
+========================
+
+ghcr.io/rjdscott/minio is an unmodified copy of the image MinIO, Inc. published
+as minio/minio:RELEASE.2025-09-07T16-13-09Z (linux/amd64 only), mirrored on
+2026-11-27 because the vendor's repository no longer serves it. MinIO is
+licensed under the GNU Affero General Public License v3.0
+(https://www.gnu.org/licenses/agpl-3.0.html); its source at that release is
+https://github.com/minio/minio at commit
+07c3a429bfed433e49018cb0f78a52145d4bedeb. The MIT licence above does not cover
+it. It is a frozen copy for this lab and receives no security fixes.

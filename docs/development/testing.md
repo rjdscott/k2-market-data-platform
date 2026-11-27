@@ -10,10 +10,13 @@ are listed below rather than papered over.
 make test          # everything: Python + Rust
 make test-python   # contract, lake-offset, wire-format, bars and the scripts' tests (needs uv)
 make test-rust     # capture unit + replay integration tests (runs in rust:1.100.0-bookworm)
-make test-trino    # Trino's etc/ starts; lake refuses every commit; only a domain's writer changes its catalog
+make test-trino    # a compiled release's rules on a throwaway Trino and Lakekeeper: default deny, exact names, writer fenced from writer
 make test-dbt      # dbt/ with no Trino: lint, deps, parse, compile, the manifest check; the project with no marts
 make test-airflow  # inside the Airflow image: every dbt package at the version dbt/ pins
+make spine-e2e     # the release and rules spine end to end on throwaway containers: run at merge points, not per step
 ```
+
+`make spine-e2e` is the project's merge-point practice and has [a page of its own](spine-e2e.md): its five stages, how to read a failure, and why it is not in CI.
 
 ## Inventory
 
@@ -82,14 +85,15 @@ tests `legacy/v2-kotlin/`.
 | **Rust (capture)** | `cargo fmt --check`, `cargo clippy --locked --all-targets -- -D warnings`, `cargo test --locked` on a pinned 1.98.0 toolchain, runs the 79 tests |
 | **Python (lake + tests)** | `ruff check` then `pytest tests -q` under `uv` |
 | **Docker build** | matrix: Airflow, lake-metrics, Spark, capture, with GHA layer caching. Every leg builds from the repo root. The Airflow leg then runs `make test-airflow`'s tests in the image it built, with `dbt/` mounted; the lake-metrics leg builds the retired exporter's Dockerfile at its archived path in `legacy/v3-lake-ingest/`, so the archive stays buildable and the leg's required name keeps reporting |
-| **Trino (access rules)** | `bash scripts/trino-rules-test.sh` (`make test-trino`): the pinned `trinodb/trino` with `docker/trino/etc`, no network, two starts. The real `etc/`: a misspelt property fails the start, the catalogs must be `lake`, `system` and one per domain in `contracts/domains.yaml`, only `lake` is on warehouse `k2` and it is `read_only`. Then local Iceberg catalogs from the same generator: each domain's writer creates, inserts and drops in its own catalog; the next domain's writer and an unnamed user are denied every SQL write there and in `lake`; `optimize`, `rollback_to_snapshot`, `expire_snapshots`, `remove_orphan_files` and `CALL` through `lake` denied, and `CALL` through a domain catalog; nobody may set the two retention-floor session properties, so an expire at `0s` fails; a user sees only its own queries; the known table-procedure gap between domains asserted (ADR-044) |
+| **Trino (access rules)** | `bash scripts/trino-rules-test.sh` (`make test-trino`): k2gen compiles the good fixture set plus a same-domain twin product into a release, and `scripts/lib/throwaway-lake.sh` starts Trino 484 from that release's own `etc`, `rules.json` and `groups.txt` over a throwaway Lakekeeper, Postgres and MinIO on a network of their own, every principal logging in with a per-run password over HTTPS. The suite (`scripts/trino_rules_test.py`) is a table of named rows: each role reads exactly its policy's rows and masks and never the untested row; every base path, both catalogs, refused to every reader and stranger; views, listings, builders and publishers; every session property; `system.runtime` and query history the operator's; impersonation; the release canary; the set's own expectation rows; spike (e)'s 40 statements, writer against writer. A negative control widens one rule in place and the suite must fail; a mask or filter on a column the view lacks fails closed ([ADR-059](../adr/ADR-059-access-rules-compiled-default-deny-over-two-catalogs-per-domain.md)) |
 | **dbt (marts)** | `bash scripts/dbt-test.sh` (`make test-dbt`): `sqlfluff lint`, then the pinned `trinodb/trino` over the local catalogs k2gen writes; `dbt deps`, `parse` and `compile --target trino`; and a project with no marts (k2gen's empty sources and selectors, no models) through `dbt parse`. The marts' build, unit tests and test-result checks went with the v3 marts to `legacy/v3-lake-ingest/`; the name is kept because branch protection requires it |
 | **Compose (config validation)** | `docker compose --env-file .env.example config -q`, then `python3 scripts/check-budget.py`: prints the steady default, the bootstrap default and, for each profile a service names (`hot-gold` today), the default plus that profile: limit sums, each service's limits times its `deploy.replicas` (compose sets it from `scale` too), and fails when the bootstrap default is over 25 CPU / 48 GiB ([ADR-045](../adr/ADR-045-ceiling-25-cpu-48-gib.md)); fails any service under any profile (`--profile '*'`) without a CPU and memory limit (it would escape the budget and nothing else would notice), any image not pinned to a release (a digest, or a tag whose first number has a minor version: `rust:1-bookworm`, `postgres:15-alpine` and `nonroot` fail) in compose, a Dockerfile `FROM` or `COPY --from`, or a `docker run` in the Makefile or a script, any `pip install` or `uv run --with` without `==`, any GitHub Action not pinned by full commit SHA with its version in a comment, and any published port in any profile not bound to `127.0.0.1` |
 | **Docs** | `bash scripts/check-docs.sh`, eleven failing gates: links, forbidden words (held as salted hashes in `scripts/check_docs.py`), promtool check and test, runbook annotation paths and presence, capacity-model gate, no plan checkboxes, no em-dash on lines added since `origin/main` (so the job checks out with full history; a push to main diffs from the commit before the push), every data file generated at its hash in `tests/fixtures/SHA256SUMS` or listed in `NOTICE` and no notebook with outputs, no count of captured data in an editable Markdown file. Mermaid width only warns |
 | **Security (Trivy)** | Filesystem scan of the lockfiles for CRITICAL/HIGH findings, SARIF uploaded to GitHub code scanning; then the gate: a CRITICAL with a fix available fails the job unless `.trivyignore.yaml` lists it with a reason and an expiry date (`tests/test_ci_security.py`). `legacy/` is skipped; the third-party compose images are not scanned |
 
 No job starts the stack, so nothing in CI exercises a real Redpanda, ClickHouse or
-WebSocket connection.
+WebSocket connection. `make test-access` and the deploy rehearsal are not in CI either: they run in
+[`make spine-e2e`](spine-e2e.md), at merge points.
 
 ## What is not covered
 

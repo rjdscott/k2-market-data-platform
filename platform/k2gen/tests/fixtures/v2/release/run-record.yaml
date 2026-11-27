@@ -1,0 +1,24 @@
+# A hand-written example of one run-record row (contracts/schema/run-record.schema.json):
+# the dbt wrapper moved daily-load's tag. Every id and count is made up.
+run_id: daily_load/scheduled__2026-11-26T01:30:00+00:00
+product_id: ops-insight.daily-load
+release_id: v3.0.0-alpha.3-rc.1-6ee0eb490ff8
+task: build
+event: audited
+table_name: ops_insight_build.daily_load__base.gold_daily_load
+snapshot_before: 101
+snapshot_after: 102
+inputs:
+  - contractId: sensor-net.station-readings.silver_readings
+    relation: sensor_net.station_readings__base.silver_readings
+    snapshot: 55
+    state: active
+    lagMinutes: 12.5
+rows_written: 3
+bytes_written: 2048
+started_at: "2026-11-26T01:30:05.123456Z"
+recorded_at: "2026-11-26T01:30:09Z"
+duration_s: 4.2
+detail: null
+dbt_invocation_id: 6f1d2c3b-4a5e-4f60-8a7b-9c0d1e2f3a4b
+openlineage_run_id: null
