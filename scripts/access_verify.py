@@ -92,6 +92,7 @@ DENIED = "PERMISSION_DENIED"  # an `expect: denied` row passes on this errorName
 UNSUPPORTED = "NOT_SUPPORTED"  # and an `expect: error` row on this one
 SKIP_REST = "via rest: k2-api's REST rows join in phase 003"
 SKIP_PROBE = "a network probe: scripts/verify/catalog-fence.sh (step S22) runs it on the stack"
+SKIP_DRIFT = "the catalog API answers only inside k2-catalog: scripts/verify/catalog_drift.py runs there (release-verify)"
 S3_ENDPOINT = "http://minio:9000"  # $K2_S3_ENDPOINT overrides, as docker/lake/init-lake.sh and spark_conf.py read it
 PROBE_DIR = "k2-access-probe"  # a write row's object: <prefix>/k2-access-probe/<random hex>, deleted at once
 EMPTY_SHA256 = hashlib.sha256(b"").hexdigest()
@@ -488,24 +489,46 @@ def plant(env: dict[str, Any], m: Any, p: Any, name: str) -> Callable[[], None]:
     return undo
 
 
-def verdict(trino: Trino, env: dict[str, Any], m: Any, release: Path, scope: str, e: Any) -> tuple[str, str]:
+def catalog_uri(env: dict[str, Any]) -> str | None:
+    return env.get("lakekeeper") and f"{env['lakekeeper']}/catalog" or os.environ.get("K2_CATALOG_URI")
+
+
+def legs(e: Any, m: Any, scope: str, env: dict[str, Any]) -> list[tuple[str, str | None]]:
+    """What a row runs here: its legs, each with why it is skipped (None: it runs). A row with `via`
+    has one leg per endpoint, `sql` and `rest`; any other row one leg, `row`. The one rule run()
+    skips by and tests/access/prove.py expects by, so the two cannot disagree on a skip."""
     from k2gen import model
+    if scope == "live" and (why := live_skip(e, m)):
+        return [("row", why)]
+    if isinstance(e, model.ProbeExpectation):
+        return [("row", SKIP_PROBE)]
+    if isinstance(e, model.DriftExpectation) and not catalog_uri(env):
+        return [("row", SKIP_DRIFT)]
+    via = getattr(e, "via", None)
+    return [(v, None if v == "sql" else SKIP_REST) for v in via] if via else [("row", None)]
+
+
+def verdict(trino: Trino, env: dict[str, Any], m: Any, release: Path, scope: str, e: Any) -> tuple[str, str]:
+    """The row's verdict: FAIL when a leg fails, else SKIP when one is skipped, else PASS; a row of
+    two legs says each one's."""
     if why := unknown(e, m):
         return "FAIL", f"names something that does not exist: {why}"
-    if scope == "live" and (why := live_skip(e, m)):
-        return "SKIP", why
-    if "sql" not in getattr(e, "via", ("sql",)):
-        return "SKIP", SKIP_REST
-    if isinstance(e, model.ProbeExpectation):
-        return "SKIP", SKIP_PROBE
+    plan = legs(e, m, scope, env)
+    done = [("SKIP", skip) if skip else check(trino, env, m, release, e) for _, skip in plan]
+    if len(done) == 1 and plan[0][0] != "rest":
+        return done[0]
+    worst = next(v for v in ("FAIL", "SKIP", "PASS") if v in {d[0] for d in done})
+    return worst, "; ".join(f"{leg} {v}: {why}" for (leg, _), (v, why) in zip(plan, done, strict=True))
+
+
+def check(trino: Trino, env: dict[str, Any], m: Any, release: Path, e: Any) -> tuple[str, str]:
+    """The row's own check, over SQL (a read, a denial, a statement), S3 or the catalog API."""
+    from k2gen import model
     if isinstance(e, model.StorageKeyExpectation):
         passed, why = storage_key(e)
         return ("PASS" if passed else "FAIL"), why
     if isinstance(e, model.DriftExpectation):
-        uri = env.get("lakekeeper") and f"{env['lakekeeper']}/catalog" or os.environ.get("K2_CATALOG_URI")
-        if not uri:
-            return "SKIP", "the catalog API answers only inside k2-catalog: scripts/verify/catalog_drift.py runs there (release-verify)"
-        found = catalog_drift.drift(uri, catalog_drift.expected(release))
+        found = catalog_drift.drift(catalog_uri(env), catalog_drift.expected(release))
         return ("FAIL" if found["differences"] else "PASS"), "; ".join(found["differences"]) or \
             f"clean; {len(found['pending'])} pending, {len(found['skipped'])} skipped (run records, phase 002)"
     try:

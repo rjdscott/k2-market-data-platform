@@ -10,7 +10,7 @@
 #    reason alone: catalog-fence.sh runs them on the stack (prove.py release).
 # 3. Negative control: one reader rule loosened in the running copy of the rules; access-verify
 #    fails exactly that role's read rows, and passes again once the rule is restored.
-# 4. The live scope on this lake: only the planted-view, drift, probe and other products' rows skip; a missing canary
+# 4. The live scope on this lake: exactly the rows the runner's own rule (av.legs) skips on live skip; a missing canary
 #    password fails that reader's rows.
 # 5. The drift check is clean, then names each plant and is clean once it is undone: a view with a
 #    forged owner, a grafted tag, a table in a reader namespace, a wider view, a column aliased past

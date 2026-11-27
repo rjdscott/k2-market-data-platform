@@ -264,7 +264,15 @@ rows = {
     "a service row naming no product": model.StatementExpectation("svc.api", 'SET SESSION AUTHORIZATION "svc.platform"', "denied", {}),
     "the drift row": model.DriftExpectation("catalog", "clean"),
 }
-print(json.dumps({k: av.live_skip(e, m) for k, e in rows.items()}))
+legs = {
+    "a person's statement": model.StatementExpectation(person, "SELECT 1", "denied", {}),
+    "a service statement": model.StatementExpectation("svc.api", "SELECT 1", "denied", {}),
+    "a probe": model.ProbeExpectation("k2-net", "lakekeeper:8181", "refused"),
+    "the drift row": model.DriftExpectation("catalog", "clean"),
+    "a storage-key row": model.StorageKeyExpectation("tools", "k2-landing", "read", "allowed"),
+}
+print(json.dumps({"skips": {k: av.live_skip(e, m) for k, e in rows.items()},
+                  "legs": {k: av.legs(e, m, "live", {"trino": "https://t:8443"}) for k, e in legs.items()}}))
 """
 
 
@@ -272,11 +280,17 @@ def test_the_live_scope_runs_only_platform_held_passwords_on_the_canary():
     out = subprocess.run(["uv", "run", "--project", "platform/k2gen", "--locked", "-q", "python", "-c", LIVE],
                          cwd=ROOT, capture_output=True, text=True, timeout=300)
     assert out.returncode == 0, out.stderr
-    skips = json.loads(out.stdout.strip().splitlines()[-1])
+    got = json.loads(out.stdout.strip().splitlines()[-1])
+    skips, legs = got["skips"], got["legs"]
     assert "owner's, not the platform's" in skips["a consumer of a product that is not the canary"]
     assert "not the canary" in skips["a service row naming another product"]
     assert skips["a service row naming no product"] is None
     assert skips["the drift row"] is None
+    # legs(): the one rule run() skips by and tests/access/prove.py live expects by. A person's
+    # statement row has no table, and is skipped all the same (the blocker of W2-9's three rows).
+    assert "owner's, not the platform's" in legs["a person's statement"][0][1]
+    assert legs["a service statement"] == [["row", None]] and legs["a storage-key row"] == [["row", None]]
+    assert legs["a probe"] == [["row", av.SKIP_PROBE]] and legs["the drift row"] == [["row", av.SKIP_DRIFT]]
 
 
 def test_the_lake_env_json_is_read_as_the_lake_writes_it(tmp_path):

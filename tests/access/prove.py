@@ -8,7 +8,7 @@ control and asserts how it ends, exiting 1 when the control did not behave.
     prove.py release         access-verify's release scope: no row fails, and exactly the probe rows skip,
                              each for the probe reason (catalog-fence.sh runs them on the stack)
     prove.py live            access-verify's live scope against this lake (K2_SECRETS laid out from the
-                             lake's passwords): only the planted-view, drift, probe and other products' rows skip; with one
+                             lake's passwords): exactly the rows its own rule (av.legs) skips on live skip; with one
                              canary reader's password file gone, exactly that reader's rows fail
     prove.py plant <kind>    view: a definer view by REST, an undeclared name, the publisher's name
                                    forged as its owner, SQL over the base's main
@@ -140,13 +140,14 @@ def live() -> int:
     os.environ.pop("K2_CATALOG_URI", None)
     code, rows = run_access_verify("live", "/work/live.json")
     skipped = {n for n, (v, _) in rows.items() if v == "SKIP"}
-    c = next(p for p in M.products if p.id == av.CANARY_PRODUCT)  # a row on another product's relation is not live's to run
-    canary_ns = {model.reader_namespace(c.name), model.base_namespace(c.name)}
-    foreign = {n for n, e in enumerate(M.expectations, 1) if getattr(e, "table", None) and not e.table.startswith("system.")
-               and e.table.split(".")[1].split("$")[0] not in canary_ns}
-    want = {n for n, e in enumerate(M.expectations, 1) if av.planted(e, M) or isinstance(e, model.DriftExpectation)} | probes() | foreign
-    say(f"live scope: exit {code}; skipped rows {sorted(skipped)}, the planted-view, drift, probe and other products' rows are {sorted(want)}")
-    ok = code == 0 and skipped == want
+    # The rows the runner's own rule skips here (av.legs: a planted view, drift without the catalog
+    # API, a probe, a principal whose password is its owner's, another product's name, a REST leg
+    # with no key): equal, so a row that should run and was skipped fails the proof, as does a skip
+    # the rule does not name. Not every row: a live run that skips everything proves nothing.
+    _, live_env = av.connect(None)
+    want = {n for n, e in enumerate(M.expectations, 1) if any(skip for _, skip in av.legs(e, M, "live", live_env))}
+    say(f"live scope: exit {code}; skipped rows {sorted(skipped)}, the rows av.legs skips on live are {sorted(want)}")
+    ok = code == 0 and skipped == want and len(want) < len(M.expectations)
     gone = sorted(canary)[-1]
     (sec / "principals" / f"{gone}.password").unlink()
     code, rows = run_access_verify("live", "/work/live-missing.json")
