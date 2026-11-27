@@ -331,3 +331,9 @@ def test_the_webhook_path_and_the_alertmanager_address_agree_everywhere():
     assert prom["alerting"]["alertmanagers"][0]["static_configs"][0]["targets"] == ["alertmanager:9093"]
     jobs = {j["job_name"]: j["static_configs"][0]["targets"] for j in prom["scrape_configs"]}
     assert jobs["alertmanager"] == ["alertmanager:9093"]
+
+
+def test_a_flag_that_takes_a_value_is_not_read_as_the_image():
+    """--pids-limit and --network-alias take the next word (the phase 002 audit's HIGH 2: `docker run 256`)."""
+    text = "\tdocker run --rm --pids-limit 256 --network-alias api --name x alpine:3.20 true\n"
+    assert budget.run_images(text) == ["alpine:3.20"]
