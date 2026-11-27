@@ -42,14 +42,14 @@ Where the endpoint and each principal's password come from:
   each password ${K2_SECRETS:-$HOME/k2-secrets}/principals/<id>.password. No row impersonates
   anyone and no verification principal exists: a principal that may become consumers would be a
   key to every consumer's rows. Live runs only the rows whose principal's password the platform
-  holds, a service principal (svc.*, dbt_*, pub_*) or a grantee of the access canary only (it
-  exists to be tested; platform_held, which scripts/principal-secret.py's TO_FILE=1 obeys too),
+  holds, a service principal (svc.*, dbt_*, pub_*; never a partner's, OWNER_HELD) or a grantee of
+  the access canary only (it exists to be tested; platform_held, which scripts/principal-secret.py's TO_FILE=1 obeys too),
   and only when every product the row names is the canary, so a loosened
   rule can damage nothing real. Every other row is a SKIP naming the throwaway run at release
   time, where generated passwords stand in for the consumers'. A planted-view row is a SKIP (it
   would write the live catalog), and so is the drift row unless the catalog API answers at
   $K2_CATALOG_URI (it does only from inside k2-catalog). An eligible principal with no password
-  file fails its row.
+  file fails its row; deploy's preflight refuses before that, naming each file (live_principals).
 
 stage (throwaway lake only) makes the lake the release describes, as its build and deploy would:
 every namespace of the storage plan by REST; Spark's tables checked present (the lake made them);
@@ -105,6 +105,13 @@ SKIP_DRIFT = "the catalog API answers only inside k2-catalog: scripts/verify/cat
 S3_ENDPOINT = "http://minio:9000"  # $K2_S3_ENDPOINT overrides, as docker/lake/init-lake.sh and spark_conf.py read it
 PROBE_DIR = "k2-access-probe"  # a write row's object: <prefix>/k2-access-probe/<random hex>, deleted at once
 EMPTY_SHA256 = hashlib.sha256(b"").hexdigest()
+# Principals whose credential is their owner's although their id is a service's (svc.*): a partner's
+# login, which the platform never holds. Their rows are skipped live as a person's are (live_skip), so
+# deploy's preflight asks no password file for them (live_principals). ponytail: a list in this one
+# place, because contracts/access/principals.yaml has no kind that tells a partner's service from the
+# platform's (both are `kind: service`, `owner: platform-team`); once it declares `kind: partner`
+# (model.PrincipalKind and the principals schema), this is {p.id for p in m.principals if p.kind == "partner"}.
+OWNER_HELD = frozenset({"svc.partner-dashboard"})
 
 
 # ---- Trino ---------------------------------------------------------------------------------------
@@ -568,7 +575,7 @@ def live_skip(e: Any, m: Any) -> str | None:
         return "it plants a view, which would write the live catalog; it ran on the throwaway lake at release time"
     who = e.principal
     service = re.fullmatch(r"(svc\.|dbt_|pub_).+", who)
-    if not service and who not in platform_held(m):
+    if who in OWNER_HELD or (not service and who not in platform_held(m)):
         return f"{who}'s password is its owner's, not the platform's; its row ran on the throwaway lake at release time"
     named = set(re.findall(r"[a-z0-9_]+", json.dumps(asdict(e))))
     others = sorted(p.id for p in m.products if p.id != CANARY_PRODUCT
@@ -576,6 +583,13 @@ def live_skip(e: Any, m: Any) -> str | None:
     if others:
         return f"it names {', '.join(others)}, not the canary, and a live run risks nothing real"
     return None
+
+
+def live_principals(m: Any) -> set[str]:
+    """Each principal the live suite logs in to Trino as: one with a row live_skip runs. Its password
+    is the platform's, so deploy's preflight refuses while its file is missing (scripts/deploy.py),
+    where the row would otherwise fail after the swap."""
+    return {e.principal for e in m.expectations if getattr(e, "principal", None) and live_skip(e, m) is None}
 
 
 # ---- one row -------------------------------------------------------------------------------------

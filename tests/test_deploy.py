@@ -1077,6 +1077,26 @@ sys.exit(f"fake docker: no answer for {A}")
             (world.secrets / n).write_text("fixture\n")
         assert deploy.required_secrets(world.ctx, p) == []
 
+    def test_preflight_refuses_while_a_principal_the_live_suite_logs_in_as_has_no_password_file(world: World) -> None:
+        """svc.operator's rows run on live (its host-held login is the platform operator's), so its file is
+        asked before anything moves, not failed by the live suite after the swap; a partner's rows are skipped
+        there (access_verify.OWNER_HELD), so its file is never asked."""
+        principals = "contracts/access/principals.yaml"
+        rows = ('  - {principal: svc.operator, sql: "SELECT 1", expect: ok}\n'
+                '  - {principal: svc.partner-dashboard, sql: "SELECT 1", expect: denied}\n')
+        declared = "".join(f"  - id: {x}\n    kind: service\n    owner: platform-team\n" for x in ("svc.operator", "svc.partner-dashboard"))
+        world.live(world.release())
+        r1 = world.release(over={EXPECT: (GOOD / EXPECT).read_bytes() + rows.encode(),
+                                 principals: (GOOD / principals).read_bytes() + declared.encode()})
+        live = deploy.live_principals(r1)
+        assert "svc.operator" in live and "svc.partner-dashboard" not in live, live
+        with pytest.raises(deploy.Refused) as e:
+            world.deploy(r1)
+        assert "principals/svc.operator.password (make password PRINCIPAL=svc.operator TO_FILE=1)" in str(e.value)
+        assert "partner" not in str(e.value) and world.ups() == [] and records(world)[-1]["step"] == "preflight"
+        (world.secrets / "principals/svc.operator.password").write_text("fixture\n")
+        assert world.deploy(r1) == 0
+
     # --- review R6: lake-init runs the deployed release's own script and policies --------
 
     def test_lake_init_runs_the_target_release_script_and_an_older_release_skips_it(world: World) -> None:
@@ -1201,7 +1221,8 @@ sys.exit(f"fake docker: no answer for {A}")
         assert world.deploy(r2) == 0
         runs = [[*p, "--state", "running", "-o", "json"] for p in (["dags", "list-runs", DL], ["dags", "list-runs", SR])]
         poll = [*runs, ["tasks", "states-for-dag-run", SR, "scheduled__1", "-o", "json"]]
-        assert world.airflow_calls() == [["dags", "list", "-o", "json"], ["dags", "pause", SR], *poll, *poll,
+        listing = ["dags", "list", "-o", "json"]  # the drain's, then verify's (idle_dags), read-only
+        assert world.airflow_calls() == [listing, ["dags", "pause", SR], *poll, *poll, listing,
                                          ["dags", "unpause", SR]]  # daily_load's run is asked, its pause kept
         assert world.paused() == {SR: False, DL: True} and not (world.root / deploy.DRAIN_STATE).exists()
         t = [e[:3] for e in world.timeline()]
@@ -1319,9 +1340,26 @@ sys.exit(f"fake docker: no answer for {A}")
         monkeypatch.setattr(deploy, "sql", refused)
         said: list[str] = []
         world.ctx.say = said.append
-        assert world.deploy(r2) == 0  # live and verified; the DAGs wait for the next deploy or rollback that reads them
+        # Review D7: live and verified, never rolled back, but not a clean exit 0: exit 4, the DAGs and why on the
+        # deploy's last line, and in make release-status; they wait for a check of the holds, or the next done.
+        assert world.deploy(r2) == deploy.EXIT_PAUSED
         assert world.paused() == {SR: True, DL: True} and deploy.paused_by_deploy(world.ctx) == {SR, DL}
         assert any(x.startswith("  kept paused daily_load, station_readings: the holds could not be read as svc.platform") for x in said)
+        why = "the holds could not be read as svc.platform (TrinoError"
+        assert said[-1].startswith(f"deploy: {r2.id} is live and verified, but 2 DAG(s) deploy paused are left paused: "
+                                   f"daily_load, station_readings ({why}") and said[-1].endswith(f"its holds: {deploy.UNPAUSE}"), said[-1]
+        assert records(world)[-2]["step"] == "done" and [r["step"] for r in records(world) if r["step"].startswith("rollback")] == []
+        assert "live and verified, but DAGs left paused" in deploy.MEANING[deploy.EXIT_PAUSED]
+        status: list[str] = []
+        world.ctx.say = status.append
+        deploy.status(world.ctx)
+        line = next(x for x in status if "DAGs a deploy paused" in x)
+        assert line.startswith("  DAGs a deploy paused and has not yet unpaused: daily_load, station_readings (left paused at ")
+        assert why in line and deploy.UNPAUSE in line
+        monkeypatch.setattr(deploy, "sql", real)  # the holds readable again: the next done unpauses them and exits 0
+        world.ctx.say = said.append
+        assert world.deploy(world.release(over={CODE: b"# three\n"})) == deploy.EXIT_OK
+        assert world.paused() == {SR: False, DL: False} and not (world.root / deploy.DRAIN_STATE).exists()
 
     def test_a_release_without_the_holds_table_unpauses_without_reading_them(world: World) -> None:
         r1, r2 = drained_world(world, {SR: False, DL: False})
@@ -1346,11 +1384,35 @@ sys.exit(f"fake docker: no answer for {A}")
         assert any(x.startswith("  no scheduler: airflow-scheduler is not running") for x in said), said
         world.scheduler({})
         assert world.deploy(world.release(over={CODE: b"# three\n"})) == 0
-        assert any(x.startswith("  no DAGs: Airflow has none to drain") for x in said) and world.airflow_calls() == [["dags", "list", "-o", "json"]]
+        listing = ["dags", "list", "-o", "json"]
+        assert any(x.startswith("  no DAGs: Airflow has none to drain") for x in said) and world.airflow_calls() == [listing] * 2  # drain, verify
         assert world.deploy(world.release(over={CODE: b"# three\n", **policy(60)})) == 0
         assert any(x.startswith("  no drain: no Trino restart and no DAG's task list changes") for x in said)
-        assert len(world.airflow_calls()) == 1  # no change that drains: Airflow not asked
+        assert world.airflow_calls() == [listing] * 3  # no change that drains: only verify's read-only listing
         assert all(r["outcome"] == "ok" for r in records(world) if r["step"] == "drain")
+
+    def test_verify_names_the_releases_dags_paused_in_airflow_that_no_hold_explains(world: World, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Review D6: every DAG is created paused, so a fresh install, or a release adding a product, sits idle
+        unless someone unpauses it. Deploy's verify and make release-verify name them with the command, read-only;
+        never a DAG deploy paused itself (resume unpauses it next) or one a hold keeps paused."""
+        r1 = world.release(over={CODE: b"# one\n"})
+        world.live(r1)
+        world.scheduler({SR: True, DL: True, "not_this_release": True})
+        said: list[str] = []
+        world.ctx.say = said.append
+        assert world.deploy(world.release(over={CODE: b"# one\n", **policy(60)})) == 0  # no drain: both stay as Airflow has them
+        line = f"  paused in Airflow and not held, so idle: daily_load, station_readings; unpause each once ready: {deploy.UNPAUSE}"
+        assert line in said and deploy.UNPAUSE == "docker exec k2-airflow-scheduler airflow dags unpause <dag> -y"
+        assert all(c == ["dags", "list", "-o", "json"] for c in world.airflow_calls()) and world.paused()[SR] is True
+        live = deploy.open_release(world.ctx, deploy.resolve(world.ctx)[0].id)
+        deploy.write_paused(world.ctx, {DL})  # a deploy's own pause: resume's to lift, not idle
+        monkeypatch.setattr(deploy, "holds", lambda ctx, rel, dags: {SR: {"kind": "operator"}} if SR in dags else {})
+        assert deploy.idle_dags(world.ctx, live) == []  # station_readings held, daily_load deploy's own
+        monkeypatch.setattr(deploy, "holds", lambda ctx, rel, dags: {})
+        only = f"paused in Airflow and not held, so idle: station_readings; unpause each once ready: {deploy.UNPAUSE}"
+        assert only in deploy.verify(world.ctx, live, None)  # the lines make release-verify prints too
+        world.write(world.read() | {"airflow": {"paused": {SR: False, DL: False}, "busy": {}}})
+        assert deploy.idle_dags(world.ctx, live) == []
 
     # --- a release that adds a product (the first live deploy of alpha.4-rc.1, 2026-11-27) ----------
 
