@@ -151,7 +151,7 @@ live stack in this shape. <!-- VERIFY: run the block below on the live stack aft
 net=$(docker inspect -f '{{range $k, $v := .NetworkSettings.Networks}}{{$k}} {{end}}' k2-minio | grep -o '[^ ]*_k2-catalog')
 catalog() {  # catalog <path>: a GET to Lakekeeper by name, with no credential
   docker run --rm --network "$net" --cpus 0.5 --memory 128m \
-    --entrypoint curl ghcr.io/rjdscott/minio:RELEASE.2025-09-07T16-13-09Z@sha256:a1a8bd4ac40ad7881a245bab97323e18f971e4d4cba2c2007ec1bedd21cbaba2 -fsS "http://lakekeeper:8181/$1"
+    --entrypoint curl ghcr.io/rjdscott/minio@sha256:a1a8bd4ac40ad7881a245bab97323e18f971e4d4cba2c2007ec1bedd21cbaba2 -fsS "http://lakekeeper:8181/$1"
 }
 catalog health
 PREFIX=$(catalog 'catalog/v1/config?warehouse=k2' | jq -r '.defaults.prefix')
