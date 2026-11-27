@@ -128,7 +128,8 @@ directory and the fifth, `fx-idempotent.sh`, is a check rather than a fault, so 
 (`bash <script> <release dir>`, for example the one `scripts/verify/ci-validate.sh` prints) and
 build a throwaway lake of their own from it (`scripts/lib/throwaway-lake.sh`, the script's name
 as its prefix). Every task in them runs the release's own code, in the shape the DAG factory
-gives it, on the machinery `scripts/verify/run-path.sh` (spine-e2e's `run` stage) shares through
+gives it, on the machinery `scripts/verify/run-path.sh` (spine-e2e's `run` stage, nine claims; one
+recorded run of 2026-11-27 printed `run-path: 9 PASS, 0 FAIL in 263 s`) shares through
 `scripts/lib/run-path-lib.sh`. Each prints one PASS or FAIL line per claim and `<n> PASS, <m>
 FAIL`, stops at the first FAIL, and refuses to start beside another container job or under
 10 GiB available. None touches the running stack but `deploy-mid-run.sh`, which is for the
