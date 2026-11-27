@@ -10,6 +10,7 @@ bytes the fake serves. A local server would sit on loopback, which the guard mus
 fake is injected at the connection boundary instead. Addresses are public ones nothing dials.
 """
 
+import errno
 import hashlib
 import importlib.util
 import io
@@ -50,15 +51,23 @@ def no_network(monkeypatch):
 
 
 class Stream(io.RawIOBase):
-    """Bytes from an iterable of chunks, pulled lazily: a 64 MiB body is never in memory."""
+    """Bytes from an iterable of chunks, pulled lazily: a 64 MiB body is never in memory. As the
+    file socket.makefile() returns, it holds a reference on its wire: closing it drops that."""
 
-    def __init__(self, chunks):
-        self.chunks, self.left = iter(chunks), memoryview(b"")
+    def __init__(self, chunks, wire=None):
+        self.chunks, self.left, self.wire = iter(chunks), memoryview(b""), wire
 
     def readable(self):
         return True
 
+    def close(self):
+        if not self.closed and self.wire:
+            self.wire.decref()
+        super().close()
+
     def readinto(self, buf):
+        if self.wire:
+            self.wire.alive()  # recv on a closed descriptor
         while not self.left:
             chunk = next(self.chunks, None)
             if chunk is None:
@@ -71,31 +80,49 @@ class Stream(io.RawIOBase):
 
 class Wire:
     """One fake TCP connection to `address`: records the request, then serves the page for the
-    URL its request line and Host header name."""
+    URL its request line and Host header name. It closes as a real socket does: close() with a
+    makefile() file still open only marks it, the descriptor goes when the last of the two goes,
+    and settimeout or recv on it after that raises EBADF."""
 
     def __init__(self, web, address):
         self.web, self.address, self.sent, self.timeouts, self.tls_name = web, address, b"", [], None
+        self.closed, self.refs, self.fd = False, 0, True
+
+    def alive(self):
+        if not self.fd:
+            raise OSError(errno.EBADF, "Bad file descriptor")
+
+    def decref(self):
+        self.refs -= 1
+        if self.closed and self.refs <= 0:
+            self.fd = False
 
     def sendall(self, data):
+        self.alive()
         self.sent += data
 
     def settimeout(self, value):
+        self.alive()
         self.timeouts.append(value)
 
     def setsockopt(self, *args):
         pass
 
     def close(self):
-        pass
+        self.closed = True
+        if self.refs <= 0:
+            self.fd = False
 
     def makefile(self, mode, *args, **kwargs):
+        self.alive()
         line, *headers = self.sent.split(b"\r\n\r\n")[0].decode().split("\r\n")
         host = next(h.split(":", 1)[1].strip() for h in headers if h.lower().startswith("host:"))
         url = f"https://{host}{line.split()[1]}"
         self.web.asked.append(url)
         self.web.requests.append({"url": url, "address": self.address, "tls_name": self.tls_name,
                                   "headers": headers})
-        return io.BufferedReader(Stream(self.web.pages[url]))
+        self.refs += 1
+        return io.BufferedReader(Stream(self.web.pages[url], self))
 
 
 class FakeTLS:
@@ -235,6 +262,58 @@ def test_a_fetch_spools_raw_and_record_then_rows(web, tmp_path, capsys):
     out = capsys.readouterr()
     assert "files.example.invalid/rates-2026-11-27.xml" in out.out
     assert "QUERYMARK" not in out.out + out.err  # host and path logged, never the query
+
+
+def chunked(body, close=False):
+    head = "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n" + ("Connection: close\r\n" if close else "")
+    half = len(body) // 2
+    return [f"{head}\r\n".encode(), *(b"%x\r\n%s\r\n" % (len(c), c) for c in (body[:half], body[half:]) if c),
+            b"0\r\n\r\n"]
+
+
+SHAPES = {
+    "length, keep-alive": lambda b: ok(b),
+    "length, Connection: close": lambda b: ok(b, {"Connection": "close"}),  # the live failure of 2026-11-27
+    "HTTP/1.0, length": lambda b: [ok(b)[0].replace(b"HTTP/1.1", b"HTTP/1.0", 1), b],  # closes by default
+    "chunked, keep-alive": lambda b: chunked(b),
+    "chunked, Connection: close": lambda b: chunked(b, close=True),
+    "no length, read to the close": lambda b: streamed([b]),
+}
+
+
+@pytest.mark.parametrize("body", [BODY, b""], ids=["body", "empty"])
+@pytest.mark.parametrize("shape", SHAPES)
+def test_every_response_shape_downloads_whole(web, tmp_path, shape, body):
+    """A response that closes its connection hands the socket to the response, which closes it
+    at the body's end: the read loop must stop there, never set a timeout on a closed socket."""
+    web.pages[FIRST] = SHAPES[shape](body)
+    assert run() == 0
+    assert (spool(tmp_path) / "raw.xml").read_bytes() == body
+    assert json.loads((spool(tmp_path) / "fetch.json").read_text())["bytes"] == len(body)
+
+
+@pytest.mark.parametrize("shape", SHAPES)
+def test_a_redirect_that_closes_then_any_shape_on_a_second_connection(web, tmp_path, shape):
+    web.pages[FIRST] = [moved(f"https://{MIRROR}/rates.xml")[0].replace(b"\r\n\r\n", b"\r\nConnection: close\r\n\r\n")]
+    web.pages[f"https://{MIRROR}/rates.xml"] = SHAPES[shape](BODY)
+    assert run() == 0
+    assert len(web.wires) == 2 and (spool(tmp_path) / "raw.xml").read_bytes() == BODY
+
+
+@pytest.mark.parametrize("close", [False, True])
+def test_a_body_short_of_its_content_length_is_a_task_error(web, tmp_path, capsys, close):
+    web.pages[FIRST] = ok(BODY, {"Content-Length": len(BODY) + 10, **({"Connection": "close"} if close else {})})
+    assert run() == F.EXIT_ERROR
+    assert nothing_left(tmp_path) and "short of its Content-Length" in capsys.readouterr().err
+
+
+def test_a_socket_error_mid_body_is_still_a_task_error(web, tmp_path, capsys):
+    def reset():
+        yield BODY[:5]
+        raise ConnectionResetError(104, "Connection reset by peer")
+    web.pages[FIRST] = streamed(reset())
+    assert run() == F.EXIT_ERROR
+    assert nothing_left(tmp_path) and "ConnectionResetError" in capsys.readouterr().err
 
 
 def test_the_connection_goes_to_the_checked_address_with_tls_and_host_on_the_name(web):

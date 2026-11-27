@@ -2,8 +2,11 @@
 # The catalog fence on the running stack (ADR-059 part 7, step S22), one line per check.
 # Structure: the project's Lakekeeper container publishes no port and is on <project>_k2-catalog
 # alone, and every container on that network is this project's service named in
-# tests/access/catalog-fence-allow.txt. Probes: every `probe` row of tests/access/expectations.yaml
-# (or the file named as $1) is dialled from where its `from` says (`fetch`: a container on
+# tests/access/catalog-fence-allow.txt, or one of this project's one-shots of a kind named there:
+# no compose labels, labels com.k2.project=<project> and com.k2.oneshot=<kind> (as
+# docker/airflow/dags/oneshot.py sets them), the name k2-<kind>-<dagId>-<try>, and the image the
+# live release's compiled/oneshots.json gives the kind when that file can be read.
+# Probes: every `probe` row of tests/access/expectations.yaml (or the file named as $1) is dialled from where its `from` says (`fetch`: a container on
 # <project>_k2-egress, the network the fetch one-shot runs on), and passes when the TCP
 # connection is open or refused as its `expect` says. A name that does not resolve counts as
 # refused only when the structure passed; a missing network or a probe container that could not
@@ -13,10 +16,11 @@
 #                           1 refused or timed out, 3 name unresolvable, 4 network absent,
 #                           125-127 the probe container could not start
 #   K2_FENCE_INSPECT=<cmd>  run as `<cmd> lakekeeper` (prints `ports <p>,...` and `networks <n>,...`)
-#                           and `<cmd> members` (`<container> <project>/<service>` per member);
+#                           and `<cmd> members` (`<container> <project>/<service> <k2 project>/<one-shot
+#                           kind> <image>` per member, the last two optional);
 #                           exits non-zero when there is no such container or network
 set -uo pipefail
-cd "$(dirname "$0")/../.."
+cd "$(dirname "$0")/../.." || exit 2
 FILE=${1:-tests/access/expectations.yaml}
 ALLOW=$(sed 's/#.*//' tests/access/catalog-fence-allow.txt | xargs)
 IMAGE='alpine@sha256:f59abe656b692d901e184be3445e084786602108599d2a51d229c0f5a48c71bf'  # alpine:3, busybox nc
@@ -53,8 +57,26 @@ networks {{range $n, $v := .NetworkSettings.Networks}}{{$n}},{{end}}'
   else
     ids=$(docker network inspect "${PROJECT}_k2-catalog" --format '{{range $id, $c := .Containers}}{{$id}} {{end}}') || return 1
     [ -z "$ids" ] || docker inspect $ids --format \
-      '{{.Name}} {{index .Config.Labels "com.docker.compose.project"}}/{{index .Config.Labels "com.docker.compose.service"}}'
+      '{{.Name}} {{index .Config.Labels "com.docker.compose.project"}}/{{index .Config.Labels "com.docker.compose.service"}} {{index .Config.Labels "com.k2.project"}}/{{index .Config.Labels "com.k2.oneshot"}} {{.Config.Image}}'
   fi
+}
+
+# What the operator gives each one-shot kind in the live release, `<kind> <image>` per line (the
+# file oneshot.py reads); empty when no live release can be read, and the image goes unchecked.
+# ponytail: a run still on the release before a deploy may run an older image and fail this until
+# it ends; and anyone who can start a container with these labels holds the Docker socket already.
+images=$(python3 -c 'import json, sys
+for k, v in json.load(open(sys.argv[1]))["oneshots"].items(): print(k, v["image"])' \
+         "${K2_RELEASES:-$HOME/k2-releases}/pointers/airflow/compiled/oneshots.json" 2>/dev/null)
+
+oneshot() {  # $1 name, $2 <k2 project>/<kind>, $3 image: one of this project's one-shots of an allowed kind
+  local kind=${2#*/} want
+  [ "${2%%/*}" = "$PROJECT" ] && [[ $kind =~ ^[a-z][a-z0-9-]*$ ]] || return 1
+  case " $ALLOW " in *" $kind "*) ;; *) return 1 ;; esac
+  [[ $1 =~ ^k2-$kind-[A-Za-z0-9_.-]+-[0-9]+$ ]] || return 1
+  [ -n "$images" ] || return 0
+  want=$(awk -v k="$kind" '$1 == k {print $2}' <<< "$images")
+  [ -n "$want" ] && [ "$3" = "$want" ]
 }
 
 PROJECT=${K2_COMPOSE_PROJECT:-} FOREIGN=another
@@ -85,13 +107,17 @@ else
   say FAIL "structure no running lakekeeper container in project $PROJECT"
 fi
 if members=$(inspect members); then
-  off=$(while read -r name who; do
-          [ -n "$name" ] || continue
-          case " $ALLOW " in *" ${who#"$PROJECT"/} "*) [ "${who%%/*}" = "$PROJECT" ] && continue ;; esac
-          printf '%s ' "${name#/}=$who"
-        done <<< "$members")
-  if [ -z "$off" ]; then say PASS "structure $NET holds only catalog-fence-allow.txt services"
-  else say FAIL "structure $NET holds containers off catalog-fence-allow.txt: ${off% }"; fi
+  verdicts=$(while read -r name who k2 image; do
+               [ -n "$name" ] || continue
+               case " $ALLOW " in *" ${who#"$PROJECT"/} "*) [ "${who%%/*}" = "$PROJECT" ] && continue ;; esac
+               if [ "$who" = / ] && oneshot "${name#/}" "${k2:-/}" "${image:-}"; then echo oneshot
+               else echo "off ${name#/}=$who"; fi
+             done <<< "$members")
+  off=$(sed -n 's/^off //p' <<< "$verdicts" | paste -sd' ')
+  checked=${images:+images as the live release gives them}
+  admitted="$(grep -c '^oneshot$' <<< "$verdicts") one-shots admitted, ${checked:-images unchecked: no live release readable}"
+  if [ -z "$off" ]; then say PASS "structure $NET holds only catalog-fence-allow.txt services ($admitted)"
+  else say FAIL "structure $NET holds containers off catalog-fence-allow.txt: $off"; fi
 else
   say FAIL "structure cannot list the members of $NET (no such network)"
 fi

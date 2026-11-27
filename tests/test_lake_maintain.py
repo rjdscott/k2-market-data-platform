@@ -41,19 +41,43 @@ class FakeStore:
         self.deleted.append(k)
 
 
+class AnalysisException(Exception):
+    """pyspark.errors.AnalysisException as Spark 3.5 raises it, its error class by getErrorClass()."""
+
+    def __init__(self, error_class, message):
+        super().__init__(f"[{error_class}] {message}")
+        self.error_class = error_class
+
+    def getErrorClass(self):  # noqa: N802 - pyspark's name
+        return self.error_class
+
+
+def not_found(table):
+    parts = table.split(".") + ["refs"]
+    return AnalysisException("TABLE_OR_VIEW_NOT_FOUND", f"The table or view {'.'.join(f'`{p}`' for p in parts)} cannot "
+                             f"be found. To tolerate the error on drop use DROP VIEW IF EXISTS or DROP TABLE IF EXISTS.;\n"
+                             f"'UnresolvedRelation [{', '.join(parts)}], [], false")
+
+
 class FakeLake:
-    def __init__(self, published=(SHA_OLD, SHA_NEW), logged=(SHA_OLD, SHA_FAILED, SHA_NEW), drop_ref=None):
+    def __init__(self, published=(SHA_OLD, SHA_NEW), logged=(SHA_OLD, SHA_FAILED, SHA_NEW), drop_ref=None, fail=None,
+                 empty=()):
         self.published, self.logged, self.drop_ref = set(published), set(logged), drop_ref
+        self.fail, self.empty = fail or {}, set(empty)  # fail: table -> the exception its read raises
         self.sql, self.expired = [], False
 
     def refs(self, table):
+        if table in self.fail:
+            raise self.fail[table]
+        if table in self.empty:
+            return {}
         refs = {"main": 1, "audit": 2, "audited": 3}
         if self.expired and self.drop_ref:
             del refs[self.drop_ref]
         return refs
 
     def snapshot_count(self, table):
-        return 2 if self.expired else 5
+        return 0 if table in self.empty else 2 if self.expired else 5
 
     def run(self, text):
         self.sql.append(text)
@@ -76,16 +100,44 @@ def test_plan_passes_each_tables_days_from_retention_json():
 
 def test_expiry_statement_and_counts():
     lake = FakeLake()
-    code, expired = M.expire_snapshots(PIPELINE, RETENTION, lake, AT)
-    assert code == 0 and expired[BRONZE] == 3
+    code, expired, unbuilt = M.expire_snapshots(PIPELINE, RETENTION, lake, AT)
+    assert code == 0 and expired[BRONZE] == 3 and unbuilt == []
     assert ("CALL `lake`.`system`.`expire_snapshots`(table => 'station_readings.bronze_readings', "
             "older_than => TIMESTAMP '2026-10-28 03:00:00', retain_last => 1)") in lake.sql
 
 
 @pytest.mark.parametrize("ref", ["audit", "audited"])
 def test_a_ref_missing_after_expiry_fails(ref, capsys):
-    code, _ = M.expire_snapshots(PIPELINE, RETENTION, FakeLake(drop_ref=ref), AT)
+    code, _, _ = M.expire_snapshots(PIPELINE, RETENTION, FakeLake(drop_ref=ref), AT)
     assert code == 1 and ref in capsys.readouterr().err
+
+
+OUTPUT = "sensor_net_build.station_readings__base.silver_readings"
+
+
+def test_a_build_output_not_built_yet_is_skipped_and_named(capsys):
+    """The live failure of 2026-11-27: before a product's first good build its outputs do not
+    exist, and reading their refs raised TABLE_OR_VIEW_NOT_FOUND. Nothing to expire: skipped."""
+    lake = FakeLake(fail={OUTPUT: not_found(OUTPUT)})
+    code, expired, unbuilt = M.expire_snapshots(PIPELINE, RETENTION, lake, AT)
+    assert (code, unbuilt) == (0, [OUTPUT]) and OUTPUT not in expired and len(expired) == 3
+    assert f"maintain: {OUTPUT}: not built yet" in capsys.readouterr().out
+    assert not [s for s in lake.sql if "silver_readings" in s]  # no CALL on a table that is not there
+
+
+@pytest.mark.parametrize("table, error", [
+    (OUTPUT, AnalysisException("INSUFFICIENT_PERMISSIONS", "no read on the table")),  # there, not readable
+    (OUTPUT, RuntimeError("org.apache.iceberg.exceptions.ForbiddenException: Forbidden")),
+    (BRONZE, not_found(BRONZE)),  # made at deploy, never by a build: gone is a broken deploy, not "not built"
+])
+def test_a_table_that_cannot_be_read_or_should_exist_is_still_an_error(table, error):
+    with pytest.raises(type(error)):
+        M.expire_snapshots(PIPELINE, RETENTION, FakeLake(fail={table: error}), AT)
+
+
+def test_a_table_with_no_snapshot_yet_has_no_ref_to_lose():
+    code, expired, _ = M.expire_snapshots(PIPELINE, RETENTION, FakeLake(empty={BRONZE}), AT)
+    assert code == 0 and expired[BRONZE] == 0
 
 
 def test_a_table_without_retention_is_refused():

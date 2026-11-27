@@ -42,6 +42,7 @@ DBT = {"kind": "dbt-runner", "command": ["k2-dbt", "build", "--release", RID, "-
 FETCH = {"kind": "fetch", "command": ["k2-fetch", "--spool", "/spool/ecb_fx/manual__1"]}
 SPOOL_HELPER = ["docker", "run", "--rm", "--pull", "never", "--network", "none", "--read-only", "--cap-drop", "ALL",
                 "--security-opt", "no-new-privileges", "--pids-limit", "16", "--cpus", "0.1", "--memory", "32m",
+                "--label", "com.k2.oneshot=fetch-spool", "--label", "com.k2.project=k2proj",
                 "--mount", "type=volume,source=k2proj_k2-spool,target=/spool", "fetch:4008294739ab",
                 "mkdir", "-p", "/spool/ecb_fx"]
 
@@ -102,7 +103,8 @@ class ArgumentList(unittest.TestCase):
         run = Run()
         run(**FETCH)
         self.assertEqual(run.docker_run, [
-            "docker", "run", "--rm", "--name", "k2-fetch-ecb_fx-1", "--pull", "never", "--read-only", "--tmpfs",
+            "docker", "run", "--rm", "--name", "k2-fetch-ecb_fx-1", "--label", "com.k2.oneshot=fetch",
+            "--label", "com.k2.project=k2proj", "--pull", "never", "--read-only", "--tmpfs",
             "/tmp:rw,noexec,nosuid,size=64m", "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
             "--pids-limit", "256",
             "--cpus", "0.5", "--memory", "512M", "--network", "k2proj_k2-egress", "-e", "K2_RELEASE", *RELEASE_MOUNT,
@@ -132,7 +134,8 @@ class ArgumentList(unittest.TestCase):
         run = Run(lines=('{"exit": 0, "expire": []}',))
         run(try_number=2, **DBT)
         self.assertEqual(run.docker_run, [
-            "docker", "run", "--rm", "--name", "k2-dbt-runner-ecb_fx-2", "--pull", "never", "--read-only", "--tmpfs",
+            "docker", "run", "--rm", "--name", "k2-dbt-runner-ecb_fx-2", "--label", "com.k2.oneshot=dbt-runner",
+            "--label", "com.k2.project=k2proj", "--pull", "never", "--read-only", "--tmpfs",
             "/tmp:rw,noexec,nosuid,size=64m", "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
             "--pids-limit", "256", "--user", "1000:1001",
             "--cpus", "0.5", "--memory", "768M", "--network", "k2proj_k2-catalog",
