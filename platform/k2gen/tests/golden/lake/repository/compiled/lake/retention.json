@@ -4,6 +4,7 @@
   "governance.access_canary__base.event_offsets": 7,
   "governance.access_canary__base.events": 1,
   "governance.quality_results__base.test_results": 7,
+  "governance.run_records.holds": 7,
   "governance.run_records.run_record": 7,
   "k2.currency_master.audit_checks": 7,
   "k2.currency_master.bronze_currencies": 7,

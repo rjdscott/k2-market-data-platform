@@ -154,3 +154,55 @@ def test_offset_gaps_newest_first_and_bad_detail_skipped():
     rows = [dict(event="offset_gap", recorded_at=T0, detail=d("old")), dict(event="offset_gap", recorded_at=T0 + timedelta(hours=1), detail=d("new")),
             dict(event="offset_gap", recorded_at=T0, detail="not json"), dict(event="passed", recorded_at=T0, detail=d("x"))]
     assert [g["reason"] for g in k2runs.offset_gaps(rows)] == ["new", "old"]
+
+
+P = "market-capture.kraken-trades"
+
+
+def test_hold_binds_one_conditional_insert_and_refuses_bad_arguments_before_any_call():
+    cur = Cur(rows=[(1,)])
+    when = datetime(2026, 11, 28, 12, 0, tzinfo=timezone(timedelta(hours=11)))
+    k2runs.hold(Conn(cur), P, "drill", "rob", at=when)
+    (sql, params), = cur.calls
+    assert sql.startswith(f"INSERT INTO {k2runs.HOLDS} ") and sql.count("?") == len(params) and P not in sql
+    assert params[:4] == [P, "operator", "drill", "rob"] and params[5:] == [P, "operator"]
+    assert params[4].utcoffset() == timedelta(0) and params[4].hour == 1
+    for bad in (dict(reason=""), dict(reason="  "), dict(by=""), dict(kind="lock"), dict(product="")):
+        cur = Cur(rows=[(1,)])
+        with pytest.raises(k2runs.HoldError):
+            k2runs.hold(Conn(cur), **(dict(product=P, reason="r", by="rob") | bad))
+        assert cur.calls == []
+
+
+def test_a_second_hold_of_one_kind_and_a_release_of_nothing_are_refused():
+    with pytest.raises(k2runs.HoldError, match="held already"):
+        k2runs.hold(Conn(Cur(rows=[(0,)])), P, "again", "rob", kind="rebuild")
+    with pytest.raises(k2runs.HoldError, match="no open restore hold"):
+        k2runs.release(Conn(Cur(rows=[(0,)])), P, "rob", kind="restore")
+
+
+def test_release_appends_a_row_copied_from_the_open_hold_of_its_kind_only():
+    cur = Cur(rows=[(1,)])
+    k2runs.release(Conn(cur), P, "rob")
+    (sql, params), = cur.calls
+    # append-only: an INSERT of the hold's own columns, never an UPDATE or DELETE
+    assert sql.startswith(f"INSERT INTO {k2runs.HOLDS} ") and "UPDATE" not in sql and "DELETE" not in sql
+    assert "h.product_id, h.kind, h.reason, h.held_by, h.held_at" in sql
+    assert params[1:] == ["rob", P, "operator"] and params[0].utcoffset() == timedelta(0)
+    assert "h.kind = ?" in sql  # an operator's release never ends a restore's lock
+
+
+def test_held_is_the_newest_open_hold_or_none():
+    row = (P, "restore", "restore drill", "make restore", T0, None, None)
+    cur = Cur(rows=[row])
+    assert k2runs.held(Conn(cur), P) == dict(zip(k2runs.HOLD_COLUMNS, row))
+    (sql, params), = cur.calls
+    assert params == [P] and "ORDER BY h.held_at DESC LIMIT 1" in sql and "h.kind = ?" not in sql  # any kind holds it
+    assert k2runs.held(Conn(Cur()), P) is None
+
+
+def test_the_hold_columns_are_holds_sql_in_order():
+    text = (Path(__file__).parent / "holds.sql").read_text()
+    body = text[text.index("CREATE TABLE"):]
+    assert [line.split()[0] for line in body.splitlines()[1:] if line.startswith("    ")] == list(k2runs.HOLD_COLUMNS)
+    assert f"CREATE TABLE {k2runs.HOLDS} (" in text

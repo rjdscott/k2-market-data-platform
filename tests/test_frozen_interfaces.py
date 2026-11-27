@@ -1,6 +1,7 @@
 """The frozen interfaces this suite can hold without a stack
 (docs/development/phase-001-interfaces.md): the REST routes' OpenAPI document (A12),
-the run-record table's DDL (A6) and a Kafka connector's snapshot summary keys (I-1).
+the run-record table's DDL (A6), the holds table's (I-7) and a Kafka connector's snapshot
+summary keys (I-1).
 A change to any fails here until the test moves with it, which is the point of
 freezing them.
 
@@ -143,6 +144,30 @@ def test_the_run_record_ddl_and_its_json_schema_are_one_row():
         assert json_types <= {expected, "null"}, (name, json_types)
     # recorded_at is the partition source: never null
     assert schema["properties"]["recorded_at"]["type"] == "string"
+
+
+# I-7, column for column: the holds, append-only beside the run record. A changed column moves
+# here, in holds.sql, in k2runs.HOLD_COLUMNS and in the interfaces page together.
+HOLDS = ROOT / "platform/runs/holds.sql"
+I7 = [
+    ("product_id", "varchar"), ("kind", "varchar"), ("reason", "varchar"), ("held_by", "varchar"),
+    ("held_at", "timestamp(6) with time zone"), ("released_at", "timestamp(6) with time zone"), ("released_by", "varchar"),
+]
+
+
+def test_the_holds_ddl_is_i7_with_every_column_described_and_k2runs_writes_it():
+    t = parse_run_record(HOLDS)
+    assert t["table"] == "governance_build.run_records.holds"
+    assert [(n, ty) for n, ty, _ in t["columns"]] == I7
+    assert [n for n, _, comment in t["columns"] if not (comment or "").strip()] == []
+    assert t["partitioning"] == []
+    k2runs = constants((ROOT / "platform/runs/k2runs.py").read_text())
+    assert list(k2runs["HOLD_COLUMNS"]) == [n for n, _ in I7]
+    assert k2runs["HOLDS"] == t["table"] and k2runs["HOLD_KINDS"] == ("operator", "rebuild", "restore")
+    kind = next(c for n, _, c in t["columns"] if n == "kind")
+    assert all(k in kind for k in k2runs["HOLD_KINDS"])
+    # the model emits both platform tables, each from its own file
+    assert 'PLATFORM_SQL = (RUN_RECORD_SQL, HOLDS_SQL)' in MODEL.read_text()
 
 
 # I-1: the summary keys a Kafka connector commit carries, read from kafka.py's source (no Spark).

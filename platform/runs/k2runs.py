@@ -1,7 +1,8 @@
 """The one run-records client (phase 001 interface A6, contracts/schema/run-record.schema.json).
 
 record() appends one row to governance_build.run_records.run_record as svc.runs; newest_audited()
-reads the newest `audited` row of a table. Dependency: trino only. The password is read from its
+reads the newest `audited` row of a table. hold(), release() and held() write and read the holds
+(platform/runs/holds.sql, step I-7), also as svc.runs. Dependency: trino only. The password is read from its
 file at each connect() and never held, logged or put in an error message.
 """
 from __future__ import annotations
@@ -89,6 +90,76 @@ def newest_audited(conn: Any, table: str) -> int | None:
     cur.execute(NEWEST, [table])
     rows = cur.fetchall()
     return int(rows[0][0]) if rows else None
+
+
+HOLDS = "governance_build.run_records.holds"
+HOLD_KINDS = ("operator", "rebuild", "restore")  # make hold; make rebuild's and make restore's per-product lock
+# The columns of platform/runs/holds.sql, in order.
+HOLD_COLUMNS = ("product_id", "kind", "reason", "held_by", "held_at", "released_at", "released_by")
+# An open hold: a hold row (released_at null) that no release row of its product, kind and held_at follows.
+_OPEN = (f"h.released_at IS NULL AND NOT EXISTS (SELECT 1 FROM {HOLDS} r WHERE r.product_id = h.product_id "
+         "AND r.kind = h.kind AND r.held_at = h.held_at AND r.released_at IS NOT NULL)")
+# Each write is one statement that inserts only when the state allows it, so a hold never opens
+# twice and a release never ends what is not held; the row count says which.
+# ponytail: one statement, not a mutex: two writers in the same instant can both pass NOT EXISTS
+# (Iceberg appends do not conflict). One operator per host; add a compare-and-set on the table's
+# snapshot if two writers ever hold at once.
+HOLD = (f"INSERT INTO {HOLDS} ({', '.join(HOLD_COLUMNS)}) SELECT ?, ?, ?, ?, ?, CAST(NULL AS timestamp(6) with time zone), "
+        f"CAST(NULL AS varchar) WHERE NOT EXISTS (SELECT 1 FROM {HOLDS} h WHERE h.product_id = ? AND h.kind = ? AND {_OPEN})")
+RELEASE = (f"INSERT INTO {HOLDS} ({', '.join(HOLD_COLUMNS)}) SELECT h.product_id, h.kind, h.reason, h.held_by, h.held_at, ?, ? "
+           f"FROM {HOLDS} h WHERE h.product_id = ? AND h.kind = ? AND {_OPEN}")
+HELD = (f"SELECT {', '.join(HOLD_COLUMNS)} FROM {HOLDS} h WHERE h.product_id = ? AND {_OPEN} "
+        "ORDER BY h.held_at DESC LIMIT 1")
+
+
+class HoldError(RunRecordError):
+    """A refused hold or release: a bad argument, already held, or not held."""
+
+
+def _written(cur: Any) -> int:
+    """The row count Trino returns for an INSERT, as its one row's one column."""
+    rows = cur.fetchall()
+    return int(rows[0][0]) if rows else 0
+
+
+def _hold_args(product: str, kind: str, by: str) -> None:
+    if not product or not by:
+        raise HoldError("a hold names its product and who acts")
+    if kind not in HOLD_KINDS:
+        raise HoldError(f"kind {kind!r} is not one of {HOLD_KINDS}")
+
+
+def hold(conn: Any, product: str, reason: str, by: str, kind: str = "operator", at: datetime | None = None) -> None:
+    """Open a hold of `kind` on `product` (<domain>.<product>). Refused, before any call, without a
+    reason; refused by the table when one of that kind is open already."""
+    _hold_args(product, kind, by)
+    if not reason or not reason.strip():
+        raise HoldError("a hold carries its reason")
+    at = _utc(at) or datetime.now(timezone.utc)
+    cur = conn.cursor()
+    cur.execute(HOLD, [product, kind, reason[:1000], by, at, product, kind])
+    if _written(cur) != 1:
+        raise HoldError(f"{product} is held already ({kind}); release it first")
+
+
+def release(conn: Any, product: str, by: str, kind: str = "operator", at: datetime | None = None) -> None:
+    """End the open hold of `kind` on `product` by appending its release row. An operator's release
+    never ends a rebuild's or a restore's lock, nor they an operator's hold."""
+    _hold_args(product, kind, by)
+    at = _utc(at) or datetime.now(timezone.utc)
+    cur = conn.cursor()
+    cur.execute(RELEASE, [at, by, product, kind])
+    if _written(cur) != 1:
+        raise HoldError(f"{product} has no open {kind} hold to release")
+
+
+def held(conn: Any, product: str) -> dict[str, Any] | None:
+    """The newest open hold on `product`, any kind, as a dict of HOLD_COLUMNS; None when it is free.
+    A DAG's resolve fails fast on anything but None, naming the hold."""
+    cur = conn.cursor()
+    cur.execute(HELD, [product])
+    rows = cur.fetchall()
+    return dict(zip(HOLD_COLUMNS, rows[0])) if rows else None
 
 
 def _json(value: Any) -> Any:

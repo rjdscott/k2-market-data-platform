@@ -388,3 +388,81 @@ that key, and `pipeline.schema.json` gains the matching rule for `kind` `kafka` 
 (its descriptions state it now; a rule there today would fail the emitter test that compiles a
 Kafka connector over a fetch-kind fixture's bronze). The landing goes in the backup set as
 `restore`, with no row expiry. The accept-data-loss `conf` is run time and is never compiled.
+
+## Holds, 2026-11-28 (phases 004 and 005, step I-7)
+
+Additive: the run record, its rules and its file are unchanged. The `holds` table is the platform's
+second Trino table, `governance_build.run_records.holds`, in the run record's namespace, its DDL
+frozen in `platform/runs/holds.sql` (`model.HOLDS_SQL`). `model.PLATFORM_SQL` lists both files; the
+lake emitter copies each byte for byte to `compiled/lake/ddl/trino/governance.run_records.<table>.sql`
+when the `governance` domain is declared, and a contract whose build is `platform` is still refused,
+since the platform's tables come from those files alone. `tests/test_frozen_interfaces.py` holds the
+columns, their descriptions and `k2runs.HOLD_COLUMNS` to each other. The namespace `run_records` was
+reserved already (`model.RESERVED_PRODUCT_NAMES`), so no name is newly reserved.
+
+| Column | Type | Meaning |
+|---|---|---|
+| `product_id` | varchar | the product held, `<domain>.<product>` |
+| `kind` | varchar | `operator` (`make hold`), `rebuild` (`make rebuild`'s lock) or `restore` (`make restore`'s) |
+| `reason` | varchar | the holder's reason, at most 1000 characters |
+| `held_by` | varchar | who took it: the operator's name, or the make target for a lock |
+| `held_at` | timestamp(6) with time zone | when it was taken; with `product_id` and `kind`, the hold's key |
+| `released_at` | timestamp(6) with time zone | null on the hold row; set on the release row |
+| `released_by` | varchar | null on the hold row; who ended it |
+
+**Append-only: a release is a second row, never an update.** The writer holds SELECT and INSERT and
+nothing else, as it does on the run record, so no row of either table can change or go; an UPDATE
+would need the UPDATE privilege on the table the page reads, and an Iceberg row update writes
+delete files a reader then merges. A hold is the row with `released_at` null; its release copies
+that row's `product_id`, `kind`, `reason`, `held_by` and `held_at` and sets `released_at` and
+`released_by`. A hold is open while no release row carries its `(product_id, kind, held_at)`. One
+open hold per product and kind, so an operator hold and a restore's lock are apart: the end of a
+restore never ends an operator's hold, and `make unhold` never ends a lock.
+
+**Rules** (`emit/trino_rules.py`), default deny kept, three rules per platform table and no other:
+svc.platform SELECT and OWNERSHIP through `governance_build` (it creates the table at deploy, and
+deploy reads it, below); svc.runs SELECT and INSERT there (`make hold` and the locks write, a DAG's
+`resolve` reads); svc.catalog SELECT through `governance`, for the page. No principal holds DELETE or
+UPDATE on it, and no reader group reaches it.
+
+**Backup and retention.** In the backup set as `restore` at `main`, and in `retention.json` at the
+run records' 7 days of snapshots; no row is ever expired.
+
+**The client** (`platform/runs/k2runs.py`, as svc.runs): `hold(conn, product, reason, by,
+kind="operator")` inserts the hold row only while no hold of that kind is open (one statement,
+`INSERT ... SELECT ... WHERE NOT EXISTS`), else `HoldError`; `release(conn, product, by,
+kind="operator")` inserts the release row copied from the open hold of that kind, else `HoldError`;
+`held(conn, product)` returns the newest open hold of any kind as a dict, or None. The conditional
+insert is not a mutex: two writers in one instant can both pass it, since Iceberg appends do not
+conflict; one operator per host is assumed.
+
+**What honours a hold.**
+
+- `resolve` has no Trino identity of its own: it runs inside the Airflow task and reads only the
+  pointer. Having pinned the release, it loads `k2runs` from it, as `record` does, connects as
+  svc.runs (whose password Airflow mounts for `record`) and calls `held(product)`. A hold fails the
+  run in `resolve` with `AirflowFailException`, naming the kind, reason, holder and time; a read that
+  fails fails `resolve` too, so a hold is never skipped because the table was unreachable. `record`
+  then skips, as it does after any failed `resolve`.
+- `make hold` also pauses the DAG (W1-11), so a held product normally starts no run; `resolve` is
+  the guard for a manual trigger, a run already queued and the locks.
+- No deploy unpauses or overrides a hold. Deploy unpauses only the DAGs it paused itself
+  (`deploy-paused.json`), and from W1-12 skips any whose product `held` returns, read as
+  svc.platform; deploy holds no INSERT, so it cannot end one.
+- `make rebuild PRODUCT=` takes a `rebuild` hold on its product before it restages bronze and
+  releases it after `k2-dbt build --full-refresh`; the product's own runs fail in `resolve` meanwhile.
+- `make restore` holds every DAG of the live release's `dags.json` with a `restore` hold, and pauses
+  each, before it touches a table, and releases each only after the tags equal the run records. The
+  holds table is itself in the backup set, so the holds are written after it is put back.
+
+**W1-6's trigger: a degraded build of `kraken-trades` starts a `kraken-instruments` run.** The
+factory adds one task, `refresh`, downstream of `build` (all_success: a degraded build publishes,
+so `build` succeeds), to a DAG whose `pipeline.json` names a refresh target. It is Airflow's own
+`TriggerDagRunOperator` (the standard provider in the Airflow 3 image), whose `execute` raises
+`AirflowSkipException` unless `build`'s XCom `result` carries `"degraded": true` (W1-7's wrapper
+result). Bounded so it cannot loop: `trigger_run_id` is `refresh__<this run's run_id>`, with
+`skip_when_already_exists`, `retries=0` and no `wait_for_completion`, so one degraded run starts at
+most one target run; the target is one of the product's own input ports' products, and k2gen
+refuses a refresh target that itself declares one, so the chain is one hop. A held or paused target
+gets the run queued, and `resolve` fails it while held. Where `pipeline.json` gets the target, and
+the contract field it comes from, is W1-6's, with `make test-airflow`.
