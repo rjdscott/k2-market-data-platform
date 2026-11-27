@@ -1,0 +1,23 @@
+{
+  "build": {
+    "engine": "dbt",
+    "outputs": [
+      "reference_data_build.calendars__base.target_days"
+    ],
+    "publisher": "pub_calendars",
+    "selector": "calendars",
+    "writer": "dbt_calendars"
+  },
+  "dagId": "calendars",
+  "domain": "reference-data",
+  "fence": "calendars",
+  "inputs": [],
+  "maintain": {
+    "cron": "59 2 * * *"
+  },
+  "product": "reference-data.calendars",
+  "schedule": {
+    "cron": "0 4 * * *"
+  },
+  "status": "active"
+}

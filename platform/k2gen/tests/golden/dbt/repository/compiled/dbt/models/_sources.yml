@@ -1,3 +1,82 @@
 # Compiled by k2gen (platform/k2gen/k2gen/emit/dbt.py) from the release's documents. Never edit it: change the documents.
 version: 2
-sources: []
+sources:
+- name: calendars
+  database: reference_data
+  schema: calendars__base
+  tables:
+  - name: target_days
+    description: One row per calendar day from 1 January 2025 to 31 December 2027, marked open or closed for TARGET. TARGET
+      closes on Saturdays, Sundays, New Year's Day, Good Friday, Easter Monday, 1 May, 25 December and 26 December; every
+      other day it is open.
+    meta:
+      k2:
+        contract: reference-data.calendars.target_days
+        tested_ref: audited
+    columns:
+    - name: calendar_date
+      data_type: date
+      description: The calendar day, one row each.
+    - name: is_target_day
+      data_type: boolean
+      description: True when TARGET is open that day (a weekday that is not a closing day in the seed), the days the ECB publishes
+        reference rates; false on a weekend or a closing day.
+    - name: closing_reason
+      data_type: varchar
+      description: 'Why TARGET is closed: Saturday, Sunday, or the holiday''s name from the seed (Good Friday, Labour Day,
+        ...). Null on a day TARGET is open. A holiday falling on a weekend reads as the weekend day, since the seed lists
+        only the holidays that fall on weekdays.'
+- name: currency_master
+  database: lake
+  schema: currency_master
+  tables:
+  - name: bronze_currencies
+    description: One row per alphabetic currency code of one landed ISO 4217 list, as the parser read it; a code shared by
+      several countries is one row. Each landed file adds its own rows.
+    meta:
+      k2:
+        contract: reference-data.currency-master.bronze_currencies
+        tested_ref: main
+    columns:
+    - name: code
+      data_type: varchar
+      description: The alphabetic code, three capital letters (EUR).
+    - name: numeric_code
+      data_type: varchar
+      description: The numeric code, three digits as published, leading zeros kept (008).
+    - name: name
+      data_type: varchar
+      description: The currency's name as the list writes it.
+    - name: minor_units
+      data_type: integer
+      description: Digits after the decimal point (2 for EUR); null where the list says N.A.
+    - name: is_fund
+      data_type: boolean
+      description: True when the list marks the entry a fund (IsFund), not a circulating currency.
+    - name: source_file_sha256
+      data_type: varchar
+      description: The landed file's sha256, set by the connector on every row (its lineage).
+- name: ecb_fx_rates
+  database: lake
+  schema: ecb_fx_rates
+  tables:
+  - name: bronze_daily
+    description: One row per fixing date and currency of one landed 90-day file, the rate the string the ECB published. Each
+      landed file adds its own rows, so a date appears once per file that holds it.
+    meta:
+      k2:
+        contract: fx-reference.ecb-fx-rates.bronze_daily
+        tested_ref: main
+    columns:
+    - name: rate_date
+      data_type: date
+      description: The fixing's date (the file's Cube time), a TARGET day.
+    - name: currency
+      data_type: varchar
+      description: The quoted currency's ISO 4217 code (USD); the base is always the euro.
+    - name: rate
+      data_type: varchar
+      description: Units of the currency per one euro, the string exactly as published, such as 1.5000; typed in silver.
+    - name: source_file_sha256
+      data_type: varchar
+      description: The landed file's sha256, set by the connector on every row (its lineage).

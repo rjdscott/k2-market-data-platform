@@ -1,0 +1,1 @@
+SELECT "rate_date", "currency", "rate", "is_carried", "carried_days", "rate_available_at" FROM "fx_reference"."ecb_fx_rates__base"."gold_eur_rates_daily" FOR VERSION AS OF 'audited' WHERE EXISTS (SELECT 1 FROM "fx_reference"."ecb_fx_rates__base"."gold_eur_rates_daily$refs" WHERE "name" = 'audited' AND "type" = 'TAG')

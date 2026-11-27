@@ -1,0 +1,154 @@
+{
+  "id": "reference-data.currency-master",
+  "name": "currency-master",
+  "domain": "reference-data",
+  "version": "1.0.0",
+  "status": "active",
+  "type": "sourceAligned",
+  "owner": "reference-data-team",
+  "purpose": "The currencies of ISO 4217, one row per alphabetic code with its numeric code, name, minor units and whether it is a fund, from the list SIX Group publishes as the standard's maintenance agency. The reference other products check currency codes against.",
+  "limitations": "The publisher's terms of reuse are not yet recorded here: the owner confirms them before any grant outside the owning team (k2gen check refuses such a grant while no terms are recorded). A code stays in currency once any landed list has held it; the list carries no withdrawal date the parser reads. A published code whose values change in a later list fails the bronze audit (values_unchanged), which holds every later file until someone looks.",
+  "usage": "Read reference_data.currency_master.currency; join on code. numeric_code is a string, since its leading zeros are part of it (008).",
+  "issued": "2026-01-01T00:00:00Z",
+  "periodicity": "0 5 * * 1",
+  "productFile": "documents/contracts/reference-data/currency-master/product.odps.yaml",
+  "inputs": [],
+  "outputs": [
+    {
+      "contractId": "reference-data.currency-master.bronze_currencies",
+      "relation": "lake.currency_master.bronze_currencies",
+      "build": "connector",
+      "testedRef": "main",
+      "contractFile": "documents/contracts/reference-data/currency-master/bronze_currencies.odcs.yaml",
+      "layer": "bronze",
+      "version": "1.0.0",
+      "purpose": "One row per alphabetic currency code of one landed ISO 4217 list, as the parser read it; a code shared by several countries is one row. Each landed file adds its own rows.",
+      "columns": [
+        {
+          "name": "code",
+          "type": "varchar",
+          "required": true,
+          "primaryKey": true,
+          "description": "The alphabetic code, three capital letters (EUR).",
+          "logicalType": "string",
+          "primaryKeyPosition": 1
+        },
+        {
+          "name": "numeric_code",
+          "type": "varchar",
+          "required": true,
+          "primaryKey": false,
+          "description": "The numeric code, three digits as published, leading zeros kept (008).",
+          "logicalType": "string"
+        },
+        {
+          "name": "name",
+          "type": "varchar",
+          "required": true,
+          "primaryKey": false,
+          "description": "The currency's name as the list writes it."
+        },
+        {
+          "name": "minor_units",
+          "type": "integer",
+          "required": false,
+          "primaryKey": false,
+          "description": "Digits after the decimal point (2 for EUR); null where the list says N.A."
+        },
+        {
+          "name": "is_fund",
+          "type": "boolean",
+          "required": true,
+          "primaryKey": false,
+          "description": "True when the list marks the entry a fund (IsFund), not a circulating currency."
+        },
+        {
+          "name": "source_file_sha256",
+          "type": "varchar",
+          "required": true,
+          "primaryKey": true,
+          "description": "The landed file's sha256, set by the connector on every row (its lineage).",
+          "primaryKeyPosition": 2
+        }
+      ],
+      "retentionDays": null,
+      "roles": [],
+      "readers": [],
+      "dbtDocs": null
+    },
+    {
+      "contractId": "reference-data.currency-master.currency",
+      "relation": "reference_data.currency_master.currency",
+      "build": "dbt",
+      "testedRef": "audited",
+      "contractFile": "documents/contracts/reference-data/currency-master/currency.odcs.yaml",
+      "layer": "silver",
+      "version": "1.0.0",
+      "purpose": "One row per ISO 4217 alphabetic currency code that any landed list has held, with its numeric code, name, minor units and fund flag.",
+      "columns": [
+        {
+          "name": "code",
+          "type": "varchar",
+          "required": true,
+          "primaryKey": true,
+          "description": "The alphabetic code, three capital letters (EUR); unique.",
+          "primaryKeyPosition": 1
+        },
+        {
+          "name": "numeric_code",
+          "type": "varchar",
+          "required": true,
+          "primaryKey": false,
+          "description": "The numeric code, three digits, leading zeros kept (008)."
+        },
+        {
+          "name": "name",
+          "type": "varchar",
+          "required": true,
+          "primaryKey": false,
+          "description": "The currency's name as the list writes it."
+        },
+        {
+          "name": "minor_units",
+          "type": "integer",
+          "required": false,
+          "primaryKey": false,
+          "description": "Digits after the decimal point (2 for EUR); null where the list says N.A."
+        },
+        {
+          "name": "is_fund",
+          "type": "boolean",
+          "required": true,
+          "primaryKey": false,
+          "description": "True when the list marks the entry a fund, not a circulating currency."
+        }
+      ],
+      "retentionDays": null,
+      "roles": [],
+      "readers": [],
+      "dbtDocs": "dbt-docs/#!/model/model.k2.currency_master__currency"
+    }
+  ],
+  "joinKeys": [],
+  "lineage": {
+    "nodes": [
+      {
+        "id": "reference-data.currency-master.bronze_currencies",
+        "product": "reference-data.currency-master",
+        "relation": "lake.currency_master.bronze_currencies"
+      },
+      {
+        "id": "reference-data.currency-master.currency",
+        "product": "reference-data.currency-master",
+        "relation": "reference_data.currency_master.currency"
+      }
+    ],
+    "edges": [
+      {
+        "from": "reference-data.currency-master.bronze_currencies",
+        "to": "reference-data.currency-master.currency"
+      }
+    ]
+  },
+  "tag": "v3.0.0-alpha.3-rc.1"
+}

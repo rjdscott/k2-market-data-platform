@@ -1,0 +1,68 @@
+{
+  "bronze": [
+    {
+      "audits": [
+        "rate_positive",
+        "no_future_date"
+      ],
+      "branch": "audit",
+      "checks": "lake.ecb_fx_rates.audit_checks",
+      "decimal": [],
+      "key": [
+        "rate_date",
+        "currency",
+        "source_file_sha256"
+      ],
+      "patterns": {
+        "currency": "^[A-Z]{3}$"
+      },
+      "table": "lake.ecb_fx_rates.bronze_daily",
+      "values": [
+        "rate"
+      ]
+    }
+  ],
+  "build": {
+    "engine": "dbt",
+    "outputs": [
+      "fx_reference_build.ecb_fx_rates__base.gold_eur_rates_daily",
+      "fx_reference_build.ecb_fx_rates__base.silver_rates"
+    ],
+    "publisher": "pub_ecb_fx_rates",
+    "selector": "ecb_fx_rates",
+    "writer": "dbt_ecb_fx_rates"
+  },
+  "connector": {
+    "allowHosts": [
+      "www.ecb.europa.eu"
+    ],
+    "format": "xml",
+    "kind": "https-file",
+    "parser": "ecb_fx",
+    "url": "https://www.ecb.europa.eu/stats/eurofxref/eurofxref-hist-90d.xml"
+  },
+  "dagId": "ecb_fx_rates",
+  "domain": "fx-reference",
+  "fence": "ecb_fx_rates",
+  "inputs": [
+    {
+      "contractId": "reference-data.calendars.target_days",
+      "maxLagMinutes": null,
+      "relation": "reference_data.calendars__base.target_days",
+      "required": true
+    }
+  ],
+  "landing": {
+    "bucket": "k2-landing",
+    "log": "lake.ecb_fx_rates.landing_files",
+    "prefix": "fx-reference/ecb-fx-rates/"
+  },
+  "maintain": {
+    "cron": "55 2 * * *"
+  },
+  "product": "fx-reference.ecb-fx-rates",
+  "schedule": {
+    "cron": "30 15 * * 1-5"
+  },
+  "status": "active"
+}

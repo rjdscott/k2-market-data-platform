@@ -1,12 +1,18 @@
 {
   "landing": {
     "bucket": "k2-landing",
-    "prefixes": []
+    "prefixes": [
+      "fx-reference/ecb-fx-rates/",
+      "reference-data/currency-master/"
+    ]
   },
   "warehouses": [
     {
       "name": "fx_reference",
-      "namespaces": [],
+      "namespaces": [
+        "ecb_fx_rates",
+        "ecb_fx_rates__base"
+      ],
       "remoteSigningEnabled": false
     },
     {
@@ -20,7 +26,10 @@
     },
     {
       "name": "k2",
-      "namespaces": [],
+      "namespaces": [
+        "currency_master",
+        "ecb_fx_rates"
+      ],
       "remoteSigningEnabled": false
     },
     {
@@ -35,7 +44,12 @@
     },
     {
       "name": "reference_data",
-      "namespaces": [],
+      "namespaces": [
+        "calendars",
+        "calendars__base",
+        "currency_master",
+        "currency_master__base"
+      ],
       "remoteSigningEnabled": false
     }
   ]
