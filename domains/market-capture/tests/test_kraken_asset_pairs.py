@@ -33,7 +33,7 @@ def changed(**pair_changes) -> dict:
 
 def test_fixture_gives_one_row_per_pair_sorted_strings_as_published():
     rows = kap.parse(raw(FIXTURE))
-    assert [r["pair_code"] for r in rows] == ["ALPHAUSD", "CHARLIEUSDT", "XBRAVZEUR"]
+    assert [r["pair_code"] for r in rows] == ["ALPHAUSD", "CHARLIEUSDT", "XBRAVZEUR", "XXBTZUSD"]
     assert rows[0] == {"pair_code": "ALPHAUSD", "ws_name": "ALPHA/USD", "base": "ALPHA", "quote": "ZUSD",
                        "tick_size": "0.1", "pair_decimals": 1, "lot_decimals": 8, "order_min": "0.0001",
                        "status": "online"}

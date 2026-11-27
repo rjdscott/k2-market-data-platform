@@ -850,6 +850,7 @@ PAIRS_A = (ROOT / "domains/market-capture/tests/fixtures/asset-pairs-synthetic.j
 _b = json.loads(PAIRS_A)
 _b["result"]["ALPHAUSD"]["tick_size"] = "0.5"
 PAIRS_B = json.dumps(_b).encode()
+N_PAIRS = len(_b["result"])  # the fixture's pairs, one bronze row each
 
 
 def api_run(hour):
@@ -907,7 +908,7 @@ def test_a_public_api_page_lands_as_json_and_stages_its_rows_at_its_fetch_time(a
     assert (row["object_key"], row["url"], row["final_url"], row["http_status"], row["sha256"], row["bytes"],
             row["fetched_at"]) == (uri, page["url"], page["finalUrl"], 200, sha, len(PAIRS_A), at)
     rows = staged(lake)
-    assert len(rows) == 3 and all(r["fetched_at"] == at and r[model.LINEAGE_COLUMN] == sha for r in rows)
+    assert len(rows) == N_PAIRS and all(r["fetched_at"] == at and r[model.LINEAGE_COLUMN] == sha for r in rows)
     assert C.audit(actx(10), store, lake)[0] == C.EXIT_OK  # parses: fetched_at is the connector's column
     assert [r["check_name"] for r in lake.tables[API_CHECKS]] == C.check_names(KRAKEN["bronze"][0])
 
@@ -935,7 +936,7 @@ def test_a_listing_seen_again_after_another_is_a_new_observation_staged_at_its_o
     for hour, body in ((10, PAIRS_A), (11, PAIRS_B), (12, PAIRS_A)):  # A, B, A
         assert api(body, hour) == FETCH.EXIT_OK  # the third A differs from B, the newest earlier fetch
         assert C.load(actx(hour), store, lake)[0] == C.EXIT_OK
-        assert C.audit(actx(hour), store, lake)[0] == C.EXIT_OK  # row_count: this fetch's 3 rows, not A's 6
+        assert C.audit(actx(hour), store, lake)[0] == C.EXIT_OK  # row_count: this fetch's rows, not A's twice over
         lake.refs_["main"] = lake.refs_["audit"]  # published
     a, b = (hashlib.sha256(x).hexdigest() for x in (PAIRS_A, PAIRS_B))
     assert len(store.objects) == 2 and len(store.puts) == 3  # A stored once
@@ -943,7 +944,7 @@ def test_a_listing_seen_again_after_another_is_a_new_observation_staged_at_its_o
     assert [(r["sha256"], r["fetched_at"].hour) for r in log] == [(a, 10), (b, 11), (a, 12)]
     assert log[0]["object_key"] == log[2]["object_key"]
     published = sorted((r[model.LINEAGE_COLUMN], r["fetched_at"].hour) for r in lake.rows[lake.refs_["main"]])
-    assert published == sorted([(a, 10)] * 3 + [(b, 11)] * 3 + [(a, 12)] * 3)
+    assert published == sorted([(a, 10)] * N_PAIRS + [(b, 11)] * N_PAIRS + [(a, 12)] * N_PAIRS)
     _, text, args = [s for s in lake.sql if s[0] == "row_count"][-1]
     assert text.endswith("WHERE `source_file_sha256` = :sha AND `fetched_at` = :fetched_at")
     assert args == {"sha": a, "fetched_at": log[2]["fetched_at"]}
