@@ -421,7 +421,13 @@ def publish(run: Run, store, lake) -> tuple[int, dict]:
     refs = lake.refs(table)
     main, head = refs.get("main"), refs.get(AUDIT, refs.get("main"))
     result = {"table": table, "snapshotBefore": main, "snapshotAfter": main}
-    why = unaudited(lake.checks_of(bronze["checks"], table, run.run_id, head), check_names(bronze))
+    if run.pipeline["connector"]["kind"] == "kafka":
+        import kafka  # not at the top: kafka.py imports this module
+
+        expected = list(kafka.CHECKS)  # a Kafka batch's audit runs these, never the file kind's
+    else:
+        expected = check_names(bronze)
+    why = unaudited(lake.checks_of(bronze["checks"], table, run.run_id, head), expected)
     if why:
         print(f"publish refused at {AUDIT} snapshot {head}: {why}; main {main} not moved", file=sys.stderr)
         return EXIT_FAILED, result

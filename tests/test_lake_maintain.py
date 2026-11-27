@@ -349,7 +349,7 @@ def test_a_kafka_landing_is_never_expired_and_maintenance_never_compacts():
 
 
 def gap(partition, committed, log_start):
-    return {**connector({partition: log_start + 5}), K.KAFKA_GAPS: json.dumps({TOPIC: {str(partition): [committed, log_start]}})}
+    return {**connector({partition: log_start + 5}), K.KAFKA_GAPS: json.dumps({TOPIC: {str(partition): [[committed, log_start]]}})}
 
 
 @pytest.mark.parametrize("rows, gaps, passed, says", [

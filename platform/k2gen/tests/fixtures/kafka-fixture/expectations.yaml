@@ -1,0 +1,5 @@
+  # The fixture product market-capture.kafka-fixture (scripts/verify/kafka-path.sh appends these
+  # rows to a scratch clone's tests/access/expectations.yaml): owner-only, so a reader of another
+  # product is refused its bronze and its landing.
+  - {principal: p.canary-full, table: lake.kafka_fixture.bronze_frames, denied: true}
+  - {principal: p.canary-full, table: lake.kafka_fixture.landing, denied: true}
