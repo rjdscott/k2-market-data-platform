@@ -4,7 +4,9 @@ the DAG ids, tasks, edges, pools, trigger rules and run limits; resolve pinning 
 pointer moves; the fetch exit 10 and exit 30 paths; expire after a failed build; record after a
 failure and a skip; each Spark task's exact argv and its kill sequence; no product import; a
 malformed entry as an import error; and, on the golden release plus a Kafka and a public-API
-product, the Kafka DAG's shape, the accept-data-loss conf and its `offset_gap` row.
+product, the Kafka DAG's shape, the accept-data-loss conf and its `offset_gap` row; resolve
+refusing a held product through the real k2runs (I-7); the refresh task a degraded build triggers,
+and the one-hop rule at parse (W1-6).
 
     make test-airflow     # inside the Airflow image, no Docker daemon and no network
 """
@@ -28,7 +30,12 @@ from airflow.dag_processing.dagbag import BundleDagBag
 from airflow.models.dagrun import DagRun
 from airflow.sdk import TriggerRule
 from airflow.sdk.api.datamodels._generated import DagRunType  # what a task's dag_run carries
-from airflow.sdk.exceptions import AirflowException, AirflowFailException, AirflowSkipException
+from airflow.sdk.exceptions import (
+    AirflowException,
+    AirflowFailException,
+    AirflowSkipException,
+    DagRunTriggerException,  # what TriggerDagRunOperator raises to start a run
+)
 from airflow.ti_deps.deps.trigger_rule_dep import TriggerRuleDep
 from airflow.utils.state import State, TaskInstanceState
 
@@ -251,11 +258,11 @@ class Scheduling(unittest.TestCase):
 class Parse(unittest.TestCase):
     """The module as Airflow parses it: from a release tree, the bundle folder on sys.path."""
 
-    def release(self, dags_json: str) -> Path:
+    def release(self, dags_json: str, compiled: Path = GOLDEN / "compiled") -> Path:
         root = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, root)
         rel = root / RID
-        shutil.copytree(GOLDEN / "compiled", rel / "compiled")
+        shutil.copytree(compiled, rel / "compiled")
         (rel / "compiled/airflow/dags.json").write_text(dags_json)
         (rel / "manifest.json").write_text("{}")
         dags = rel / "platform/docker/airflow/dags"
@@ -280,6 +287,18 @@ class Parse(unittest.TestCase):
         self.assertEqual(bag.dag_ids, [])
         self.assertIn("dags.json entry 1 ('station_readings'): bad tasks", " ".join(map(str, bag.import_errors.values())))
 
+    def test_a_refresh_task_parses_and_a_refused_target_is_an_import_error(self):
+        for targets, dag_ids in (({KAFKA: API}, sorted(factory.build(KINDS))), ({KAFKA: KAFKA}, [])):
+            compiled = with_refresh(self, targets) / "compiled"
+            bag = BundleDagBag(dag_folder=str(folder := self.release((compiled / "airflow/dags.json").read_text(), compiled)),
+                               bundle_path=folder)
+            self.assertEqual(sorted(bag.dag_ids), dag_ids, targets)
+            if dag_ids:
+                self.assertEqual(bag.import_errors, {})
+                self.assertIn("refresh", bag.dags[KDAG].task_dict)
+            else:
+                self.assertIn("is not another product", " ".join(map(str, bag.import_errors.values())))
+
     def test_a_checkout_builds_nothing(self):
         self.assertFalse((Path(factory.__file__).resolve().parents[4] / "manifest.json").exists())
         self.assertFalse([v for v in vars(factory).values() if type(v).__name__ == "DAG"])
@@ -295,11 +314,11 @@ class Resolve(unittest.TestCase):
         (root / "pointers").mkdir()
         (root / "pointers/airflow").symlink_to(f"../{r1}")
         with mock.patch.multiple(factory, RELEASES_MOUNT=str(root), POINTER=str(root / "pointers/airflow")):
-            pin = factory.Resolve(task_id="resolve").execute({})
+            pin = factory.Resolve(task_id="resolve", product="sensor-net.station-readings").execute({})
             self.assertEqual(pin, {"release": r1, "releasePath": f"{root}/{r1}"})
             (root / "pointers/next").symlink_to(f"../{r2}")
             os.replace(root / "pointers/next", root / "pointers/airflow")  # a deploy, mid-run
-            self.assertEqual(factory.Resolve(task_id="resolve").execute({})["release"], r2)  # the next run's
+            self.assertEqual(factory.Resolve(task_id="resolve", product="sensor-net.station-readings").execute({})["release"], r2)  # the next run's
             ti = TI({("resolve", "return_value"): pin})
             with Docker() as docker:
                 task("station_readings", "load").execute(ctx(ti))
@@ -313,7 +332,7 @@ class Resolve(unittest.TestCase):
         (root / "pointers/airflow").symlink_to("/etc")
         with mock.patch.multiple(factory, RELEASES_MOUNT=str(root), POINTER=str(root / "pointers/airflow")), \
                 self.assertRaises(AirflowFailException):
-            factory.Resolve(task_id="resolve").execute({})
+            factory.Resolve(task_id="resolve", product="sensor-net.station-readings").execute({})
 
     def test_a_task_without_a_pinned_release_runs_nothing(self):
         ti = TI({("resolve", "return_value"): None})
@@ -715,6 +734,146 @@ class OffsetGap(unittest.TestCase):
         for row in rows:
             k2runs.record(SimpleNamespace(cursor=lambda: cur), **row)
         self.assertEqual(cur.execute.call_count, len(rows))
+
+
+class Holds(unittest.TestCase):
+    """resolve under a release, with the release's real k2runs and only its Trino connection faked."""
+
+    HOLD = ("sensor-net.station-readings", "operator", "listing rebuilt by hand", "owner",
+            datetime(2026, 11, 28, 1, 2, 3, tzinfo=timezone.utc), None, None)
+
+    def resolve(self, rows=(), table=True, fail=None):
+        root = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, root)
+        rel = root / RID
+        rel.mkdir()
+        (rel / "platform").symlink_to(REPO)  # <release>/platform/<repository path>: the real k2runs
+        if table:
+            (rel / factory.HOLDS_DDL).parent.mkdir(parents=True)
+            (rel / factory.HOLDS_DDL).write_text("-- the holds table")
+        (root / "pointers").mkdir()
+        (root / "pointers/airflow").symlink_to(f"../{RID}")
+        cur = mock.MagicMock()
+        cur.fetchall.return_value = list(rows)
+        cur.execute.side_effect = fail
+        self.cur, real = cur, factory.load_k2runs
+
+        def load(path):
+            k2runs = real(path)
+            k2runs.connect = lambda: SimpleNamespace(cursor=lambda: cur)
+            return k2runs
+        with mock.patch.multiple(factory, RELEASES_MOUNT=str(root), POINTER=str(root / "pointers/airflow")), \
+                mock.patch.object(factory, "load_k2runs", side_effect=load) as loaded:
+            try:
+                return task("station_readings", "resolve").execute(ctx(TI())), f"{root}/{RID}"
+            finally:
+                self.loaded = loaded.call_count
+
+    def test_a_held_product_is_refused_naming_the_hold(self):
+        with self.assertRaises(AirflowFailException) as e:
+            self.resolve([self.HOLD])
+        self.assertIn("sensor-net.station-readings is held (operator hold by owner at 2026-11-28 01:02:03+00:00): "
+                      "listing rebuilt by hand", str(e.exception))
+        statement, params = self.cur.execute.call_args.args
+        self.assertIn("FROM governance_build.run_records.holds", statement)
+        self.assertEqual(params, ["sensor-net.station-readings"])
+
+    def test_no_open_hold_pins_the_release(self):
+        pin, rel = self.resolve([])
+        self.assertEqual(pin, {"release": RID, "releasePath": rel})
+        self.assertEqual(self.cur.execute.call_count, 1)
+
+    def test_a_release_without_the_holds_table_holds_nothing(self):
+        pin, rel = self.resolve([self.HOLD], table=False)
+        self.assertEqual(pin["releasePath"], rel)
+        self.assertEqual(self.loaded, 0)  # no k2runs loaded, no connection made
+
+    def test_holds_that_cannot_be_read_refuse_the_run(self):
+        with self.assertRaises(AirflowException) as e:
+            self.resolve(fail=ConnectionError("trino unreachable"))
+        self.assertIs(type(e.exception), AirflowException)  # not AirflowFailException: no hold was seen
+        self.assertIn("the holds of sensor-net.station-readings could not be read: ConnectionError", str(e.exception))
+
+    def test_every_resolve_checks_its_own_product(self):
+        for root in (GOLDEN, CANARY, KINDS):
+            for d in factory.build(root).values():
+                self.assertEqual({d.get_task("resolve").product}, set(d.tags), d.dag_id)
+
+
+DEGRADED = {"exit": 0, "expire": [], "degraded": True, "warned": ["silver_trade_unresolved_rows"]}
+
+
+def with_refresh(test: unittest.TestCase, targets: dict) -> Path:
+    """KINDS with pipeline.json's `refresh` set to each {product: target}, removed after `test`."""
+    root = Path(tempfile.mkdtemp())
+    test.addCleanup(shutil.rmtree, root)
+    shutil.copytree(KINDS / "compiled", root / "compiled")
+    for product, target in targets.items():
+        path = root / f"compiled/products/{product}/pipeline.json"
+        path.write_text(json.dumps({**json.loads(path.read_text()), "refresh": target}))
+    return root
+
+
+class Refresh(unittest.TestCase):
+    """W1-6 on KINDS: trade_feed's degraded build starts pair_list."""
+
+    def release(self, targets: dict) -> Path:
+        return with_refresh(self, targets)
+
+    def op(self):
+        return factory.build(self.release({KAFKA: API}))[KDAG].get_task("refresh")
+
+    def test_no_refresh_target_no_refresh_task(self):
+        for root in (GOLDEN, CANARY, KINDS):
+            for d in factory.build(root).values():
+                if (root, d.dag_id) != (CANARY, "kraken_trades"):  # the repository's one refresh target
+                    self.assertNotIn("refresh", d.task_dict, d.dag_id)
+
+    def test_the_repository_kraken_trades_refreshes_kraken_instruments(self):
+        op = factory.build(CANARY)["kraken_trades"].get_task("refresh")
+        self.assertEqual((op.trigger_dag_id, op.upstream_task_ids), ("kraken_instruments", {"build"}))
+
+    def test_a_target_adds_refresh_after_build_and_changes_nothing_else(self):
+        dags = factory.build(self.release({KAFKA: API}))
+        self.assertEqual(edges(dags[KDAG]) ^ edges(factory.build(KINDS)[KDAG]), {("build", "refresh")})
+        for d in (d for d in dags if d != KDAG):
+            self.assertEqual(edges(dags[d]), edges(factory.build(KINDS)[d]), d)
+        r = dags[KDAG].get_task("refresh")
+        self.assertEqual((r.trigger_dag_id, r.retries, r.trigger_rule, r.skip_when_already_exists, r.wait_for_completion,
+                          r.is_teardown, r.conf, r.pool), (ADAG, 0, TriggerRule.ALL_SUCCESS, True, False, False, None, "default_pool"))
+
+    def test_skipped_unless_build_says_degraded(self):
+        op = self.op()
+        for result in (None, {"exit": 0, "expire": []}, {**DEGRADED, "degraded": False}, {**DEGRADED, "degraded": "true"},
+                       {**DEGRADED, "degraded": 1}, ["degraded"]):
+            with self.subTest(result=result), self.assertRaises(AirflowSkipException):
+                op.execute(ctx(TI({("build", "result"): result}, dag_id=KDAG)))
+
+    def test_a_degraded_build_starts_one_target_run_with_the_fixed_run_id(self):
+        op = self.op()
+        for _ in (1, 2):  # a rerun asks for the same run id, which then exists: skipped, never a second run
+            with self.assertRaises(DagRunTriggerException) as e:
+                op.execute(ctx(TI({("build", "result"): DEGRADED}, dag_id=KDAG)))
+            t = e.exception
+            self.assertEqual((t.trigger_dag_id, t.dag_run_id, t.skip_when_already_exists, t.wait_for_completion, t.conf),
+                             (ADAG, f"refresh__{RUN}", True, False, None))  # no conf: the target's resolve refuses one
+
+    def test_a_target_that_refreshes_itself_or_another_is_refused_at_parse(self):
+        for targets, message in (({KAFKA: API, API: "sensor-net.station-readings"}, "names its own refresh target"),
+                                 ({KAFKA: API, API: KAFKA}, "a refresh is one hop"),
+                                 ({KAFKA: KAFKA}, "is not another product"),
+                                 ({KAFKA: "sensor-net.nowhere"}, "is not another product")):
+            with self.subTest(targets=targets), self.assertRaises(ValueError) as e:
+                factory.build(self.release(targets))
+            self.assertIn(message, str(e.exception))
+
+    def test_runs_through_the_trigger_rules(self):
+        d = factory.build(self.release({KAFKA: API}))[KDAG]
+        for outcomes, refresh, run in (({}, S, "success"), ({"refresh": SK}, SK, "success"), ({"build": F}, UF, "failed"),
+                                       ({"audit": F}, UF, "failed"), ({"refresh": F}, F, "failed")):
+            with self.subTest(outcomes=outcomes):
+                states, state = schedule(d, outcomes)
+                self.assertEqual((states["refresh"], states["record"], state), (refresh, S, run))
 
 
 if __name__ == "__main__":

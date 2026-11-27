@@ -504,6 +504,15 @@ refuses a refresh target that itself declares one, so the chain is one hop. A he
 gets the run queued, and `resolve` fails it while held. Where `pipeline.json` gets the target, and
 the contract field it comes from, is W1-6's, with `make test-airflow`.
 
+2026-11-28, the field: the product property `refresh`, value a product id, compiles to
+`pipeline.json`'s top-level `"refresh"` (optional in `pipeline.schema.json`). `k2gen check
+refresh.*` (`platform/k2gen/k2gen/checks/refresh.py`) holds it: the target is a product of the set,
+not retired, not the product itself, scheduled, upstream of the product through its input ports
+directly or through other products (`kraken-instruments` feeds `kraken-trades` through the security
+master, so a target is never a product the build does not read), naming no refresh of its own; and
+the product has a warn-severity dbt test, the only thing that makes a build degraded.
+`kraken-trades` declares `refresh: market-capture.kraken-instruments`.
+
 ## The role order, 2026-11-28 (phases 004 and 005)
 
 A10 gains one optional field, additively: a role in `contracts/access/roles.yaml` may list the roles
