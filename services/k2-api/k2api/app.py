@@ -229,6 +229,22 @@ def ask(user: str, sql: str, params: list[Any]) -> list[list[Any]]:
         raise Refused(503, "trino_unavailable", "Trino did not answer; try again") from None
 
 
+def probe(principal: str, out: dict[str, Any]) -> None:
+    """A query as the caller that reads no row of out's reader relation: db.Denied when Trino
+    refuses the caller, db.Failed on another error."""
+    ask(principal, f"SELECT {', '.join(map(ident, columns(out)))} FROM {quoted(out['relation'])} LIMIT 0", [])
+
+
+def unpublished(e: db.Failed) -> bool:
+    """Whether a probe failed only for want of a tested snapshot, so `$refs` decides 404 or a read.
+    Taken from Trino 484's source, unproven against a running Trino: a guarded view over a base with
+    no `audited` tag is INVALID_VIEW (Trino wraps any error in a view's body; Iceberg's own is
+    INVALID_ARGUMENTS), a base or connector table before its first build TABLE_NOT_FOUND or
+    SCHEMA_NOT_FOUND. The same source checks the caller's SELECT only after the whole statement is
+    analysed, so a denied caller may meet these before PERMISSION_DENIED: the REST leg decides."""
+    return e.name in {"INVALID_VIEW", "INVALID_ARGUMENTS", *NOT_YET}
+
+
 def access(principal: str, doc: dict[str, Any]) -> list[dict[str, Any]]:
     """Per output with a reader relation, whether Trino lets the caller read it, asked with a
     query that reads no row. Any refusal, a rule or a relation not yet published, is False."""
@@ -236,9 +252,8 @@ def access(principal: str, doc: dict[str, Any]) -> list[dict[str, Any]]:
     for out in doc["outputs"]:
         if out["relation"] is None:  # build serving: only its serving copy holds it
             continue
-        sql = f"SELECT {', '.join(map(ident, columns(out)))} FROM {quoted(out['relation'])} LIMIT 0"
         try:
-            ask(principal, sql, [])
+            probe(principal, out)
             allowed = True
         except (db.Denied, db.Failed):
             allowed = False
@@ -397,6 +412,15 @@ def get_data(domain: str, product: str, table: str, request: Request) -> Respons
            f"{' WHERE ' + where if filters else ''}{' ORDER BY ' + order if order else ''}"
            f" LIMIT {limit + 1}")  # one row past the limit: result_too_large
     values = [value for _, value in filters]
+    # The caller first: a relation's publication state is told only to a caller Trino lets read it.
+    try:
+        probe(principal, out)
+    except db.Denied:
+        raise Refused(403, "forbidden", f"Trino denied the caller {out['relation']}") from None
+    except db.Failed as e:
+        if not unpublished(e):
+            log.error("probing %s failed: %s", out["relation"], e.name)
+            raise Refused(503, "query_failed", "Trino could not run the read") from None
     snapshot = tested_snapshot(rel, out)
     for _ in range(2):  # the tag read before and after; when it moved, once more
         if snapshot is None:
