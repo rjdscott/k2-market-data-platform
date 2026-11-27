@@ -303,6 +303,24 @@ nothing stages. The descriptions of `kafkaConnector` and its `filter` in `k2-v2.
 say the filter decides what lands; the next step to edit that file's descriptions brings them to
 this.
 
+2026-11-28 (review finding D1): a partition bronze has no through-offset for (the product's first
+stage, or a partition added since) starts at the landing's first offset in it, its minimum
+`kafka_offset` read from the landing's rows, never at 0. The landing lands from the log start
+(`startFrom: earliest-retained`), so a range from 0 planned rows that were never there and the first
+audit on a trimmed topic failed for good. The rows are the source because they are never expired;
+the landing commit whose `k2.kafka-starts` recorded that start may be. The audit's accounting plans
+from the same start, and Retention's "stages again from offset 0" reads "from the landing's first
+offset".
+
+2026-11-28 (review finding D4): the landing commit is no plain append to `main`, which Iceberg
+retries on a newer head, so two loads at once landed one range twice. It is written on the
+landing's branch `land`, set first to `main` as the plan read it (a landing with no `main`: made
+again, empty), and made `main`'s head by one Iceberg REST commit requiring `main` to be that
+snapshot and `land` the commit, as `connector.publish` moves bronze, and only if the commit's
+parent is that snapshot. The loser of a race, or a load whose landing a compaction moved under
+it, exits 2 having landed nothing, and the next run plans from what landed. The landing's refs
+are `main` and `land`.
+
 **Bronze.** A Kafka product has one bronze table (`kafka.py` stages into exactly one), staged from the landing
 by offset, never by run id, so a retry, or a kill between the landing commit and the stage, stages
 nothing twice and leaves no hole. Its columns are exactly the landing's nine, by name and type, as
@@ -332,6 +350,22 @@ batch in the audit's `parses`, which reads each staged frame again from the land
 column. `schema_id` and the envelope columns are never `required`: a frame unframed, of an id that
 is no `RawMessage`, or whose body does not read, is staged with them null and fails `parses`.
 k2gen's `connectors.kafka-bronze-shape` and `pipeline.schema.json` hold this shape.
+
+2026-11-28 (review finding D3): an id is unresolvable only when the registry answers 404 for it;
+any other registry error fails the task, exit 1, before the stage writes or the audit records
+anything. `parses` also compares each staged row with the frame's decode from the landing: a frame
+whose bronze columns are not what its decode projects (null where the decode is not, as when the
+registry answered 404 at the stage and serves the id since) fails the batch, naming partition,
+offset and the columns.
+
+2026-11-28 (review finding D2): a kill between the stage and the audit leaves no stuck batch either.
+A stage that finds another run's batch unpublished on `audit` resets `audit` to `main` and stages
+the range again from `main`'s through-offsets, with whatever landed since, when that batch has no
+`audit_checks` row at its snapshot (never audited) or its newest audit passed every check (never
+published); it is refused, naming the failed checks and the `REPLACE BRANCH` (no `main`: `DROP
+BRANCH`) that clears it, when its newest audit failed or lacks a check, or no Kafka stage wrote the
+head. A batch that failed its audit is never reset. The file kinds keep their rule: any other
+batch blocks.
 
 **The envelope contract.** The capture's `RawMessage` (`schemas/avro/raw-message.avsc`, subject
 `market.crypto.v3.raw.<exchange>-value`) is declared by `market-capture` as the table contract
