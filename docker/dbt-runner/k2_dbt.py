@@ -270,6 +270,71 @@ def restore(io: Any, rel: str, target: int | None, tagged: bool) -> None:
     io.sql("builder", restore_statement(rel, target, tagged, at_target, io.columns(rel, None)))
 
 
+def reconcile(ctx: Ctx, io: Any) -> None:
+    """Step 1. Raises Refused on anything a reconcile must not repair; the caller exits 3."""
+    rels = {o.relation for o in ctx.outputs}
+    last: dict[str, dict[str, Any]] = {}
+    audited: dict[str, int] = {}
+    # A restore by create-or-replace leaves main on a new snapshot holding the tag's rows and
+    # schema, never the tag's id (rolling back onto the tag's id would read its files through the
+    # replaced field ids). So main is clean when it is the tag, or what a restore since the newest
+    # audited row recorded as its snapshot_after.
+    restored: dict[str, set[int]] = {}
+    for row in io.history(ctx.product):  # oldest first
+        rel = row["table_name"]
+        if rel in rels and row["event"] in ("started", *TERMINAL):
+            last[rel] = row
+            after = None if row["snapshot_after"] is None else snap(row["snapshot_after"])
+            if row["event"] == "audited" and after is not None:
+                audited[rel], restored[rel] = after, set()
+            elif row["event"] in ("rolled_back", "reconciled") and after is not None:
+                restored.setdefault(rel, set()).add(after)
+    tags: dict[str, int | None] = {}
+    for o in ctx.outputs:
+        main, tag = heads(io, o.relation)
+        tags[o.relation] = tag
+        prev = last.get(o.relation)
+        unfinished = prev["run_id"] if prev and prev["event"] == "started" else None
+        if unfinished is not None and not RUN_ID.fullmatch(unfinished):
+            raise Refused(f"{o.relation}: run record {unfinished!r} is not a run id")
+        clean = main == tag or main in restored.get(o.relation, set())
+        if tag != audited.get(o.relation):
+            # Only a run that died between its tag commit and its audited row explains this: its
+            # build is main, the tag is on it, and its last record for the table is `started`.
+            if unfinished is None or tag is None or main != tag:
+                raise Refused(f"{o.relation}: tag {tag} and newest audited run record {audited.get(o.relation)} differ, "
+                              "and no unfinished run explains it")
+            log(f"reconcile {o.relation}: tag {tag} ahead of the records; {unfinished} gets its audited row")
+            record(ctx, io, run_id=unfinished, event="audited", table_name=o.relation,
+                   snapshot_before=None if prev["snapshot_before"] is None else snap(prev["snapshot_before"]), snapshot_after=tag, detail="reconciled: the tag moved and the run stopped before its audited row")
+        elif not clean:
+            # Back to where the dead run started (its main then held the tag's rows), else the tag.
+            start = None if unfinished is None or prev["snapshot_before"] is None else snap(prev["snapshot_before"])
+            target = start if start is not None and (start == tag or start in restored.get(o.relation, set())) else tag
+            log(f"reconcile {o.relation}: main {main} is not its tag {tag}; restored to {target}")
+            restore(io, o.relation, target, tag is not None)
+            record(ctx, io, run_id=unfinished or ctx.run_id, event="reconciled", table_name=o.relation,
+                   snapshot_before=main, snapshot_after=heads(io, o.relation)[0] if target is not None else None,
+                   detail="main restored to the audited tag's rows" if tag else "dropped: never tagged")
+        elif unfinished:
+            record(ctx, io, run_id=unfinished, event="reconciled", table_name=o.relation, snapshot_before=main,
+                   snapshot_after=tag, detail="nothing moved")
+    for o in ctx.outputs:  # the view rule of step 6, rerun: each view is C and the tagged columns
+        if tags[o.relation] is None:
+            continue
+        cols = io.columns(o.relation, tags[o.relation])
+        want = lake.view_sql(o.view, list(cols))
+        have = io.view_sql(o.view)
+        if have is None or catalog_drift.tokens(have) != catalog_drift.tokens(want):
+            log(f"reconcile {o.view.relation}: the view is put back to the tagged columns")
+            io.sql("publisher", lake.view_update(o.view, cols, cols)[1])
+    found = io.drift()
+    if found["differences"]:
+        for line in found["differences"]:
+            log(line)
+        raise Refused(f"the catalog drift check found {len(found['differences'])} difference(s)")
+
+
 def resolve(ctx: Ctx, io: Any) -> dict[str, int | None]:
     """Step 2: every input's tested snapshot, as svc.runs. One full read can straddle a publish,
     so the set is read twice and must agree; tags only move forward, so two equal reads hold one
@@ -415,6 +480,11 @@ def run(ctx: Ctx, io: Any) -> tuple[int, list[dict[str, Any]]]:
     """Steps 1 to 6; (exit code, expire)."""
     expire: list[dict[str, Any]] = []
     try:
+        reconcile(ctx, io)
+    except Exception as e:
+        log(f"reconcile: {type(e).__name__}: {e}")
+        return 3, expire
+    try:
         inputs = resolve(ctx, io)
     except Untested as e:
         log(f"resolve: {e}")
@@ -533,6 +603,11 @@ class Live:
     def record(self, **row: Any) -> None:
         self.k2runs.record(self.conn("runs"), **row)
 
+    def history(self, product: str) -> list[dict[str, Any]]:
+        rows, _ = self.query("runs", f"SELECT run_id, event, table_name, snapshot_before, snapshot_after FROM {self.k2runs.TABLE} "
+                                     "WHERE product_id = ? AND task = 'build' ORDER BY recorded_at", [product])
+        return [dict(zip(("run_id", "event", "table_name", "snapshot_before", "snapshot_after"), r, strict=True)) for r in rows]
+
     def dbt(self, argv: list[str]) -> tuple[int, dict[str, Any] | None]:
         results = WORK / "target" / "run_results.json"
         results.unlink(missing_ok=True)
@@ -550,6 +625,17 @@ class Live:
             raise Refused(f"warehouse {warehouse} is not this product's")
         status, _ = catalog_drift.call("POST", f"{self.cat().base}/transactions/commit", {"table-changes": changes})
         return status
+
+    def view_sql(self, view: k2.View) -> str | None:
+        _, ns, name = view.relation.split(".")
+        meta = self.cat().view(ns, name)
+        return catalog_drift.view_state(meta)["sql"][0] if meta else None
+
+    def drift(self) -> dict[str, list[str]]:
+        runs = self.conn("runs")
+        found: dict[str, list[str]] = catalog_drift.drift(self.uri, catalog_drift.expected(self.ctx.release_path),
+                                                          newest_audited=lambda t: self.k2runs.newest_audited(runs, t))
+        return found
 
 
 def main(argv: list[str] | None = None) -> int:

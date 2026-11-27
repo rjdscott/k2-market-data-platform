@@ -469,6 +469,104 @@ def test_a_crash_at_each_point_of_the_publish_never_exposes_untested_data(crash)
     assert fake.violations == []
 
 
+# ---- W1-17: reconcile --------------------------------------------------------------------------
+
+def test_a_clean_state_reconciles_to_nothing():
+    fake = Fake()
+    fake.seed()
+    before = list(fake.records)
+    w.reconcile(ctx(), fake)
+    assert fake.statements == [] and fake.records == before
+
+
+def test_an_unfinished_run_is_restored_to_its_tag_and_reconciled():
+    fake = Fake()
+    s0 = fake.seed()
+    fake.records.append(dict(run_id="access_canary/r0", product_id="governance.access-canary", task="build",
+                             event="started", table_name=OUT, snapshot_before=s0, snapshot_after=None))
+    fake._snap(OUT, V2, False)  # the dead run's build
+    w.reconcile(ctx(), fake)
+    t = fake.tables[OUT]
+    assert t["schema"] == V1 and t["snaps"][t["main"]][0] == V1 and t["tag"] == s0  # rows and schema of the tag
+    assert (fake.records[-1]["event"], fake.records[-1]["run_id"], fake.records[-1]["snapshot_after"]) == (
+        "reconciled", "access_canary/r0", t["main"])
+    n = len(fake.statements)
+    w.reconcile(ctx(), fake)  # main is the recorded restore: clean, nothing more to do
+    assert len(fake.statements) == n and fake.violations == []
+
+
+def test_an_unfinished_run_on_a_never_tagged_table_drops_it():
+    fake = Fake()
+    fake.seed(tagged=False)
+    fake.records.append(dict(run_id="access_canary/r0", product_id="governance.access-canary", task="build",
+                             event="started", table_name=OUT, snapshot_before=None, snapshot_after=None))
+    w.reconcile(ctx(), fake)
+    assert OUT not in fake.tables and fake.records[-1]["event"] == "reconciled"
+
+
+def test_a_tag_ahead_of_the_records_gets_its_audited_row_and_its_view():
+    fake = Fake()
+    fake.seed()
+    s1 = fake._snap(OUT, V2, True)
+    fake.records.append(dict(run_id="access_canary/r0", product_id="governance.access-canary", task="build",
+                             event="started", table_name=OUT, snapshot_before=None, snapshot_after=None))
+    fake.tables[OUT]["tag"] = s1  # it died after the commit
+    fake.views[VIEW.relation] = {"id": "bigint", "region": "varchar"}  # narrowed
+    w.reconcile(ctx(), fake)
+    assert (fake.records[-1]["event"], fake.records[-1]["snapshot_after"], fake.records[-1]["run_id"]) == (
+        "audited", s1, "access_canary/r0")
+    assert fake.views[VIEW.relation] == V2 and fake.drift()["differences"] == []
+
+
+def test_a_tag_no_unfinished_run_explains_exits_3_before_dbt():
+    fake = Fake()
+    fake.seed()
+    fake.tables[OUT]["tag"] = fake._snap(OUT, V1, True)  # moved by someone, the records say otherwise
+    assert w.run(ctx(), fake) == (3, []) and fake.dbt_calls == []
+
+
+def test_any_drift_left_after_the_repairs_exits_3_before_dbt():
+    fake = Fake()
+    fake.seed()
+    fake.extra_drift = ["DRIFT view governance.access_canary.planted: the release declares no such view"]
+    assert w.run(ctx(), fake) == (3, []) and fake.dbt_calls == []
+
+
+def test_a_rerun_with_the_same_run_id_is_idempotent():
+    fake = Fake()
+    fake.seed()
+    fake.build[OUT], fake.crash = V2, "narrow"
+    with pytest.raises(Crash):
+        w.run(ctx(), fake)
+    fake.crash = None
+    assert w.run(ctx(), fake) == (0, []) and w.run(ctx(), fake) == (0, [])
+    assert fake.violations == [] and fake.drift()["differences"] == []
+
+
+@pytest.mark.parametrize("crash,first_run_left", [("narrow", "reconciled"), ("tag", "audited"), ("widen", "audited")])
+def test_after_a_crash_at_each_point_of_the_publish_the_next_run_finishes_it(crash, first_run_left):
+    fake = Fake()
+    fake.seed()
+    fake.build[OUT], fake.crash = V2, crash
+    with pytest.raises(Crash):
+        w.run(ctx(), fake)
+    assert fake.violations == []
+    fake.crash = None
+    assert w.run(ctx(run="access_canary/r2"), fake) == (0, [])
+    assert fake.violations == []
+    assert events(fake, "access_canary/r1")[-1] == (first_run_left, OUT)
+    t = fake.tables[OUT]
+    assert t["tag"] == t["main"] and fake.views[VIEW.relation] == V2 and fake.drift()["differences"] == []
+
+
+def test_a_snapshot_id_from_a_run_record_is_parsed_never_spliced():
+    fake = Fake()
+    fake.seed()
+    fake.records.append(dict(run_id="access_canary/r0", product_id="governance.access-canary", task="build",
+                             event="audited", table_name=OUT, snapshot_before=None, snapshot_after="1 OR 1=1"))
+    assert w.run(ctx(), fake) == (3, []) and fake.statements == []
+
+
 # ---- trust boundaries --------------------------------------------------------------------------
 
 @pytest.mark.parametrize("bad", ["a.b", 'a.b.c"; DROP TABLE x --', "A.b.c", "a.b.c$refs", "a.b." + "x" * 64, "a..c", None])

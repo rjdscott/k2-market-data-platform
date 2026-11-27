@@ -119,8 +119,8 @@ class View:
 
 
 WANT = {"namespaces": {"governance": {"c", "c__base"}}, "tables": {("governance", "c__base"): {"t", "seed"}},
-        "views": {("governance", "c"): {"t": {"view": View, "base": ("c__base", "t")}}},
-        "pending_tables": {("governance", "c__base"): {"t", "seed"}},
+        "views": {("governance", "c"): {"t": {"view": View, "base": ("c__base", "t"), "record": "governance_build.c__base.t"}}},
+        "pending_tables": {("governance", "c__base"): {"t", "seed"}}, "results": {("governance", "c__base")},
         "sql": lambda view, columns, tagged: GENERATED if list(columns) == ["id", "note"] else "other"}
 
 
@@ -140,16 +140,39 @@ def catalog(**change) -> dict:
 def drift(monkeypatch):
     monkeypatch.setattr(cd, "Catalog", FakeCatalog)
 
-    def run(state: dict) -> dict:
+    def run(state: dict, newest_audited=None) -> dict:
         FakeCatalog.state = state
-        return cd.drift("http://fake/catalog", WANT)
+        return cd.drift("http://fake/catalog", WANT, newest_audited)
 
     return run
 
 
 def test_a_catalog_equal_to_the_release_is_clean(drift):
+    found = drift(catalog(), newest_audited={"governance_build.c__base.t": 2}.get)
+    assert found == {"differences": [], "pending": [], "skipped": []}
+
+
+def test_without_a_run_records_reader_each_tag_is_a_skip_never_a_pass(drift):
     found = drift(catalog())
-    assert found["differences"] == [] and len(found["skipped"]) == 1 and "phase 002" in found["skipped"][0]
+    assert found["differences"] == [] and len(found["skipped"]) == 1 and "no run-records reader" in found["skipped"][0]
+
+
+@pytest.mark.parametrize("recorded", [1, 3, None])
+def test_a_tag_no_recorded_publish_moved_is_named(drift, recorded):
+    asked = []
+    found = drift(catalog(), newest_audited=lambda t: asked.append(t) or recorded)
+    assert asked == ["governance_build.c__base.t"]
+    assert any("DRIFT tag governance.c__base.t" in line and f"says {recorded}" in line for line in found["differences"]), found
+
+
+def test_the_builds_results_table_is_expected_in_its_base_namespace_only(drift):
+    assert drift(catalog(base__tables__dq_test_results=table(tag=None)))["differences"] == []
+    named = drift(catalog(reader__tables__dq_test_results=table(tag=None)))["differences"]
+    assert any("governance.c.dq_test_results: in a reader namespace" in line for line in named)
+    planted = drift(catalog(base__tables__planted=table(tag=None)))["differences"]
+    assert any("governance.c__base.planted" in line for line in planted)
+    as_view = drift(catalog(base__views__dq_test_results=view_meta()))["differences"]
+    assert any("governance.c__base.dq_test_results: the release declares no such view" in line for line in as_view)
 
 
 def test_a_product_before_its_first_publish_is_pending_not_drift(drift):
