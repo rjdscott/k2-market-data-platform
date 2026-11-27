@@ -20,6 +20,10 @@ For every table in model.LAKE_BUILDS (a serving table has no lake table and is s
   product's: each (warehouse, namespace) has one owner, a product or the platform.
 - model.CONTRACT_SCHEMAS, model.RETENTION (the contract's days, else the floor),
   model.STORAGE_PLAN and model.BACKUP_SET, the last two against their schemas.
+- A kafka product's landing is a table, never objects: no landing prefix in the storage plan or
+  the backup set, so maintain's landing expiry (14 days, file kinds alone) never reaches it; the
+  table is backed up as restore at main and its snapshots kept by RETENTION's days, maintain
+  never expiring its newest connector snapshot, the resume point (I-1, "Retention").
 
 Every name in emitted SQL goes through model.quote_ident or model.quote_relation and every value
 through model.sql_literal; the one exception is the frozen run-record file, copied unchanged.
