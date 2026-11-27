@@ -56,6 +56,33 @@ sources:
     - name: source_file_sha256
       data_type: varchar
       description: The landed file's sha256, set by the connector on every row (its lineage).
+- name: currency_master
+  database: reference_data
+  schema: currency_master__base
+  tables:
+  - name: currency
+    description: One row per ISO 4217 alphabetic currency code that any landed list has held, with its numeric code, name,
+      minor units and fund flag.
+    meta:
+      k2:
+        contract: reference-data.currency-master.currency
+        tested_ref: audited
+    columns:
+    - name: code
+      data_type: varchar
+      description: The alphabetic code, three capital letters (EUR); unique.
+    - name: numeric_code
+      data_type: varchar
+      description: The numeric code, three digits, leading zeros kept (008).
+    - name: name
+      data_type: varchar
+      description: The currency's name as the list writes it.
+    - name: minor_units
+      data_type: integer
+      description: Digits after the decimal point (2 for EUR); null where the list says N.A.
+    - name: is_fund
+      data_type: boolean
+      description: True when the list marks the entry a fund, not a circulating currency.
 - name: ecb_fx_rates
   database: lake
   schema: ecb_fx_rates
@@ -126,3 +153,54 @@ sources:
     - name: source_file_sha256
       data_type: varchar
       description: The landed response's sha256, set by the connector on every row (its lineage).
+- name: kraken_instruments
+  database: market_capture
+  schema: kraken_instruments__base
+  tables:
+  - name: silver_listing
+    description: 'One row per pair and version: a version is a run of fetches, in fetch time order, that state the same listing
+      attributes for the pair, valid from the first fetch of the run. A refetch with no change adds no row, a changed tick
+      size adds one, and a pair missing from a fetch after it was listed adds one row with is_listed false and no attributes.'
+    meta:
+      k2:
+        contract: market-capture.kraken-instruments.silver_listing
+        tested_ref: audited
+    columns:
+    - name: pair_code
+      data_type: varchar
+      description: The pair's REST code, the key of the response's result object.
+    - name: first_fetched_at
+      data_type: timestamp(6) with time zone
+      description: 'The fetch time (bronze fetched_at) of the first fetch that stated this version, in UTC: the version is
+        valid from it until the pair''s next version. Ordered by fetch time, never by when a response arrived in the lake.'
+    - name: is_listed
+      data_type: boolean
+      description: False when this version is the pair's absence from the response, every attribute below but source_file_sha256
+        null.
+    - name: ws_name
+      data_type: varchar
+      description: The websocket name (wsname), the symbol a trades stream frame carries.
+    - name: base
+      data_type: varchar
+      description: The base asset's code as the venue spells it.
+    - name: quote
+      data_type: varchar
+      description: The quote asset's code as the venue spells it.
+    - name: tick_size
+      data_type: decimal(38,18)
+      description: The smallest price step, the published string cast exactly.
+    - name: pair_decimals
+      data_type: integer
+      description: Digits after the decimal point of a price.
+    - name: lot_decimals
+      data_type: integer
+      description: Digits after the decimal point of a volume.
+    - name: order_min
+      data_type: decimal(38,18)
+      description: The smallest order volume in the base asset, the published string cast exactly.
+    - name: status
+      data_type: varchar
+      description: The pair's trading status as the venue states it.
+    - name: source_file_sha256
+      data_type: varchar
+      description: The landed response that first stated this version (or the pair's absence).

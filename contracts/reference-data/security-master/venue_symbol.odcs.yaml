@@ -1,0 +1,105 @@
+apiVersion: v3.2.0
+kind: DataContract
+id: reference-data.security-master.venue_symbol
+name: venue_symbol
+version: 1.0.0
+domain: reference-data
+description:
+  purpose: >-
+    Type-2: one row per venue spelling and version, the symbol the venue's trades stream carries
+    and the instrument it names, valid from valid_from up to but not including valid_to. A trade
+    resolves through the row of its venue and symbol whose interval holds its time. A version
+    changes when the instrument or the pair behind the spelling changes; a delisting does not
+    close it (the instrument's is_listed records that), so the spelling still resolves.
+  limitations: >-
+    The spelling is composed by rule from the listing's websocket name (venue_symbol_claim); a
+    spelling two pairs of one venue claim at overlapping times is not here but in
+    venue_symbol_held. The first version opens at 1970-01-01 00:00:00 UTC, so a trade older than
+    the first fetch still resolves.
+team:
+  name: reference-data-team
+schema:
+  - id: venue_symbol
+    name: venue_symbol
+    physicalName: security_master.venue_symbol
+    physicalType: table
+    properties:
+      - name: venue
+        physicalType: varchar
+        required: true
+        primaryKey: true
+        primaryKeyPosition: 1
+        description: The venue (kraken).
+      - name: venue_symbol
+        physicalType: varchar
+        required: true
+        primaryKey: true
+        primaryKeyPosition: 2
+        description: The symbol as the venue's trades stream spells it (BTC/USD on Kraken's websocket v2).
+      - name: valid_from
+        physicalType: timestamp(6) with time zone
+        required: true
+        primaryKey: true
+        primaryKeyPosition: 3
+        description: The fetch that first saw this version, in UTC; the spelling's first version opens at 1970-01-01 00:00:00 UTC.
+        customProperties:
+          - property: time
+            value: valid
+      - name: valid_to
+        physicalType: timestamp(6) with time zone
+        required: true
+        description: The next version's valid_from; 9999-12-31 23:59:59 UTC on the open row, never null.
+        customProperties:
+          - property: time
+            value: valid
+      - name: instrument_id
+        physicalType: varchar
+        required: true
+        description: The instrument the spelling names (instrument.instrument_id).
+      - name: pair_code
+        physicalType: varchar
+        required: true
+        description: The venue's REST code of the pair whose listing claims the spelling.
+      - name: recorded_at
+        physicalType: timestamp(6) with time zone
+        required: true
+        description: When the fetch that first saw this version ran, in UTC (knowledge time).
+        customProperties:
+          - property: time
+            value: known
+    quality:
+      - name: versions_do_not_overlap
+        type: sql
+        query: "select count(*) from (select valid_to, lead(valid_from) over (partition by venue, venue_symbol order by valid_from) as next_from from ${table}) as v where next_from < valid_to"
+        mustBe: 0
+        description: Each version ends no later than the next one of its key starts.
+      - name: versions_leave_no_gap
+        type: sql
+        query: "select count(*) from (select valid_to, lead(valid_from) over (partition by venue, venue_symbol order by valid_from) as next_from from ${table}) as v where valid_to < next_from"
+        mustBe: 0
+        description: Each version ends exactly where the next one of its key starts.
+      - name: one_open_row_per_key
+        type: sql
+        query: "select count(*) from (select venue, venue_symbol from ${table} group by venue, venue_symbol having count_if(valid_to = timestamp '9999-12-31 23:59:59 UTC') <> 1) as k"
+        mustBe: 0
+        description: Every spelling of a venue has exactly one open row.
+      - name: first_version_opens_1970
+        type: sql
+        query: "select count(*) from (select venue, venue_symbol from ${table} group by venue, venue_symbol having min(valid_from) <> timestamp '1970-01-01 00:00:00 UTC') as k"
+        mustBe: 0
+        description: Every spelling's first version opens at 1970-01-01 00:00:00 UTC.
+      - name: intervals_not_empty
+        type: sql
+        query: "select count(*) from ${table} where valid_to <= valid_from"  # worded apart from instrument's: dbt names a test by its arguments, not its model
+        mustBe: 0
+        description: Every version is valid for some time.
+roles:
+  - role: full_reader  # offered, held by nobody yet (grants.yaml)
+    access: read
+customProperties:
+  - property: layer
+    value: gold
+  - property: build
+    value: dbt
+  - property: backup
+    value: rebuild  # rebuilt whole from the listing on every run

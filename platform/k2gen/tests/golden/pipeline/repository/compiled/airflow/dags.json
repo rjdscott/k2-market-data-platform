@@ -110,6 +110,20 @@
         "record",
         "maintain"
       ]
+    },
+    {
+      "dagId": "security_master",
+      "pipeline": "compiled/products/reference-data.security-master/pipeline.json",
+      "product": "reference-data.security-master",
+      "schedule": "37 * * * *",
+      "status": "active",
+      "tasks": [
+        "resolve",
+        "build",
+        "expire",
+        "record",
+        "maintain"
+      ]
     }
   ]
 }

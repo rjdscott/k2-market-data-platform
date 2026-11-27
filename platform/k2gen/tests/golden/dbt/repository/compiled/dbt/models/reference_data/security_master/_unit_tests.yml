@@ -1,0 +1,180 @@
+# dbt unit tests: each runs one model's SQL on the rows written here instead of its real inputs,
+# and compares the result with the expected rows, on the columns the expectation lists. They prove
+# the logic, not the data. Every pair, code and value is invented (ALPHA, BRAVO, XALP, AAA, round
+# numbers); fetches are on 5 January 2026, a trade time before them is in 2025.
+unit_tests:
+  - name: claim_maps_codes_through_the_exceptions_seed
+    model: security_master__venue_symbol_claim  # the dbt name, <fence>__<table> (k2gen.model.dbt_model)
+    description: >-
+      The seed maps kraken's older code XALP to ALPHA, so XALP/USD resolves to ALPHA/USD and
+      BRAVO/XALP, a quote, to BRAVO/ALPHA; a seed row of another venue does not apply to kraken
+      (BRAVO stays BRAVO); a lower-case name is upper-cased (charlie/usd to CHARLIE/USD). ALPHAUSD
+      is unlisted at 11:00, so its claim ends there and the unlisted version claims nothing.
+    given:
+      - input: source('kraken_instruments', 'silver_listing')  # k2_input renders source() in a unit test
+        # format sql, every column typed: dbt reads a dict fixture's column types from the input
+        # relation in the warehouse, and an input product's table may not exist where the test runs.
+        format: sql
+        rows: |
+          select cast('ALPHAUSD' as varchar) as pair_code, cast(timestamp '2026-01-05 10:00:00 UTC' as timestamp(6) with time zone) as first_fetched_at, true as is_listed, cast('XALP/USD' as varchar) as ws_name, cast('XALP' as varchar) as base, cast('ZUSD' as varchar) as quote, cast(0.1 as decimal(38, 18)) as tick_size, cast(1 as integer) as pair_decimals, cast(8 as integer) as lot_decimals, cast(0.01 as decimal(38, 18)) as order_min, cast('online' as varchar) as status, cast('aa' as varchar) as source_file_sha256
+          union all select 'ALPHAUSD', timestamp '2026-01-05 11:00:00 UTC', false, null, null, null, null, null, null, null, null, 'bb'
+          union all select 'BRAVOALP', timestamp '2026-01-05 10:00:00 UTC', true, 'BRAVO/XALP', 'BRAVO', 'XALP', 0.01, 2, 8, 1, 'online', 'aa'
+          union all select 'BRAVOUSD', timestamp '2026-01-05 10:00:00 UTC', true, 'BRAVO/USD', 'BRAVO', 'ZUSD', 0.01, 2, 8, 1, 'online', 'aa'
+          union all select 'CHARLIEUSD', timestamp '2026-01-05 10:00:00 UTC', true, 'charlie/usd', 'CHARLIE', 'ZUSD', 0.001, 3, 2, 100, 'online', 'aa'
+      - input: ref('security_master__code_exceptions')
+        rows:
+          - {venue: kraken, venue_code: XALP, asset_code: ALPHA, reason: invented}
+          - {venue: othervenue, venue_code: BRAVO, asset_code: CHARLIE, reason: invented}
+    expect:
+      rows:
+        - {pair_code: ALPHAUSD, claimed_from: "2026-01-05 10:00:00 UTC", claimed_to: "2026-01-05 11:00:00 UTC", base_asset: ALPHA, quote_asset: USD, venue_symbol: ALPHA/USD, instrument_id: ALPHA-USD, held_reason: null}
+        - {pair_code: BRAVOALP, claimed_from: "2026-01-05 10:00:00 UTC", claimed_to: "9999-12-31 23:59:59 UTC", base_asset: BRAVO, quote_asset: ALPHA, venue_symbol: BRAVO/ALPHA, instrument_id: BRAVO-ALPHA, held_reason: null}
+        - {pair_code: BRAVOUSD, claimed_from: "2026-01-05 10:00:00 UTC", claimed_to: "9999-12-31 23:59:59 UTC", base_asset: BRAVO, quote_asset: USD, venue_symbol: BRAVO/USD, instrument_id: BRAVO-USD, held_reason: null}
+        - {pair_code: CHARLIEUSD, claimed_from: "2026-01-05 10:00:00 UTC", claimed_to: "9999-12-31 23:59:59 UTC", base_asset: CHARLIE, quote_asset: USD, venue_symbol: CHARLIE/USD, instrument_id: CHARLIE-USD, held_reason: null}
+
+  - name: claim_spelling_claimed_twice_is_held_the_rest_published
+    model: security_master__venue_symbol_claim
+    description: >-
+      ALPHAUSD (ALPHA/USD) and XALPUSD (XALP/USD, which the seed maps to ALPHA/USD) claim one
+      spelling from 10:00 and 11:00, open, so they overlap: both claims are held, claimed_twice.
+      CHARLIEUSD claims CHARLIE/USD until it is unlisted at 11:00 and CHARLIE2USD from 12:00: the
+      spans do not overlap, so both publish. BRAVOUSD publishes; DELTAUSD, a name with no slash,
+      is held as not_base_slash_quote.
+    given:
+      - input: source('kraken_instruments', 'silver_listing')
+        format: sql  # every column typed, as above
+        rows: |
+          select cast('ALPHAUSD' as varchar) as pair_code, cast(timestamp '2026-01-05 10:00:00 UTC' as timestamp(6) with time zone) as first_fetched_at, true as is_listed, cast('ALPHA/USD' as varchar) as ws_name, cast('ALPHA' as varchar) as base, cast('ZUSD' as varchar) as quote, cast(0.1 as decimal(38, 18)) as tick_size, cast(1 as integer) as pair_decimals, cast(8 as integer) as lot_decimals, cast(0.01 as decimal(38, 18)) as order_min, cast('online' as varchar) as status, cast('aa' as varchar) as source_file_sha256
+          union all select 'XALPUSD', timestamp '2026-01-05 11:00:00 UTC', true, 'XALP/USD', 'XALP', 'ZUSD', 0.1, 1, 8, 0.01, 'online', 'bb'
+          union all select 'BRAVOUSD', timestamp '2026-01-05 10:00:00 UTC', true, 'BRAVO/USD', 'BRAVO', 'ZUSD', 0.01, 2, 8, 1, 'online', 'aa'
+          union all select 'CHARLIEUSD', timestamp '2026-01-05 10:00:00 UTC', true, 'CHARLIE/USD', 'CHARLIE', 'ZUSD', 0.001, 3, 2, 100, 'online', 'aa'
+          union all select 'CHARLIEUSD', timestamp '2026-01-05 11:00:00 UTC', false, null, null, null, null, null, null, null, null, 'bb'
+          union all select 'CHARLIE2USD', timestamp '2026-01-05 12:00:00 UTC', true, 'CHARLIE/USD', 'CHARLIE', 'ZUSD', 0.001, 3, 2, 100, 'online', 'cc'
+          union all select 'DELTAUSD', timestamp '2026-01-05 10:00:00 UTC', true, 'DELTAUSD', 'DELTA', 'ZUSD', 0.1, 1, 8, 1, 'online', 'aa'
+      - input: ref('security_master__code_exceptions')
+        rows:
+          - {venue: kraken, venue_code: XALP, asset_code: ALPHA, reason: invented}
+    expect:
+      rows:
+        - {pair_code: ALPHAUSD, claimed_from: "2026-01-05 10:00:00 UTC", venue_symbol: ALPHA/USD, held_reason: claimed_twice}
+        - {pair_code: XALPUSD, claimed_from: "2026-01-05 11:00:00 UTC", venue_symbol: ALPHA/USD, held_reason: claimed_twice}
+        - {pair_code: BRAVOUSD, claimed_from: "2026-01-05 10:00:00 UTC", venue_symbol: BRAVO/USD, held_reason: null}
+        - {pair_code: CHARLIEUSD, claimed_from: "2026-01-05 10:00:00 UTC", venue_symbol: CHARLIE/USD, held_reason: null}
+        - {pair_code: CHARLIE2USD, claimed_from: "2026-01-05 12:00:00 UTC", venue_symbol: CHARLIE/USD, held_reason: null}
+        - {pair_code: DELTAUSD, claimed_from: "2026-01-05 10:00:00 UTC", venue_symbol: null, held_reason: not_base_slash_quote}
+
+  - name: held_lists_only_the_held_claims
+    model: security_master__venue_symbol_held
+    description: Of three claims, the two with a held_reason are held; the published one is not.
+    given:
+      - input: ref('security_master__venue_symbol_claim')
+        rows:
+          - {venue: kraken, pair_code: ALPHAUSD, claimed_from: "2026-01-05 10:00:00 UTC", claimed_to: "9999-12-31 23:59:59 UTC", ws_name: ALPHA/USD, venue_symbol: ALPHA/USD, held_reason: claimed_twice}
+          - {venue: kraken, pair_code: XALPUSD, claimed_from: "2026-01-05 11:00:00 UTC", claimed_to: "9999-12-31 23:59:59 UTC", ws_name: XALP/USD, venue_symbol: ALPHA/USD, held_reason: claimed_twice}
+          - {venue: kraken, pair_code: BRAVOUSD, claimed_from: "2026-01-05 10:00:00 UTC", claimed_to: "9999-12-31 23:59:59 UTC", ws_name: BRAVO/USD, venue_symbol: BRAVO/USD, held_reason: null}
+    expect:
+      rows:
+        - {pair_code: ALPHAUSD, venue_symbol: ALPHA/USD, held_reason: claimed_twice}
+        - {pair_code: XALPUSD, venue_symbol: ALPHA/USD, held_reason: claimed_twice}
+
+  - name: instrument_first_version_opens_1970_and_held_claims_stay_out
+    model: security_master__instrument
+    description: >-
+      ALPHA-USD is first fetched at 10:00 and never changes: one version from 1970-01-01, open,
+      recorded at 10:00. The held BRAVO-USD claim makes no row.
+    given:
+      - input: ref('security_master__venue_symbol_claim')
+        rows:
+          - {venue: kraken, pair_code: ALPHAUSD, claimed_from: "2026-01-05 10:00:00 UTC", claimed_to: "9999-12-31 23:59:59 UTC", ws_name: ALPHA/USD, base_asset: ALPHA, quote_asset: USD, venue_symbol: ALPHA/USD, instrument_id: ALPHA-USD, tick_size: 0.1, pair_decimals: 1, lot_decimals: 8, order_min: 0.01, status: online, held_reason: null}
+          - {venue: kraken, pair_code: BRAVOUSD, claimed_from: "2026-01-05 10:00:00 UTC", claimed_to: "9999-12-31 23:59:59 UTC", ws_name: BRAVO/USD, base_asset: BRAVO, quote_asset: USD, venue_symbol: BRAVO/USD, instrument_id: BRAVO-USD, tick_size: 0.1, pair_decimals: 1, lot_decimals: 8, order_min: 0.01, status: online, held_reason: claimed_twice}
+    expect:
+      rows:
+        - {venue: kraken, instrument_id: ALPHA-USD, valid_from: "1970-01-01 00:00:00 UTC", valid_to: "9999-12-31 23:59:59 UTC", recorded_at: "2026-01-05 10:00:00 UTC", base_asset: ALPHA, quote_asset: USD, is_listed: true, pair_code: ALPHAUSD, tick_size: 0.1}
+
+  - name: instrument_changed_tick_size_closes_one_version_and_opens_another
+    model: security_master__instrument
+    description: >-
+      ALPHAUSD's tick size goes from 0.1 to 0.5 at the 11:00 fetch: the first version runs from
+      1970-01-01 to 11:00, the second from 11:00, open. At 12:00 only the websocket name changes
+      (XALP/USD, resolved to the same ALPHA-USD), so no version opens.
+    given:
+      - input: ref('security_master__venue_symbol_claim')
+        rows:
+          - {venue: kraken, pair_code: ALPHAUSD, claimed_from: "2026-01-05 10:00:00 UTC", claimed_to: "2026-01-05 11:00:00 UTC", ws_name: ALPHA/USD, base_asset: ALPHA, quote_asset: USD, venue_symbol: ALPHA/USD, instrument_id: ALPHA-USD, tick_size: 0.1, pair_decimals: 1, lot_decimals: 8, order_min: 0.01, status: online, held_reason: null}
+          - {venue: kraken, pair_code: ALPHAUSD, claimed_from: "2026-01-05 11:00:00 UTC", claimed_to: "2026-01-05 12:00:00 UTC", ws_name: ALPHA/USD, base_asset: ALPHA, quote_asset: USD, venue_symbol: ALPHA/USD, instrument_id: ALPHA-USD, tick_size: 0.5, pair_decimals: 1, lot_decimals: 8, order_min: 0.01, status: online, held_reason: null}
+          - {venue: kraken, pair_code: ALPHAUSD, claimed_from: "2026-01-05 12:00:00 UTC", claimed_to: "9999-12-31 23:59:59 UTC", ws_name: XALP/USD, base_asset: ALPHA, quote_asset: USD, venue_symbol: ALPHA/USD, instrument_id: ALPHA-USD, tick_size: 0.5, pair_decimals: 1, lot_decimals: 8, order_min: 0.01, status: online, held_reason: null}
+    expect:
+      rows:
+        - {instrument_id: ALPHA-USD, valid_from: "1970-01-01 00:00:00 UTC", valid_to: "2026-01-05 11:00:00 UTC", recorded_at: "2026-01-05 10:00:00 UTC", is_listed: true, tick_size: 0.1}
+        - {instrument_id: ALPHA-USD, valid_from: "2026-01-05 11:00:00 UTC", valid_to: "9999-12-31 23:59:59 UTC", recorded_at: "2026-01-05 11:00:00 UTC", is_listed: true, tick_size: 0.5}
+
+  - name: instrument_delisted_then_relisted
+    model: security_master__instrument
+    description: >-
+      ALPHAUSD is listed from 10:00, missing at 11:00 (its claim ends there) and listed again at
+      12:00 with the same attributes: three versions, the middle one not listed with null
+      attributes, each ending where the next starts.
+    given:
+      - input: ref('security_master__venue_symbol_claim')
+        rows:
+          - {venue: kraken, pair_code: ALPHAUSD, claimed_from: "2026-01-05 10:00:00 UTC", claimed_to: "2026-01-05 11:00:00 UTC", ws_name: ALPHA/USD, base_asset: ALPHA, quote_asset: USD, venue_symbol: ALPHA/USD, instrument_id: ALPHA-USD, tick_size: 0.1, pair_decimals: 1, lot_decimals: 8, order_min: 0.01, status: online, held_reason: null}
+          - {venue: kraken, pair_code: ALPHAUSD, claimed_from: "2026-01-05 12:00:00 UTC", claimed_to: "9999-12-31 23:59:59 UTC", ws_name: ALPHA/USD, base_asset: ALPHA, quote_asset: USD, venue_symbol: ALPHA/USD, instrument_id: ALPHA-USD, tick_size: 0.1, pair_decimals: 1, lot_decimals: 8, order_min: 0.01, status: online, held_reason: null}
+    expect:
+      rows:
+        - {instrument_id: ALPHA-USD, valid_from: "1970-01-01 00:00:00 UTC", valid_to: "2026-01-05 11:00:00 UTC", recorded_at: "2026-01-05 10:00:00 UTC", is_listed: true, pair_code: ALPHAUSD, tick_size: 0.1}
+        - {instrument_id: ALPHA-USD, valid_from: "2026-01-05 11:00:00 UTC", valid_to: "2026-01-05 12:00:00 UTC", recorded_at: "2026-01-05 11:00:00 UTC", is_listed: false, pair_code: null, tick_size: null}
+        - {instrument_id: ALPHA-USD, valid_from: "2026-01-05 12:00:00 UTC", valid_to: "9999-12-31 23:59:59 UTC", recorded_at: "2026-01-05 12:00:00 UTC", is_listed: true, pair_code: ALPHAUSD, tick_size: 0.1}
+
+  - name: venue_symbol_trade_before_first_fetch_resolves_through_1970
+    model: security_master__venue_symbol
+    description: >-
+      ALPHA/USD is first fetched at 10:00 on 5 January 2026, and its tick size changes at 11:00:
+      one version from 1970-01-01, open, so a trade at 2025-12-31 12:00, before any fetch, falls
+      in it (valid_from <= t < valid_to) and resolves to ALPHA-USD. CHARLIE/USD is claimed by
+      CHARLIEUSD until its delisting at 11:00, then by CHARLIE2USD from 12:00: two versions, the
+      first held over the delisted hour. The held BRAVO/USD claim makes no row.
+    given:
+      - input: ref('security_master__venue_symbol_claim')
+        rows:
+          - {venue: kraken, pair_code: ALPHAUSD, claimed_from: "2026-01-05 10:00:00 UTC", claimed_to: "2026-01-05 11:00:00 UTC", venue_symbol: ALPHA/USD, instrument_id: ALPHA-USD, held_reason: null}
+          - {venue: kraken, pair_code: ALPHAUSD, claimed_from: "2026-01-05 11:00:00 UTC", claimed_to: "9999-12-31 23:59:59 UTC", venue_symbol: ALPHA/USD, instrument_id: ALPHA-USD, held_reason: null}
+          - {venue: kraken, pair_code: BRAVOUSD, claimed_from: "2026-01-05 10:00:00 UTC", claimed_to: "9999-12-31 23:59:59 UTC", venue_symbol: BRAVO/USD, instrument_id: BRAVO-USD, held_reason: claimed_twice}
+          - {venue: kraken, pair_code: CHARLIEUSD, claimed_from: "2026-01-05 10:00:00 UTC", claimed_to: "2026-01-05 11:00:00 UTC", venue_symbol: CHARLIE/USD, instrument_id: CHARLIE-USD, held_reason: null}
+          - {venue: kraken, pair_code: CHARLIE2USD, claimed_from: "2026-01-05 12:00:00 UTC", claimed_to: "9999-12-31 23:59:59 UTC", venue_symbol: CHARLIE/USD, instrument_id: CHARLIE-USD, held_reason: null}
+    expect:
+      rows:
+        - {venue: kraken, venue_symbol: ALPHA/USD, valid_from: "1970-01-01 00:00:00 UTC", valid_to: "9999-12-31 23:59:59 UTC", instrument_id: ALPHA-USD, pair_code: ALPHAUSD, recorded_at: "2026-01-05 10:00:00 UTC"}
+        - {venue: kraken, venue_symbol: CHARLIE/USD, valid_from: "1970-01-01 00:00:00 UTC", valid_to: "2026-01-05 12:00:00 UTC", instrument_id: CHARLIE-USD, pair_code: CHARLIEUSD, recorded_at: "2026-01-05 10:00:00 UTC"}
+        - {venue: kraken, venue_symbol: CHARLIE/USD, valid_from: "2026-01-05 12:00:00 UTC", valid_to: "9999-12-31 23:59:59 UTC", instrument_id: CHARLIE-USD, pair_code: CHARLIE2USD, recorded_at: "2026-01-05 12:00:00 UTC"}
+
+  - name: asset_kind_from_the_currency_master_and_the_stablecoin_seed
+    model: security_master__asset
+    description: >-
+      AAA is a circulating currency in the currency master, so the fiat quote of ALPHA-AAA is
+      fiat; BBB is a fund and CCC has no minor units (as a metal does), so both are crypto by the
+      rule; STAB is in the stablecoin seed; ALPHA is crypto. ALPHA is first seen at 09:00, its
+      earliest instrument version, not 10:00.
+    given:
+      - input: ref('security_master__instrument')
+        rows:
+          - {instrument_id: ALPHA-AAA, base_asset: ALPHA, quote_asset: AAA, recorded_at: "2026-01-05 10:00:00 UTC"}
+          - {instrument_id: ALPHA-AAA, base_asset: ALPHA, quote_asset: AAA, recorded_at: "2026-01-05 11:00:00 UTC"}
+          - {instrument_id: ALPHA-BBB, base_asset: ALPHA, quote_asset: BBB, recorded_at: "2026-01-05 10:00:00 UTC"}
+          - {instrument_id: ALPHA-CCC, base_asset: ALPHA, quote_asset: CCC, recorded_at: "2026-01-05 10:00:00 UTC"}
+          - {instrument_id: ALPHA-STAB, base_asset: ALPHA, quote_asset: STAB, recorded_at: "2026-01-05 09:00:00 UTC"}
+      - input: source('currency_master', 'currency')  # k2_input renders source() in a unit test
+        format: sql  # every column typed, as above
+        rows: |
+          select cast('AAA' as varchar) as code, cast('901' as varchar) as numeric_code, cast('Invented A' as varchar) as name, cast(2 as integer) as minor_units, false as is_fund
+          union all select 'BBB', '902', 'Invented fund', 4, true
+          union all select 'CCC', '903', 'Invented metal', null, false
+      - input: ref('security_master__stablecoins')
+        rows:
+          - {asset_code: STAB, name: Invented stablecoin}
+    expect:
+      rows:
+        - {asset_code: AAA, kind: fiat, first_seen_at: "2026-01-05 10:00:00 UTC"}
+        - {asset_code: ALPHA, kind: crypto, first_seen_at: "2026-01-05 09:00:00 UTC"}
+        - {asset_code: BBB, kind: crypto, first_seen_at: "2026-01-05 10:00:00 UTC"}
+        - {asset_code: CCC, kind: crypto, first_seen_at: "2026-01-05 10:00:00 UTC"}
+        - {asset_code: STAB, kind: stablecoin, first_seen_at: "2026-01-05 09:00:00 UTC"}

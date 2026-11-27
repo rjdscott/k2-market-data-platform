@@ -1,0 +1,106 @@
+# The security master: the assets, instruments and venue spellings the platform knows, built by
+# dbt from each venue's published listing (an input port, read at its tested snapshot, never its
+# landing) and the currency master, by rule: upper-cased codes, the reviewed seeds/code_exceptions.csv,
+# seeds/stablecoins.csv for the asset kind, the currency master for fiat. Kraken is the only venue.
+# instrument and venue_symbol are type-2 (ADR-030 with its Outcome): rebuilt whole from the
+# listing on every run, so a --full-refresh gives the same rows and the history is the listing's.
+apiVersion: v1.1.0
+kind: DataProduct
+id: reference-data.security-master
+name: security-master
+version: 1.0.0
+status: active
+domain: reference-data
+type: sourceAligned
+description:
+  purpose: >-
+    One row per asset with its kind (fiat, stablecoin or crypto); one row per instrument and
+    version of its venue listing (tick size, decimals, minimum order, status, listed or not);
+    and one row per venue spelling and version, the symbol a venue's trades stream carries, with
+    the instrument it names. A version is valid from the first fetch that saw it; the first
+    version of a key opens at 1970-01-01 so that a trade older than the first fetch still
+    resolves; the open version ends at 9999-12-31 23:59:59, never null.
+  limitations: >-
+    Kraken only, from its AssetPairs listing, so history starts at that product's first fetch
+    and a version starts up to an hour late. A venue spelling is the listing's websocket name with
+    each code upper-cased and mapped through seeds/code_exceptions.csv, recomposed as base/quote:
+    if the trades stream spells a pair otherwise, its trades resolve to nothing and are held by
+    the trades product. A spelling two pairs of one venue claim at overlapping times is held in
+    venue_symbol_held, and neither claim is published until the owner resolves it. The kind of an
+    asset is fiat when the currency master lists it as a circulating currency with minor units,
+    stablecoin when seeds/stablecoins.csv lists it, else crypto.
+  usage: >-
+    Resolve a trade by venue and venue_symbol in reference_data.security_master.venue_symbol with
+    valid_from <= trade time < valid_to, half-open, then read the instrument by venue and
+    instrument_id over the same interval rule. Filter valid_to = TIMESTAMP '9999-12-31 23:59:59 UTC'
+    for the current rows: a query that forgets it reads history.
+team:
+  name: reference-data-team
+inputPorts:
+  - name: silver_listing
+    version: 1.0.0
+    contractId: market-capture.kraken-instruments.silver_listing
+    customProperties:
+      - property: required
+        value: true  # every table is rebuilt from it: never audited, no build (wrapper exit 4)
+      - property: whenAbsent
+        # I-4: these are table models, so zero rows would rebuild them empty; a paused listing
+        # is read at its last audited snapshot and the product shows partial
+        value: fail
+      - property: maxLagMinutes
+        # An unchanged listing lands nothing, so its audited commit ages while it is current: a
+        # bound waits for a freshness signal that tells the two apart
+        value: null
+  - name: currency
+    version: 1.0.0
+    contractId: reference-data.currency-master.currency
+    customProperties:
+      - property: required
+        value: true  # asset's kind reads it: never audited, no build
+      - property: maxLagMinutes
+        value: null  # the list changes a few times a year
+outputPorts:
+  - name: venue_symbol_claim
+    version: 1.0.0
+    contractId: reference-data.security-master.venue_symbol_claim
+    inputContracts:
+      - id: market-capture.kraken-instruments.silver_listing
+        version: 1.0.0
+  - name: venue_symbol_held
+    version: 1.0.0
+    contractId: reference-data.security-master.venue_symbol_held
+    inputContracts:  # a sibling, not an input port
+      - id: reference-data.security-master.venue_symbol_claim
+        version: 1.0.0
+  - name: instrument
+    version: 1.0.0
+    contractId: reference-data.security-master.instrument
+    inputContracts:
+      - id: reference-data.security-master.venue_symbol_claim
+        version: 1.0.0
+  - name: venue_symbol
+    version: 1.0.0
+    contractId: reference-data.security-master.venue_symbol
+    inputContracts:
+      - id: reference-data.security-master.venue_symbol_claim
+        version: 1.0.0
+  - name: asset
+    version: 1.0.0
+    contractId: reference-data.security-master.asset
+    inputContracts:
+      - id: reference-data.security-master.instrument
+        version: 1.0.0
+      - id: reference-data.currency-master.currency
+        version: 1.0.0
+customProperties:
+  - property: schedule
+    value:
+      # Hourly at minute 37, twenty minutes after the instruments fetch (minute 17). No timeout
+      # yet: set from this product's first measured runs.
+      cron: "37 * * * *"
+  - property: seeds
+    value:
+      # Hand-written public naming facts (a venue's older code for an asset, which codes are
+      # stablecoins), no prices and no row copied from a feed; the owner reviews each row.
+      - {path: seeds/code_exceptions.csv, synthetic: true}
+      - {path: seeds/stablecoins.csv, synthetic: true}

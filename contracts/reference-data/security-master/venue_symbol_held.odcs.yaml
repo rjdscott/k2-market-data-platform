@@ -1,0 +1,81 @@
+apiVersion: v3.2.0
+kind: DataContract
+id: reference-data.security-master.venue_symbol_held
+name: venue_symbol_held
+version: 1.0.0
+domain: reference-data
+description:
+  purpose: >-
+    The claims held from publication: every claim of a spelling two pairs of one venue claim at
+    overlapping times, and every listing whose websocket name the rule cannot split. Other
+    spellings and other venues publish as usual. Owner-only.
+  limitations: >-
+    A spelling held once stays held while the listing holds the overlap: the history is rebuilt
+    from the listing on every run. The owner resolves it by a reviewed row in
+    seeds/code_exceptions.csv, or by recording why the venue lists both.
+team:
+  name: reference-data-team
+schema:
+  - id: venue_symbol_held
+    name: venue_symbol_held
+    physicalName: security_master.venue_symbol_held
+    physicalType: table
+    properties:
+      - name: venue
+        physicalType: varchar
+        required: true
+        primaryKey: true
+        primaryKeyPosition: 1
+        description: The venue whose listing states the pair.
+      - name: pair_code
+        physicalType: varchar
+        required: true
+        primaryKey: true
+        primaryKeyPosition: 2
+        description: The pair's REST code.
+      - name: claimed_from
+        physicalType: timestamp(6) with time zone
+        required: true
+        primaryKey: true
+        primaryKeyPosition: 3
+        description: The first fetch that stated this listing of the pair, in UTC.
+        customProperties:
+          - property: time
+            value: valid
+      - name: claimed_to
+        physicalType: timestamp(6) with time zone
+        required: true
+        description: The pair's next listing version; 9999-12-31 23:59:59 UTC while none follows.
+        customProperties:
+          - property: time
+            value: valid
+      - name: ws_name
+        physicalType: varchar
+        required: true
+        description: The websocket name as the listing spells it.
+      - name: venue_symbol
+        physicalType: varchar
+        description: The spelling the rule composed; null when the name could not be split.
+      - name: held_reason
+        physicalType: varchar
+        required: true
+        description: claimed_twice or not_base_slash_quote (venue_symbol_claim.held_reason).
+    quality:
+      - name: no_claim_held
+        type: custom
+        engine: dbt
+        implementation:
+          k2_quality:
+            arguments:
+              query: "select count(*) from ${table} where held_reason is not null"
+              holds: "metric_value = 0"
+            config:
+              severity: warn
+        description: No claim is held; a held one warns and the build still publishes the rest.
+customProperties:
+  - property: layer
+    value: silver
+  - property: build
+    value: dbt
+  - property: backup
+    value: rebuild  # rebuilt from venue_symbol_claim

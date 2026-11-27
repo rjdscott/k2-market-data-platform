@@ -56,7 +56,9 @@
         "calendars",
         "calendars__base",
         "currency_master",
-        "currency_master__base"
+        "currency_master__base",
+        "security_master",
+        "security_master__base"
       ],
       "remoteSigningEnabled": false
     }

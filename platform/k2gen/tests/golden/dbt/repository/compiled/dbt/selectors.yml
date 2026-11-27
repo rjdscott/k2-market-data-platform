@@ -36,3 +36,9 @@ selectors:
   definition:
     method: fqn
     value: k2.reference_data.currency_master
+- name: security_master
+  description: 'reference-data.security-master: its seeds and models, with their tests and unit tests; built as dbt_security_master
+    (the wrapper''s dbt build --selector).'
+  definition:
+    method: fqn
+    value: k2.reference_data.security_master
