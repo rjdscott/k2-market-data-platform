@@ -21,7 +21,7 @@
       }
     },
     "productState": {
-      "description": "A derived product's completeness, computed from its newest run's inputs, not stored in a column: complete (every input read at its audited snapshot, none late), partial: <comma-separated contract ids of the inputs missing or late> (the run built from the rest), or degraded (an input is paused, deprecated or retired and the run built from its last audited snapshot).",
+      "description": "A derived product's completeness, computed from its newest run's inputs, not stored in a column: complete (every input read at its audited snapshot, none late), partial: <comma-separated contract ids of the inputs missing or late> (the run built from the rest), or degraded (the newest build published while a warn-severity test failed, such as unresolved rows = 0). An input that is paused or was never audited is missing, so it makes the product partial; degraded wins when both hold.",
       "type": "string",
       "pattern": "^(complete|degraded|partial: [a-z][a-z0-9-]*\\.[a-z][a-z0-9-]*\\.[a-z][a-z0-9_]*(, [a-z][a-z0-9-]*\\.[a-z][a-z0-9-]*\\.[a-z][a-z0-9_]*)*)$"
     }
