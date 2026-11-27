@@ -19,15 +19,18 @@ principals, maintain's crons) is read at execute from the pinned release's files
 The edges, for the full task list (any entry's list is a subset, in this order):
 
     resolve >> fetch >> load >> audit >> publish >> build >> expire >> record
-    resolve >> maintain >> record
+                                                              expire >> maintain >> record
 
-Every task is all_success but three. build is none_failed: an unchanged fetch (exit 10) skips load,
+Every task is all_success but four. build is none_failed: an unchanged fetch (exit 10) skips load,
 audit and publish and build still runs, so a build fixed by a deploy, or an input that moved, is
 built without new bytes (the build is idempotent: one build per run); a failed or refused data task
 before it leaves build upstream_failed. expire and record are teardowns with no setup: they run once everything upstream is done, whatever
 its state (all_done), and a teardown does not decide the run's state, so a failed build or audit
 still fails the run while record succeeds after it. A record that cannot write fails as a task
-(AirflowTaskFailed), loudly, but does not repaint the run.
+(AirflowTaskFailed), loudly, but does not repaint the run. maintain is all_done after the data path's
+last task: it expires snapshots by retention, so beside build it could expire the untagged
+snapshot_before that build's rollback, or the next reconcile, restores to. All_done runs it whatever
+build did; it is not a teardown, so with build it still decides the run's state, as before.
 
 Spark tasks (load, audit, publish, expire, maintain) are `docker exec` into the long-lived Spark
 container, as the retired LakeScript ran them (IMPLEMENTATION-N0-N1 A13), from the pinned release's
@@ -312,7 +315,8 @@ def make_dag(release: Path, e: dict) -> DAG:
             last = last >> ops[t]
         last >> ops["record"]
         if "maintain" in tasks:
-            ops["resolve"] >> ops["maintain"] >> ops["record"]
+            ops["maintain"].trigger_rule = TriggerRule.ALL_DONE
+            last >> ops["maintain"] >> ops["record"]
         if "expire" in ops:
             ops["expire"].as_teardown()
         ops["record"].as_teardown()
