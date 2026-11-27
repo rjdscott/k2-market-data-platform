@@ -266,14 +266,18 @@ RUN_RECORD_SQL = REPO / "platform" / "runs" / "run_record.sql"  # S15 emits it a
 HOLDS_SQL = REPO / "platform" / "runs" / "holds.sql"  # I-7: the operator hold and the rebuild and restore locks
 # The platform's own Trino tables, each a frozen CREATE TABLE in one file, all in the run records'
 # namespace of the governance build catalog: emit/lake.py copies each byte for byte (S15) and
-# emit/trino_rules.py gives each the same three rules (svc.platform creates, svc.runs appends,
-# svc.catalog reads).
+# emit/trino_rules.py gives each three rules: svc.platform creates it; its one writer appends
+# (svc.runs the run record, HOLDS_WRITER the holds); its readers read it through the reader catalog.
 PLATFORM_SQL = (RUN_RECORD_SQL, HOLDS_SQL)
+# The holds' one writer (review A4): the operator's own login, used from the host alone (make hold,
+# make unhold, the rebuild and restore locks), its password file mounted into no container, so no
+# DAG, one-shot or dbt model, which hold svc.runs's, can end or forge a hold.
+HOLDS_WRITER = "svc.operator"
 
 # Principals matched by pattern in Trino's rules and resource groups (A8, ADR-061, the gate):
 # - pipeline principals run in resource group `pipeline` and alone may set STATISTICS_PROPERTY,
 #   by statement or by session header;
-# - build-catalog principals alone reach a <domain>_build catalog;
+# - build-catalog principals alone reach a <domain>_build catalog (HOLDS_WRITER only to INSERT into the holds);
 # - READER_CATALOG_ALL get catalog access `all` on every reader catalog, which Trino's
 #   definer-view owner check demands; the read-only connector still refuses them every write;
 # - READER_NAMESPACE_OWNERS alone hold a privilege in a dbt or code product's reader namespace,
@@ -282,7 +286,7 @@ PLATFORM_SQL = (RUN_RECORD_SQL, HOLDS_SQL)
 # - REFS_READERS, and each product's publisher (SELECT and GRANT_SELECT on exactly `<t>$refs`, for
 #   its views' guard), alone read `t$refs`; svc.api reads it and no other metadata of a base.
 PIPELINE_PRINCIPALS = (r"dbt_.*", r"pub_.*", r"svc\.runs", r"svc\.platform", r"svc\.catalog")
-BUILD_CATALOG_PRINCIPALS = (r"dbt_.*", r"pub_.*", r"svc\.runs", r"svc\.platform")
+BUILD_CATALOG_PRINCIPALS = (r"dbt_.*", r"pub_.*", r"svc\.runs", r"svc\.platform", r"svc\.operator")
 READER_CATALOG_ALL = (r"pub_.*",)
 READER_NAMESPACE_OWNERS = (r"pub_.*",)
 STATISTICS_PROPERTY = "statistics_enabled"

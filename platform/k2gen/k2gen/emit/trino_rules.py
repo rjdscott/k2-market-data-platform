@@ -28,7 +28,7 @@ through re.escape (Trino matches a rule's regex against the whole name), so `t` 
   catalog access `all` on that one reader catalog, which Trino's
   definer-view owner check demands (the gate, h1.02: the read-only connector still refuses writes).
   Nobody else holds GRANT_SELECT anywhere.
-- svc.platform, the operator: `all` on every `_build` catalog, SELECT in base namespaces there (table
+- svc.platform, the operator (OPERATOR here; svc.operator is the holds' writer): `all` on every `_build` catalog, SELECT in base namespaces there (table
   maintenance), the platform tables' DDL (model.PLATFORM_SQL), every `system` table, viewing and
   killing any query, system information, every session property. It holds no privilege in a reader namespace.
 - The builder of model.QUALITY_RESULTS alone also reads each model.test_results_writers product's
@@ -36,9 +36,13 @@ through re.escape (Trino matches a rule's regex against the whole name), so `t` 
   reader catalog at main; svc.catalog reads its views by exact name, as it reads the run record.
 - The platform tables (model.PLATFORM_SQL: the run record and the holds), each by exact name, three
   rules apiece and no other: svc.platform SELECT and OWNERSHIP through `<domain>_build` (it creates
-  them at deploy, and deploy reads the holds); svc.runs SELECT and INSERT there, never DELETE or
-  UPDATE, so both stay append-only (a DAG's resolve reads the holds as svc.runs, through k2runs);
-  svc.catalog SELECT through the reader catalog, for the page.
+  them at deploy); the table's one writer there, never DELETE or UPDATE, so both stay append-only:
+  svc.runs SELECT and INSERT on the run record, model.HOLDS_WRITER (svc.operator, host-held) INSERT
+  alone on the holds; SELECT through the read-only reader catalog for the readers, svc.catalog on
+  both (the page) and, on the holds, svc.operator, svc.runs (a DAG's resolve) and svc.platform
+  (deploy's resume), every one through k2runs.HOLDS_READ. No reader of the holds holds SELECT on
+  them in `_build`, where it is the right to roll the table back and so end a hold with no row
+  (spike (e)); only their creator does, beside OWNERSHIP, which can drop and recreate them anyway.
 - model.REFS_READERS read exactly `<table>$refs` of each lake table, at its model.input_relation;
   a publisher reads its own bases' `$refs` too, through its views' guard.
 - svc.api may impersonate the declared `p.*` principals by exact name and nobody else.
@@ -77,6 +81,7 @@ from collections.abc import Iterable
 from typing import Any
 
 from k2gen.model import (
+    HOLDS_WRITER,
     LAKE,
     LAKE_BUILDS,
     PIPELINE_PRINCIPALS,
@@ -130,12 +135,16 @@ SYSTEM_TABLES = {
                  "materialized_views", "schema_properties", "table_comments", "table_properties"),
 }
 # The services that are the platform's own: never a reader, never impersonated (A10).
-PLATFORM_SERVICES = ("svc.runs", "svc.catalog", OPERATOR, API)
+PLATFORM_SERVICES = ("svc.runs", "svc.catalog", OPERATOR, API, HOLDS_WRITER)
 _NOT_A_READER = re.compile(r"(dbt|pub)_.*|k2_release_.*|" + "|".join(re.escape(s) for s in PLATFORM_SERVICES))
 # The platform tables (A6, I-7), as (domain fence, namespace, table): created by svc.platform at
-# deploy, written only by svc.runs, both through `<domain>_build`; read by svc.catalog through the
-# reader catalog.
+# deploy and appended to by one writer, both through `<domain>_build`; read through the reader catalog.
 _PLATFORM = [re.search(r"CREATE TABLE (\w+)_build\.(\w+)\.(\w+) ", p.read_text()).groups() for p in PLATFORM_SQL]  # type: ignore[union-attr]
+# Each table's writer and its privileges in `<domain>_build`, and its readers through the reader
+# catalog. svc.runs keeps SELECT on the run record there (k2runs.newest_audited); the holds' writer
+# gets INSERT alone and reads them, as every holds reader does, read-only (k2runs.HOLDS_READ).
+_WRITER = {"run_record": ("svc.runs", ["SELECT", "INSERT"]), "holds": (HOLDS_WRITER, ["INSERT"])}
+_READERS = {"run_record": ["svc.catalog"], "holds": ["svc.catalog", HOLDS_WRITER, OPERATOR, "svc.runs"]}
 
 
 def exact(names: Iterable[str]) -> str:
@@ -309,16 +318,18 @@ def emit(model: Model) -> dict[str, str]:
     for rr_domain, rr_schema, rr_table in _PLATFORM:
         if rr_domain not in {fence(d) for d in domains}:
             continue
-        reach(f"{rr_domain}_build", "svc.runs", "all")
-        reach(rr_domain, "svc.catalog", "read-only")
+        writer, writes = _WRITER[rr_table]
+        reach(f"{rr_domain}_build", writer, "all")
+        for u in _READERS[rr_table]:
+            reach(rr_domain, u, "read-only")
         where = {"schema": exact([rr_schema]), "table": exact([rr_table])}
         if (rr_domain, rr_schema) not in owned_schemas:
             owned_schemas.add((rr_domain, rr_schema))
             schemas.append({"user": exact([OPERATOR]), "catalog": exact([f"{rr_domain}_build"]), "schema": exact([rr_schema]), "owner": True})
         run_records += [
             {"user": exact([OPERATOR]), "catalog": exact([f"{rr_domain}_build"]), **where, "privileges": ["SELECT", "OWNERSHIP"]},
-            {"user": exact(["svc.runs"]), "catalog": exact([f"{rr_domain}_build"]), **where, "privileges": ["SELECT", "INSERT"]},
-            {"user": exact(["svc.catalog"]), "catalog": exact([rr_domain]), **where, "privileges": ["SELECT"]}]
+            {"user": exact([writer]), "catalog": exact([f"{rr_domain}_build"]), **where, "privileges": writes},
+            {"user": exact(_READERS[rr_table]), "catalog": exact([rr_domain]), **where, "privileges": ["SELECT"]}]
 
     # svc.catalog reads the quality results' views as it reads the run record: a platform principal
     # takes no grant (checks.access, access.grant-to-platform), so the rule names it, by exact view.

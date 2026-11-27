@@ -219,18 +219,37 @@ expectations:
   - {principal: dbt_candles, table: market_capture.kraken_trades.silver_trade, denied: true}  # by no name
   - {principal: dbt_candles, sql: "INSERT INTO market_analytics_build.canonical_trades__base.trades SELECT * FROM market_analytics.canonical_trades__base.trades WHERE false", expect: denied}  # nor writes its input
 
-  # The holds table (I-7, I-8), append-only as the run record: svc.runs reads and adds rows through
-  # governance_build and never changes or removes one, svc.catalog reads it through governance,
-  # svc.platform creates and reads it and writes no row, and a reader or a builder reaches nothing.
-  # These name no product, so they run on live too: every write is WHERE false, so a loosened rule
-  # adds, changes or removes no hold.
-  - {principal: svc.runs, sql: "SELECT count(*) FROM governance_build.run_records.holds", expect: ok}
-  - {principal: svc.runs, sql: "INSERT INTO governance_build.run_records.holds (product_id) SELECT 'x' WHERE false", expect: ok}
+  # The holds table (I-7, I-8, review A4), append-only: svc.operator, the operator's host-held login,
+  # alone adds rows, with INSERT and nothing else through governance_build, so nothing holding
+  # svc.runs's password (every dbt-runner one-shot, the scheduler) can forge or end a hold. Every
+  # reader, svc.operator, svc.runs (a DAG's resolve), svc.platform (deploy's resume) and svc.catalog
+  # (the page), reads through governance, read-only at the connector: SELECT through governance_build
+  # is the right to roll the table back (spike (e)), which would end a hold with no row, and only the
+  # table's creator, svc.platform, holds it there, beside OWNERSHIP. Nobody changes or removes a row,
+  # and a reader or a builder reaches nothing. These name no product but the canary, so they run on
+  # live too: every write is WHERE false and the rollback names no snapshot, so a loosened rule
+  # adds, changes or removes no hold; it fails with an error that is not a denial.
+  - {principal: svc.operator, sql: "SELECT count(*) FROM governance.run_records.holds", expect: ok}
+  - {principal: svc.operator, sql: "INSERT INTO governance_build.run_records.holds (product_id) SELECT 'x' WHERE false", expect: ok}
+  - {principal: svc.operator, sql: "UPDATE governance_build.run_records.holds SET reason = 'x' WHERE false", expect: denied}
+  - {principal: svc.operator, sql: "DELETE FROM governance_build.run_records.holds WHERE false", expect: denied}
+  - {principal: svc.operator, sql: "SELECT count(*) FROM governance_build.run_records.holds", expect: denied}  # never SELECT where a rollback runs
+  - {principal: svc.operator, sql: "ALTER TABLE governance_build.run_records.holds EXECUTE rollback_to_snapshot(0)", expect: denied}
+  - {principal: svc.operator, sql: "SELECT count(*) FROM governance.run_records.run_record", expect: denied}  # the run records
+  - {principal: svc.operator, sql: "INSERT INTO governance_build.run_records.run_record (run_id) SELECT 'x' WHERE false", expect: denied}
+  - {principal: svc.operator, table: governance.access_canary__base.events, denied: true}  # a product base
+  - {principal: svc.operator, sql: "SELECT count(*) FROM governance_build.access_canary__base.events", expect: denied}  # the base through the build catalog it reaches
+  - {principal: svc.operator, table: governance.access_canary.events, denied: true}  # a product's reader view
+  - {principal: svc.runs, sql: "SELECT count(*) FROM governance.run_records.holds", expect: ok}
+  - {principal: svc.runs, sql: "INSERT INTO governance_build.run_records.holds (product_id) SELECT 'x' WHERE false", expect: denied}
   - {principal: svc.runs, sql: "UPDATE governance_build.run_records.holds SET reason = 'x' WHERE false", expect: denied}
   - {principal: svc.runs, sql: "DELETE FROM governance_build.run_records.holds WHERE false", expect: denied}
+  - {principal: svc.runs, sql: "SELECT count(*) FROM governance_build.run_records.holds", expect: denied}  # never SELECT where a rollback runs
+  - {principal: svc.runs, sql: "ALTER TABLE governance_build.run_records.holds EXECUTE rollback_to_snapshot(0)", expect: denied}
   - {principal: svc.catalog, sql: "SELECT count(*) FROM governance.run_records.holds", expect: ok}
   - {principal: svc.catalog, sql: "INSERT INTO governance_build.run_records.holds (product_id) SELECT 'x' WHERE false", expect: denied}
-  - {principal: svc.platform, sql: "SELECT count(*) FROM governance_build.run_records.holds", expect: ok}
+  - {principal: svc.platform, sql: "SELECT count(*) FROM governance.run_records.holds", expect: ok}  # deploy's resume, through k2runs.held
+  - {principal: svc.platform, sql: "SELECT count(*) FROM governance_build.run_records.holds", expect: ok}  # the creator's, with OWNERSHIP: the residual risk, host-held
   - {principal: svc.platform, sql: "INSERT INTO governance_build.run_records.holds (product_id) SELECT 'x' WHERE false", expect: denied}
   - {principal: p.canary-full, sql: "SELECT count(*) FROM governance.run_records.holds", expect: denied}  # a reader
   - {principal: dbt_ecb_fx_rates, sql: "SELECT count(*) FROM governance.run_records.holds", expect: denied}  # a builder of another domain

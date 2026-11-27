@@ -496,6 +496,26 @@ deploy reads it, below); svc.runs SELECT and INSERT there (`make hold` and the l
 `resolve` reads); svc.catalog SELECT through `governance`, for the page. No principal holds DELETE or
 UPDATE on it, and no reader group reaches it.
 
+2026-11-28 (review A4): this replaces the writer above. svc.runs's password is in every dbt-runner
+one-shot and the scheduler, and Trino enforces only who may INSERT, so its holder could forge or end
+a hold; and SELECT through `governance_build` is the right to roll the table back (spike (e)), which
+ends a hold with no row written. The holds' one writer is now `svc.operator` (`model.HOLDS_WRITER`,
+declared in `contracts/access/principals.yaml`), the operator's own login from the host: INSERT
+through `governance_build` and nothing else there. Every read of the holds goes through the reader
+catalog, read-only at the connector (`k2runs.HOLDS_READ`, `governance.run_records.holds`), the
+writes' own `NOT EXISTS` conditions included: SELECT there for svc.operator, svc.runs (`resolve`),
+svc.platform (deploy's resume) and svc.catalog. svc.platform keeps SELECT and OWNERSHIP through
+`governance_build` as the table's creator; OWNERSHIP lets it drop and recreate the table, and
+SELECT there lets it roll it back, so a hold is as safe as svc.platform's password, which only the
+host holds. `scripts/hold.py` connects as svc.operator from
+`${K2_SECRETS}/principals/svc.operator.password`, which the operator makes once with
+`make password PRINCIPAL=svc.operator TO_FILE=1`, and refuses without it; no compose service and no
+one-shot kind is given it (`tests/test_hold.py`). The one container that sees it is deploy's own
+live access one-shot, which the operator starts from the host and which mounts `principals/`
+read-only whole, svc.platform's included, for the live rows; those rows log in as svc.operator, so
+a deploy whose live suite runs needs the file, though its preflight does not ask for it (deploy
+writes no hold). The run record's rules are unchanged.
+
 **Backup and retention.** In the backup set as `restore` at `main`, and in `retention.json` at the
 run records' 7 days of snapshots; no row is ever expired.
 

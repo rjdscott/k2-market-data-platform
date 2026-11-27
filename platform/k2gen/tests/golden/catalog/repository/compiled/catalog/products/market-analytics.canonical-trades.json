@@ -145,9 +145,13 @@
             "delay": {
               "column": "trade_ts",
               "minutes": 20
-            }
+            },
+            "mask": [
+              "kafka_offset",
+              "load_seq"
+            ]
           },
-          "inWords": "only rows whose trade_ts is at least 20 minutes old"
+          "inWords": "only rows whose trade_ts is at least 20 minutes old; kafka_offset and load_seq read as null"
         }
       ],
       "readers": [],

@@ -206,3 +206,13 @@ def test_the_hold_columns_are_holds_sql_in_order():
     body = text[text.index("CREATE TABLE"):]
     assert [line.split()[0] for line in body.splitlines()[1:] if line.startswith("    ")] == list(k2runs.HOLD_COLUMNS)
     assert f"CREATE TABLE {k2runs.HOLDS} (" in text
+
+
+def test_every_read_of_the_holds_goes_through_the_read_only_reader_catalog():
+    # SELECT in governance_build is the right to roll the table back (spike (e)), which would end a
+    # hold with no row: the build catalog is named once per write, as its INSERT target, and never read.
+    assert k2runs.HOLDS.startswith("governance_build.") and k2runs.HOLDS_READ == "governance.run_records.holds"
+    for statement, writes in ((k2runs.HOLD, 1), (k2runs.RELEASE, 1), (k2runs.HELD, 0)):
+        assert statement.count("governance_build.") == writes, statement
+        assert statement.count(f"INSERT INTO {k2runs.HOLDS} ") == writes
+        assert f"FROM {k2runs.HOLDS_READ} " in statement and f"FROM {k2runs.HOLDS} " not in statement
