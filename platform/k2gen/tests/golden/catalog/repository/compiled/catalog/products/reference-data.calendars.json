@@ -2,7 +2,7 @@
   "id": "reference-data.calendars",
   "name": "calendars",
   "domain": "reference-data",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "status": "active",
   "type": "sourceAligned",
   "owner": "reference-data-team",
@@ -21,7 +21,7 @@
       "testedRef": "audited",
       "contractFile": "documents/contracts/reference-data/calendars/target_days.odcs.yaml",
       "layer": "gold",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "purpose": "One row per calendar day from 1 January 2025 to 31 December 2027, marked open or closed for TARGET. TARGET closes on Saturdays, Sundays, New Year's Day, Good Friday, Easter Monday, 1 May, 25 December and 26 December; every other day it is open.",
       "columns": [
         {
@@ -48,7 +48,12 @@
         }
       ],
       "retentionDays": null,
-      "roles": [],
+      "roles": [
+        {
+          "role": "full_reader",
+          "inWords": "every row and column"
+        }
+      ],
       "readers": [],
       "dbtDocs": "dbt-docs/#!/model/model.k2.calendars__target_days"
     }

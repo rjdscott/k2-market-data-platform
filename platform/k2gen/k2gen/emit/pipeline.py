@@ -69,7 +69,8 @@ ONESHOT_KINDS: dict[str, dict[str, Any]] = {
                    "env": ["K2_TRINO_HOST", "K2_TRINO_INTERNAL_PORT", "K2_TRINO_USER", "K2_PUB_USER", "K2_RUNS_USER",
                            "K2_CATALOG_URI", "K2_RELEASE"],
                    "secrets": [password_mount("dbt_*"), password_mount("pub_*"), password_mount("svc.runs"), _CA]},
-    "fetch": {"cpus": "0.5", "memory": "512M", "networks": ["k2-net"], "env": ["K2_RELEASE"], "secrets": []},
+    # fetch on k2-egress alone (2026-11-27): a parser reaches the internet and nothing of the stack
+    "fetch": {"cpus": "0.5", "memory": "512M", "networks": ["k2-egress"], "env": ["K2_RELEASE"], "secrets": []},
 }
 MAINTAIN_FIRST_HOUR, MAINTAIN_HOURS = 2, 4  # every maintain cron falls in 02:00 to 05:59 UTC
 

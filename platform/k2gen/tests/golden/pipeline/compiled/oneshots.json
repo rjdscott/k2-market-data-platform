@@ -31,7 +31,7 @@
       "image": "fetch:4008294739ab",
       "memory": "512M",
       "networks": [
-        "k2-net"
+        "k2-egress"
       ],
       "secrets": []
     },

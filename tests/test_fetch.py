@@ -243,7 +243,7 @@ def test_the_connection_goes_to_the_checked_address_with_tls_and_host_on_the_nam
     (request,) = web.requests
     assert request["address"] == PUBLIC and request["tls_name"] == HOST
     assert f"Host: {HOST}" in request["headers"]
-    assert web.wires[0].timeouts == [F.READ_TIMEOUT_S]
+    assert set(web.wires[0].timeouts) == {F.READ_TIMEOUT_S}  # at connect, then before each read with time to spare
 
 
 def test_a_rebind_between_check_and_connect_cannot_move_the_connection(web):
@@ -410,6 +410,25 @@ def test_the_overall_deadline_stops_a_slow_body(web, tmp_path, monkeypatch, caps
     web.pages[FIRST] = streamed(itertools.repeat(bytes(2**16), 8))
     assert run() == 1
     assert nothing_left(tmp_path) and "deadline" in capsys.readouterr().err
+
+
+def test_a_trickling_body_stops_at_the_deadline_not_after_a_full_chunk(web, tmp_path, monkeypatch, capsys):
+    """F7: one byte every 29 s never trips the 30 s read timeout. A blocking read(64 KiB) took
+    65536 of them (about 22 days) before the deadline was looked at; now every read is one
+    read1 under a socket timeout cut to the time left, so the fetch stops at the deadline."""
+    clock = [0.0]
+    monkeypatch.setattr(F, "monotonic", lambda: clock[0])
+
+    def trickle():
+        for _ in range(2**16 + 10):
+            clock[0] += 29
+            yield b"x"
+    web.pages[FIRST] = streamed(trickle())
+    assert run() == F.EXIT_ERROR
+    assert clock[0] <= F.DEADLINE_S + F.READ_TIMEOUT_S, f"stopped at {clock[0]} s"
+    assert nothing_left(tmp_path) and "deadline" in capsys.readouterr().err
+    timeouts = web.wires[-1].timeouts
+    assert max(timeouts) == F.READ_TIMEOUT_S and timeouts[-1] == F.DEADLINE_S - 10 * 29  # the time left, 10 s
 
 
 def test_an_http_error_is_a_task_error(web, tmp_path):

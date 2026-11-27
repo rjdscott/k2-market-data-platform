@@ -75,7 +75,9 @@ cases:
   - {kind: storage-plan, file: release/storage-plan.yaml, set: warehouses/0/remoteSigningEnabled, value: true, error: "False was expected"}
   - {kind: storage-plan, file: release/storage-plan.yaml, set: warehouses/1/namespaces/1, value: daily_load__audit, error: "does not match"}
   - {kind: dags, file: release/dags.yaml, set: dags/0/tasks/1, value: deploy, error: "'deploy' is not one of"}
-  - {kind: oneshots, file: release/oneshots.yaml, set: oneshots/fetch/networks, value: [k2-net, k2-catalog], error: "'k2-net' was expected"}
+  - {kind: oneshots, file: release/oneshots.yaml, set: oneshots/fetch/networks, value: [k2-egress, k2-catalog], error: "'k2-egress' was expected"}
+  - {kind: oneshots, file: release/oneshots.yaml, set: oneshots/fetch/networks, value: [k2-net], error: "'k2-egress' was expected"}
+  - {kind: oneshots, file: release/oneshots.yaml, set: oneshots/tools/networks, value: [k2-net, k2-egress], error: "'k2-egress' is not one of"}
   - {kind: oneshots, file: release/oneshots.yaml, set: oneshots/fetch/secrets, value: [/run/k2-secrets/tls/ca.pem], error: "is expected to be empty"}
   - {kind: deploy-record, file: release/deploy-record.yaml, set: outcome, value: maybe, error: "'maybe' is not one of"}
   - {kind: deploy-record, file: release/deploy-record.yaml, set: release, value: v3.0.0, error: "does not match"}
