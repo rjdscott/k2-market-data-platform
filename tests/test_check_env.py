@@ -27,7 +27,8 @@ def filled(**overrides):
     (the database role keeps its historical name, ADR-034)."""
     env = {n: f"filled-{i}-value-7f3a9c2e" for i, n in enumerate(NAMES)}
     keys = {f"K2_{e}_S3_ACCESS_KEY": f"k2-{e.lower()}-0a1b2c3d" for e in guard.ENGINES}
-    return {**env, **keys, "MINIO_ROOT_USER": USER, "PREFECT_DB_USER": "prefect", **overrides}
+    ids = {"K2_RUN_UID": "1000", "K2_RUN_GID": "1000"}  # compose requires them (airflow-scheduler); no secret
+    return {**env, **keys, **ids, "MINIO_ROOT_USER": USER, "PREFECT_DB_USER": "prefect", **overrides}
 
 
 def test_the_shipped_example_does_not_pair_minio_user_and_password():

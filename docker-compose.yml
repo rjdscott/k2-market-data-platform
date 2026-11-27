@@ -86,9 +86,9 @@ x-logging: &k2-logging
 # mount. Mounted by every service that reads a pointer (scripts/deploy.py POINTERS):
 # trino, airflow-scheduler, airflow-dag-processor, spark-iceberg, prometheus, and the
 # profiled stubs; and by lake-init, for the storage plan (the trino pointer's, or the
-# release deploy names in K2_STORAGE_PLAN). Only Trino and lake-init read through it
-# today; the DAGs, the Spark jobs and the alert rules move onto their pointers in
-# phase 002, when a release first carries them.
+# release deploy names in K2_STORAGE_PLAN). Airflow's DAG folder and Prometheus's rules
+# are read through their pointers (`platform/` in the release, k2gen PLATFORM_CODE); a
+# Spark task runs the scripts of the release its run pinned, /k2/releases/<id>/platform/.
 x-k2-releases-ro: &k2-releases-ro
   type: bind
   source: ${K2_RELEASES:-${HOME}/k2-releases}
@@ -133,6 +133,16 @@ x-airflow-env: &airflow-env
   AIRFLOW__CORE__EXECUTION_API_SERVER_URL: http://airflow-api-server:8080/execution/
   AIRFLOW__API_AUTH__JWT_SECRET: ${AIRFLOW_JWT_SECRET}
   AIRFLOW__API__SECRET_KEY: ${AIRFLOW_API_SECRET_KEY}
+  # The DAG folder is the airflow pointer's release (ADR-058), read through the releases root:
+  # the default bundle, dags-folder, follows it. A dangling path (no pointer yet, or a release
+  # without platform/) is an empty folder to Airflow 3.3: the bundle logs a warning, no file is
+  # found, no DAG, and every service starts healthy. Files are listed every 300 s
+  # ([dag_processor] refresh_interval) and each parsed every 30 s, so a swap reaches factory.py,
+  # whose path does not change, within 30 s.
+  AIRFLOW__CORE__DAGS_FOLDER: /k2/releases/pointers/airflow/platform/docker/airflow/dags
+  # A scheduler that dies under a running task leaves it running until the orphan check resets
+  # it, by default every 300 s (scripts/verify/oneshot-slots.sh, W0-8).
+  AIRFLOW__SCHEDULER__ORPHANED_TASKS_CHECK_INTERVAL: "30"
   # Tags in InfluxDB form, which the statsd exporter turns into labels, and no
   # legacy names: those embed dag_id in the metric name and would arrive twice.
   AIRFLOW__METRICS__STATSD_ON: "True"
@@ -382,9 +392,8 @@ services:
     volumes:
       - prometheus-data:/prometheus
       - ./docker/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
-      # The rules stay on the checkout until a release carries them (phase 002); the
-      # releases root is mounted now so deploy can check the pointer it will read.
-      - ./docker/prometheus/rules:/etc/prometheus/rules:ro
+      # The rules: the prometheus pointer's platform/docker/prometheus/rules/*.yml
+      # (prometheus.yml rule_files), reread on the SIGHUP deploy sends at each swap.
       - *k2-releases-ro
     command:
       - '--config.file=/etc/prometheus/prometheus.yml'
@@ -641,21 +650,24 @@ services:
   # ───────────────────────────────────────────────────────────────────────
   # The scheduler of the lake writes. Its old DAGs (the 5-minute ingest, the
   # nightly maintenance, the rebuild and the hourly dbt marts) are retired to
-  # legacy/v3-lake-ingest/airflow/ (ADR-056), so docker/airflow/dags holds no
-  # DAG until phase 002 adds one per product. docs/runbooks/airflow-scheduling.md
-  # has the recoveries.
+  # legacy/v3-lake-ingest/airflow/ (ADR-056). The DAGs are the release's: one per
+  # product from docker/airflow/dags/factory.py, read through the airflow pointer
+  # (AIRFLOW__CORE__DAGS_FOLDER above), never from the checkout.
+  # docs/runbooks/airflow-scheduling.md has the recoveries.
   #
   # LocalExecutor, so tasks run inside airflow-scheduler, and that is the only
   # service given the Docker socket. No triggerer: nothing here defers.
   #
-  # ./docker/airflow/dags and ./dbt are directory bind mounts held by the
-  # scheduler and the dag-processor, read-only: cosmos ran each dbt command in
-  # a temporary copy of symlinks, where dbt writes target/ and logs/. A checkout
-  # switch or a write-then-rename edit needs both recreated (CLAUDE.md,
-  # bind-mount gotcha).
+  # ./dbt is a directory bind mount held by the scheduler and the dag-processor,
+  # read-only: cosmos ran each dbt command in a temporary copy of symlinks, where
+  # dbt writes target/ and logs/. A checkout switch or a write-then-rename edit
+  # needs both recreated (CLAUDE.md, bind-mount gotcha).
 
   # One-shot: creates the `airflow` role and database on prefect-db when
-  # missing (docker/airflow/init-db.sh), then `airflow db migrate`.
+  # missing (docker/airflow/init-db.sh), then `airflow db migrate`, then the three
+  # pools the factory's tasks name (phase-001-interfaces.md, "Run-time contracts"):
+  # a task in a pool that does not exist never schedules. `pools set` creates or
+  # updates, so every run converges them.
   airflow-migrate:
     logging: *k2-logging
     build:
@@ -671,7 +683,14 @@ services:
       PGUSER: ${PREFECT_DB_USER}
       PGPASSWORD: ${PREFECT_DB_PASSWORD}
       AIRFLOW_DB_PASSWORD: ${AIRFLOW_DB_PASSWORD}
-    command: ["bash", "/opt/k2/init-db.sh"]
+    command:
+      - bash
+      - -c
+      - >-
+        bash /opt/k2/init-db.sh
+        && airflow pools set lake_spark 1 'Spark tasks: one driver at a time in spark-iceberg'
+        && airflow pools set fetch 1 'fetch one-shots'
+        && airflow pools set dbt 2 'dbt-runner one-shots'
     depends_on:
       prefect-db:
         condition: service_healthy
@@ -727,9 +746,24 @@ services:
 
   # Scheduler, and with LocalExecutor the four task slots too. The Docker
   # socket is root on the Docker
-  # engine, whatever the uid inside (ADR-034). It runs as the image's `airflow`
-  # user; group_add gives it the socket's group, which is 0 on Docker Desktop
-  # and `docker` on a Linux engine: set K2_DOCKER_GID (.env.example).
+  # engine, whatever the uid inside (ADR-034). group_add gives it the socket's
+  # group, which is 0 on Docker Desktop and `docker` on a Linux engine: set
+  # K2_DOCKER_GID (.env.example).
+  #
+  # It runs as the host user, K2_RUN_UID, with group 0 (the image supports any
+  # uid with group 0, as Airflow's own compose file runs it): `record` reads
+  # svc.runs's password file, mode 600 and owned by the host user, as the
+  # one-shots that mount secrets do (docker/airflow/dags/oneshot.py). The socket
+  # already makes it root on the engine, so the uid widens nothing; the other
+  # Airflow services keep the image's `airflow` user and mount no secret.
+  #
+  # The environment past the shared block is the one-shot operator's: the host
+  # side of its mounts (K2_RELEASES, K2_SECRETS, as the daemon resolves a bind
+  # source on the host), the project its networks and spool volume belong to,
+  # the uid its secret-mounting kinds run as, and dbt-runner's fixed values,
+  # passed on by name (the same values as the dbt-runner service's). K2_TRINO_HOST,
+  # K2_TRINO_INTERNAL_PORT and K2_RUNS_USER are also `record`'s, through k2runs.connect():
+  # Trino is on k2-net too, so the scheduler stays off k2-catalog. No storage key.
   #
   # stop_grace_period covers a task's on_kill, which stops the Spark driver
   # (up to 10 s) before the container goes: without it, `docker compose stop`
@@ -739,20 +773,40 @@ services:
     image: k2-airflow:3.3.2  # built by airflow-migrate
     container_name: k2-airflow-scheduler
     hostname: airflow-scheduler
+    user: "${K2_RUN_UID:?set K2_RUN_UID in .env (make engine-keys)}:0"
     networks:
       - k2-net
     volumes:
-      # The DAGs and dbt stay on the checkout until a release carries them (phase 002);
-      # the releases root is mounted now for the `resolve` task's pointer.
-      - ./docker/airflow/dags:/opt/airflow/dags:ro
       - ./dbt:/opt/k2/dbt:ro
       - *k2-releases-ro
       - /var/run/docker.sock:/var/run/docker.sock
+      # Each file by name, never created when missing (tests/test_secret_mounts.py).
+      - type: bind
+        source: ${K2_SECRETS:-${HOME}/k2-secrets}/principals/svc.runs.password
+        target: /run/k2-secrets/runs.password
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${K2_SECRETS:-${HOME}/k2-secrets}/tls/ca.pem
+        target: /run/k2-secrets/tls/ca.pem
+        read_only: true
+        bind:
+          create_host_path: false
     group_add:
       - "${K2_DOCKER_GID:-0}"
     environment:
       <<: *airflow-env
       AIRFLOW__SCHEDULER__ENABLE_HEALTH_CHECK: "True"
+      K2_RELEASES: ${K2_RELEASES:-${HOME}/k2-releases}
+      K2_SECRETS: ${K2_SECRETS:-${HOME}/k2-secrets}
+      K2_COMPOSE_PROJECT: ${COMPOSE_PROJECT_NAME}
+      K2_RUN_UID: ${K2_RUN_UID:?set K2_RUN_UID in .env (make engine-keys)}
+      K2_RUN_GID: ${K2_RUN_GID:?set K2_RUN_GID in .env (make engine-keys)}
+      K2_TRINO_HOST: trino
+      K2_TRINO_INTERNAL_PORT: "8443"
+      K2_RUNS_USER: svc.runs
+      K2_CATALOG_URI: http://lakekeeper:8181/catalog
     command: ["scheduler"]
     depends_on:
       airflow-migrate:
@@ -778,8 +832,9 @@ services:
       com.k2.tier: "control-plane"
       com.k2.version: "v3"
 
-  # Parses docker/airflow/dags into the database; in Airflow 3 the scheduler
-  # no longer does. No socket, no published port.
+  # Parses the airflow pointer's DAG folder into the database; in Airflow 3 the
+  # scheduler no longer does. No socket, no published port, no secret and none of
+  # the one-shot environment: parsing reads only the release's files.
   airflow-dag-processor:
     logging: *k2-logging
     image: k2-airflow:3.3.2  # built by airflow-migrate
@@ -788,8 +843,6 @@ services:
     networks:
       - k2-net
     volumes:
-      # As the scheduler's: the DAGs on the checkout until phase 002, the root mounted now.
-      - ./docker/airflow/dags:/opt/airflow/dags:ro
       - ./dbt:/opt/k2/dbt:ro
       - *k2-releases-ro
     environment: *airflow-env
@@ -890,9 +943,12 @@ services:
       # place needs --force-recreate (CLAUDE.md, bind-mount gotcha).
       - ./config/instruments.yaml:/home/iceberg/config/instruments.yaml:ro
       - ./config/bars.yaml:/home/iceberg/config/bars.yaml:ro
-      # The jobs stay on the checkout until a release carries them (phase 002); the
-      # releases root is mounted now for the spark pointer.
+      # A run's scripts: /k2/releases/<id>/platform/docker/lake/, the release its resolve pinned.
       - *k2-releases-ro
+      # fetch's spool, read by the connector's load task. Read-only: only fetch writes it. The
+      # image creates /spool with fetch's owner (docker/spark/Dockerfile), so whichever of the two
+      # mounts the empty volume first, Docker gives its root fetch's uid and fetch can write.
+      - k2-spool:/spool:ro
     # Two storage keys, never the root pair (docker/lake/minio/policies/, made by lake-init):
     # Spark's, which docker/lake/spark_conf.py hands each session's catalogs and the connector signs
     # landings with, and the maintenance key, which only expire's session uses (docker/lake/expire.py).

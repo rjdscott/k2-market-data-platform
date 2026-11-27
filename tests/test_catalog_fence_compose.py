@@ -263,3 +263,98 @@ def test_a_storage_key_out_of_place_fails(mutate, says):
     mutate(doc)
     found = storage_problems(doc)
     assert any(says in p for p in found), found
+
+
+# ---- the run path (W1-5, W1-20): code read through the pointers, the scheduler wired for the factory --
+
+AIRFLOW = ("airflow-migrate", "airflow-api-server", "airflow-scheduler", "airflow-dag-processor")
+DAGS_FOLDER = "/k2/releases/pointers/airflow/platform/docker/airflow/dags"  # factory.py's POINTER + the release's platform/
+RULES = "/k2/releases/pointers/prometheus/platform/docker/prometheus/rules/*.yml"
+POOLS = {"lake_spark": "1", "fetch": "1", "dbt": "2"}  # factory.py POOLS, slots as W0-8 proved them
+# oneshot.py's host-side names, and dbt-runner's fixed values it passes on by name (record reads three of them).
+ONESHOT_ENV = {"K2_RELEASES", "K2_SECRETS", "K2_COMPOSE_PROJECT", "K2_RUN_UID", "K2_RUN_GID"}
+PASSED_ON = {"K2_TRINO_HOST", "K2_TRINO_INTERNAL_PORT", "K2_RUNS_USER", "K2_CATALOG_URI"}
+PROMETHEUS = yaml.safe_load((ROOT / "docker/prometheus/prometheus.yml").read_text())
+OWNER = re.compile(r"chown (\d+:\d+) /spool\b")
+
+
+def run_path_problems(doc: dict, prometheus: dict, spark_dockerfile: str, fetch_dockerfile: str) -> list[str]:
+    services, out = doc["services"], []
+    for n in AIRFLOW:
+        s = services[n]
+        if any("docker/airflow/dags" in str(v.get("source") if isinstance(v, dict) else v) for v in s.get("volumes") or []):
+            out.append(f"{n} bind-mounts the checkout's docker/airflow/dags")
+        if (got := env_items(s).get("AIRFLOW__CORE__DAGS_FOLDER")) != DAGS_FOLDER:
+            out.append(f"{n}'s DAG folder is {got!r}, not the airflow pointer's {DAGS_FOLDER}")
+        if n != "airflow-scheduler" and (extra := sorted(env_names(s) & (ONESHOT_ENV | PASSED_ON))):
+            out.append(f"{n} has the one-shot environment {extra}: the scheduler's alone")
+    sched, dbt = env_items(services["airflow-scheduler"]), env_items(services["dbt-runner"])
+    if missing := sorted((ONESHOT_ENV | PASSED_ON) - set(sched)):
+        out.append(f"airflow-scheduler lacks {missing}")
+    if wrong := sorted(k for k in PASSED_ON if k in sched and sched[k] != dbt.get(k)):
+        out.append(f"airflow-scheduler passes on {wrong} with values other than dbt-runner's")
+    if any(not re.fullmatch(rf"\$\{{{k}:\?[^${{}}]*\}}", sched.get(k, "")) for k in ("K2_RUN_UID", "K2_RUN_GID")):
+        out.append("airflow-scheduler's K2_RUN_UID and K2_RUN_GID are not required (${NAME:?...})")
+    if not re.fullmatch(r"\$\{K2_RUN_UID:\?[^${}]*\}:0", str(services["airflow-scheduler"].get("user"))):
+        out.append(f"airflow-scheduler runs as {services['airflow-scheduler'].get('user')!r}, not K2_RUN_UID with group 0")
+    command = " ".join(services["airflow-migrate"].get("command") or [])
+    if bad := [p for p, n in POOLS.items() if not re.search(rf"&& airflow pools set {p} {n} ", command)]:
+        out.append(f"airflow-migrate does not set the pools {bad} after the migration")
+    spool = [v for v in services["spark-iceberg"].get("volumes") or [] if str(v).split(":")[0] == "k2-spool"]
+    if spool != ["k2-spool:/spool:ro"]:
+        out.append(f"spark-iceberg mounts the spool as {spool}, not k2-spool:/spool:ro")
+    if OWNER.findall(spark_dockerfile) != OWNER.findall(fetch_dockerfile) or len(OWNER.findall(fetch_dockerfile)) != 1:
+        out.append(f"/spool's owner in the Spark image {OWNER.findall(spark_dockerfile)} is not fetch's "
+                   f"{OWNER.findall(fetch_dockerfile)}: the first to mount the empty volume decides its owner")
+    if prometheus.get("rule_files") != [RULES]:
+        out.append(f"prometheus.yml reads rules from {prometheus.get('rule_files')}, not the pointer's {RULES}")
+    if any("docker/prometheus/rules" in str(v) for v in services["prometheus"].get("volumes") or []):
+        out.append("prometheus mounts the checkout's rules")
+    return out
+
+
+DOCKERFILES = tuple((ROOT / f).read_text() for f in ("docker/spark/Dockerfile", "docker/fetch/Dockerfile"))
+
+
+def test_the_run_code_is_read_through_the_pointers_and_the_scheduler_is_wired():
+    assert run_path_problems(COMPOSE, PROMETHEUS, *DOCKERFILES) == []
+
+
+@pytest.mark.parametrize("mutate,says", [
+    (lambda d: d["services"]["airflow-dag-processor"]["volumes"].append("./docker/airflow/dags:/opt/airflow/dags:ro"),
+     "airflow-dag-processor bind-mounts"),
+    (lambda d: d["services"]["airflow-scheduler"]["volumes"].append(
+        {"type": "bind", "source": "./docker/airflow/dags", "target": "/opt/airflow/dags"}), "airflow-scheduler bind-mounts"),
+    (env_set("airflow-scheduler", "AIRFLOW__CORE__DAGS_FOLDER", "/opt/airflow/dags"), "DAG folder is '/opt/airflow/dags'"),
+    (lambda d: d["services"]["airflow-dag-processor"].__setitem__("environment", {}), "airflow-dag-processor's DAG folder"),
+    (env_set("airflow-api-server", "K2_SECRETS", "/x"), "airflow-api-server has the one-shot environment"),
+    (env_set("airflow-dag-processor", "K2_RUNS_USER", "svc.runs"), "airflow-dag-processor has the one-shot"),
+    (lambda d: d["services"]["airflow-scheduler"]["environment"].pop("K2_COMPOSE_PROJECT"), "lacks ['K2_COMPOSE_PROJECT']"),
+    (env_set("airflow-scheduler", "K2_TRINO_HOST", "localhost"), "passes on ['K2_TRINO_HOST']"),
+    (env_set("airflow-scheduler", "K2_RUN_UID", "${K2_RUN_UID:-1000}"), "not required"),
+    (svc_set("airflow-scheduler", "user", "${K2_RUN_UID:?x}:${K2_RUN_GID:?x}"), "not K2_RUN_UID with group 0"),
+    (lambda d: d["services"]["airflow-scheduler"].pop("user"), "runs as None"),
+    (svc_set("airflow-migrate", "command", ["bash", "/opt/k2/init-db.sh"]), "does not set the pools"),
+    (svc_set("airflow-migrate", "command", ["bash", "-c", "bash /opt/k2/init-db.sh && airflow pools set lake_spark 1 x"
+                                            " && airflow pools set fetch 1 x && airflow pools set dbt 4 x"]), "['dbt']"),
+    (lambda d: d["services"]["spark-iceberg"]["volumes"].remove("k2-spool:/spool:ro"), "mounts the spool as []"),
+    (lambda d: d["services"]["spark-iceberg"]["volumes"].__setitem__(-1, "k2-spool:/spool"), "not k2-spool:/spool:ro"),
+    (lambda d: d["services"]["prometheus"]["volumes"].append("./docker/prometheus/rules:/etc/prometheus/rules:ro"),
+     "prometheus mounts the checkout's rules"),
+])
+def test_a_run_path_off_the_pointers_fails(mutate, says):
+    doc = copy.deepcopy(COMPOSE)
+    mutate(doc)
+    found = run_path_problems(doc, PROMETHEUS, *DOCKERFILES)
+    assert any(says in p for p in found), found
+
+
+@pytest.mark.parametrize("rules", [["rules/*.yml"], [RULES, "rules/*.yml"], None])
+def test_prometheus_rules_off_the_pointer_fail(rules):
+    found = run_path_problems(COMPOSE, {**PROMETHEUS, "rule_files": rules}, *DOCKERFILES)
+    assert any("not the pointer's" in p for p in found), found
+
+
+@pytest.mark.parametrize("spark", ["", "RUN mkdir /spool && chown 185:185 /spool", "RUN mkdir /spool"])
+def test_a_spark_image_whose_spool_is_not_fetchs_fails(spark):
+    assert any("is not fetch's" in p for p in run_path_problems(COMPOSE, PROMETHEUS, spark, DOCKERFILES[1]))
