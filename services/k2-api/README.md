@@ -32,7 +32,7 @@ release in [`tests/release/`](tests/release/README.md).
 | 400 | `unknown_parameter`, `unknown_column`, `bad_limit`, `bad_filter`, `bad_cursor`, `bad_request` | a name the route or the contract does not declare, a malformed value, a parameter twice, any `cursor` |
 | 401 | `unauthorized` | no key on a data route; an unknown key, or one whose principal the release does not serve |
 | 403 | `forbidden` | Trino denied the caller (a bronze table offers no role) |
-| 404 | `not_found`, `not_published` | no such product or table in the release, or an output with no reader relation; a table never tested |
+| 404 | `not_found`, `not_published` | no such product or table in the release, or an output with no reader relation; a table never tested, to a caller Trino lets read it |
 | 422 | `as_of_unavailable`, `result_too_large` | `as_of` given; more rows match than `limit` |
 | 503 | `trino_unavailable`, `query_failed`, `snapshot_moving`, `no_release` | Trino did not answer or could not run the read; the tested tag moved during two reads; the pointer names no release |
 
@@ -47,3 +47,6 @@ Decided 2026-11-27, for phase 007 to fold into `openapi.yaml`:
 - Rows are sorted by the table's declared primary key (`primaryKeyPosition`, then declaration
   order), so SQL and REST answers compare row for row; a table with no key is not sorted.
 - `access.allowed` is false for any refusal, a relation not yet published included.
+- 2026-11-27: a data request asks Trino first, as the caller, for a zero-row read of the relation
+  (the probe `access` uses): a denial is 403 whatever the relation's publication state, and only an
+  allowed caller learns `not_published`. It costs one more query per data request, accepted.

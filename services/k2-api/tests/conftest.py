@@ -71,6 +71,12 @@ class FakeTrino:
         self.calls: list[tuple[str, str, list[Any]]] = []
         self.rows: dict[str, list[dict[str, Any]]] = {}  # relation -> rows
         self.snapshots: dict[str, list[int]] = {}  # base relation -> the id of each read in turn; the last repeats
+        self.views = {v["relation"]: v["base"] for v in json.loads((rel / "compiled/trino/views.json").read_text())["views"]}
+        # What a reader view does, for a user allowed it, while its base has no tested snapshot
+        # (`FOR VERSION AS OF 'audited'` names no tag): None reads zero rows, else fails with this
+        # errorName. A denied user is refused first either way: the order k2-api assumes, not yet
+        # Trino's (its Analyzer checks access only after analysing a view's body).
+        self.untagged: str | None = None
         self.down = False
 
     def _matches(self, rule: dict[str, Any], user: str) -> bool:
@@ -100,6 +106,11 @@ class FakeTrino:
         if table.endswith("$refs"):
             ids = self.snapshots.get(f"{catalog}.{schema}.{table.removesuffix('$refs')}", [])
             return [[ids.pop(0) if len(ids) > 1 else ids[0]]] if ids else []
+        base = self.views.get(f"{catalog}.{schema}.{table}")
+        if base is not None and not self.snapshots.get(base):
+            if self.untagged is not None:
+                raise db.Failed(self.untagged)
+            return []
         columns = re.findall(r'"([a-z0-9_]+)"', sql.split(" FROM ")[0])
         order = re.search(r" ORDER BY (.+) LIMIT", sql)
         key = re.findall(r'"([a-z0-9_]+)"', order.group(1)) if order else []
