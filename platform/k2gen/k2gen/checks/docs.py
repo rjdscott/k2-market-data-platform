@@ -30,7 +30,10 @@ schema-valid documents. Then, each rule a code in CODES:
 - terms before a grant outside the owning team (ADR-055 part 5); a table another product reads
   keeps at least the retention floor;
 - an incremental dbt table's key holds every partition source column (A7; experiment (a) of
-  docs/research/2026-11-26-release-spine-spikes.md).
+  docs/research/2026-11-26-release-spine-spikes.md);
+- an input port read empty when absent (`whenAbsent: empty`) only in a product whose every dbt model
+  is incremental: k2_input's zero rows rebuild a table model, which then publishes empty (a type-2
+  history included), unless the port says `emptyIntoTable`.
 
 Failing fixtures: tests/fixtures/v2/bad/docs/cases.yaml, one or more per code.
 """
@@ -88,6 +91,7 @@ CODES = (
     "docs.terms-missing",
     "docs.retention-below-floor",
     "docs.incremental-key-misses-partition",
+    "docs.empty-input-into-table",
 )
 RETENTION_FLOOR_DAYS = 7  # what model.Table.retention None takes; a table another product reads keeps at least it
 FETCH_KINDS = frozenset(typing.get_args(model.ConnectorKind)) - {"kafka"}  # the kinds the fetch container runs
@@ -290,6 +294,13 @@ def _product(d: _Dir, domains: dict[str, Any], owners: dict[str, str], tables: d
             owner = owners.get(grant["principal"])  # an undeclared principal is the access check's
             if owner is not None and owner != team:
                 yield _finding("docs.terms-missing", d.at("grants.yaml"), f"$.grants[{i}]: {grant['principal']} belongs to {owner}, outside the product's team {team}; record the source's terms in the product's terms property before a grant outside the owning team (ADR-055 part 5)")
+
+    # ponytail: any model of the product, not only those calling k2_input on the port: an ephemeral
+    # or view between them passes the zero rows on. Name the readers when a product needs one exempt.
+    rebuilt = sorted(t for t, b in builds.items() if b == "dbt" and not _incremental(d.models.get(d.at(f"models/{t}.sql"))))
+    for i, port in enumerate(p.get("inputPorts", [])):
+        if rebuilt and _props(port).get("whenAbsent") == "empty":
+            yield _finding("docs.empty-input-into-table", path, f"$.inputPorts[{i}].customProperties: whenAbsent empty reads {port['contractId']} as zero rows while it is paused or never audited, and a build then rebuilds this product's models that are not incremental ({', '.join(rebuilt)}) from those rows and publishes them empty; make the models incremental, read the input at its last audited snapshot (whenAbsent fail), or accept it with whenAbsent emptyIntoTable")
 
     models = {d.at(f"models/{t}.sql") for t, b in builds.items() if b == "dbt"}
     for model_path in d.models:
