@@ -217,6 +217,7 @@ drift. Each tag prints a `SKIP` for the run-record comparison until phase 002 wr
 | `DRIFT tag <w>.<ns>.<t>: 'audited' names snapshot ..., never this table's main` and `... manifest list is outside the table's location` | the tag was moved or a snapshot grafted from another table |
 | `DRIFT base <w>.<ns>.<t>: a VIEW where the release's TABLE must be` | the builder dropped its base and created a view at its name; readers are served the view's rows |
 | `DRIFT namespace ...`, `... missing` | the storage plan was not applied, or something was dropped |
+| `LEFT <kind> <name>: declared by <release id>, a release deployed or attempted since the one that is live; nothing reads it under the live rules: ...` | not a difference, exit 0: a namespace, table or view a release deployed or attempted since the live one created, and nothing undoes (its DDL is additive); it stays until a release that declares it is deployed or `make drop` removes it |
 
 **Recovery**
 
@@ -228,13 +229,15 @@ bash scripts/lib/throwaway-lake.sh up av-debug "$RELEASE"
 bash scripts/lib/throwaway-lake.sh py av-debug scripts/access_verify.py stage --release "/work/releases/$ID" --env /work/env.json
 bash scripts/lib/throwaway-lake.sh py av-debug scripts/verify/catalog_drift.py --release "/work/releases/$ID" --out /work/drift.json
 # SKIP tag governance.access_canary__base.events audited = <id> against its newest audited run record: run records are written from phase 002
-# catalog_drift: <release id>: clean, the catalog equals the release; 0 pending, 1 skipped
+# catalog_drift: <release id>: clean, the catalog equals the release; 0 pending, 1 skipped, 0 left
 ```
 
    This is the throwaway form, with the result in `~/.k2-throwaway/av-debug/drift.json`. On the
    stack the same script runs in the `tools` one-shot, the one place inside `k2-catalog`, as
-   `scripts/verify/catalog_drift.py --release /k2/releases/pointers/trino --out <file>`. That is
-   step S19's wiring, not run here.
+   `scripts/verify/catalog_drift.py --release /k2/releases/pointers/trino --out <file>`, with
+   `--left-by /k2/releases/<id>` (repeatable) or `K2_DRIFT_LEFT_BY=<dir>,<dir>` for each release deployed or
+   attempted since the live one, as deploy's verify gives it from the deploy log; without it, what such a
+   release created is `DRIFT`. That is step S19's wiring, not run here.
 2. A planted object, a moved or grafted tag, or a base turned view means something wrote to the
    catalog or to a base that should not have. Escalate it as a security incident to the platform
    owner, with the JSON, before changing anything.

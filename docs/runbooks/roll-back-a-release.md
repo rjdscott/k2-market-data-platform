@@ -3,7 +3,9 @@
 Use this to put the previous release back on purpose, to finish a rollback that was interrupted, and to
 recover when a rollback itself failed (exit 3) or a first deploy failed with nothing to go back to.
 A deploy that fails verification rolls itself back; that case is section 6 of
-[deploy-a-release.md](./deploy-a-release.md). Why rollback is a deploy in reverse:
+[deploy-a-release.md](./deploy-a-release.md). A healthy rollback across a release that added a product
+exits 1, the deploy having failed and been undone, not 3: the tables and views that release created stay
+and verify reports them as `LEFT` (section 3). Why rollback is a deploy in reverse:
 [ADR-058](../adr/ADR-058-deploy-sealed-releases-by-pointer-swap.md).
 
 **Run every command from the repo root with `set -a && . ./.env && set +a` loaded**, with the same
@@ -150,6 +152,18 @@ make release-status
 make rollback
 make release-verify
 ```
+
+---
+
+A release's DDL is additive and nothing undoes it, so after a rollback across a release that added a
+product its namespaces, tables and views are still in the catalog. The drift check run by the rollback's
+verify and by `make release-verify` reports each as `LEFT <kind> <name>: declared by <release id>, a release
+deployed or attempted since the one that is live; nothing reads it under the live rules: ...` and does not
+fail on it; anything else undeclared in a namespace of the live release is still `DRIFT`
+([verify-access-after-a-release.md](./verify-access-after-a-release.md) section 4). A rollback whose only
+differences are `LEFT` lines exits 1, and `make release-verify` afterwards exits 0. The leftovers stay
+until a release that declares them is deployed again or they are dropped with `make drop`
+([drop-and-rebuild.md](./drop-and-rebuild.md)).
 
 ---
 

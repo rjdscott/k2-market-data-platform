@@ -328,3 +328,13 @@ name the target.
 **Not yet verified:** a rollback of the live stack from this phase's release to `v3.0.0-alpha.3.2`
 (tested against a fake stack only); a release that changes only a MinIO policy reaches MinIO only when
 `lake-init` next runs, and the plan runs it only when its compose definition or image changes.
+
+The first deploy of a release that added products failed on the live stack on 2026-11-27, at
+`views-narrow`: the step queried a new product's view as its publisher, under the old rules, which name
+neither the view nor its publisher. The rollback's verify then exited 3 on the failed attempt's own
+namespaces, which its additive DDL had created and nothing undoes. Both are fixed. A view the release
+being moved from does not declare is left to widen once the target's rules are loaded, and the drift check
+reports what a release deployed or attempted since the live one created as `LEFT` lines, not `DRIFT`, so
+that rollback exits 1. The deploy rehearsal now has a release that adds a product, forced to fail first
+and then deployed (`scripts/verify/deploy_rehearsal.py`, section 7b). No rehearsal release had ever added
+a product before, which is why it was first seen on the live stack.

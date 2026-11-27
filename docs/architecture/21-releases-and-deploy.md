@@ -226,7 +226,9 @@ major version, never an `ALTER` at deploy.
 release that drops a masked column changes both the view and the rule, and the rules reload on their
 own timer. Deploy therefore narrows views before the swap and widens them only after the canary proves
 the new rules loaded and one more refresh has passed: at no instant does a view show a column its rule
-no longer masks.
+no longer masks. A view the release being moved from does not declare is not narrowed: the old rules name
+no reader of it and its publisher has not created it, so it is left to widen once the target's rules are
+loaded, and the plan lists it as `views new in this release`.
 
 **The release canary** is a Trino user, `k2_release_<setSha256[:12]>`, that only this release's rules
 admit, to run `SELECT 1`. Logging in as it is the one question Trino answers only with the rules it has
@@ -241,6 +243,15 @@ admitted and the previous one refused, each container's image id against the man
 check, `k2-api`'s own answer (`GET /v1/release`), then the catalog drift check, the hand-written access
 suite on the live stack (its storage-key rows signing from `tools` with each engine's key, by name, for
 that run) and the catalog fence's probes (chapter 22). It runs at the end of every deploy and on demand.
+`make health` judges the stack's long-running services against the live release's compose, read through
+`pointers/trino`, not the checkout's.
+
+A release's DDL is additive and never undone, so after a rollback across a release that added a product its
+namespaces, tables and views remain. The drift check is given each release deployed or attempted since the
+live one (`--left-by`, or `K2_DRIFT_LEFT_BY`) and reports what those declare as `LEFT` lines, which do not
+fail verify; anything undeclared in a namespace of the live release is still `DRIFT`. A rollback whose only
+differences are `LEFT` lines exits 1 (the deploy failed and was undone), not 3, and `make release-verify`
+afterwards exits 0. Leftovers stay until a release that declares them is deployed or `make drop` removes them.
 
 **After done, the sites.** The release's catalog site and dbt docs are written into the `k2-site` volume
 that `k2-api` serves (chapter 22). A failure there is recorded as step `site` and never fails or rolls back
@@ -340,6 +351,7 @@ make site                           # the live release's catalog site and dbt do
   mid-run leaves it where it started.
 - A deploy drains the DAGs it affects, moves one pointer per service from inside `tools`, recreates
   only what k2gen's needs name, and a rules-only change restarts nothing.
-- Views narrow before and widen after the rules change, so no masked value shows in between.
+- Views narrow before and widen after the rules change, so no masked value shows in between; a view the
+  source release does not declare is left to widen, and what a rollback leaves behind is `LEFT`, not drift.
 - Verification asks every part; any failure from the views step on rolls everything back, images
   included, by the same steps.

@@ -160,6 +160,13 @@ more:
    compile for the selected models. It now refuses a missing pin only when the model compiles,
    and `make test-dbt` builds the products in the order their input ports give.
 
+It also missed one. The first deploy of a release that added products failed on the live stack on
+2026-11-27, at `views-narrow`, and its rollback's verify exited 3: no release the rehearsal had ever
+deployed added a product, so neither path was run. The rehearsal now carries a release that adds a product,
+forced to fail first and then deployed (`scripts/verify/deploy_rehearsal.py`, section 7b), so the next
+change to either path fails here before it reaches the live stack. One recorded run of 2026-11-27 printed
+`PASS rehearsal 848s` after that section was added.
+
 ## Alternatives considered
 
 | Alternative | Why not |
