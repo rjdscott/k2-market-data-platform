@@ -14,7 +14,10 @@ land   reads the pinned range from the topic once to count and once to write. Ev
        range lands byte for byte in lake.<fence>.landing, the count per partition equal to its span
        or nothing commits, with the end offsets, the batch's starts and every accepted gap so far
        (cumulative: the previous connector commit's and any this run accepts) in that one commit's
-       summary. A retry plans from that commit, so it lands only what is new.
+       summary. A retry plans from that commit, so it lands only what is new. The commit is
+       written on branch LAND from main as plan read it, and made main's head by one catalog
+       commit requiring main unmoved (commit_landing): of two loads at once one lands, the other
+       exits 2 having landed nothing.
 stage  takes, per partition, every landing row after the offset bronze has staged through (for a
        partition bronze never staged, from the landing's first offset in it, never 0) up to the
        landing's newest end offsets, read from the landing at one snapshot and never from the
@@ -69,6 +72,7 @@ KAFKA_STARTS = "k2.kafka-starts"  # landing commits: the batch's first offset pe
 KAFKA_GAPS = "k2.kafka-gaps"
 KAFKA_SKIPPED = "k2.kafka-skipped"  # bronze commits: landing rows the filter skipped, per partition
 KEPT = "k2_kept"  # the filter's verdict on a landing row (a column of the stage's read, never written)
+LAND = "land"  # the landing's branch a load writes on, before one catalog commit makes it main's head
 # The landing's columns from the Kafka source's, as read: the bytes are never decoded or re-encoded.
 # tests/test_lake_kafka.py holds these with the run's four equal to model.PLATFORM_TABLES["landing"].
 LANDING_SOURCE = (("kafka_partition", "partition"), ("kafka_offset", "offset"),
@@ -137,6 +141,37 @@ def account(p: Plan, found: list) -> None:
     if failures:
         raise C.Refused("the read does not cover its offsets, nothing landed: "
                         + "; ".join(f"{f['scope']} {f['detail']}" for f in failures))
+
+
+def landed_on(parents: dict, head: int, parent) -> bool:
+    """Whether the landing commit `head` was written on `parent`, main as plan read it: its parent
+    is `parent`, or, with no main yet, nothing or a root no load wrote (the empty snapshot Iceberg
+    makes for a branch of a table with none). `parents` is `{snapshot: (parent, k2.batch-id)}`.
+    Iceberg retries a conflicting append on the newer head, so a load whose write landed on
+    another's would carry both ranges."""
+    on = parents.get(head, (None, None))[0]
+    return on == parent if parent is not None else on is None or parents.get(on) == (None, None)
+
+
+def commit_landing(lake, table: str, parent, head: int) -> None:
+    """Makes `head`, the landing commit written on LAND, main's head by one catalog commit that
+    requires main to be `parent` still and LAND to be `head`, only if `head` was written on
+    `parent` (landed_on). Refused otherwise, nothing landed: another load, or a compaction, moved
+    the landing since plan read it, and the next run plans from where it is."""
+    if not landed_on(lake.parents(table), head, parent):
+        raise C.Refused(f"the landing commit {head} was not written on main's {parent}, which the plan read: another "
+                        "load wrote the landing at once; nothing landed")
+    catalog = lake.catalog(table)
+    status, doc = catalog.commit(table, C.publish_change(table, parent, head, LAND))
+    if status == 409:
+        found = catalog.refs(table)
+        raise C.Refused(f"the catalog answered HTTP 409, {(doc.get('error') or {}).get('message')!r}: main (read "
+                        f"{parent}, now {found.get('main')}), {LAND} (wrote {head}, now {found.get(LAND)}); nothing "
+                        "landed, and the next run plans from what landed")
+    after = (((doc.get("metadata") or {}).get("refs") or {}).get("main") or {}).get("snapshot-id")
+    if status != 200 or after != head:
+        raise RuntimeError(f"the landing commit answered HTTP {status} with main at {after}, not {LAND}'s {head}")
+    lake.refresh(table)
 
 
 def merged(ranges) -> list:
@@ -410,7 +445,7 @@ def land(run: C.Run, source, lake) -> tuple[int, dict]:
     are lost when the snapshots expire. The filter runs at stage, into bronze."""
     connector, table = run.pipeline["connector"], run.pipeline["landing"]["table"]
     result = {"landing": table, "landed": 0}
-    _, history = lake.history(table)
+    parent, history = lake.history(table)
     earliest, latest = source.offsets(connector["topic"])
     try:
         p = plan(history, earliest, latest, connector["maxOffsetsPerPartition"], run.accept_data_loss)
@@ -437,7 +472,11 @@ def land(run: C.Run, source, lake) -> tuple[int, dict]:
     if gaps_so_far:  # absent when no loss was ever accepted
         props[KAFKA_GAPS] = gaps_json(gaps_so_far)
     values = dict(zip(LANDING_RUN, (run.run_id, C.now(), run.run_id, run.release)))
-    lake.land(table, frames, values, summary(run, **props))
+    try:
+        commit_landing(lake, table, parent, lake.land(table, frames, values, summary(run, **props), parent))
+    except C.Refused as e:
+        print(f"load refused: {e}", file=sys.stderr)
+        return C.EXIT_REFUSED, result
     landed = sum(n for _, n, _, _ in found)
     print(f"load: landed {landed} records in {table}")
     return C.EXIT_OK, {**result, "landed": landed}
@@ -600,13 +639,26 @@ class SparkLanding(C.SparkLake):
 
         return current_snapshot_id(self.spark, C.rel(table)), snapshot_history(self.spark, C.rel(table))
 
-    def land(self, table: str, frames, values: dict, props: dict) -> None:
+    def land(self, table: str, frames, values: dict, props: dict, parent) -> int:
+        """The landing commit, written on branch LAND set to `parent` first, main untouched: its
+        snapshot id, for commit_landing. Refused unless LAND's head after the write is this Spark
+        application's own commit (the spark.app.id Iceberg's Spark writes record): another load
+        writing the branch at once moved it."""
         from pyspark.sql import functions as F
 
+        self.reset_branch(table, parent, LAND)
         cols = [F.col(src).alias(dst) for dst, src in LANDING_SOURCE] + [F.lit(v).alias(k) for k, v in values.items()]
         schema = self.spark.table(C.rel(table)).schema
         self._write(frames.select(*cols).select(*[F.col(f.name).cast(f.dataType) for f in schema.fields]),
-                    C.rel(table), props)
+                    f"{C.rel(table)}.{C.name('branch_' + LAND)}", props)
+        head = self.refs(table)[LAND]
+        if self.summary_of(table, head).get("spark.app.id") != self.spark.sparkContext.applicationId:
+            raise C.Refused(f"{LAND} of {table} is at {head}, which another load wrote at once; nothing landed")
+        return head
+
+    def refresh(self, table: str) -> None:
+        """Spark's cached copy of `table` dropped: commit_landing moved main past it, by the catalog."""
+        self.spark.sql(f"REFRESH TABLE {C.rel(table)}")
 
     def envelopes(self, frames) -> dict:
         """`{schema id: writer schema}` of the ids among `frames`' `schema_id` that the registry

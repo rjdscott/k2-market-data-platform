@@ -312,6 +312,15 @@ the landing commit whose `k2.kafka-starts` recorded that start may be. The audit
 from the same start, and Retention's "stages again from offset 0" reads "from the landing's first
 offset".
 
+2026-11-28 (review finding D4): the landing commit is no plain append to `main`, which Iceberg
+retries on a newer head, so two loads at once landed one range twice. It is written on the
+landing's branch `land`, set first to `main` as the plan read it (a landing with no `main`: made
+again, empty), and made `main`'s head by one Iceberg REST commit requiring `main` to be that
+snapshot and `land` the commit, as `connector.publish` moves bronze, and only if the commit's
+parent is that snapshot. The loser of a race, or a load whose landing a compaction moved under
+it, exits 2 having landed nothing, and the next run plans from what landed. The landing's refs
+are `main` and `land`.
+
 **Bronze.** A Kafka product has one bronze table (`kafka.py` stages into exactly one), staged from the landing
 by offset, never by run id, so a retry, or a kill between the landing commit and the stage, stages
 nothing twice and leaves no hole. Its columns are exactly the landing's nine, by name and type, as

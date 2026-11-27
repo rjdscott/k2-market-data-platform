@@ -162,9 +162,26 @@ class Lake:
         head = self.refs_[table].get("main")
         return head, [(s, self.snaps[s]["summary"]) for s in self.lineage(head)]
 
-    def land(self, table, frames, values, props):
+    def land(self, table, frames, values, props, parent):
+        """As SparkLanding.land: K.LAND set to `parent` (no main: an empty root, as Iceberg makes
+        one), then the commit on whatever K.LAND's head is then, as Iceberg retries an append.
+        `during_write` runs once between the two: another load at once."""
         rows = [{**{dst: f[src] for dst, src in K.LANDING_SOURCE}, **values} for f in frames]
-        self.refs_[table]["main"] = self._commit(table, self.refs_[table].get("main"), rows, props)
+        self.refs_[table][K.LAND] = parent if parent is not None else self._commit(table, None, [], {})
+        hook, self.during_write = getattr(self, "during_write", None), None
+        if hook:
+            hook()
+        self.refs_[table][K.LAND] = head = self._commit(table, self.refs_[table][K.LAND], rows, props)
+        return head
+
+    def parents(self, table):
+        return {s: (x["parent"], x["summary"].get("k2.batch-id")) for s, x in self.snaps.items() if x["table"] == table}
+
+    def catalog(self, table):
+        return Catalog(self)
+
+    def refresh(self, table):
+        pass
 
     def maintain(self, table, summary=None):
         """A compaction or expiry snapshot: the same rows, no k2 properties."""
@@ -271,6 +288,29 @@ class Lake:
         assert checks == PIPELINE["bronze"][0]["checks"]
         return [(r["check_name"], r["passed"], r["checked_at"]) for r in self.checks
                 if r["table_name"] == table and r["batch_id"] == batch and r["snapshot_id"] == snapshot]
+
+
+class Catalog:
+    """The catalog's table commit over the fake's refs, as tests/test_lake_connector.py's REST fake
+    has it: the set-snapshot-ref updates applied only if every assert-ref-snapshot-id holds (null:
+    no such ref), else 409. `lake.during_commit` runs once before the check: another load at once."""
+
+    def __init__(self, lake):
+        self.lake = lake
+
+    def commit(self, table, change):
+        hook, self.lake.during_commit = getattr(self.lake, "during_commit", None), None
+        if hook:
+            hook()
+        refs = self.lake.refs_[table]
+        if any(refs.get(r["ref"]) != r["snapshot-id"] for r in change["requirements"]):
+            return 409, {"error": {"message": "Requirement failed", "code": 409}}
+        for u in change["updates"]:
+            refs[u["ref-name"]] = u["snapshot-id"]
+        return 200, {"metadata": {"refs": {r: {"snapshot-id": s} for r, s in refs.items()}}}
+
+    def refs(self, table):
+        return dict(self.lake.refs_[table])
 
 
 def offsets_of(rows):
@@ -438,6 +478,34 @@ def test_two_gaps_in_one_partition_are_both_carried_and_adjacent_ones_merge():
     assert K.accepted_losses(lake.history(LANDING)[1], TOPIC) == {0: [(2, 3), (5, 6)]}
     assert K.carried_gaps({TOPIC: {0: [(2, 4)]}}, [(TOPIC, 0, 4, 7, 3), (TOPIC, 1, 0, 2, 2)]) == {
         TOPIC: {0: [(2, 7)], 1: [(0, 2)]}}  # one that starts where the last ended is one gap
+
+
+@pytest.mark.parametrize("first", [True, False])
+@pytest.mark.parametrize("when", ["write", "commit"])
+def test_of_two_loads_at_once_one_lands_and_the_other_lands_nothing(capsys, when, first):
+    """The other load runs start to end inside this one: during its branch write (Iceberg rebases
+    this write on the other's), or between that write and its catalog commit (main moved)."""
+    topic, lake = Topic(partitions=1), Lake()
+    topic.produce(0, "trade")
+    if not first:  # else the race is the landing's first commit, on no main
+        K.land(ctx(1), topic, lake)
+    topic.produce(0, "trade", "trade")
+    winner = []
+    setattr(lake, f"during_{when}", lambda: winner.append(K.land(ctx(3), topic, lake)[0]))
+    code, result = K.land(ctx(2), topic, lake)
+    assert winner == [C.EXIT_OK] and code == C.EXIT_REFUSED and "nothing landed" in capsys.readouterr().err
+    assert offsets_of(lake.rows(LANDING)) == [(0, 0), (0, 1), (0, 2)]  # each offset once: the winner's
+    assert newest_summary(lake, LANDING)["k2.batch-id"] == run_id(3)
+    topic.produce(0, "trade")
+    assert K.land(ctx(4), topic, lake)[1]["landed"] == 1  # the next plans from the winner's offsets
+    assert offsets_of(lake.rows(LANDING)) == [(0, 0), (0, 1), (0, 2), (0, 3)]
+
+
+def test_a_landing_commit_written_on_main_as_planned_lands_and_one_written_elsewhere_does_not():
+    parents = {5: (4, "a"), 4: (None, "b"), 9: (None, None), 10: (9, "c"), 11: (10, "d")}
+    assert K.landed_on(parents, 5, 4) and not K.landed_on(parents, 5, 3)
+    assert K.landed_on(parents, 10, None) and K.landed_on(parents, 4, None)  # no main: an empty root, or none
+    assert not K.landed_on(parents, 11, None)  # on another load's commit
 
 
 def test_a_paused_product_lands_nothing():
