@@ -15,13 +15,18 @@
 #      its builder dbt_<fence> over HTTPS, from a container on the lake's network. Then the
 #      results hook's table (dbt/macros/k2_results.sql) must hold one row per test of
 #      run_results.json, same status, under the run id passed: checked on a failed build too,
-#      which then fails the step. The lake is removed on exit.
+#      which then fails the step. The lake is removed on exit. The products build in the order
+#      their input ports give (pipeline.json), each input pinned in k2_inputs to its producer's
+#      main once that producer built and passed (the wrapper pins the audited tag instead). This
+#      proves the models' logic and tests on the real engine; the wrapper, the tag and the reader
+#      views are scripts/verify/dbt-wrapper.sh's.
 #   4. k2_input's render cases (dbt/macros/k2_input.sql, interface A7), in its own
 #      project dbt/tests/k2_input/ (a symlink to the macro, so the one shipped is the
 #      one tested): pinned (FOR VERSION AS OF BIGINT '<id>'), unpinned (no var), a
 #      unit test with the var set (the fixture's CTE, no clause), a var without the
-#      key, and a snapshot that is null, a string, a float or a boolean (each a
-#      compiler error at parse, never a guessed id). No warehouse: a unit test's SQL is only
+#      key (it parses, as another product's model must, and fails to compile), and a
+#      snapshot that is null, a string, a float or a boolean (each a compiler error at
+#      parse, never a guessed id). No warehouse: a unit test's SQL is only
 #      rendered when dbt sends it, so it is read from dbt's log of the one statement
 #      it tried before the refused connection; the step refuses to run at all if
 #      anything listens on the profile's port.
@@ -70,8 +75,10 @@ k2i unit test -q --select test_type:unit --vars "$pin" >/dev/null 2>&1 || true  
 grep -q 'Connection refused' "$tmp/unit/dbt.log" || fail "unit test: did not stop at the refused connection"
 grep -qx 'from __dbt__cte__up__events' "$tmp/unit/dbt.log" \
   || fail "unit test: $(grep -m1 'from __dbt__cte__up__events' "$tmp/unit/dbt.log")"
-if out=$(k2i missing parse --vars '{"k2_inputs": {"other/table": {"snapshot": 1}}}' 2>&1); then
-  fail "missing key: parse passed"
+missing='{"k2_inputs": {"other/table": {"snapshot": 1}}}'
+k2i missing-parse parse --vars "$missing" >/dev/null 2>&1 || fail "missing key: parse refused (another product's model, unselected, names no pinned input)"
+if out=$(k2i missing compile --vars "$missing" 2>&1); then
+  fail "missing key: compile passed"
 fi
 grep -qF 'k2_input: k2_inputs is set but has no entry up/events' <<< "$out" || fail "missing key: $out"
 n=0
@@ -90,9 +97,47 @@ state=$(bash ../scripts/lib/throwaway-lake.sh state "$P")
 uv_image=$(sed -n 's/^UV_IMAGE=//p' ../scripts/lib/throwaway-lake.sh)  # the lake's tools pin, not a second one
 release=$(basename "$rel") built=0 failed=()
 mkdir -p "$HOME/.cache/k2-dbt-test-uv"  # uv's download cache across runs; the venv is per run
-for sel in $(sed -n 's/^- name: //p' "$rel/compiled/dbt/selectors.yml"); do
+# Every selector, each after the products its input ports name (compiled/products/*/pipeline.json).
+order=$(python3 - "$rel" $(sed -n 's/^- name: //p' "$rel/compiled/dbt/selectors.yml") <<'PY'
+import json, sys
+from graphlib import TopologicalSorter
+from pathlib import Path
+pipes = [json.loads(f.read_text()) for f in Path(sys.argv[1], "compiled/products").glob("*/pipeline.json")]
+selector = {d["product"]: d["build"]["selector"] for d in pipes if d.get("build", {}).get("selector") in sys.argv[2:]}
+deps = {selector[d["product"]]: {selector[c] for i in d.get("inputs", []) if (c := i["contractId"].rsplit(".", 1)[0]) in selector}
+        for d in pipes if d["product"] in selector}
+print(" ".join(TopologicalSorter(deps).static_order()))
+PY
+)
+for sel in $order; do
   run_id="dbt-test/$P-$sel" out=$state/dbt-$sel
   mkdir -p "$out"
+  # The wrapper's --vars (docker/dbt-runner/k2_dbt.py): each input pinned to a snapshot. No wrapper
+  # runs here and no tag exists, so the pin is the producer's main once its build and tests passed.
+  if ! vars=$(bash ../scripts/lib/throwaway-lake.sh py "$P" - "$sel" "$run_id" "$release" "${failed[@]}" <<'PY'
+import json, sys
+from pathlib import Path
+sys.path.insert(0, "/src/scripts")
+from verify import catalog_drift as cd
+from k2gen import model
+sel, run_id, release, *failed = sys.argv[1:]
+pipes = [json.loads(f.read_text()) for f in Path(f"/work/releases/{release}/compiled/products").glob("*/pipeline.json")]
+me = next(d for d in pipes if d.get("build", {}).get("selector") == sel)
+pins = {}
+for i in me.get("inputs", []):
+    domain, producer, table = i["contractId"].split(".")
+    if model.fence(producer) in failed:
+        sys.exit(f"dbt-test: {sel}: its input {i['contractId']} did not build and pass")
+    meta = cd.Catalog("http://lakekeeper:8181/catalog", model.warehouse(domain)).table(model.base_namespace(producer), table)
+    main = ((meta or {}).get("refs") or {}).get("main")
+    if main is None:
+        sys.exit(f"dbt-test: {sel}: its input {i['contractId']} has no snapshot")
+    pins[f"{model.fence(producer)}/{table}"] = {"snapshot": main["snapshot-id"]}
+print(json.dumps({"k2_inputs": pins, "k2_run_id": run_id, "k2_release": release}))
+PY
+  ); then
+    failed+=("$sel"); continue
+  fi
   # The builder's password from its mode-600 file into dbt's scrubbed variable inside the
   # container, never on a command line; the CA at the profile's default path.
   if ! docker run --rm --label "k2.throwaway=$P" --network "$P-net" --memory 1g --cpus 1 --user "$(id -u):$(id -g)" \
@@ -104,8 +149,8 @@ for sel in $(sed -n 's/^- name: //p' "$rel/compiled/dbt/selectors.yml"); do
       -v "$state/secrets/k2/principals/dbt_$sel.password:/run/k2-secrets/builder.password:ro" \
       -w /project --entrypoint sh "$uv_image" -c \
       'export DBT_ENV_SECRET_K2_TRINO_PASSWORD="$(cat /run/k2-secrets/builder.password)"; exec uv run -q --project /dbt --locked \
-         dbt build --selector "$1" --vars "{\"k2_run_id\": \"$2\", \"k2_release\": \"$3\"}" --profiles-dir /dbt --target-path /out/target --log-path /out' \
-      sh "$sel" "$run_id" "$release"; then
+         dbt build --selector "$1" --vars "$2" --profiles-dir /dbt --target-path /out/target --log-path /out' \
+      sh "$sel" "$vars"; then
     failed+=("$sel")
   fi
   # One row per test of the invocation, same status, under this run id, failed build or not.

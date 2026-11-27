@@ -67,6 +67,23 @@ def test_a_storage_pair_unset_root_or_shared_is_refused_by_name(overrides, says)
     assert "canary" not in problems[0] and "0a1b2c3d" not in problems[0] and USER not in problems[0]
 
 
+@pytest.mark.parametrize("name", ["MINIO_ROOT_USER", "MINIO_ROOT_PASSWORD", "K2_TRINO_S3_ACCESS_KEY", "K2_SPARK_S3_SECRET_KEY"])
+@pytest.mark.parametrize("bad", ['"', "\\", "$", " ", "%", "@", ":", "\u00e9"])
+def test_a_storage_value_outside_the_safe_set_is_refused_by_name(name, bad):
+    # lake-init writes the root pair into a JSON body (docker/lake/init-lake.sh, storage()): a quote
+    # or a backslash breaks it, and the scoped pairs go into Trino's and Spark's configuration.
+    env = filled(**{name: f"canary-0123456789{bad}x"})
+    problems = [p for p in guard.check(env, EXAMPLE) if "outside" in p]
+    assert len(problems) == 1 and problems[0].startswith(name + " ") and "-_.~+/=" in problems[0], problems
+    assert "canary" not in problems[0]
+
+
+def test_what_the_example_tells_you_to_generate_is_in_the_safe_set():
+    # `openssl rand -hex 24`, `openssl rand -base64 32` and secrets.token_urlsafe (make engine-keys)
+    for v in ("0a1b" * 12, "q9Zr+/0aB3cD4eF5gH6iJ7kL8mN9oP0qR1sT2uV3wX=", "Ab-_" * 10):
+        assert not [p for p in guard.check(filled(MINIO_ROOT_PASSWORD=v, K2_TRINO_S3_SECRET_KEY=v + "t"), EXAMPLE)]
+
+
 def test_a_secret_unset_is_named_once():
     env = filled()
     del env["K2_SPARK_S3_SECRET_KEY"]
