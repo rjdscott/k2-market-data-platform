@@ -24,9 +24,15 @@ set -a && . ./.env && set +a
 
 ## 2. Bring it up from nothing
 
-```bash
-docker compose up -d --build     # first run builds three images; minutes
-```
+A bare `docker compose up` no longer starts the stack: Trino reads its etc and rules only
+from a deployed release (ADR-058). Use a scratch compose project, never the live one, with
+`K2_RELEASES` and `K2_SECRETS` set to directories under `$WORK` (their defaults are the live
+stack's `~/k2-releases` and `~/k2-secrets`), and
+follow `docs/runbooks/first-cutover-to-releases.md` and `docs/runbooks/deploy-a-release.md`
+for the order: the `K2_TRINO_*`, `K2_HOME` and `K2_COMPOSE_PROJECT` lines of `.env`,
+`make tls`, each service's password, `make release TAG=<annotated tag>`,
+`make deploy RELEASE=<id>`, `make release-verify`.
+<!-- VERIFY: this order from a fresh clone on a scratch project, from nothing; then rewrite this step with the commands as run -->
 Wait for health, don't guess:
 ```bash
 until [ -z "$(docker compose ps --format '{{.Name}} {{.Health}}' | grep -v ' healthy$' | grep -v ' $')" ]; do
@@ -54,9 +60,12 @@ docker exec k2-redpanda rpk topic consume market.crypto.v3.trades.binance --num 
 docker compose ps -a --format '{{.Name}}' | grep -cx k2-clickhouse
 # → 0
 
-# Lake: the catalog answers and holds none of the old namespaces
-curl -s localhost:18181/health
-docker exec k2-trino trino --execute "SHOW SCHEMAS FROM lake"
+# Lake: the catalog has no host port; the fence is refused or open where expected
+make catalog-fence
+# Trino: HTTPS with password logins only (ADR-060); the release it runs, checked part by part
+make release-verify
+# The lake holds none of the old namespaces: SHOW SCHEMAS FROM lake through the trino_cli
+# helper of docs/runbooks/tls-and-passwords.md
 # → "information_schema" and "system" only
 
 # Airflow: no DAG until phase 002 adds the first product DAG
@@ -72,6 +81,7 @@ curl -s localhost:9090/api/v1/targets \
 curl -su "admin:$GRAFANA_PASSWORD" localhost:3000/api/search | jq -r '.[].title'
 # → K2 Airflow, K2 Capture (v3), K2 Pipeline Overview, K2 Resources
 ```
+<!-- VERIFY: run SHOW SCHEMAS FROM lake with trino_cli on the scratch project and write the exact command and output above -->
 
 ## 4. Tests
 

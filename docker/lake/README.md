@@ -18,14 +18,13 @@ until the Kafka connector of phase 004
 
 | File | What it is | Why it stays |
 |------|------------|--------------|
-| `init-lake.sh` | the `lake-init` one-shot: MinIO bucket, Lakekeeper bootstrap, warehouse `k2`, then one warehouse per domain from `generated/warehouses.txt` (ADR-044). It creates no namespaces | runs on every `docker compose up`; the domain catalogs Trino reads need the warehouses |
+| `init-lake.sh` | the `lake-init` one-shot: MinIO bucket, Lakekeeper bootstrap, warehouse `k2`, then every warehouse of the release's storage plan (`compiled/lake/storage-plan.json`, read through the trino pointer, or the release `make deploy` names in `K2_STORAGE_PLAN`; ADR-044). It creates no namespaces | the domain catalogs Trino reads need the warehouses |
 | `spark_conf.py` | `lake_session()`, the one `lake` catalog config; `--smoke` round-trips one row in its own namespace and drops both | the session any Spark job on the lake opens |
 | `offsets.py` | exactly-once offset bookkeeping, pure | the plan reuses it for the phase 004 Kafka connector |
 | `wire.py` | the Confluent framing, as a Python parser and as Spark SQL | its framing half is reused in phase 004, which splits it from the trade constants |
 | `catalog.py` | snapshots on `main`'s lineage, the broker's offsets, the registry fetch by id | the Spark side of `offsets.py` and `wire.py`; `books.py` imports two of them |
 | `bars.py` | event bars as SQL in two dialects, with a pure Python reference | kept for reuse, as the plan says |
 | `books.py`, `book.py`, `instruments.py` | the book replay, its pure core, the registry loader it uses | kept for reuse, as the plan says; every table `books.py` names is retired |
-| `generated/`, `ddl/generated/` | written by `make generate` from `contracts/`; never edit them | `init-lake.sh` reads `generated/warehouses.txt` |
 
 Plan [000](../../docs/plans/2026-11-26-unified-product-platform/000-clear-the-ground.md),
 Wave 3, step 5, names what stays. The tests are `tests/test_lake_*.py`, `tests/test_bars.py`

@@ -6,7 +6,7 @@
 #   2. dbt deps, parse and compile --target trino, then the manifest check
 #      (scripts/dbt_manifest_check.py): layering, places, every mart's grain test,
 #      against the marts the contracts declare. With no model and no mart, this is
-#      the zero-marts project k2gen writes (sources: [], selectors: []) still parsing.
+#      this tree with no sources or selectors (k2gen compiles those into a release) parsing.
 #      Nothing listens on the profile's host and port here, so a step that tried to
 #      reach a warehouse would fail rather than touch the stack.
 #   3. dbt build --selector <domain> with its unit tests, on a throwaway Trino: SKIP,

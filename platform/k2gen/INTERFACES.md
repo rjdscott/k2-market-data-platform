@@ -29,9 +29,9 @@ adding one with the right signature, leaves it green; a drifted signature fails 
 - **Emitter**, a module in `k2gen/emit/`: `emit(model: Model) -> dict[str, str]`, release-relative
   path under `compiled/` to file text. Pure: no clock, git, network, secret, and no previous
   release (an emitter that read it would give one set two ids, CI's and deploy's).
-  `emit.run(model)` calls them all: two emitters returning one path, or a path outside
-  `compiled/`, is an error; an emitter still raising `NotImplementedError` is skipped with a
-  `SKIP emitter <name>` line on stderr, until step S23 makes that an error.
+  `emit.run(model)` calls them all: two emitters returning one path, a path outside
+  `compiled/`, or an emitter still raising `NotImplementedError` is an error (since step S23:
+  a compile emits every file or none).
 - **Check**, a module in `k2gen/checks/`: `check(docs: DocumentSet, previous: DocumentSet | None)
   -> list[Finding]`, `Finding.code` spelt `<check module>.<kebab-case>`; `Finding.pointer`, optional
   (default None), is where in the document (a JSON pointer or a `$` path), and `k2gen check`
