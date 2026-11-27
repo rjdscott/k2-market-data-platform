@@ -25,7 +25,7 @@ first failure:
  3 plan          k2gen's needs from the live release (and any attempt since it) to this one, printed;
                  PLAN=1 stops here
    backup        before a one-shot that migrates a database (a service named <database>-migrate), that
-                 database dumped by scripts/backup-lake.sh --dump under <releases root>/backups/<release>/,
+                 database dumped by scripts/backup-lake.sh --dump under ${K2_BACKUP_DIR}/deploy/<release>/,
                  its path and sha256 in the record: a rollback never runs a migration backwards
                  (docs/runbooks/roll-back-a-release.md section 5); a dump that fails refuses the deploy
  4 ddl           the one-shots the plan names (lake-init reads the target's storage plan), the storage plan's missing namespaces, and each table of
@@ -1181,7 +1181,8 @@ def trino_answers(ctx: Ctx) -> bool:
 def migration_dumps(ctx: Ctx, p: Plan, record: dict[str, Any]) -> list[str]:
     """Before step 4 runs a one-shot that migrates a database (named <database>-migrate: airflow-migrate,
     lakekeeper-migrate), that database dumped from the project's prefect-db by scripts/backup-lake.sh's
-    own dump (--dump) to <root>/backups/<release>/, its path and sha256 into `record` (review R1 H1).
+    own dump (--dump) to ${K2_BACKUP_DIR:-~/k2-backup}/deploy/<release>/, its path and sha256 into `record`
+    (review R1 H1). Never under the releases root: every service mounts that, and a dump holds a whole database.
     Skipped only when every release the plan moves from pins the one-shot's image: then no migration
     can have changed. A failed dump refuses the deploy: nothing has changed yet."""
     out, dumps = [], {}
@@ -1193,7 +1194,8 @@ def migration_dumps(ctx: Ctx, p: Plan, record: dict[str, Any]) -> list[str]:
         c = container(ctx, "prefect-db")
         if c is None:
             raise Refused(f"{s} migrates database {db}, and project {ctx.project} has no prefect-db container to dump it from")
-        path = ctx.root / "backups" / p.target.id / f"{db}-{now().replace(':', '')}.sql.gz"
+        backups = Path(compose_env(ctx).get("K2_BACKUP_DIR") or Path.home() / "k2-backup")
+        path = backups / "deploy" / p.target.id / f"{db}-{now().replace(':', '')}.sql.gz"
         done = run("bash", str(ctx.home / "scripts/backup-lake.sh"), "--dump", c["Id"], db, str(path), env=compose_env(ctx), check=False)
         if done.returncode or not path.is_file():
             raise Refused(f"the dump of database {db} before {s} failed: {tail(done, 4)}")

@@ -134,7 +134,7 @@ it, else the old one) and take the target's shape and new columns once its rules
 time, each waited healthy; a rules-only release recreates none. The last line is the exit code and what it
 means. `make deploy RELEASE=<tag>` compiles the tag first when no release of that id exists.
 Before a one-shot that migrates a database (`airflow-migrate`, `lakekeeper-migrate`), `backup` dumps that
-database to `$K2_RELEASES/backups/<id>/` (`scripts/backup-lake.sh --dump`) and records its path and sha256;
+database to `${K2_BACKUP_DIR:-~/k2-backup}/deploy/<id>/`, outside the releases root every service mounts, (`scripts/backup-lake.sh --dump`) and records its path and sha256;
 it prints `SKIP dump` when every release the deploy moves from pins the same image. A rollback never runs a
 migration backwards: restoring the dump is section 5 of [roll-back-a-release.md](./roll-back-a-release.md).
 Verify also fails when no container of the project, or not every default-profile long-running service of

@@ -212,7 +212,7 @@ DOTENV: dict[str, str] = {}
 
 def env() -> dict[str, str]:
     return {**os.environ, **DOTENV, "K2_RELEASES": str(ROOT), "K2_SECRETS": str(SECRETS), "K2_COMPOSE_PROJECT": PROJECT,
-            "K2_TRINO_PORT": PORT, "K2_HOME": str(CLONE), "UV_NO_PROGRESS": "1"}
+            "K2_TRINO_PORT": PORT, "K2_HOME": str(CLONE), "K2_BACKUP_DIR": str(BASE / "backup"), "UV_NO_PROGRESS": "1"}
 
 
 def make(*args: str, fault: str = "", check: bool = True) -> subprocess.CompletedProcess[str]:

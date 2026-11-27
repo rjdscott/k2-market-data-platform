@@ -148,7 +148,7 @@ sys.exit(f"fake docker: no answer for {A}")
             (tmp / "bin/docker").chmod(0o755)
             monkeypatch.setenv("PATH", f"{tmp / 'bin'}:{os.environ['PATH']}")
             for k, v in {"FAKE_STATE": self.state, "FAKE_LOG": self.log, "FAKE_ROOT": self.root,
-                         "K2TOOLS": ROOT / "docker/tools/k2tools.py"}.items():
+                         "K2TOOLS": ROOT / "docker/tools/k2tools.py", "K2_BACKUP_DIR": tmp / "backup"}.items():
                 monkeypatch.setenv(k, str(v))
             images = {r: "sha256:" + r[-64:] for r in (A, B, TRINO, LK, LK2)} | {TOOLS: "sha256:0123456789ab" + "0" * 52}
             self.write({"containers": [], "images": images, "tables": {}, "oneshots": ["lake-init"]})
@@ -646,7 +646,8 @@ sys.exit(f"fake docker: no answer for {A}")
         steps = [r["step"] for r in records(world)]
         assert len(steps) - steps[::-1].index("backup") < len(steps) - steps[::-1].index("ddl")  # the dump first
         dump = next(r for r in reversed(records(world)) if r["step"] == "backup")["backups"]["airflow"]
-        assert Path(dump["path"]).parent == world.root / "backups" / r2.id
+        assert Path(dump["path"]).parent == world.tmp / "backup" / "deploy" / r2.id  # never the releases root, which every service mounts
+        assert world.root not in Path(dump["path"]).parents
         assert hashlib.sha256(Path(dump["path"]).read_bytes()).hexdigest() == dump["sha256"]
         p = deploy.make_plan(world.ctx, r2, [r2])
         p.oneshots, found = ["airflow-migrate"], {}
