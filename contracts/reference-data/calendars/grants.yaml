@@ -1,3 +1,5 @@
-# Owner-only: no table offers a role, so only the owning team and the platform read it. The ECB
-# product reads target_days as an input port, through its tested tag, which needs no grant.
+# Owner-only: nobody holds a role, so only the owning team and the platform read it. target_days
+# offers full_reader only because ECB gold, laid out on these days, offers it to its readers
+# (access.inherit-role); a grant here still waits for the terms. The ECB product reads
+# target_days as an input port, through its tested tag, which needs no grant.
 grants: []

@@ -125,25 +125,35 @@ expectations:
               planning_time_ms, created, started, last_heartbeat, end, error_type, error_code]
     mustAppear: {where: "\"user\" = 'p.canary-full'", minRows: 1}
 
-  # The owner-only products (reference-data.calendars, reference-data.currency-master,
-  # fx-reference.ecb-fx-rates): no table offers a role yet, so a reader of another product is
-  # refused each reader view, each base, the seed's table, each bronze table and each landing.
-  # ECB's first reader arrives in step W2-9 with its own read rows.
-  - {principal: p.canary-full, table: reference_data.calendars.target_days, denied: true}  # reader view, no role offered
+  # The owner-only products (reference-data.calendars, reference-data.currency-master): nobody
+  # holds a role, so a reader of another product is refused each reader view, each base, the
+  # seed's table, each bronze table and each landing.
+  - {principal: p.canary-full, table: reference_data.calendars.target_days, denied: true}  # reader view: nobody holds a role
   - {principal: p.canary-full, table: reference_data.calendars__base.target_days, denied: true}  # base (ADR-061)
   - {principal: p.canary-full, table: reference_data.calendars__base.target_closing_days, denied: true}  # the seed's table in the base
   - {principal: p.canary-full, table: reference_data.currency_master.currency, denied: true}  # reader view, no role offered
   - {principal: p.canary-full, table: reference_data.currency_master__base.currency, denied: true}  # base (ADR-061)
   - {principal: p.canary-full, table: lake.currency_master.bronze_currencies, denied: true}  # bronze, which offers no role
   - {principal: p.canary-full, table: lake.currency_master.landing_files, denied: true}  # the product's landing
-  - {principal: p.canary-full, table: fx_reference.ecb_fx_rates.silver_rates, denied: true}  # reader view, no role offered
-  - {principal: p.canary-full, table: fx_reference.ecb_fx_rates__base.silver_rates, denied: true}  # base (ADR-061)
-  - {principal: p.canary-full, table: fx_reference.ecb_fx_rates.gold_eur_rates_daily, denied: true}  # reader view, no role offered
-  - {principal: p.canary-full, table: fx_reference.ecb_fx_rates__base.gold_eur_rates_daily, denied: true}  # base (ADR-061)
-  - {principal: p.canary-full, table: lake.ecb_fx_rates.bronze_daily, denied: true}  # bronze, which offers no role
-  - {principal: p.canary-full, table: lake.ecb_fx_rates.landing_files, denied: true}  # the product's landing
   - {principal: p.canary-full, table: governance.quality_results.test_results, denied: true}  # reader view, no role offered (svc.catalog's by rule)
   - {principal: p.canary-full, table: governance.quality_results__base.test_results, denied: true}  # base (ADR-061)
+  # fx-reference.ecb-fx-rates (step W2-9): p.analyst-a holds full_reader, offered by gold alone
+  # with no policy, so it reads gold's reader view whole and nothing else of the product. The read
+  # row asserts columns, not rows (no mustAppear): a lab lake may hold no ECB rows yet.
+  - {principal: p.analyst-a, table: fx_reference.ecb_fx_rates.gold_eur_rates_daily, via: [sql, rest], visible: [rate_date, currency, rate, is_carried, carried_days, rate_available_at]}  # gold, every column
+  - {principal: p.canary-full, table: fx_reference.ecb_fx_rates.gold_eur_rates_daily, denied: true}  # a non-holder is still refused gold
+  - {principal: p.analyst-a, table: fx_reference.ecb_fx_rates.silver_rates, denied: true}  # silver's reader view: no role offered
+  - {principal: p.analyst-a, table: fx_reference.ecb_fx_rates__base.silver_rates, denied: true}  # base (ADR-061)
+  - {principal: p.analyst-a, table: fx_reference.ecb_fx_rates__base.gold_eur_rates_daily, denied: true}  # base, even to gold's reader
+  - {principal: p.analyst-a, table: "fx_reference.ecb_fx_rates__base.silver_rates$files", denied: true}  # metadata table: paths, column bounds
+  - {principal: p.analyst-a, table: "fx_reference.ecb_fx_rates__base.gold_eur_rates_daily$files", denied: true}  # and gold's
+  - {principal: p.analyst-a, table: lake.ecb_fx_rates.bronze_daily, via: [sql, rest], denied: true}  # bronze, which offers no role
+  - {principal: p.analyst-a, table: lake.ecb_fx_rates.landing_files, denied: true}  # the product's landing
+  # No compaction by a consumer (plan 002's optimize line). The reader name is a view, which Trino
+  # refuses as NOT_SUPPORTED before any access check, so the denials name the table under it.
+  - {principal: p.analyst-a, sql: "ALTER TABLE fx_reference.ecb_fx_rates.silver_rates EXECUTE optimize", expect: error}  # a view: not supported
+  - {principal: p.analyst-a, sql: "ALTER TABLE fx_reference.ecb_fx_rates__base.silver_rates EXECUTE optimize", expect: denied}  # read-only reader catalog
+  - {principal: p.analyst-a, sql: "ALTER TABLE fx_reference_build.ecb_fx_rates__base.silver_rates EXECUTE optimize", expect: denied}  # writer catalog: not a consumer's
 
   # The catalog fence (ADR-059 part 7): Lakekeeper has no authentication, so nothing reaches it
   # but the catalog's own network. Run on the stack by scripts/verify/catalog-fence.sh.

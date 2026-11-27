@@ -6,7 +6,7 @@ apiVersion: v1.1.0
 kind: DataProduct
 id: fx-reference.ecb-fx-rates
 name: ecb-fx-rates
-version: 1.0.0
+version: 1.1.0
 status: active
 domain: fx-reference
 type: sourceAligned
@@ -19,11 +19,20 @@ description:
     A reference fixing, not a market close or a tradable price, published at about 16:00 CET on
     each TARGET day.
     The 90-day file holds the last 90 days only, so history starts at the first file landed.
-    The ECB's terms of reuse are linked below but not yet recorded as terms here: the owner
-    confirms them against the terms page before any grant outside the owning team (k2gen check
-    refuses such a grant while no terms are recorded). A published rate that a later file
-    changes fails the bronze audit (values_unchanged), which holds every later file until
-    someone looks.
+    A published rate that a later file changes fails the bronze audit (values_unchanged), which
+    holds every later file until someone looks.
+    The ECB's reference rates page says "The reference rates are published for information
+    purposes only." and "Using the rates for transaction purposes is strongly discouraged.": do
+    not price, settle or trade with them. The ECB accepts no liability for their use.
+    Terms of reuse (the terms property and the licence link below, read by the owner on
+    2026-11-27): the rates may be used freely and passed on, provided they appear accurately, the
+    ECB is cited as the source, and any change made to them is stated; a document sold with them
+    in it tells its buyers the ECB's website gives them free of charge. How this
+    product meets the last condition: bronze and silver_rates keep the published fixings
+    unchanged (silver only types and keys them); gold_eur_rates_daily adds rows the ECB did not
+    publish, a missing fixing carried forward for at most five TARGET days, each marked by
+    is_carried and carried_days. Anyone passing gold on keeps those two columns and says the
+    carried rows are not ECB fixings.
   usage: >-
     Read fx_reference.ecb_fx_rates.gold_eur_rates_daily for one row per TARGET day and currency,
     a missing fixing carried from the last published one for at most five TARGET days
@@ -35,8 +44,11 @@ authoritativeDefinitions:
   - type: licence
     url: https://www.ecb.europa.eu/home/disclaimer/html/index.en.html
     description: >-
-      The ECB's disclaimer and copyright page, which states its terms of reuse; to be confirmed by
-      the owner against the terms page before any non-owner grant.
+      The ECB's "Disclaimer & copyright" page, which states its terms of reuse; read by the owner
+      on 2026-11-27 (the page shows no last-updated date). It allows free use of the information
+      on condition that "it must appear accurately and the ECB must be cited as the source", and
+      that a modification by the user "must be stated explicitly". Its one exception, documents
+      that bear their authors' names, does not cover statistics.
 inputPorts:
   - name: target_days
     version: 1.0.0
@@ -57,7 +69,7 @@ outputPorts:
       - id: fx-reference.ecb-fx-rates.bronze_daily
         version: 1.0.0
   - name: gold_eur_rates_daily
-    version: 1.0.0
+    version: 1.1.0
     contractId: fx-reference.ecb-fx-rates.gold_eur_rates_daily
     inputContracts:
       - id: fx-reference.ecb-fx-rates.silver_rates
@@ -78,6 +90,12 @@ customProperties:
       # (14:00 UTC). An unchanged file adds nothing (fetch exits 10 on the same sha256). No timeout
       # yet: step W2-17 sets it from 20 measured runs.
       cron: "30 15 * * 1-5"
+  - property: terms
+    value:
+      # The ECB's terms page (licence link above), read 2026-11-27: reuse and redistribution are
+      # free, with the source cited, the data shown accurately and any modification stated.
+      redistribution: allowed
+      attribution: "Source: European Central Bank"
   - property: examples
     value:
       - description: The euro in US dollars on each TARGET day, with whether the rate was carried.

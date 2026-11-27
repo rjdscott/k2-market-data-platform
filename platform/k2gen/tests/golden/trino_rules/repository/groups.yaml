@@ -4,3 +4,5 @@ access_canary__full_reader:
 - p.canary-full
 access_canary__public_reader:
 - p.canary-scoped
+ecb_fx_rates__full_reader:
+- p.analyst-a
