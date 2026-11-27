@@ -102,7 +102,7 @@ up() {
   [ "$gib" -ge "$MIN_GIB" ] || die "MemAvailable ${gib} GiB, under ${MIN_GIB} GiB: not started"
   local trino_image lk_image pg_image minio_image
   trino_image=$(image 'trinodb/trino:'); lk_image=$(image 'quay.io/lakekeeper/catalog:')
-  pg_image=$(image 'postgres@sha256:'); minio_image=$(image 'ghcr.io/rjdscott/minio:')
+  pg_image=$(image 'postgres@sha256:'); minio_image=$(image 'ghcr.io/rjdscott/minio@sha256:')
   [ -n "$trino_image" ] && [ -n "$lk_image" ] && [ -n "$pg_image" ] && [ -n "$minio_image" ] || die "an image pin is missing from docker-compose.yml"
 
   # An aborted run's containers and network, and its lake files; <state> keeps what the caller put

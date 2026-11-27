@@ -170,12 +170,12 @@ free=$(df -B1 --output=avail "$DIR" | tail -n 1)
 mc_run() {
   docker run --rm --network "$net" --user "$(id -u):$(id -g)" --cpus 1 --memory 512m \
     -e MC_CONFIG_DIR=/tmp/.mc -e MC_HOST_k2 -v "$DIR/lake:/backup" \
-    --entrypoint mc ghcr.io/rjdscott/minio:RELEASE.2025-09-07T16-13-09Z@sha256:a1a8bd4ac40ad7881a245bab97323e18f971e4d4cba2c2007ec1bedd21cbaba2 "$@"
+    --entrypoint mc ghcr.io/rjdscott/minio@sha256:a1a8bd4ac40ad7881a245bab97323e18f971e4d4cba2c2007ec1bedd21cbaba2 "$@"
 }
 # A GET to the catalog, from a throwaway container on $net, with no credential.
 catalog() {
   docker run --rm --network "$net" --cpus 0.5 --memory 128m \
-    --entrypoint curl ghcr.io/rjdscott/minio:RELEASE.2025-09-07T16-13-09Z@sha256:a1a8bd4ac40ad7881a245bab97323e18f971e4d4cba2c2007ec1bedd21cbaba2 -fsS "$CATALOG/$1"
+    --entrypoint curl ghcr.io/rjdscott/minio@sha256:a1a8bd4ac40ad7881a245bab97323e18f971e4d4cba2c2007ec1bedd21cbaba2 -fsS "$CATALOG/$1"
 }
 
 # (1) Each table's location and current metadata file, from the catalog: read

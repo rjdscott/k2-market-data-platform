@@ -318,11 +318,12 @@ services:
   # Until Phase B, MinIO was provisioned but carried no data — the v2 Iceberg
   # warehouse was a bind-mounted hadoop catalog (ADR-013), deleted in Phase D.
   # The v3 `k2-lake` bucket behind Lakekeeper is its first real user.
-  # The image is the project's own mirror of minio/minio at this release, pinned by digest: the
+  # The image is the project's own mirror of minio/minio RELEASE.2025-09-07T16-13-09Z, pinned by digest alone
+  # (the form the release manifest takes; a tag beside a digest is refused by its schema): the
   # vendor's repository stopped serving it (found 2026-11-27; NOTICE). linux/amd64 only.
   minio:
     logging: *k2-logging
-    image: ghcr.io/rjdscott/minio:RELEASE.2025-09-07T16-13-09Z@sha256:a1a8bd4ac40ad7881a245bab97323e18f971e4d4cba2c2007ec1bedd21cbaba2  # console still present at :9001
+    image: ghcr.io/rjdscott/minio@sha256:a1a8bd4ac40ad7881a245bab97323e18f971e4d4cba2c2007ec1bedd21cbaba2  # console still present at :9001
     container_name: k2-minio
     hostname: minio
     networks:
@@ -1029,7 +1030,7 @@ services:
   # a second one-shot service. Idempotent; see docker/lake/init-lake.sh.
   lake-init:
     logging: *k2-logging
-    image: ghcr.io/rjdscott/minio:RELEASE.2025-09-07T16-13-09Z@sha256:a1a8bd4ac40ad7881a245bab97323e18f971e4d4cba2c2007ec1bedd21cbaba2
+    image: ghcr.io/rjdscott/minio@sha256:a1a8bd4ac40ad7881a245bab97323e18f971e4d4cba2c2007ec1bedd21cbaba2
     container_name: k2-lake-init
     networks:
       - k2-catalog  # it calls Lakekeeper and MinIO, both there

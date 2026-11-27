@@ -407,7 +407,7 @@ docker exec k2-trino trino --execute \
 #   "true"                                            time travel
 net=$(docker inspect -f '{{range $k, $v := .NetworkSettings.Networks}}{{$k}} {{end}}' k2-minio | grep -o '[^ ]*_k2-catalog')
 lk() { docker run --rm --network "$net" --cpus 0.5 --memory 128m \
-  --entrypoint curl ghcr.io/rjdscott/minio:RELEASE.2025-09-07T16-13-09Z@sha256:a1a8bd4ac40ad7881a245bab97323e18f971e4d4cba2c2007ec1bedd21cbaba2 -fsS "http://lakekeeper:8181/$1"; }
+  --entrypoint curl ghcr.io/rjdscott/minio@sha256:a1a8bd4ac40ad7881a245bab97323e18f971e4d4cba2c2007ec1bedd21cbaba2 -fsS "http://lakekeeper:8181/$1"; }
 lk 'management/v1/warehouse?project-id=00000000-0000-0000-0000-000000000000' \
   | jq -r '.warehouses[] | [.name, ."storage-profile"."key-prefix"] | @tsv'
 #   k2  warehouse/k2, then one line per domain warehouse              the catalog's five (2026-11-26)

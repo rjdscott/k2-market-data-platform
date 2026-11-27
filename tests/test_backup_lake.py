@@ -34,7 +34,7 @@ case "$1" in
     printf -- '-- PostgreSQL database dump\nCREATE TABLE t ();\n-- PostgreSQL database dump complete\n\n\\unrestrict x\n' ;;
   run)
     if [[ " $* " == *" --entrypoint curl "* ]]; then
-      while [[ $1 != ghcr.io/rjdscott/minio:* ]]; do shift; done
+      while [[ $1 != ghcr.io/rjdscott/minio@* ]]; do shift; done
       shift; exec curl "$@"
     fi
     echo "fake docker: $*" >&2   # a docker that echoes its command line, as some errors do
@@ -44,7 +44,7 @@ case "$1" in
     while [ $# -gt 0 ]; do
       case "$1" in
         -v) host=${2%:/backup}; shift 2 ;;
-        ghcr.io/rjdscott/minio:*) shift; break ;;   # <image> <mc args>
+        ghcr.io/rjdscott/minio@*) shift; break ;;   # <image> <mc args>
         *) shift ;;
       esac
     done

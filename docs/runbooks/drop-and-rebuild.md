@@ -118,7 +118,7 @@ the same shell after the `NET` line below: Trino is on the catalog's network too
 
 ```bash
 NET=$(docker inspect -f '{{range $k, $v := .NetworkSettings.Networks}}{{$k}} {{end}}' k2-minio | grep -o '[^ ]*_k2-catalog')
-IMG=ghcr.io/rjdscott/minio:RELEASE.2025-09-07T16-13-09Z@sha256:a1a8bd4ac40ad7881a245bab97323e18f971e4d4cba2c2007ec1bedd21cbaba2
+IMG=ghcr.io/rjdscott/minio@sha256:a1a8bd4ac40ad7881a245bab97323e18f971e4d4cba2c2007ec1bedd21cbaba2
 lk() { docker run --rm --network "$NET" --entrypoint curl "$IMG" -sS "$@"; }
 mcrun() { docker run --rm --network "$NET" -e MC_CONFIG_DIR=/tmp/.mc -e MINIO_ROOT_USER -e MINIO_ROOT_PASSWORD --entrypoint /bin/bash "$IMG" -c 'export MC_HOST_k2="http://$MINIO_ROOT_USER:$MINIO_ROOT_PASSWORD@minio:9000"; mc "$@"' mc "$@"; }
 P=$(lk "http://lakekeeper:8181/catalog/v1/config?warehouse=k2" | python3 -c "import json, sys; print(json.load(sys.stdin)['defaults']['prefix'])")
