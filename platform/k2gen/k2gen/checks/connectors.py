@@ -10,6 +10,14 @@ documents check, so every document here is schema-valid. Each rule a code in COD
   carries the envelope decoded); schema_id and the envelope columns are not required, so a frame
   that does not decode reaches bronze, null there, for the audit's parses to fail;
 - envelope-unresolved: the connector's envelope.contract is a table contract of the set;
+- topic-claimed-twice: a topic is read by one product of the set, and declared by one domain of
+  contracts/domains.yaml; topic-not-owned: a kafka product's topic is one its own domain declares
+  (A2 of the 2026-11-28 review). The broker has no ACLs, and every load shares the Spark key and
+  network, so this is the one place a product is tied to its topic: a second product reading the
+  raw topic could build a copy under its own policies and grants. The declaration sits with the
+  domain, in the file the platform team owns (.github/CODEOWNERS), not in the product's own
+  directory, which its author edits. A compile-time rule: what stops a product the documents do
+  not describe is the review of its contract, as for every other source;
 - host-outside-stack: every broker host and the registry's host is a service of the set's compose
   file on a network of LOADER, the service the load runs in, so a topic is read from the stack's
   own Redpanda and never from a host outside it (the connector's fields carry no credential: the
@@ -41,6 +49,8 @@ CODES = (
     "connectors.kafka-bronze-shape",
     "connectors.envelope-unresolved",
     "connectors.host-outside-stack",
+    "connectors.topic-claimed-twice",
+    "connectors.topic-not-owned",
     "connectors.pagination-unsupported",
     "connectors.auth-unsupported",
     "connectors.url-host-not-allowed",
@@ -59,18 +69,40 @@ def _finding(code: str, path: str, message: str) -> Finding:
 
 
 def check(docs: DocumentSet, previous: DocumentSet | None) -> list[Finding]:
-    _, dirs, found = _read(docs.documents)
+    shared, dirs, found = _read(docs.documents)
     if found:
         return []  # the documents check reports them, and stops the run before this one
     contracts = {d.contract_id(t) for d in dirs.values() for t in d.contracts}
     hosts = _stack_hosts(docs.documents.get(model.COMPOSE))
+    domains: dict[str, Any] = shared.get("domains", {}).get("domains", {})
+    owner: dict[str, str] = {}
     out: list[Finding] = []
-    for d in dirs.values():
+    for name, domain in sorted(domains.items()):
+        for topic in domain.get("topics", ()):
+            if topic in owner:
+                out.append(_finding("connectors.topic-claimed-twice", model.DOMAINS, f"$.domains.{name}.topics: {topic} is declared by {owner[topic]} too; one domain's capture writes a topic, so declare it once"))
+            owner.setdefault(topic, name)
+    readers: dict[str, str] = {}
+    for d in sorted(dirs.values(), key=lambda d: d.at("")):
         connector = _props(d.product).get("connector") if d.product is not None else None
         if connector:
             at, path = _prop_at(d.product, "connector"), d.at(model.V2_PRODUCT_FILE)
-            out += _kafka(d, connector, at, path, contracts, hosts) if connector["kind"] == "kafka" else _fetch(connector, at, path)
+            if connector["kind"] == "kafka":
+                out += _kafka(d, connector, at, path, contracts, hosts)
+                out += _topic(d, connector["topic"], f"{at}.topic", path, owner, readers)
+            else:
+                out += _fetch(connector, at, path)
     return out
+
+
+def _topic(d: Any, topic: str, at: str, path: str, owner: dict[str, str], readers: dict[str, str]) -> Iterator[Finding]:
+    pid = model.product_id(d.domain, d.name)
+    if topic in readers:
+        yield _finding("connectors.topic-claimed-twice", path, f"{at}: {topic} is read by {readers[topic]} too; a topic is read by one product, which owns its landing and bronze, and every other product reads that product's tables through an input port under its policies")
+    readers.setdefault(topic, pid)
+    if owner.get(topic) != d.domain:
+        whose = f"domain {owner[topic]} declares it" if topic in owner else "no domain declares it"
+        yield _finding("connectors.topic-not-owned", path, f"{at}: {topic} is not a topic of domain {d.domain} ({whose} in {model.DOMAINS}); a kafka product reads only a topic its own domain's capture writes, declared under the domain's topics")
 
 
 def _stack_hosts(compose: bytes | None) -> set[str] | None:

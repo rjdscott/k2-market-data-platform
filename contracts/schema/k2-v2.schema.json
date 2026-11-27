@@ -109,7 +109,8 @@
             "properties": {
               "owner": {"description": "The owning team; .github/CODEOWNERS names it for contracts/<domain>/.", "$ref": "#/$defs/slug"},
               "kind": {"description": "Whether the domain's products face a source or a consumer.", "enum": ["source-aligned", "consumer-aligned"]},
-              "description": {"description": "What the domain's data is.", "$ref": "#/$defs/text"}
+              "description": {"description": "What the domain's data is.", "$ref": "#/$defs/text"},
+              "topics": {"description": "The Kafka topics this domain's capture writes: only a product of this domain reads one, and only one product reads each (k2gen check connectors.topic-not-owned, connectors.topic-claimed-twice). Here, in the file the platform team owns, and not in a product's directory, which its author edits.", "type": "array", "uniqueItems": true, "items": {"type": "string", "pattern": "^[A-Za-z0-9._-]+$"}}
             }
           }
         }

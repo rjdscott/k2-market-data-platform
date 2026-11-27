@@ -613,3 +613,44 @@ Additive: one compiled file, one rule glob. Built by W1-17 in `platform/k2gen/k2
 - **Proof** (a container job): `platform/k2gen/tests/promtool/product-alerts_test.yml`, for
   `kraken_trades`, runs beside a scratch release's compiled file with `promtool check rules` and
   `promtool test rules` (the commands are in its header).
+
+## The access review's fixes, 2026-11-28 (phases 004 and 005)
+
+2026-11-28, what an output derives from (finding A1): the inputs every `access.inherit-*` rule runs
+over are the output port's `inputContracts`, as before, plus every `k2_input` target its model
+reads, a sibling's through the product's own `ref()` chain included
+(`k2gen.checks.sql.model_reads`). A model expression the lint cannot name (a variable, a macro,
+`api.Relation.create`, a `k2_input` with arguments that are not literals) stands for every input
+port of the product, all that Trino lets its builder read. An input read and not declared for that
+output is `access.input-undeclared`, on the product file, naming the model, the input and the
+chain; one declared and never read stays no finding.
+
+2026-11-28, a Kafka topic's one reader (finding A2): a domain in `contracts/domains.yaml` may list
+the Kafka `topics` its capture writes (additive, `k2-v2.schema.json#/$defs/domains`);
+`market-capture` lists the nine `market.crypto.v3.{raw,trades,book}.<venue>` topics
+`docker/redpanda/init.sh` creates. A kafka product's topic must be one its own domain lists
+(`connectors.topic-not-owned`), a topic is read by one product of the set and listed by one domain
+(`connectors.topic-claimed-twice`, naming both). Nothing already declared could carry it: the
+envelope contract is the reading product's own bronze, and the compose file names no domain. The
+declaration sits in the file the platform team owns (`.github/CODEOWNERS`), not in a product's
+directory. Redpanda has no ACLs and every load shares the Spark key and network, so this is a
+compile-time rule; what stops a product the documents do not describe is the review of its
+contract.
+
+2026-11-28, terms upstream (finding A3): `docs.terms-missing` now holds a grant outside the owning
+team to terms on the product and on every product upstream of it through input ports, directly or
+through others, since a derived product passes its inputs' data on. An upstream product is exempt
+only when everything it holds was written on the platform: no connector, no input port, every table
+built by dbt (from seeds the schema records synthetic, or SQL alone). The calendars product is one,
+so `ecb-fx-rates`'s grant passes over it; the exemption on the product itself is unchanged (a grant
+within the owning team needs no terms). No phase 004 product grants anyone yet; a grant on
+`candles` outside its team would be refused until `canonical-trades`, `kraken-trades`,
+`security-master`, `kraken-instruments`, `currency-master` and `candles` record terms.
+
+2026-11-28, the role order checked (finding A6): each `within` entry of
+`contracts/access/roles.yaml` names a declared role, never the role itself, with no cycle, and
+`public_reader` is within none (`access.role-within-invalid`). The forbidden direction is the one
+that leaks: `public_reader` within `full_reader` would let an output offer data to holders who may
+take it off the platform over an input that offered it only inside. An internal role within
+`public_reader` is allowed: the output is held to that role's policy on the public input, and
+nothing leaves.

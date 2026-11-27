@@ -64,6 +64,20 @@ def _second_bronze(documents: dict[str, bytes]) -> dict[str, bytes]:
         {"name": "bronze_copies", "version": "1.0.0", "contractId": f"{FEED_ID}.bronze_copies"}), documents)
 
 
+def _second_reader(documents: dict[str, bytes]) -> dict[str, bytes]:
+    """station-copy: station-feed again under another name, reading the same topic."""
+    for path in [p for p in documents if p.startswith(FEED + "/")]:
+        copy = path.replace("station-feed", "station-copy")
+        documents[copy] = documents[path].replace(b"station-feed", b"station-copy").replace(b"station_feed", b"station_copy")
+    documents[model.EXPECTATIONS] += b"".join(
+        f"  - {{principal: p.analyst-full, table: lake.station_copy.{t}, denied: true}}\n".encode() for t in ("bronze_frames", "landing"))
+    return documents
+
+
+def _topics(**by_domain: list[str]) -> dict[str, bytes]:
+    return edited(model.DOMAINS, lambda d: [d["domains"][k].update(topics=v) for k, v in by_domain.items()])
+
+
 def _column(change: Callable[[list], None]) -> Callable[[Any], None]:
     return lambda doc: change(doc["schema"][0]["properties"])
 
@@ -88,6 +102,11 @@ CASES = {
     "kafka bronze keyed offset first": ("connectors.kafka-bronze-shape", lambda: edited(
         f"{FEED}/bronze_frames.odcs.yaml", _column(_swap_key))),
     "kafka product with two bronze tables": ("connectors.kafka-bronze-shape", lambda: _second_bronze(kinds())),
+    "a topic read by a second product": ("connectors.topic-claimed-twice", lambda: _second_reader(kinds())),
+    "a topic no domain declares": ("connectors.topic-not-owned", lambda: edited(
+        f"{FEED}/product.odps.yaml", connector(topic="example.station.other"))),
+    "a topic another domain declares": ("connectors.topic-not-owned", lambda: _topics(**{
+        "sensor-net": [], "ops-insight": ["example.station.frames"]})),
     "envelope contract undeclared": ("connectors.envelope-unresolved", lambda: edited(
         f"{FEED}/product.odps.yaml", connector(envelope={"format": "avro-confluent", "contract": f"{FEED_ID}.raw_message"}))),
     "broker outside the stack": ("connectors.host-outside-stack", lambda: edited(
@@ -124,6 +143,28 @@ def test_each_failing_case_yields_exactly_its_code(name: str) -> None:
 
 def test_every_code_has_a_failing_case() -> None:
     assert {code for code, _ in CASES.values()} == set(connectors.CODES)
+
+
+def test_a_topic_is_named_by_its_owner_and_its_one_reader() -> None:
+    """A2 of the 2026-11-28 review: a second product of the owning domain reading the raw topic is
+    refused, naming the first; a topic two domains declare is refused on contracts/domains.yaml."""
+    (f,) = run(_second_reader(kinds()))
+    assert f.path == "contracts/sensor-net/station-feed/product.odps.yaml" and "sensor-net.station-copy" in f.message
+    found = run(_topics(**{"ops-insight": ["example.station.frames"]}))
+    assert sorted((f.code, f.path) for f in found) == [
+        ("connectors.topic-claimed-twice", model.DOMAINS), ("connectors.topic-not-owned", f"{FEED}/product.odps.yaml")]
+
+
+def test_the_repository_declares_its_one_kafka_topic_under_market_capture() -> None:
+    from test_repository_documents import repository_set
+
+    documents = dict(repository_set().documents)
+    assert [f for f in connectors.check(DocumentSet(documents, PROVENANCE), None) if f.code.startswith("connectors.topic")] == []
+    domains = model.parse(model.DOMAINS, documents[model.DOMAINS])
+    del domains["domains"]["market-capture"]["topics"]
+    documents[model.DOMAINS] = yaml.safe_dump(domains).encode()
+    (f,) = connectors.check(DocumentSet(documents, PROVENANCE), None)
+    assert f.code == "connectors.topic-not-owned" and "market.crypto.v3.raw.kraken" in f.message
 
 
 def test_the_pagination_refusal_says_what_the_contract_cannot_state() -> None:

@@ -9,6 +9,19 @@ domains:
     kind: source-aligned
     description: >-
       What the venues send, landed as they sent it and then typed per venue.
+    # The topics the capture tier writes (docker/redpanda/init.sh creates <prefix>.<kind>.<venue>
+    # for raw, trades and book of each venue; K2_TOPIC_PREFIX in docker-compose.yml). Only a
+    # product of this domain may read one, and one product reads each (connectors.topic-*).
+    topics:
+      - market.crypto.v3.raw.binance
+      - market.crypto.v3.raw.kraken
+      - market.crypto.v3.raw.coinbase
+      - market.crypto.v3.trades.binance
+      - market.crypto.v3.trades.kraken
+      - market.crypto.v3.trades.coinbase
+      - market.crypto.v3.book.binance
+      - market.crypto.v3.book.kraken
+      - market.crypto.v3.book.coinbase
   reference-data:
     owner: reference-data-team
     kind: source-aligned
