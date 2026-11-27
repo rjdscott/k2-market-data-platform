@@ -155,7 +155,7 @@ expectations:
   # landings' tables and bronze; governance stands for every domain warehouse.
   - {storageKey: {engine: spark, target: k2-lake/warehouse/k2, operation: write}, expect: allowed}            # Spark writes bronze
   - {storageKey: {engine: spark, target: k2-lake/warehouse/governance, operation: write}, expect: refused}    # never a domain warehouse
-  - {storageKey: {engine: spark, target: k2-landing, operation: write}, expect: allowed}                       # it lands files (it cannot delete one: the root pair removes the probe)
+  - {storageKey: {engine: spark, target: k2-landing, operation: write}, expect: allowed}                       # it lands files (it cannot delete one: the maintenance pair removes the probe)
   - {storageKey: {engine: trino, target: k2-lake/warehouse/governance, operation: write}, expect: allowed}    # Trino builds the domain warehouses
   - {storageKey: {engine: trino, target: k2-lake/warehouse/k2, operation: read}, expect: allowed}             # the lake catalog reads bronze
   - {storageKey: {engine: trino, target: k2-lake/warehouse/k2, operation: write}, expect: refused}            # but never writes it
@@ -163,6 +163,7 @@ expectations:
   - {storageKey: {engine: maintenance, target: k2-lake/warehouse/governance, operation: read}, expect: allowed}  # reads what it expires
   - {storageKey: {engine: maintenance, target: k2-lake/warehouse/governance, operation: write}, expect: refused} # deletes, never puts
   - {storageKey: {engine: maintenance, target: k2-lake/warehouse/k2, operation: write}, expect: refused}         # in no warehouse
+  - {storageKey: {engine: maintenance, target: k2-landing, operation: write}, expect: refused}                 # expires landings, never lands one
   - {storageKey: {engine: backup, target: k2-lake/warehouse/k2, operation: read}, expect: allowed}             # backup reads the lake
   - {storageKey: {engine: backup, target: k2-landing, operation: read}, expect: allowed}                       # and the landings
   - {storageKey: {engine: backup, target: k2-lake/warehouse/k2, operation: write}, expect: refused}            # and writes nowhere: k2,

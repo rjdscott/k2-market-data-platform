@@ -26,7 +26,8 @@ def filled(**overrides):
     """Every secret distinct, long and real-looking, users as .env.example ships them
     (the database role keeps its historical name, ADR-034)."""
     env = {n: f"filled-{i}-value-7f3a9c2e" for i, n in enumerate(NAMES)}
-    return {**env, "MINIO_ROOT_USER": USER, "K2_TRINO_S3_ACCESS_KEY": USER, "PREFECT_DB_USER": "prefect", **overrides}
+    keys = {f"K2_{e}_S3_ACCESS_KEY": f"k2-{e.lower()}-0a1b2c3d" for e in guard.ENGINES}
+    return {**env, **keys, "MINIO_ROOT_USER": USER, "PREFECT_DB_USER": "prefect", **overrides}
 
 
 def test_the_shipped_example_does_not_pair_minio_user_and_password():
@@ -39,7 +40,36 @@ def test_the_example_as_is_fails_on_every_secret():
     env = dict(line.split("=", 1) for line in EXAMPLE.splitlines() if re.match(r"^[A-Z0-9_]+=", line))
     problems = guard.check(env, EXAMPLE)
     assert "MINIO_ROOT_PASSWORD" in NAMES and "LAKEKEEPER_ENCRYPTION_KEY" in NAMES
-    assert len(problems) == len(NAMES) and all(any(p.startswith(n + " ") for p in problems) for n in NAMES)
+    access = [f"K2_{e}_S3_ACCESS_KEY" for e in guard.ENGINES]
+    assert len(problems) == len(NAMES) + len(access)
+    assert all(any(p.startswith(n + " ") for p in problems) for n in NAMES + access)
+
+
+def test_every_engine_has_a_pair_in_the_example_and_the_table():
+    assert guard.ENGINES == ["BACKUP", "MAINTENANCE", "SPARK", "TOOLS", "TRINO"]
+    for e in guard.ENGINES:
+        assert f"K2_{e}_S3_SECRET_KEY" in NAMES and guard.CREDENTIALS[f"K2_{e}_S3_SECRET_KEY"] == f"$K2_{e}_S3_ACCESS_KEY"
+        assert re.search(rf"^K2_{e}_S3_ACCESS_KEY=k2-{e.lower()}-placeholder$", EXAMPLE, re.M)
+
+
+@pytest.mark.parametrize("overrides, says", [
+    ({"K2_SPARK_S3_ACCESS_KEY": ""}, "K2_SPARK_S3_ACCESS_KEY is unset"),
+    ({"K2_TOOLS_S3_ACCESS_KEY": "k2-tools-placeholder"}, "K2_TOOLS_S3_ACCESS_KEY is unset, empty or still the .env.example placeholder"),
+    ({"K2_TRINO_S3_ACCESS_KEY": USER}, "K2_TRINO_S3_ACCESS_KEY equals MINIO_ROOT_USER"),
+    ({"K2_BACKUP_S3_SECRET_KEY": "root-password-canary-long"}, "K2_BACKUP_S3_SECRET_KEY equals MINIO_ROOT_PASSWORD"),
+    ({"K2_TRINO_S3_ACCESS_KEY": "k2-maintenance-0a1b2c3d"}, "K2_TRINO_S3_ACCESS_KEY is also K2_MAINTENANCE_S3_ACCESS_KEY's"),
+])
+def test_a_storage_pair_unset_root_or_shared_is_refused_by_name(overrides, says):
+    env = filled(MINIO_ROOT_PASSWORD="root-password-canary-long", **overrides)
+    problems = guard.check(env, EXAMPLE)
+    assert len(problems) == 1 and says in problems[0], problems
+    assert "canary" not in problems[0] and "0a1b2c3d" not in problems[0] and USER not in problems[0]
+
+
+def test_a_secret_unset_is_named_once():
+    env = filled()
+    del env["K2_SPARK_S3_SECRET_KEY"]
+    assert [p.split()[0] for p in guard.check(env, EXAMPLE)] == ["K2_SPARK_S3_SECRET_KEY"]
 
 
 def test_every_secret_filled_passes():

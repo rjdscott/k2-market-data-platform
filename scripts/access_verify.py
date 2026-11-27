@@ -275,11 +275,18 @@ def storage_key(e: Any, environ: Mapping[str, str] = os.environ) -> tuple[bool, 
             gone = s3(endpoint, pair, "DELETE", bucket, obj)
             if 200 <= gone[0] < 300:
                 did += "; deleted"
-            elif environ.get("MINIO_ROOT_USER") and environ.get("MINIO_ROOT_PASSWORD") and 200 <= s3(
-                    endpoint, (environ["MINIO_ROOT_USER"], environ["MINIO_ROOT_PASSWORD"]), "DELETE", bucket, obj)[0] < 300:
-                did += f"; its own delete answered {answered(*gone)}, removed with the root key"
             else:
-                return False, f"{did}; left s3://{bucket}/{obj} behind: its delete answered {answered(*gone)} and no root pair is set"
+                # The probe goes with the first key that can delete it: the maintenance key (it deletes
+                # in every warehouse and the landings, so a live run needs no root pair), then the root.
+                others = {"maintenance": key_pair("maintenance", environ)}
+                if environ.get("MINIO_ROOT_USER") and environ.get("MINIO_ROOT_PASSWORD"):
+                    others["root"] = (environ["MINIO_ROOT_USER"], environ["MINIO_ROOT_PASSWORD"])
+                who = next((w for w, p in others.items() if isinstance(p, tuple) and p != pair
+                            and 200 <= s3(endpoint, p, "DELETE", bucket, obj)[0] < 300), None)
+                if who is None:
+                    return False, (f"{did}; left s3://{bucket}/{obj} behind: its delete answered {answered(*gone)}, "
+                                   "and neither the maintenance pair nor a root pair removed it")
+                did += f"; its own delete answered {answered(*gone)}, removed with the {who} key"
     if got != e.expect:
         return False, f"expected {e.expect}, {did}"
     if got == "refused":

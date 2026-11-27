@@ -21,6 +21,11 @@
       "Effect": "Allow",
       "Action": ["s3:ListBucket"],
       "Resource": ["arn:aws:s3:::@LANDING@"]
+    },
+    {
+      "Effect": "Allow",
+      "Action": ["s3:GetBucketLocation"],
+      "Resource": ["arn:aws:s3:::@LAKE@", "arn:aws:s3:::@LANDING@"]
     }
   ]
 }

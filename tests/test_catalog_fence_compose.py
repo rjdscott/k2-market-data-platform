@@ -187,3 +187,79 @@ def test_a_breach_of_the_fence_fails(mutate, says):
     mutate(doc)
     found = problems(doc)
     assert any(says in p for p in found), found
+
+
+# ---- storage keys (W1-3): every engine on its own MinIO user, the root pair in lake-init alone -------
+
+ENGINES = sorted(p.stem.upper() for p in (ROOT / "docker/lake/minio/policies").glob("*.json"))  # init-lake.sh's list
+HOLDS = {"lake-init": set(ENGINES), "trino": {"TRINO"}, "spark-iceberg": {"SPARK", "MAINTENANCE"}, "tools": {"TOOLS", "BACKUP"}}
+ROOT_PAIR = {"minio", "lake-init"}  # MinIO itself; lake-init makes the users and the warehouses
+# Spark's pair under the AWS SDK's names, in spark-iceberg alone: scripts/deploy.py's spark-sql DDL sets no key.
+SDK = {"AWS_ACCESS_KEY_ID": "K2_SPARK_S3_ACCESS_KEY", "AWS_SECRET_ACCESS_KEY": "K2_SPARK_S3_SECRET_KEY"}
+REF = re.compile(r"\$\{([A-Za-z0-9_]+)")
+
+
+def env_items(svc: dict) -> dict[str, str]:
+    env = svc.get("environment") or {}
+    if isinstance(env, dict):
+        return {k: "" if v is None else str(v) for k, v in env.items()}
+    return {str(e).split("=", 1)[0]: str(e).partition("=")[2] for e in env}
+
+
+def storage_problems(doc: dict) -> list[str]:
+    out = []
+    for n, s in sorted(doc["services"].items()):
+        env = env_items(s)
+        own = {f"K2_{e}_S3_{h}_KEY" for e in HOLDS.get(n, ()) for h in ("ACCESS", "SECRET")}
+        if n not in ROOT_PAIR and (root := sorted({k for k in env if k.startswith("MINIO_ROOT_")}
+                                                  | {r for v in env.values() for r in REF.findall(v) if r.startswith("MINIO_ROOT_")})):
+            out.append(f"{n} holds the root pair ({', '.join(root)})")
+        named = {k for k in env if "S3_" in k}
+        if extra := sorted(named - own - ({"K2_S3_ENDPOINT", "K2_S3_REGION"} if n == "spark-iceberg" else set())):
+            out.append(f"{n} names storage keys not its own: {extra}")
+        if missing := sorted(own - named):
+            out.append(f"{n} lacks its own pair: {missing}")
+        for k, v in env.items():
+            refs = REF.findall(v)
+            if k in own and not re.fullmatch(rf"\$\{{{k}:\?[^${{}}]*\}}", v):
+                out.append(f"{n}: {k} is {v!r}, not ${{{k}:?<message>}}: required, never a default or another variable")
+            elif k.startswith("AWS_") and (n != "spark-iceberg" or k not in {*SDK, "AWS_REGION"}
+                                           or (k in SDK and refs != [SDK[k]])):
+                out.append(f"{n}: {k}={v!r} is not Spark's own pair under the SDK's name")
+            elif k not in own and k not in SDK and (other := [r for r in refs if re.fullmatch(r"K2_[A-Z]+_S3_[A-Z]+_KEY", r)]):
+                out.append(f"{n}: {k} reads another engine's key {other}")
+    return out
+
+
+def test_every_engine_holds_its_own_storage_pair_and_only_lake_init_the_root():
+    assert ENGINES == ["BACKUP", "MAINTENANCE", "SPARK", "TOOLS", "TRINO"]
+    assert storage_problems(COMPOSE) == []
+    for n in ("fetch", "dbt-runner", "k2-api", "prometheus", "grafana", "airflow-scheduler", "airflow-dag-processor",
+              "airflow-api-server", "airflow-migrate"):
+        assert not [k for k in env_items(COMPOSE["services"][n]) if "S3_" in k or k.startswith(("AWS_", "MINIO_"))], n
+
+
+def env_set(svc, key, value):
+    return lambda d: d["services"][svc].setdefault("environment", {}).__setitem__(key, value)
+
+
+@pytest.mark.parametrize("mutate,says", [
+    (env_set("trino", "K2_TRINO_S3_ACCESS_KEY", "${MINIO_ROOT_USER}"), "trino holds the root pair"),
+    (env_set("trino", "K2_TRINO_S3_SECRET_KEY", "${K2_TRINO_S3_SECRET_KEY:-${MINIO_ROOT_PASSWORD}}"), "trino holds the root pair"),
+    (env_set("trino", "K2_TRINO_S3_SECRET_KEY", "${K2_TRINO_S3_SECRET_KEY:-change-me}"), "required, never a default"),
+    (env_set("spark-iceberg", "MINIO_ROOT_USER", "${MINIO_ROOT_USER}"), "spark-iceberg holds the root pair"),
+    (env_set("spark-iceberg", "K2_TRINO_S3_ACCESS_KEY", "${K2_TRINO_S3_ACCESS_KEY:?x}"), "not its own"),
+    (env_set("spark-iceberg", "AWS_SECRET_ACCESS_KEY", "${K2_MAINTENANCE_S3_SECRET_KEY:?x}"), "not Spark's own pair"),
+    (env_set("tools", "K2_SPARK_S3_SECRET_KEY", "${K2_SPARK_S3_SECRET_KEY:?x}"), "not its own"),
+    (env_set("tools", "K2_TOOLS_S3_SECRET_KEY", "${K2_BACKUP_S3_SECRET_KEY:?x}"), "required, never a default or another"),
+    (lambda d: d["services"]["tools"]["environment"].pop("K2_BACKUP_S3_ACCESS_KEY"), "lacks its own pair"),
+    (env_set("airflow-scheduler", "K2_MAINTENANCE_S3_ACCESS_KEY", "${K2_MAINTENANCE_S3_ACCESS_KEY:?x}"), "not its own"),
+    (env_set("airflow-scheduler", "AWS_ACCESS_KEY_ID", "${K2_SPARK_S3_ACCESS_KEY:?x}"), "not Spark's own pair"),
+    (env_set("prometheus", "PASS", "${K2_TOOLS_S3_SECRET_KEY}"), "reads another engine's key"),
+    (lambda d: d["services"]["dbt-runner"]["environment"].__setitem__("MINIO_ROOT_PASSWORD", "x"), "dbt-runner holds the root pair"),
+])
+def test_a_storage_key_out_of_place_fails(mutate, says):
+    doc = copy.deepcopy(COMPOSE)
+    mutate(doc)
+    found = storage_problems(doc)
+    assert any(says in p for p in found), found
