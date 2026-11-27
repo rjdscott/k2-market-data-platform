@@ -33,6 +33,8 @@ make lint                # ruff 0.17.6 over the paths the Makefile lists; ruff a
 
 CI (`.github/workflows/ci.yml`) runs the same three suites plus a Docker build of every image, a compose config check, the doc gates and a Trivy scan.
 
+A change to the compiler, the access rules, identity, compose or the deploy is also expected to pass `make spine-e2e` (about 27 minutes, on throwaway containers; [what it runs and how to read it](docs/development/spine-e2e.md)); a docs-only change does not need it.
+
 `make test-legacy-kotlin` runs the archived v2 Kotlin feed-handler tests against `legacy/v2-kotlin/` ([ADR-019](docs/adr/ADR-019-rust-capture-tier.md)). It needs the `gradle:8.12-jdk21` Docker image and is deliberately outside `make test` and outside CI, that code is archived, not maintained.
 
 ## Where things live

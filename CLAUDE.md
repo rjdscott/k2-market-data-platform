@@ -108,6 +108,10 @@ considered before committing*.
   Never "if needed".
 - **`make test` before every PR**, plus the verification commands of whatever
   you touched. CI runs rust / python / docker / docs / security; keep it green.
+- **`make spine-e2e` at every merge point.** Run it after every merge into a phase
+  branch and before every tag (not per step; per step, the tests of what the step
+  touched). A red stage is read and fixed before anything else builds on the branch;
+  rerun that one stage with `ONLY="<stage>"`. `docs/development/spine-e2e.md`.
 
 ### Immutability
 

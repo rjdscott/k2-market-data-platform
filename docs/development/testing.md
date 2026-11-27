@@ -13,7 +13,10 @@ make test-rust     # capture unit + replay integration tests (runs in rust:1.100
 make test-trino    # a compiled release's rules on a throwaway Trino and Lakekeeper: default deny, exact names, writer fenced from writer
 make test-dbt      # dbt/ with no Trino: lint, deps, parse, compile, the manifest check; the project with no marts
 make test-airflow  # inside the Airflow image: every dbt package at the version dbt/ pins
+make spine-e2e     # the release and rules spine end to end on throwaway containers: run at merge points, not per step
 ```
+
+`make spine-e2e` is the project's merge-point practice and has [a page of its own](spine-e2e.md): its five stages, how to read a failure, and why it is not in CI.
 
 ## Inventory
 
@@ -89,7 +92,8 @@ tests `legacy/v2-kotlin/`.
 | **Security (Trivy)** | Filesystem scan of the lockfiles for CRITICAL/HIGH findings, SARIF uploaded to GitHub code scanning; then the gate: a CRITICAL with a fix available fails the job unless `.trivyignore.yaml` lists it with a reason and an expiry date (`tests/test_ci_security.py`). `legacy/` is skipped; the third-party compose images are not scanned |
 
 No job starts the stack, so nothing in CI exercises a real Redpanda, ClickHouse or
-WebSocket connection.
+WebSocket connection. `make test-access` and the deploy rehearsal are not in CI either: they run in
+[`make spine-e2e`](spine-e2e.md), at merge points.
 
 ## What is not covered
 
