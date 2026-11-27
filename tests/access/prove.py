@@ -5,8 +5,10 @@ control and asserts how it ends, exiting 1 when the control did not behave.
 
     prove.py negative        one reader rule loosened in the running copy of the rules: access-verify
                              must fail exactly the read rows of that role's members; then restored
+    prove.py release         access-verify's release scope: no row fails, and exactly the probe rows skip,
+                             each for the probe reason (catalog-fence.sh runs them on the stack)
     prove.py live            access-verify's live scope against this lake (K2_SECRETS laid out from the
-                             lake's passwords): only the planted-view and drift rows skip; with one
+                             lake's passwords): only the planted-view, drift and probe rows skip; with one
                              canary reader's password file gone, exactly that reader's rows fail
     prove.py plant <kind>    view: a definer view by REST, an undeclared name, the publisher's name
                                    forged as its owner, SQL over the base's main
@@ -105,6 +107,19 @@ def negative() -> int:
     return 0 if code == 1 and failed == want and want else 1
 
 
+def probes() -> set[int]:
+    return {n for n, e in enumerate(M.expectations, 1) if isinstance(e, model.ProbeExpectation)}
+
+
+def release() -> int:
+    """The release scope: every row passes but the probe rows, each skipped for the probe reason alone."""
+    code, rows = run_access_verify("release", "/work/release.json")
+    skipped = {n: why for n, (v, why) in rows.items() if v == "SKIP"}
+    failed = sorted(n for n, (v, _) in rows.items() if v == "FAIL")
+    say(f"release scope: exit {code}; failed rows {failed}; skipped rows {sorted(skipped)}, the probe rows are {sorted(probes())}")
+    return 0 if code == 0 and not failed and set(skipped) == probes() and set(skipped.values()) <= {av.SKIP_PROBE} else 1
+
+
 def live() -> int:
     """The live scope's choices, on this lake: the platform's and the canary's rows run, nothing else."""
     sec = Path("/work/live-secrets")
@@ -124,8 +139,8 @@ def live() -> int:
     os.environ.pop("K2_CATALOG_URI", None)
     code, rows = run_access_verify("live", "/work/live.json")
     skipped = {n for n, (v, _) in rows.items() if v == "SKIP"}
-    want = {n for n, e in enumerate(M.expectations, 1) if av.planted(e, M) or isinstance(e, model.DriftExpectation)}
-    say(f"live scope: exit {code}; skipped rows {sorted(skipped)}, the planted-view and drift rows are {sorted(want)}")
+    want = {n for n, e in enumerate(M.expectations, 1) if av.planted(e, M) or isinstance(e, model.DriftExpectation)} | probes()
+    say(f"live scope: exit {code}; skipped rows {sorted(skipped)}, the planted-view, drift and probe rows are {sorted(want)}")
     ok = code == 0 and skipped == want
     gone = sorted(canary)[-1]
     (sec / "principals" / f"{gone}.password").unlink()
@@ -220,4 +235,4 @@ def unplant(kind: str) -> int:
 
 if __name__ == "__main__":
     cmd, *args = sys.argv[1:]
-    sys.exit({"negative": negative, "live": live, "plant": plant, "unplant": unplant}[cmd](*args))
+    sys.exit({"release": release, "negative": negative, "live": live, "plant": plant, "unplant": unplant}[cmd](*args))
