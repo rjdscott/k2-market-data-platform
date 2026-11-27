@@ -33,6 +33,9 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "runs"))  # beside it in a release too
+import k2runs  # noqa: E402
+
 USER = "svc.catalog"
 PASSWORD_FILE = "/run/k2-secrets/catalog.password"  # k2gen.model.password_mount("svc.catalog")
 CA_FILE = "/run/k2-secrets/tls/ca.pem"  # as k2runs.connect
@@ -111,7 +114,7 @@ def read_facts(conn: Any, release: Path) -> dict[str, Any]:
     _, docs = load(release)
     bases = {v["relation"]: v["base"] for v in json.loads((release / VIEWS).read_text())["views"]}
     ids = [d["id"] for d in docs]
-    products: dict[str, dict[str, Any]] = {pid: {"outputs": {}, "lastRun": None, "tests": None} for pid in ids}
+    products: dict[str, dict[str, Any]] = {pid: {"outputs": {}, "lastRun": None, "tests": None, "state": None, "gaps": []} for pid in ids}
     for doc in docs:
         for out in doc["outputs"]:
             if not out["relation"] or not out["testedRef"]:
@@ -140,6 +143,16 @@ SELECT "product_id", max_by("run_id", at), max(at), max_by(ok, at), max_by(faile
 FROM runs GROUP BY "product_id\"""", ids)
     for pid, run_id, at, ok, failed, last_ok in runs or []:
         products[pid]["lastRun"] = {"runId": run_id, "at": at, "ok": ok, "failedTasks": failed, "lastOkAt": last_ok}
+    recs = _rows(conn, f"""SELECT "product_id", "run_id", "task", "event", "recorded_at", "inputs", "detail" FROM {RUNS}
+WHERE "product_id" IN ({marks}) AND "recorded_at" > current_timestamp - INTERVAL '{RUN_WINDOW_DAYS}' DAY
+AND ("task" = 'build' OR "event" = 'offset_gap')""", ids)  # ponytail: every build row of the window; narrow to the newest run when a product builds often
+    by: dict[str, list[dict[str, Any]]] = {}
+    for pid, *cells in recs or []:
+        by.setdefault(pid, []).append(dict(zip(("run_id", "task", "event", "recorded_at", "inputs", "detail"), cells)))
+    for pid, rows in by.items():
+        products[pid]["gaps"] = k2runs.offset_gaps(rows)
+        if any(r["task"] == "build" for r in rows):
+            products[pid]["state"] = k2runs.state(rows)
     tests = _rows(conn, f"""WITH newest AS (
   SELECT "product_id", max_by("dbt_invocation_id", "run_started_at") AS inv, max("run_started_at") AS at
   FROM {TESTS} WHERE "product_id" IN ({marks}) GROUP BY "product_id")
@@ -250,6 +263,24 @@ def tests_badge(pf: dict[str, Any] | None, available: bool) -> str:
     if counts:
         return '<span class="badge pass">tests passing</span>'
     return '<span class="badge none">no test results</span>'
+
+
+def state_badge(st: str | None) -> str:
+    """The product's state in words, inputs named; None when it has never built."""
+    if st is None:
+        return '<span class="badge none">not built yet</span>'
+    return f'<span class="badge {"pass" if st == "complete" else "fail"}">{e(st)}</span>'
+
+
+def _gaps(gaps: list[dict[str, Any]] | None) -> str:
+    """Offsets an accept-data-loss run gave up, newest first."""
+    if not gaps:
+        return ""
+    items = []
+    for g in gaps:
+        spans = [f"partition {p['partition']} offsets {p['fromOffset']} to {p['toOffset']}" for p in g["partitions"]]
+        items.append(f"<li>{e(when(g['at']))}: {e(listed(spans))}; reason: {e(g['reason'])}</li>")
+    return "<h3>Offset gaps accepted</h3>\n<ul>\n" + "\n".join(items) + "\n</ul>\n"
 
 
 def newest_publish(pf: dict[str, Any] | None) -> datetime | None:
@@ -364,9 +395,10 @@ def _sec_status(doc: dict[str, Any], facts: dict[str, Any], now: datetime) -> st
     else:
         tested = tests_badge(pf, True)
     published = newest_publish(pf)
-    rows = [("Newest tested publish", e(when(published)) if published else "not yet published"),
+    st = (pf or {}).get("state")
+    rows = [("State", state_badge(st)), ("Newest tested publish", e(when(published)) if published else "not yet published"),
             ("Last run", last), ("Tests, newest invocation", tested), ("Freshness", freshness(doc, pf, now))]
-    return out + _dl(rows) + f'<p class="muted">As read at {e(when(now))}.</p>\n'
+    return out + _dl(rows) + _gaps((pf or {}).get("gaps")) + f'<p class="muted">As read at {e(when(now))}.</p>\n'
 
 
 def _sec_terms(doc: dict[str, Any]) -> str:

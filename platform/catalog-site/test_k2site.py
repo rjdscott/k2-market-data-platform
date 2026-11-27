@@ -220,6 +220,22 @@ def test_failing_tests_and_a_failed_run_say_so_in_words(tmp_path: Path) -> None:
     assert "tests failing: 3" in Page((current / "index.html").read_text()).words
 
 
+def test_state_badge_and_offset_gaps_are_shown_and_escaped(tmp_path: Path) -> None:
+    gap = {"at": T, "partitions": [{"partition": 3, "fromOffset": 10, "toOffset": 19}], "reason": "<script>alert(1)</script>"}
+    current, _ = site(tmp_path, product(), f=facts(state="partial: market-capture.kraken-trades.silver_trade", gaps=[gap]))
+    raw = (current / "fx-reference/rates/index.html").read_text()
+    words = Page(raw).words
+    assert "State partial: market-capture.kraken-trades.silver_trade" in words
+    assert "partition 3 offsets 10 to 19; reason: <script>alert(1)</script>" in words  # as text
+    assert "<script>alert" not in raw and "&lt;script&gt;" in raw
+
+
+def test_state_says_not_built_when_there_is_none(tmp_path: Path) -> None:
+    current, _ = site(tmp_path, product(), f=facts(state=None, gaps=[]))
+    words = Page((current / "fx-reference/rates/index.html").read_text()).words
+    assert "State not built yet" in words and "Offset gaps" not in words
+
+
 @pytest.mark.parametrize(("last_ok", "status", "cron", "start"), [
     (datetime(2026, 11, 27, 15, 35, tzinfo=timezone.utc), "active", "30 15 * * 1-5", "Current:"),
     (datetime(2026, 11, 26, 15, 35, tzinfo=timezone.utc), "active", "30 15 * * 1-5", "Due: the run due 2026-11-27 15:30 UTC"),
@@ -325,6 +341,7 @@ def test_read_facts_binds_values_and_reads_the_bases_refs(tmp_path: Path) -> Non
                  '"reference_data"."calendars__base"."daily$refs"': not_found("SCHEMA_NOT_FOUND"),
                  'min("recorded_at")': [(T,)],
                  "WITH runs AS": [("fx-reference.rates", "r/1", T, True, "", T)],
+                 '"task" = \'build\'': [],
                  "WITH newest AS": [("fx-reference.rates", "inv-1", T, "pass", 7), ("fx-reference.rates", "inv-1", T, "fail", 1)]})
     got = k2site.read_facts(conn, rel)
     pf = got["products"]["fx-reference.rates"]
@@ -344,9 +361,9 @@ def test_read_facts_binds_values_and_reads_the_bases_refs(tmp_path: Path) -> Non
 
 def test_read_facts_with_no_run_records_yet(tmp_path: Path) -> None:
     rel = release(tmp_path, product())
-    conn = Conn({"$refs": not_found(), "WITH runs AS": not_found(), "WITH newest AS": not_found()})
+    conn = Conn({"$refs": not_found(), "WITH runs AS": not_found(), "WITH newest AS": not_found(), '"task" = \'build\'': not_found()})
     pf = k2site.read_facts(conn, rel)["products"]["fx-reference.rates"]
-    assert pf == {"outputs": {"fx-reference.rates.daily": {"snapshot": None, "publishedAt": None}}, "lastRun": None, "tests": None}
+    assert pf == {"outputs": {"fx-reference.rates.daily": {"snapshot": None, "publishedAt": None}}, "lastRun": None, "tests": None, "state": None, "gaps": []}
 
 
 @pytest.mark.parametrize("error", [trino.exceptions.HttpError("503"), ConnectionRefusedError(), not_found("PERMISSION_DENIED")])
