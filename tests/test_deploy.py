@@ -1046,6 +1046,23 @@ sys.exit(f"fake docker: no answer for {A}")
         assert world.deploy(r2) == 0  # the rerun finds SR paused, so pauses nothing, and unpauses it at the end
         assert world.paused() == {SR: False, DL: True} and ["dags", "pause", SR] not in world.airflow_calls()[2:]
 
+    @pytest.mark.parametrize("earlier", [None, "ddl", "canary", "swap"])
+    def test_a_ddl_failure_unpauses_only_when_no_attempt_went_past_the_one_shots(
+            world: World, monkeypatch: pytest.MonkeyPatch, earlier: str | None) -> None:
+        r1, r2 = drained_world(world, {SR: False, DL: True})
+        if earlier:  # an earlier attempt at r2, killed after this step (a kill after swap records only canary)
+            deploy.record(world.ctx, r2, r1.id, earlier, "ok", set())
+
+        def failing(ctx: Any, p: Any) -> list[str]:
+            raise deploy.Failed("lake-init: the one-shot exited 1")
+
+        monkeypatch.setattr(deploy, "ddl", failing)
+        with pytest.raises(deploy.Failed, match="lake-init"):
+            world.deploy(r2)
+        held = earlier in ("canary", "swap")  # past the one-shots: the pointers may name r2 already
+        assert world.paused()[SR] is held and (world.root / deploy.DRAIN_STATE).exists() is held
+        assert (["dags", "unpause", SR] in world.airflow_calls()) is not held
+
     def test_no_drain_no_scheduler_and_no_dags_are_recorded_and_the_deploy_goes_on(world: World) -> None:
         r1 = world.release(over={CODE: b"# one\n"})
         world.live(r1)

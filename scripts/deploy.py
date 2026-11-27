@@ -255,13 +255,18 @@ def history(root: Path) -> list[dict[str, Any]]:
     return [json.loads(line) for line in path.read_text().splitlines() if line.strip()] if path.exists() else []
 
 
+def after_good(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The records after the newest good release's done."""
+    last = max((i for i, r in enumerate(records) if r["step"] in DONE and r["outcome"] == "ok"), default=-1)
+    return records[last + 1:]
+
+
 def standing(records: list[dict[str, Any]]) -> tuple[list[str], list[str]]:
     """(the good releases, oldest first: each deploy or rollback that reached done; every release an
     attempt since the newest good one named, which may have changed the live state)."""
     goods = [r["release"] for r in records if r["step"] in DONE and r["outcome"] == "ok"]
-    last = max((i for i, r in enumerate(records) if r["step"] in DONE and r["outcome"] == "ok"), default=-1)
     since: list[str] = []
-    for r in records[last + 1:]:
+    for r in after_good(records):
         if r["step"] in UNCHANGING:  # a refusal or PLAN=1 moved nothing
             continue
         for rid in (r["release"], r["from"]):
@@ -1464,6 +1469,9 @@ def deploy(ctx: Ctx, rid: str, plan_only: bool) -> int:
     sources: list[Release | None] = [good] + [open_release(ctx, r) for r in since if r not in (rid, frm)]
     if rid in since and good is not None:  # an attempt of this very release was interrupted
         ctx.say(f"deploy: an earlier attempt at {rid} did not finish; converging from {frm}")
+    # Some attempt since the good release went past the one-shots: views, the canary, maybe the swap (a
+    # kill after a step's work leaves no record of it, so any later step counts, not only swap).
+    past_ddl = any(r["step"] not in (*UNCHANGING, "ddl") for r in after_good(history(ctx.root)))
     svc = set(services(target))
     plans: list[Plan] = []
 
@@ -1484,7 +1492,12 @@ def deploy(ctx: Ctx, rid: str, plan_only: bool) -> int:
     try:
         step(ctx, target, frm, "ddl", svc, lambda: ddl(ctx, p))
     except Exception:  # nothing past the one-shots moved: the DAGs run again (a kill or an interrupt: the rerun's job)
-        say_all(ctx, resume(ctx))
+        if past_ddl:  # review R8: the pointers may name the target already, so its DAG code would run on the old Trino
+            ctx.say("deploy: the DAGs deploy paused stay paused: an earlier attempt went past the one-shots, so the "
+                    f"pointers may already name a newer release ({ctx.root / DRAIN_STATE}); a deploy or rollback "
+                    "that reaches done unpauses them")
+        else:
+            say_all(ctx, resume(ctx))
         raise
     try:
         converge(ctx, p, frm)
