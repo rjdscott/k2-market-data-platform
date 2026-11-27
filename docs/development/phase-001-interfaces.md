@@ -536,3 +536,15 @@ reads, a sibling's through the product's own `ref()` chain included
 port of the product, all that Trino lets its builder read. An input read and not declared for that
 output is `access.input-undeclared`, on the product file, naming the model, the input and the
 chain; one declared and never read stays no finding.
+
+2026-11-28, a Kafka topic's one reader (finding A2): a domain in `contracts/domains.yaml` may list
+the Kafka `topics` its capture writes (additive, `k2-v2.schema.json#/$defs/domains`);
+`market-capture` lists the nine `market.crypto.v3.{raw,trades,book}.<venue>` topics
+`docker/redpanda/init.sh` creates. A kafka product's topic must be one its own domain lists
+(`connectors.topic-not-owned`), a topic is read by one product of the set and listed by one domain
+(`connectors.topic-claimed-twice`, naming both). Nothing already declared could carry it: the
+envelope contract is the reading product's own bronze, and the compose file names no domain. The
+declaration sits in the file the platform team owns (`.github/CODEOWNERS`), not in a product's
+directory. Redpanda has no ACLs and every load shares the Spark key and network, so this is a
+compile-time rule; what stops a product the documents do not describe is the review of its
+contract.
