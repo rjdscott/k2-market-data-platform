@@ -36,9 +36,10 @@ Without --compact, with the maintenance key (PASS_KEYS), in this order:
    2026-11-28). Objects under the product's own prefix `<domain>/<product>/` in k2-landing whose
    key's day, `<prefix><YYYY-MM-DD>/<sha256>.<ext>`, is more than LANDING_DAYS before today (UTC)
    are deleted, by the day in the key and never by mtime. Kept, and counted by reason: a key that
-   does not parse (`malformed`), a file not in landing_files (`unlogged`), a file whose batch has
-   no rows published on `main` (`unpublished`: a failed or waiting batch's file is evidence until
-   an operator clears it), and one inside the window (`recent`).
+   does not parse (`malformed`), a file not in landing_files (`unlogged`), a file with a logged
+   observation whose batch has no rows published on `main` (`unpublished`: a public API's object
+   is every same-day observation of its bytes, each its own batch; a failed or waiting batch's file
+   is evidence until an operator clears it), and one inside the window (`recent`).
 
 With --compact, a Kafka product only, with the Spark key: its landing and bronze compacted
 (rewrite_data_files, and the position deletes rewritten where a table has any), each commit's
@@ -268,10 +269,15 @@ def expire_snapshots(pipeline: dict, retention: dict, lake, at: datetime) -> tup
 
 
 def expire_landings(pipeline: dict, store, lake, at: datetime) -> tuple[int, int, dict]:
-    """Deletes the product's landings past LANDING_DAYS whose batch is published; (exit, deleted, kept by reason)."""
+    """Deletes the product's landings past LANDING_DAYS whose batches are all published; (exit, deleted,
+    kept by reason). A public API's object is one key for every observation of the same bytes that day
+    (A, B, A: two rows in the log), each its own batch at its fetched_at (connector.py), so it goes only
+    once every logged observation has rows published; a file's same bytes again stage nothing, so its
+    sha256 alone is the batch."""
     prefix, kept, deleted = landing_prefix(pipeline), {}, 0
     cutoff = at.astimezone(timezone.utc).date() - timedelta(days=LANDING_DAYS)
     table, log = pipeline["bronze"][0]["table"], pipeline["landing"]["log"]
+    api = pipeline["connector"]["kind"] == "public-api"  # connector.Run.api
     for key in store.list(prefix):
         parsed = parse_key(prefix, key)
         if parsed is None:
@@ -279,11 +285,11 @@ def expire_landings(pipeline: dict, store, lake, at: datetime) -> tuple[int, int
             print(f"maintain: {key} is not <prefix><day>/<sha256>.<ext>; kept")
         elif parsed[0] >= cutoff:
             reason = "recent"
-        elif not lake.has_object(log, f"s3://{LANDING_BUCKET}/{key}"):
+        elif not (seen := lake.observations(log, f"s3://{LANDING_BUCKET}/{key}")):
             reason = "unlogged"
-        elif lake.published_rows(table, parsed[1]) < 1:
+        elif any(lake.published_rows(table, parsed[1], fetched if api else None) < 1 for fetched in seen):
             reason = "unpublished"
-            print(f"maintain: {key} has no published rows; kept until an operator clears it")
+            print(f"maintain: {key} has an observation with no published rows; kept until an operator clears it")
         else:
             try:
                 store.delete(key)
@@ -407,6 +413,10 @@ class Store:
 class MaintainLake(SparkLake):
     def run(self, text: str) -> None:
         self.spark.sql(text).collect()
+
+    def observations(self, log: str, uri: str) -> list:
+        """`[fetched_at]` of each row the landing log holds for `uri`: one per observation."""
+        return [r[0] for r in self._sql(f"SELECT `fetched_at` FROM {rel(log)} WHERE `object_key` = :uri", uri=uri)]
 
     def snapshot_count(self, table: str) -> int:
         return self._sql(f"SELECT count(*) FROM {rel(table)}.`snapshots`")[0][0]

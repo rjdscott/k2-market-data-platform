@@ -62,7 +62,8 @@ def not_found(table):
 class FakeLake:
     def __init__(self, published=(SHA_OLD, SHA_NEW), logged=(SHA_OLD, SHA_FAILED, SHA_NEW), drop_ref=None, fail=None,
                  empty=()):
-        self.published, self.logged, self.drop_ref = set(published), set(logged), drop_ref
+        self.published, self.drop_ref = set(published), drop_ref
+        self.logged = logged if isinstance(logged, dict) else set(logged)  # a dict: sha256 -> its fetched_at values
         self.fail, self.empty = fail or {}, set(empty)  # fail: table -> the exception its read raises
         self.sql, self.expired = [], False
 
@@ -83,11 +84,16 @@ class FakeLake:
         self.sql.append(text)
         self.expired = True
 
-    def has_object(self, log, uri):
-        return any(uri.endswith(f"/{s}.csv") for s in self.logged)
+    def observations(self, log, uri):
+        """A logged file's one observation, or each fetched_at `logged` gives its sha256 (a public API)."""
+        if isinstance(self.logged, dict):
+            return next((list(v) for s, v in self.logged.items() if uri.endswith(f"/{s}.json")), [])
+        return [AT] if any(uri.endswith(f"/{s}.csv") for s in self.logged) else []
 
-    def published_rows(self, table, sha):
-        return 3 if sha in self.published else 0
+    def published_rows(self, table, sha, fetched_at=None):
+        """As SparkLake's: without fetched_at, any published row of the sha256 counts."""
+        rows = {p if isinstance(p, tuple) else (p, None) for p in self.published}
+        return 3 if any(s == sha and (fetched_at is None or at == fetched_at) for s, at in rows) else 0
 
 
 def test_plan_passes_each_tables_days_from_retention_json():
@@ -185,6 +191,22 @@ def test_access_denied_on_delete_is_exit_1_naming_the_grant(capsys):
     err = capsys.readouterr().err
     assert code == 1 and deleted == 0
     assert "s3:DeleteObject on arn:aws:s3:::k2-landing/*" in err and "s3:ListBucket" in err
+
+
+def test_a_public_api_object_goes_only_once_every_observation_of_it_is_published():
+    """Review D8: a public API's same bytes seen again the same day (A, B, A) are one object key and
+    two log rows, each its own batch at its fetched_at. One published must not delete the object the
+    other unpublished one still needs."""
+    api = copy.deepcopy(PIPELINE)
+    api["connector"]["kind"] = "public-api"
+    first, again = datetime(2026, 11, 1, 1, 0, tzinfo=timezone.utc), datetime(2026, 11, 1, 3, 0, tzinfo=timezone.utc)
+    old = key("2026-11-01", SHA_OLD, "json")
+    store = FakeStore([old])
+    lake = FakeLake(published=[(SHA_OLD, first)], logged={SHA_OLD: (first, again)})
+    code, deleted, kept = M.expire_landings(api, store, lake, AT)
+    assert (code, deleted, kept, store.deleted) == (0, 0, {"unpublished": 1}, [])
+    lake.published.add((SHA_OLD, again))
+    assert M.expire_landings(api, store, lake, AT)[:2] == (0, 1) and store.deleted == [old]
 
 
 # --- A Kafka product: resume points kept, continuity, compaction, orphans ---------------------
