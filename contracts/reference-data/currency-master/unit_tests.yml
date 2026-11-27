@@ -8,11 +8,14 @@ unit_tests:
       with no minor units (XTS, the code ISO reserves for testing) keep their flags.
     given:
       - input: source('currency_master', 'bronze_currencies')
-        rows:
-          - {code: EUR, numeric_code: "978", name: Euro, minor_units: 2, is_fund: false, source_file_sha256: aa}
-          - {code: EUR, numeric_code: "978", name: Euro, minor_units: 2, is_fund: false, source_file_sha256: bb}
-          - {code: CLF, numeric_code: "990", name: Unidad de Fomento, minor_units: 4, is_fund: true, source_file_sha256: bb}
-          - {code: XTS, numeric_code: "963", name: Testing code, minor_units: null, is_fund: false, source_file_sha256: bb}
+        # format sql, every column typed: dbt reads a dict fixture's column types from the input
+        # relation in the warehouse, and a bronze table may not exist where the unit test runs.
+        format: sql
+        rows: |
+          select cast('EUR' as varchar) as code, cast('978' as varchar) as numeric_code, cast('Euro' as varchar) as name, cast(2 as integer) as minor_units, false as is_fund, cast('aa' as varchar) as source_file_sha256
+          union all select 'EUR', '978', 'Euro', 2, false, 'bb'
+          union all select 'CLF', '990', 'Unidad de Fomento', 4, true, 'bb'
+          union all select 'XTS', '963', 'Testing code', null, false, 'bb'
     expect:
       rows:
         - {code: EUR, numeric_code: "978", name: Euro, minor_units: 2, is_fund: false}

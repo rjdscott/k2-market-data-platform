@@ -14,10 +14,13 @@ unit_tests:
         is_incremental: false  # the first run: the whole of bronze
     given:
       - input: source('ecb_fx_rates', 'bronze_daily')
-        rows:
-          - {rate_date: "2026-02-02", currency: AAA, rate: "2.0000", source_file_sha256: aa}
-          - {rate_date: "2026-02-02", currency: AAA, rate: "2.1000", source_file_sha256: bb}
-          - {rate_date: "2026-02-03", currency: AAA, rate: "2.2000", source_file_sha256: bb}
+        # format sql, every column typed: dbt reads a dict fixture's column types from the input
+        # relation in the warehouse, and bronze (or this, before the first build) may not exist there.
+        format: sql
+        rows: |
+          select date '2026-02-02' as rate_date, cast('AAA' as varchar) as currency, cast('2.0000' as varchar) as rate, cast('aa' as varchar) as source_file_sha256
+          union all select date '2026-02-02', 'AAA', '2.1000', 'bb'
+          union all select date '2026-02-03', 'AAA', '2.2000', 'bb'
     expect:
       rows:
         - {rate_date: "2026-02-02", currency: AAA, rate: 2.1, source_file_sha256: bb}
@@ -31,9 +34,12 @@ unit_tests:
         is_incremental: false
     given:
       - input: source('ecb_fx_rates', 'bronze_daily')
-        rows:
-          - {rate_date: "2026-02-02", currency: AAA, rate: "1.2300", source_file_sha256: aa}
-          - {rate_date: "2026-02-02", currency: BBB, rate: "150.00", source_file_sha256: aa}
+        # format sql, every column typed: dbt reads a dict fixture's column types from the input
+        # relation in the warehouse, and bronze (or this, before the first build) may not exist there.
+        format: sql
+        rows: |
+          select date '2026-02-02' as rate_date, cast('AAA' as varchar) as currency, cast('1.2300' as varchar) as rate, cast('aa' as varchar) as source_file_sha256
+          union all select date '2026-02-02', 'BBB', '150.00', 'aa'
     expect:
       rows:
         - {rate_date: "2026-02-02", currency: AAA, rate: 1.23, source_file_sha256: aa}
@@ -51,15 +57,19 @@ unit_tests:
         is_incremental: true  # a later run: the table exists
     given:
       - input: this
-        rows:
-          - {rate_date: "2026-02-02", currency: AAA, rate: 2.0, source_file_sha256: aa}
+        format: sql
+        rows: |
+          select date '2026-02-02' as rate_date, cast('AAA' as varchar) as currency, cast(2.0 as decimal(20, 10)) as rate, cast('aa' as varchar) as source_file_sha256
       - input: source('ecb_fx_rates', 'bronze_daily')
-        rows:
-          - {rate_date: "2026-01-30", currency: AAA, rate: "1.9000", source_file_sha256: zz}
-          - {rate_date: "2026-01-30", currency: AAA, rate: "1.9000", source_file_sha256: aa}
-          - {rate_date: "2026-02-02", currency: AAA, rate: "2.0000", source_file_sha256: aa}
-          - {rate_date: "2026-02-02", currency: AAA, rate: "2.0000", source_file_sha256: bb}
-          - {rate_date: "2026-02-03", currency: AAA, rate: "2.1000", source_file_sha256: bb}
+        # format sql, every column typed: dbt reads a dict fixture's column types from the input
+        # relation in the warehouse, and bronze (or this, before the first build) may not exist there.
+        format: sql
+        rows: |
+          select date '2026-01-30' as rate_date, cast('AAA' as varchar) as currency, cast('1.9000' as varchar) as rate, cast('zz' as varchar) as source_file_sha256
+          union all select date '2026-01-30', 'AAA', '1.9000', 'aa'
+          union all select date '2026-02-02', 'AAA', '2.0000', 'aa'
+          union all select date '2026-02-02', 'AAA', '2.0000', 'bb'
+          union all select date '2026-02-03', 'AAA', '2.1000', 'bb'
     expect:
       rows:
         - {rate_date: "2026-01-30", currency: AAA, rate: 1.9, source_file_sha256: aa}
@@ -75,16 +85,17 @@ unit_tests:
       In February Frankfurt is on CET, so 16:00 there is 15:00 UTC.
     given:
       - input: source('calendars', 'target_days')  # k2_input renders source() in a unit test
-        rows:
-          - {calendar_date: "2026-02-02", is_target_day: true}
-          - {calendar_date: "2026-02-03", is_target_day: true}
-          - {calendar_date: "2026-02-04", is_target_day: true}
-          - {calendar_date: "2026-02-05", is_target_day: true}
-          - {calendar_date: "2026-02-06", is_target_day: true}
-          - {calendar_date: "2026-02-07", is_target_day: false}
-          - {calendar_date: "2026-02-08", is_target_day: false}
-          - {calendar_date: "2026-02-09", is_target_day: true}
-          - {calendar_date: "2026-02-10", is_target_day: true}
+        format: sql  # every column typed, as above
+        rows: |
+          select date '2026-02-02' as calendar_date, true as is_target_day, cast(null as varchar) as closing_reason
+          union all select date '2026-02-03', true, null
+          union all select date '2026-02-04', true, null
+          union all select date '2026-02-05', true, null
+          union all select date '2026-02-06', true, null
+          union all select date '2026-02-07', false, null
+          union all select date '2026-02-08', false, null
+          union all select date '2026-02-09', true, null
+          union all select date '2026-02-10', true, null
       - input: ref('ecb_fx_rates__silver_rates')
         rows:
           - {rate_date: "2026-02-02", currency: AAA, rate: 2.0}
@@ -105,8 +116,9 @@ unit_tests:
     description: In July Frankfurt is on CEST, so 16:00 there is 14:00 UTC.
     given:
       - input: source('calendars', 'target_days')
-        rows:
-          - {calendar_date: "2026-07-01", is_target_day: true}
+        format: sql
+        rows: |
+          select date '2026-07-01' as calendar_date, true as is_target_day, cast(null as varchar) as closing_reason
       - input: ref('ecb_fx_rates__silver_rates')
         rows:
           - {rate_date: "2026-07-01", currency: AAA, rate: 2.0}
