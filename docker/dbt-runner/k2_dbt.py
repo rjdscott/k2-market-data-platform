@@ -53,7 +53,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+import catalog_drift
 from k2gen import model as k2
+from k2gen.emit import lake
 
 SECRETS = "/run/k2-secrets"
 PASSWORDS = {"builder": f"{SECRETS}/builder.password", "publisher": f"{SECRETS}/publisher.password",
@@ -338,6 +340,77 @@ def rollback(ctx: Ctx, io: Any, before: dict[str, dict[str, Any]], invocation: s
                dbt_invocation_id=invocation)
 
 
+def tag_change(o: Output, tested: int, previous: int | None) -> dict[str, Any]:
+    """One output's part of the commit: the tag onto the tested snapshot, only while main is still
+    that snapshot and the tag is still where this run found it (spike g, ADR-061 part 4)."""
+    _, ns, table = o.relation.split(".")
+    return {"identifier": {"namespace": [ns], "name": table},
+            "requirements": [{"type": "assert-ref-snapshot-id", "ref": "main", "snapshot-id": snap(tested)},
+                             {"type": "assert-ref-snapshot-id", "ref": k2.AUDITED_TAG,
+                              "snapshot-id": None if previous is None else snap(previous)}],
+            "updates": [{"action": "set-snapshot-ref", "ref-name": k2.AUDITED_TAG, "type": "tag", "snapshot-id": snap(tested)}]}
+
+
+def publish(ctx: Ctx, io: Any, before: dict[str, dict[str, Any]], invocation: str | None) -> int:
+    """Step 6, as the publisher, after every test passed.
+
+    INVARIANT: at every instant each reader view (a) reads its base at the `audited` tag, and the
+    tag names only a snapshot whose tests passed; (b) selects only columns that the tagged snapshot
+    holds with the view's types. (a): the tag moves only here, onto the snapshot dbt's tests read,
+    in one commit whose every change requires main to be that snapshot and the tag to be where step
+    3 found it, so a write after the tests or a tag moved by anyone else gets 409 and moves nothing.
+    (b): before the commit each view is narrowed to C and old and new (valid on both snapshots),
+    and widened to C and new only after it. A crash between any two statements leaves narrowed
+    views over the old tag, or narrowed or widened views over the new tested one; the next
+    reconcile finishes from what the tag holds. Never widen before the commit."""
+    tested: dict[str, int] = {}
+    steps: dict[str, tuple[str | None, str | None]] = {}
+    deliberate = []
+    for o in ctx.outputs:
+        main, tag = heads(io, o.relation)
+        if main is None:
+            raise Refused(f"{o.relation}: the build passed and left no main")
+        if tag != before[o.relation]["tag"]:
+            raise Refused(f"{o.relation}: the tag moved during the build ({before[o.relation]['tag']} to {tag})")
+        tested[o.relation] = main
+        old = io.columns(o.relation, tag) if tag is not None else None
+        new = io.columns(o.relation, main)
+        if old == new:
+            steps[o.relation] = (None, None)  # the view reads the tag by name: moving it is the publish
+            continue
+        try:
+            steps[o.relation] = lake.view_update(o.view, old, new)
+        except lake.NoCommonColumns:
+            # The deliberate path (lake.NoCommonColumns): no view is valid on both snapshots, so
+            # readers' view fails from the commit to the widen, closed, and the run pages.
+            deliberate.append(o.view.relation)
+            steps[o.relation] = (None, lake.create_view(o.view, list(new)))
+    for narrow, _ in steps.values():
+        if narrow:
+            io.sql("publisher", narrow)
+    changes = [tag_change(o, tested[o.relation], before[o.relation]["tag"]) for o in ctx.outputs]
+    try:
+        status = io.commit(ctx.warehouse, changes)
+    except catalog_drift.Unreachable as e:
+        log(f"tag commit: no answer from the catalog ({e}); views stay narrowed, the next reconcile decides")
+        return 3
+    if status not in (200, 204):
+        log(f"tag commit: HTTP {status}{' (a stale expectation: the tag or main moved)' if status == 409 else ''}; "
+            "nothing moved, views stay narrowed")
+        return 3
+    for _, widen in steps.values():
+        if widen:
+            io.sql("publisher", widen)
+    for o in ctx.outputs:
+        record(ctx, io, event="audited", table_name=o.relation, snapshot_before=before[o.relation]["tag"],
+               snapshot_after=tested[o.relation], dbt_invocation_id=invocation)
+    if deliberate:
+        log(f"published, but no column was common to the old and new snapshots of {', '.join(deliberate)}: "
+            "readers lost the view between the tag commit and the widen")
+        return 3
+    return 0
+
+
 def run(ctx: Ctx, io: Any) -> tuple[int, list[dict[str, Any]]]:
     """Steps 1 to 6; (exit code, expire)."""
     expire: list[dict[str, Any]] = []
@@ -369,15 +442,14 @@ def run(ctx: Ctx, io: Any) -> tuple[int, list[dict[str, Any]]]:
     invocation = ((results or {}).get("metadata") or {}).get("invocation_id")
     invocation = invocation if isinstance(invocation, str) and INVOCATION.fullmatch(invocation) else None
     outcome = verdict(code, results)
-    if not outcome:
-        log(f"dbt build passed (invocation {invocation})")
-        return 0, expire  # W1-16 publishes a pass (step 6)
     try:
-        log(f"dbt build {'failed its tests' if outcome == 1 else 'failed'} (exit {code}); restoring the outputs")
-        rollback(ctx, io, before, invocation, expire)
-        return outcome, expire
+        if outcome:
+            log(f"dbt build {'failed its tests' if outcome == 1 else 'failed'} (exit {code}); restoring the outputs")
+            rollback(ctx, io, before, invocation, expire)
+            return outcome, expire
+        return publish(ctx, io, before, invocation), expire
     except Exception as e:
-        log(f"rollback: {type(e).__name__}: {e}")
+        log(f"{'rollback' if outcome else 'publish'}: {type(e).__name__}: {e}")
         return 3, expire
 
 
@@ -467,6 +539,17 @@ class Live:
         done = subprocess.run(argv, env=dbt_env(self.environ, password("builder")), stdin=subprocess.DEVNULL,
                               stdout=sys.stderr, stderr=sys.stderr, check=False)
         return done.returncode, json.loads(results.read_text()) if results.exists() else None
+
+    def cat(self) -> Any:
+        if self.catalog is None:
+            self.catalog = catalog_drift.Catalog(self.uri, self.ctx.warehouse)
+        return self.catalog
+
+    def commit(self, warehouse: str, changes: list[dict[str, Any]]) -> int:
+        if warehouse != self.ctx.warehouse:
+            raise Refused(f"warehouse {warehouse} is not this product's")
+        status, _ = catalog_drift.call("POST", f"{self.cat().base}/transactions/commit", {"table-changes": changes})
+        return status
 
 
 def main(argv: list[str] | None = None) -> int:

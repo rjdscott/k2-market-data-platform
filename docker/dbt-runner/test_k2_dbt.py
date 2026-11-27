@@ -355,6 +355,120 @@ def test_a_tagged_table_is_never_dropped():
     assert w.restore_statement(OUT, 5, True, V1, dict(reversed(V1.items()))).startswith("CREATE OR REPLACE TABLE")  # order counts
 
 
+# ---- W1-16: publish ----------------------------------------------------------------------------
+
+def test_a_pass_moves_every_outputs_tag_in_one_compare_and_set_commit():
+    fake = Fake(views=(VIEW, VIEW2))
+    s0, t0 = fake.seed(OUT), fake.seed(OUT2)
+    assert w.run(ctx(outputs=((OUT, VIEW), (OUT2, VIEW2))), fake) == (0, [])
+    (changes,) = fake.commits
+    tested = {OUT: fake.tables[OUT]["main"], OUT2: fake.tables[OUT2]["main"]}
+    assert [c["requirements"] for c in changes] == [
+        [{"type": "assert-ref-snapshot-id", "ref": "main", "snapshot-id": tested[OUT]},
+         {"type": "assert-ref-snapshot-id", "ref": "audited", "snapshot-id": s0}],
+        [{"type": "assert-ref-snapshot-id", "ref": "main", "snapshot-id": tested[OUT2]},
+         {"type": "assert-ref-snapshot-id", "ref": "audited", "snapshot-id": t0}]]
+    assert all(fake.tables[r]["tag"] == tested[r] for r in tested)
+    assert [(r["event"], r.get("snapshot_after")) for r in fake.records if r["run_id"] == "access_canary/r1"][-2:] == [
+        ("audited", tested[OUT]), ("audited", tested[OUT2])]
+    assert not [s for _, s in fake.statements if "VIEW" in s]  # no column changed: the tag move is the publish
+    assert fake.violations == []
+
+
+def test_a_schema_change_narrows_before_the_tag_and_widens_after_it():
+    fake = Fake()
+    fake.seed()
+    fake.build[OUT] = V2
+    order = []
+    fake.after_dbt = lambda f: order.append("dbt")
+    real_sql, real_commit = fake.sql, fake.commit
+    fake.sql = lambda role, s: (order.append(re.findall(r'SELECT (.+?) FROM', s)[0]), real_sql(role, s))[1]
+    fake.commit = lambda wh, ch: (order.append("commit"), real_commit(wh, ch))[1]
+    assert w.run(ctx(), fake)[0] == 0
+    assert order == ["dbt", '"id", "region"', "commit", '"id", "region", "amount"']
+    assert fake.views[VIEW.relation] == V2 and fake.violations == []
+
+
+def test_a_first_publish_creates_the_view_after_the_tag():
+    fake = Fake()
+    assert w.run(ctx(), fake)[0] == 0
+    assert fake.views[VIEW.relation] == V1 and fake.tables[OUT]["tag"] == fake.tables[OUT]["main"]
+    assert fake.commits[0][0]["requirements"][1] == {"type": "assert-ref-snapshot-id", "ref": "audited", "snapshot-id": None}
+    assert fake.violations == []
+
+
+def test_a_409_exits_3_with_views_narrowed_and_the_tag_unmoved():
+    fake = Fake()
+    s0 = fake.seed()
+    fake.build[OUT], fake.commit_status = V2, 409
+    assert w.run(ctx(), fake)[0] == 3
+    assert fake.tables[OUT]["tag"] == s0 and fake.views[VIEW.relation] == {"id": "bigint", "region": "varchar"}
+    assert "audited" not in [e for e, _ in events(fake, "access_canary/r1")] and fake.violations == []
+
+
+def test_a_write_after_the_tested_read_fails_the_compare_and_set():
+    fake = Fake()
+    s0 = fake.seed()
+    real = fake.commit
+    fake.commit = lambda wh, ch: (fake._snap(OUT, V1, False), real(wh, ch))[1]  # main moves before the commit
+    assert w.run(ctx(), fake)[0] == 3
+    assert fake.tables[OUT]["tag"] == s0 and fake.leaks() == []
+
+
+def test_a_tag_moved_while_the_views_narrow_fails_the_compare_and_set():
+    fake = Fake()
+    fake.seed()
+    fake.build[OUT] = V2
+    real, moved = fake.sql, 999
+
+    def sql(role, stmt):  # another publisher, between this run's reads and its commit; main stays the tested one
+        real(role, stmt)
+        fake.tables[OUT]["snaps"][moved] = (V1, True)
+        fake.tables[OUT]["tag"] = moved
+    fake.sql = sql
+    assert w.run(ctx(), fake)[0] == 3 and fake.tables[OUT]["tag"] == moved
+    assert "audited" not in [e for e, _ in events(fake, "access_canary/r1")]
+
+
+def test_a_tag_moved_during_the_build_exits_3_and_no_view_is_touched():
+    fake = Fake()
+    fake.seed()
+    fake.build[OUT] = V2
+    fake.after_dbt = lambda f: f.tables[OUT].update(tag=f.tables[OUT]["main"])
+    assert w.run(ctx(), fake)[0] == 3
+    assert not [s for _, s in fake.statements if "VIEW" in s] and fake.commits == []
+
+
+def test_no_answer_from_the_catalog_on_the_commit_exits_3_narrowed():
+    fake = Fake()
+    fake.seed()
+    fake.build[OUT] = V2
+
+    def unreachable(wh, ch):
+        raise w.catalog_drift.Unreachable("timed out")
+    fake.commit = unreachable
+    assert w.run(ctx(), fake)[0] == 3 and fake.views[VIEW.relation] == {"id": "bigint", "region": "varchar"}
+
+
+def test_no_common_column_takes_the_deliberate_path_and_never_leaks():
+    fake = Fake()
+    fake.seed()
+    fake.build[OUT] = {"id": "varchar", "region": "bigint"}  # every common name retyped
+    assert w.run(ctx(), fake)[0] == 3  # published, and pages
+    assert fake.tables[OUT]["tag"] == fake.tables[OUT]["main"] and fake.views[VIEW.relation] == fake.build[OUT]
+    assert fake.leaks() == []  # readers' view failed closed between the commit and the widen
+
+
+@pytest.mark.parametrize("crash", ["narrow", "tag", "widen"])
+def test_a_crash_at_each_point_of_the_publish_never_exposes_untested_data(crash):
+    fake = Fake()
+    fake.seed()
+    fake.build[OUT], fake.crash = V2, crash
+    with pytest.raises(Crash):
+        w.run(ctx(), fake)
+    assert fake.violations == []
+
+
 # ---- trust boundaries --------------------------------------------------------------------------
 
 @pytest.mark.parametrize("bad", ["a.b", 'a.b.c"; DROP TABLE x --', "A.b.c", "a.b.c$refs", "a.b." + "x" * 64, "a..c", None])
