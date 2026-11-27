@@ -131,6 +131,11 @@ time and the final status. It holds no storage key and is never on `k2-catalog`.
 | 20 | refused under ADR-036 part 3 (host, redirect, address, size); the message names scheme and host only | nothing |
 | 30 | parse failed; the bytes are kept and land, and the batch fails at bronze | `raw.<ext>`, `fetch.json` |
 
+Added 2026-11-27: after a successful parse, fetch also writes `audits.json`,
+`{"audits": [{"name", "passed", "failures", "detail"}]}`, one entry per parser audit the bronze
+tables declare (`def <audit>(rows: list[dict]) -> list[str]`, in the parser module, run in fetch);
+the Spark audit task reads it into `audit_checks`, and a declared audit with no entry fails.
+
 Any other exit is a task error. The Spark task recomputes the sha256 from `raw.<ext>`, refuses a
 mismatch, writes the object by conditional PUT to `model.landing_key`, and adds one row to
 `lake.<fence>.landing_files` (`model.PLATFORM_TABLES`).

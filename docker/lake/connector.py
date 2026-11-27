@@ -24,8 +24,9 @@ load     recomputes the raw file's sha256 and size and refuses a mismatch with f
 audit    checks the batch at `audit`'s head, scoped to its rows (source_file_sha256 = its sha256),
          never the whole branch: parses (rows.jsonl there, each row exactly the table's columns),
          non_empty, row_count (the parser's count), keys_unique, in_domain:<column> per declared
-         pattern, values_unchanged (no published key with other values), and the parser's
-         declared audits; one audit_checks row each, at that snapshot.
+         pattern, values_unchanged (no published key with other values), and each declared
+         parser audit as fetch recorded it in audits.json (product code runs in the fetch
+         container, never here; no entry fails closed); one audit_checks row each, at that snapshot.
 publish  fast-forwards `main` to `audit` (Iceberg's fast_forward, which refuses anything else),
          only if the batch's newest audit at `audit`'s current head passed every check; a batch
          that staged nothing (the same bytes again) moves nothing.
@@ -122,6 +123,17 @@ class Run:
         # parser that feeds two tables needs the rows tagged by table first.
         [bronze] = self.pipeline["bronze"]
         return bronze
+
+    def audits(self) -> dict:
+        """audits.json's entries by name, as fetch wrote them; none when it wrote no file."""
+        path = self.entry / "audits.json"
+        if not path.exists():
+            return {}
+        try:
+            return {a["name"]: a for a in json.loads(path.read_text())["audits"]}
+        except (ValueError, KeyError, TypeError) as e:
+            print(f"audit: audits.json does not read ({type(e).__name__}); every parser audit fails")
+            return {}
 
     def lines(self) -> list[str] | None:
         """rows.jsonl's lines, or None when fetch's parse failed (exit 30)."""
@@ -308,7 +320,7 @@ def audit(run: Run, store, lake) -> tuple[int, dict]:
         print(f"audit refused: {AUDIT} of {table} holds batch {pending}, not this one", file=sys.stderr)
         return EXIT_REFUSED, {"table": table}
     head = refs.get(AUDIT, refs.get("main"))
-    results = audit_results(bronze, lines, lake, head, sha)
+    results = audit_results(bronze, lines, lake, head, sha, run.audits())
     at = now()
     rows = [{"table_name": table, "batch_id": run.run_id, "snapshot_id": head, "check_name": check,
              "passed": passed, "detail": detail[:1000], "checked_at": at, "run_id": run.run_id,
@@ -385,7 +397,31 @@ def fast_forward_sql(table: str) -> str:
             f"to => {string_literal(AUDIT)})")
 
 
-def audit_results(bronze: dict, lines: list[str] | None, lake, head, sha: str) -> list[tuple[str, bool, str]]:
+def parser_audits(declared: list[str], found: dict) -> list[tuple[str, bool, str]]:
+    """One result per declared parser audit, from fetch's audits.json: passed only if fetch
+    recorded it passed with no failure; a declared audit with no entry fails closed. The
+    functions are product code and ran in the fetch container; nothing here imports them."""
+    for extra in sorted(set(found) - set(declared)):
+        print(f"audit: audits.json holds {extra!r}, which the pipeline does not declare; ignored")
+    out = []
+    for check in declared:
+        a = found.get(check)
+        if a is None:
+            out.append((check, False, "not run: no result for it in fetch's audits.json"))
+            continue
+        passed, failures, detail = a.get("passed"), a.get("failures"), str(a.get("detail") or "")
+        counted = isinstance(failures, int) and not isinstance(failures, bool)
+        if passed is True and counted and failures == 0:
+            out.append((check, True, ""))
+        elif counted and failures > 0:
+            out.append((check, False, f"{failures} failing rows: {detail}"))
+        else:
+            out.append((check, False, detail or f"audits.json records passed {passed!r}, failures {failures!r}"))
+    return out
+
+
+def audit_results(bronze: dict, lines: list[str] | None, lake, head, sha: str,
+                  audits: dict) -> list[tuple[str, bool, str]]:
     """`(check, passed, detail)` in check_names order; a batch that did not parse has one row."""
     if lines is None:
         return [("parses", False, "fetch could not parse the file; its bytes are landed")]
@@ -402,10 +438,7 @@ def audit_results(bronze: dict, lines: list[str] | None, lake, head, sha: str) -
         detail = (f"{got} rows on {AUDIT}, the parser wrote {wanted}" if check == "row_count"
                   else f"{got} rows fail it" if got else "")
         out.append((check, got == wanted, detail))
-    # The parser's own audit functions are product code, which runs in the fetch container, never
-    # here with a storage key: until fetch hands their results over, each fails the batch.
-    out += [(a, False, "not run: a parser audit has no runner in the Spark task") for a in bronze["audits"]]
-    return out
+    return out + parser_audits(bronze["audits"], audits)
 
 
 def summary(run: Run, sha: str) -> dict:
