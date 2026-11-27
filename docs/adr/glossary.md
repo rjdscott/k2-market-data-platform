@@ -1221,6 +1221,33 @@ requirement is stale the catalog answers 409 and moves no tag, so a publisher wo
 values cannot overwrite another's move.
 Where: [ADR-061](ADR-061-readers-see-dbt-outputs-through-a-view-over-the-tested-tag.md) point 4.
 
+### Storage key and remote signing
+
+A **storage key** is an access key and secret for MinIO; each engine has one, a MinIO user whose policy
+lists the bucket paths it may read, write or delete. Every S3 request is signed with the secret, and
+MinIO checks the signature against the key's policy. With **remote signing**, an engine asks the
+catalog to sign each request with the warehouse's stored credential instead of its own key, so its own
+key is never checked; with **vended credentials**, the catalog hands out a short-lived key per table.
+K2 uses neither: every warehouse has both off, so each engine's own key is the one MinIO checks.
+Where: [ADR-054](ADR-054-a-storage-key-per-engine-with-catalog-signing-off.md).
+
+### dbt wrapper and run records
+
+The **wrapper**, `k2-dbt build`, is the one program that runs a product's dbt build: it cancels the
+builder's leftover queries, repairs what a dead run left, pins each input at its tested snapshot, runs
+one `dbt build`, restores every output of a failed build, and on a pass moves the
+[tested-data marker](#tested-data-marker). A **run record** is one row per output per event
+(`started`, `rolled_back`, `audited`, `reconciled`) in `governance.run_records.run_record`, naming the
+snapshots before and after; the next run reads them to finish what an earlier one left.
+Where: [ADR-062](ADR-062-dbt-builds-silver-and-gold-per-product-through-one-wrapper.md).
+
+### Orphaned query
+
+A Trino query whose client has gone, for example a build container that was killed. Trino keeps
+running it until its client timeout (five minutes by default), and it can still commit, so the wrapper
+cancels every query its builder still runs before it reads any state.
+Where: [ADR-062](ADR-062-dbt-builds-silver-and-gold-per-product-through-one-wrapper.md) part 4.
+
 ### Access rules and the file group provider
 
 Trino's file-based access control reads one JSON rules file: ordered lists of rules for catalogs,

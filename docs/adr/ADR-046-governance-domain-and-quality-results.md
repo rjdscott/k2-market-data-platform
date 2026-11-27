@@ -208,3 +208,35 @@ land their first table in this domain.
   [`dbt_artifacts` README](https://github.com/brooklyn-data/dbt_artifacts) and Elementary's
   [`dbt-data-reliability`](https://github.com/elementary-data/dbt-data-reliability), read
   2026-11-25
+
+---
+
+## Outcome (2026-11-27, quality results recorded per product)
+
+The mechanism of this decision retired with the old pipeline in phase 000: the `dbt_marts` DAG, its
+per-domain `dq.dbt_test_results` tables, `lake.audit.checks` and the view
+`governance.quality_results.dq_results` are archived in `legacy/v3-lake-ingest/`. Its principle held, one
+level down: each writer records its own tests' results beside its own outputs, and governance only reads.
+
+What replaced it, from phase 002:
+
+- **Per product, not per domain.** Every product is built by its own builder `dbt_<fence>`
+  ([ADR-062](ADR-062-dbt-builds-silver-and-gold-per-product-through-one-wrapper.md)), and the compiled
+  project's on-run-end hook, `k2_results` (`dbt/macros/k2_results.sql`), writes every data and unit test
+  of the invocation, passed, failed, errored or skipped, to `<domain>_build.<fence>__base.dq_test_results`
+  in one `INSERT`, with this decision's columns plus `run_id` and `release_id`, which join a result to the
+  product's run records. One dbt invocation builds a whole product, so the per-node gap of cosmos is gone:
+  a test that ran is recorded; a build Airflow never started still records nothing.
+- **A product, built like any other.** `governance.quality-results` (`contracts/governance/quality-results/`)
+  is a dbt table, `test_results`, hourly at minute 50, whose union of every product's results table is
+  compiled by k2gen from the release's products (`k2_test_results`, `platform/k2gen/k2gen/emit/dbt.py`),
+  so a new product is in it from its first build with no change here. Readers read it through its view
+  over the tested tag, like any output (ADR-061).
+- **Not in it yet:** the bronze audits' results, `lake.<fence>.audit_checks`, written by Spark.
+- **Self-attested.** The builder owns its whole base namespace, results table included, so any
+  query it runs could insert or delete result rows; the union's `writer` column is a value the writer sets. The
+  results are the builder's own word until the wrapper writes them from `run_results.json` as a platform
+  principal, which is deferred (ADR-062, Consequences).
+
+`scripts/verify/dbt-wrapper.sh` plants a failing test and reads its row back, and checks that every run
+that ran dbt wrote its rows (2026-11-27).

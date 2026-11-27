@@ -1,6 +1,6 @@
 # ADR-035: Trino and dbt for marts; the Spark and dbt boundary
 
-**Status:** Accepted
+**Status:** Accepted; its Spark and dbt boundary table **superseded by [ADR-062](ADR-062-dbt-builds-silver-and-gold-per-product-through-one-wrapper.md)** (silver and gold built per product by dbt on Trino through one wrapper; scoped, Trino as the SQL engine stands)
 **Date:** 2026-11-25
 **Author:** Rob Scott
 **Category:** Query engine
