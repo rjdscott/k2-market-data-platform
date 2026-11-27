@@ -20,6 +20,7 @@ from typing import Any
 
 import pytest
 import yaml
+from test_checks_connectors import kinds
 
 from k2gen import model
 from k2gen.emit import lake
@@ -621,6 +622,26 @@ def test_a_kafka_connector_lands_in_a_table_and_a_fetch_kind_in_objects() -> Non
     assert landing in streamed and landing_files not in streamed
     assert '"record_value" BINARY' in streamed[landing]
     assert '"prefixes": []' in streamed[model.STORAGE_PLAN] and '"kind": "landing"' not in streamed[model.BACKUP_SET]
+
+
+def test_a_kafka_landing_is_restored_and_never_expired_and_a_file_landing_keeps_its_objects() -> None:
+    """The kinds overlay: the Kafka landing is a table backed up as restore at main, with snapshot
+    retention and no landing objects (so maintain's 14-day landing expiry has nothing of it); a
+    public-api product lands objects under its prefix, as a file kind does."""
+    out = lake.emit(load(kinds()))
+    backup = json.loads(out[model.BACKUP_SET])["entries"]
+    tables = {e["table"]: (e["mode"], e["ref"]) for e in backup if e["kind"] == "table"}
+    assert tables["k2.station_feed.landing"] == ("restore", "main")
+    assert tables["k2.station_feed.bronze_frames"] == ("rebuild", "main")  # restaged from the landing by offset
+    prefixes = {e["prefix"] for e in backup if e["kind"] == "landing"}
+    assert prefixes == {"sensor-net/station-readings/", "sensor-net/station-list/"}  # none for the Kafka product
+    assert json.loads(out[model.STORAGE_PLAN])["landing"]["prefixes"] == sorted(prefixes)
+    retention = json.loads(out[model.RETENTION])
+    assert {k for k in retention if k.startswith("k2.station_feed.")} == {
+        "k2.station_feed.landing", "k2.station_feed.bronze_frames", "k2.station_feed.audit_checks"}
+    assert "k2.station_list.landing_files" in retention
+    ddl = out[model.ddl_path("spark", "k2", "station_feed", "bronze_frames")]
+    assert '"kafka_partition" INT NOT NULL' in ddl and '"record_value" BINARY' in ddl
 
 
 def test_a_contract_platform_table_is_refused_until_its_ddl_is_decided() -> None:

@@ -1,0 +1,43 @@
+apiVersion: v1.1.0
+kind: DataProduct
+id: sensor-net.station-feed
+name: station-feed
+version: 1.0.0
+status: active
+domain: sensor-net
+type: sourceAligned
+description:
+  purpose: Synthetic station frames, every record of a made-up topic landed as read.
+  limitations: Synthetic; no real station or measurement.
+team:
+  name: sensor-team
+tags: [synthetic]
+support:
+  - channel: sensor-team-requests
+    url: "mailto:sensor-team@example.org"
+    tool: email
+    scope: issues
+    description: Questions and access requests, answered by the made-up sensor team.
+outputPorts:
+  - name: bronze_frames
+    version: 1.0.0
+    contractId: sensor-net.station-feed.bronze_frames
+customProperties:
+  - property: connector
+    value:
+      kind: kafka
+      brokers: "redpanda:9092"
+      registry: "http://redpanda:8081"
+      topic: example.station.frames
+      envelope:
+        format: avro-confluent
+        contract: sensor-net.station-feed.bronze_frames
+      filter:
+        field: stream
+        in: [reading]
+      payload: json
+      startFrom: earliest-retained
+      maxOffsetsPerPartition: 1000
+  - property: schedule
+    value:
+      cron: "*/5 * * * *"
