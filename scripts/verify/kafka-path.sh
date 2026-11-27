@@ -4,9 +4,8 @@
 # release's own docker/lake/connector.py in the shape the DAG factory gives it (run-path-lib.sh's
 # WRAPPER, by docker exec into one long-lived Spark container), on the synthetic fixture product
 # market-capture.kafka-fixture (platform/k2gen/tests/fixtures/kafka-fixture/) in a release of this
-# tree compiled here. Its pipeline.json is k2gen's own: the connector reads `connector`, `landing`,
-# `bronze[0].table` and `checks` alone, all compiled as I-1 freezes them (k2gen's `values` lists
-# the four lineage columns too, which nothing here reads). Frames: scripts/lib/kafka_seed.py's,
+# tree compiled here. Its pipeline.json is k2gen's own (W1-2's emitter); the connector reads
+# `connector`, `landing`, `bronze[0].table` and `checks` of it. Frames: scripts/lib/kafka_seed.py's,
 # from services/capture-rust/tests/fixtures/synthetic-kraken-20s.jsonl (1185 frames, 3 trades),
 # and its 20 heartbeat lines alone for a batch of control frames.
 #
@@ -39,6 +38,7 @@
 #   2 with --accept-data-loss the run lands from the log start, records the gap in k2.kafka-gaps
 #     and returns it as offsetGaps (what the run's offset_gap record is written from)
 #   3 the audit's accounting passes with the gap excluded, and publish moves main
+#   4 after one further clean run the newest landing commit still carries the gap (cumulative)
 # Spark task wall times go to <rp>/times and are printed as INFO lines.
 #
 # One container job (run-path-lib.sh's guards); a killed run leaves the lake to
@@ -47,7 +47,7 @@ set -uo pipefail
 # shellcheck source=scripts/lib/run-path-lib.sh
 . "$(dirname "$0")/../lib/run-path-lib.sh"
 GROUP=${2:-a}
-case $GROUP in a) N=9 ;; b) N=3 ;; *) echo "kafka-path: no group $GROUP (a or b)" >&2; exit 2 ;; esac
+case $GROUP in a) N=9 ;; b) N=4 ;; *) echo "kafka-path: no group $GROUP (a or b)" >&2; exit 2 ;; esac
 rp_start kafka-path "${1:-}" "$N"
 FX=platform/k2gen/tests/fixtures/kafka-fixture
 KF=market-capture.kafka-fixture DAG=kafka_fixture
@@ -117,7 +117,8 @@ PY2
   echo "$P: trimmed $(cat "$RP/trims.json") (partition: new log start)"
   ktask b3 load; facts b3
   ktask b4 load --accept-data-loss; ktask b4 audit; ktask b4 publish; facts b4
-  timings; claims below accepted gap-audit
+  seed "$FULL"; run b5; facts b5
+  timings; claims below accepted gap-audit carried
   finish
 fi
 

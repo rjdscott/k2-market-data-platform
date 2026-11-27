@@ -359,7 +359,7 @@ def claim(name: str, rp: Path) -> bool:
         trims, r = load_json(rp, "trims.json"), result(rp, "b4.load")
         [(topic, ends)] = offsets_of(connector_snapshots(f1["landing"])[-1][4]).items()
         newest = connector_snapshots(f["landing"])[-1][4]
-        want = {topic: {p: [ends[int(p)], o] for p, o in trims.items()}}
+        want = {topic: {p: [[ends[int(p)], o]] for p, o in trims.items()}}
         gaps = sorted((g["partition"], g["committed"], g["logStart"], g["lost"]) for g in r.get("offsetGaps", []))
         bad = []
         if rc(rp, "b4.load") != "0" or json.loads(newest.get("k2.kafka-gaps", "{}")) != want:
@@ -393,6 +393,17 @@ def claim(name: str, rp: Path) -> bool:
         acc = next((c[4] for c in rows if c[2] == "accounting"), "")
         return say(3, "the audit's accounting passes with the gap excluded, and publish moves main", bad,
                    f"accounting: {acc}; through-offsets = landing ends = topic ends")
+    if name == "carried":  # b4
+        f4, f = load_json(rp, "facts-b4.json"), load_json(rp, "facts-b5.json")
+        before, after = connector_snapshots(f4["landing"])[-1], connector_snapshots(f["landing"])[-1]
+        gaps = after[4].get("k2.kafka-gaps")
+        bad = [] if after[0] != before[0] and gaps == before[4].get("k2.kafka-gaps") and gaps else [
+            f"b5's landing commit {after[0]} carries {gaps}, b4's {before[0]} {before[4].get('k2.kafka-gaps')}"]
+        if any(rc(rp, f"b5.{t}") != "0" for t in ("load", "audit", "publish")):
+            bad.append(f"b5 exits {[rc(rp, f'b5.{t}') for t in ('load', 'audit', 'publish')]}")
+        return say(4, "after one further clean run the newest landing commit still carries the gap", bad,
+                   f"b5 landed {result(rp, 'b5.load').get('landed')} in landing commit {after[0]}, which carries "
+                   f"k2.kafka-gaps {gaps}, as b4's did; its audit and publish exit 0")
     raise SystemExit(f"kafka_path_probe.py: no claim {name}")
 
 
