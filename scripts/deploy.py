@@ -1359,7 +1359,8 @@ def held_ref(iid: str, image: str, local: str) -> str:
         ref = f"{local}:{iid.removeprefix('sha256:')[:12]}"
         run("docker", "tag", iid, ref)
         return ref
-    repo = (image.rsplit(":", 1)[0] if ":" in image.rsplit("/", 1)[-1] else image).split("@")[0]
+    name = image.split("@")[0]  # the digest off first: a ref may carry a tag and a digest (<repo>:<tag>@sha256:...)
+    repo = name.rsplit(":", 1)[0] if ":" in name.rsplit("/", 1)[-1] else name
     short = repo.removeprefix("docker.io/").removeprefix("library/")
     digests = json.loads(run("docker", "image", "inspect", "--format", "{{json .RepoDigests}}", iid).stdout) or []
     match = [d for d in digests if d.split("@")[0].removeprefix("docker.io/").removeprefix("library/") == short]
