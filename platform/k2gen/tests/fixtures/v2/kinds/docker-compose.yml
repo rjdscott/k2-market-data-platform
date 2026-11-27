@@ -1,0 +1,8 @@
+# Only what connectors.kafka-host-outside reads: the services and their networks.
+services:
+  redpanda:
+    networks: [k2-net]
+  spark-iceberg:
+    networks: [k2-net, k2-catalog]
+  minio-public:
+    networks: [k2-egress]

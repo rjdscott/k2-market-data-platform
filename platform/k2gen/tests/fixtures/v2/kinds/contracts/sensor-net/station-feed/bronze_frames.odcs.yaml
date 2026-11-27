@@ -1,0 +1,56 @@
+apiVersion: v3.2.0
+kind: DataContract
+id: sensor-net.station-feed.bronze_frames
+name: bronze_frames
+version: 1.0.0
+domain: sensor-net
+description:
+  purpose: One row per frame the bronze filter kept, the landing's columns as landed.
+team:
+  name: sensor-team
+schema:
+  - id: bronze_frames
+    name: bronze_frames
+    physicalName: station_feed.bronze_frames
+    physicalType: table
+    properties:
+      - name: kafka_partition
+        physicalType: integer
+        required: true
+        primaryKey: true
+        primaryKeyPosition: 1
+        description: The topic partition.
+      - name: kafka_offset
+        physicalType: bigint
+        required: true
+        primaryKey: true
+        primaryKeyPosition: 2
+        description: The record's offset in its partition.
+      - name: kafka_timestamp
+        physicalType: timestamp(6) with time zone
+        description: The record's timestamp.
+      - name: record_key
+        physicalType: varbinary
+        description: The key's bytes as read.
+      - name: record_value
+        physicalType: varbinary
+        description: The value's bytes as read.
+      - name: batch_id
+        physicalType: varchar
+        description: The landing batch that landed the record.
+      - name: landed_at
+        physicalType: timestamp(6) with time zone
+        description: When that landing batch committed.
+      - name: run_id
+        physicalType: varchar
+        description: The run that landed the record.
+      - name: release_id
+        physicalType: varchar
+        description: The release that run resolved.
+customProperties:
+  - property: layer
+    value: bronze
+  - property: build
+    value: connector
+  - property: backup
+    value: rebuild
