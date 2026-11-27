@@ -166,6 +166,9 @@ def test_creates_k2_then_every_domain_warehouse_with_remote_signing_off(tmp_path
             assert b["storage-profile"]["remote-signing-enabled"] is False
             assert b["storage-profile"]["key-prefix"] == f"warehouse/{b['warehouse-name']}"
     assert all(w["storage-profile"]["remote-signing-enabled"] is False for w in state["warehouses"])
+    # The lake bucket, then the plan's landing bucket: plain, no --with-lock, no versioning.
+    assert [c["argv"] for c in calls if c["tool"] == "mc" and c["argv"][0] != "admin"] == \
+        [["mb", "--ignore-existing", "k2/k2-lake"], ["mb", "--ignore-existing", "k2/k2-landing"]]
 
 
 def test_existing_warehouses_that_sign_are_switched_off_in_place_never_recreated(tmp_path: Path) -> None:
