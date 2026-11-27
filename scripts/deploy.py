@@ -86,6 +86,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import urllib.request
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -120,6 +121,7 @@ POINTERS = ("trino", "airflow", "spark", "prometheus", "k2-api")  # A1
 REFRESH_S = 5  # Trino rereads rules, groups and the password file this often (compiled etc, S11 and S13)
 RULES_WAIT_S = 4 * REFRESH_S  # how long a swap may take to reach Trino: 0.1 to 4.7 s measured (spike c)
 HEALTH_WAIT_S = 300  # a recreated service's start, Trino's included
+API_TRIES, API_WAIT_S = 5, 2.0  # k2-api reads its pointer at every request; the tries cover a slow first answer
 DISK_FLOOR_GIB = 2.0  # free at the releases root; a release is a few MiB, a pulled image is not
 MEM_FLOOR_GIB = 2.0  # MemAvailable on the host: a recreate starts a container before the old one's memory returns
 DONE = ("done", "rollback-done")
@@ -307,6 +309,14 @@ def compose(ctx: Ctx, rel: Release, *args: str) -> list[str]:
         override.write_text(json.dumps({"services": pinned}, indent=2))
     return ["docker", "compose", "-p", ctx.project, "--project-directory", str(ctx.home),
             "-f", str(rel.root / model.RELEASE_COMPOSE), "-f", str(override), *args]
+
+
+def rendered(ctx: Ctx, rel: Release) -> dict[str, Any]:
+    """The release's compose as compose renders it, interpolated from this environment and the checkout's
+    .env, every declared network and volume included (--all-resources), the default set's services."""
+    doc: dict[str, Any] = json.loads(run(*compose(ctx, rel, "--all-resources", "config", "--format", "json"),
+                                         env=compose_env(ctx)).stdout or "{}")
+    return doc
 
 
 def compose_env(ctx: Ctx) -> dict[str, str]:
@@ -1142,6 +1152,13 @@ def verify(ctx: Ctx, target: Release, previous_canary: str | None) -> list[str]:
         wrong.append(f"no container of compose project {ctx.project!r}: K2_COMPOSE_PROJECT names another project")
     elif missing := sorted(expected - running):
         wrong.append(f"{len(running & expected)} of the release's {len(expected)} long-running services run; not running: {', '.join(missing)}")
+    api = svc.get("k2-api")
+    if api and not api.get("profiles") and str(api.get("restart", "no")) != "no":  # W3-6: k2-api is a part too
+        said, where = api_release(ctx, target)
+        if said != target.id:
+            wrong.append(f"k2-api serves {said}, not {target.id} ({where})" if said else f"k2-api did not answer: {where}")
+        else:
+            lines.append(f"k2-api: GET {where} names {said}")
     fence = catalog_fence(ctx)
     if fence.returncode:
         wrong.append(f"catalog fence exit {fence.returncode}: {tail(fence, 6)}")
@@ -1166,6 +1183,26 @@ def verify(ctx: Ctx, target: Release, previous_canary: str | None) -> list[str]:
     if wrong:
         raise Failed("verify: " + "; ".join(wrong))
     return lines
+
+
+def api_release(ctx: Ctx, rel: Release) -> tuple[str | None, str]:
+    """(the release k2-api says it serves, or None; where it asked or why not): GET /v1/release on the
+    port the release's rendered compose publishes, a few tries while a recreated k2-api starts."""
+    port = (rendered(ctx, rel).get("services", {}).get("k2-api", {}).get("ports") or [{}])[0]
+    if not port.get("published"):
+        return None, "the release's compose publishes no port for k2-api"
+    host = port.get("host_ip") or "127.0.0.1"
+    url = f"http://{'127.0.0.1' if host == '0.0.0.0' else host}:{port['published']}/v1/release"
+    why = ""
+    for i in range(API_TRIES):
+        try:
+            with urllib.request.urlopen(url, timeout=3) as answer:
+                return str(json.load(answer)["release"]), url
+        except (OSError, ValueError, KeyError, TypeError) as e:  # no answer, an error status, not the document
+            why = f"{url}: {type(e).__name__}: {str(e)[:160]}"
+        if i + 1 < API_TRIES:
+            time.sleep(API_WAIT_S)
+    return None, why
 
 
 def catalog_fence(ctx: Ctx) -> subprocess.CompletedProcess[str]:

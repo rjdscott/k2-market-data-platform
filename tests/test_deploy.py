@@ -17,12 +17,15 @@ scripts/verify/deploy_rehearsal.py (`make deploy-rehearsal`).
 from __future__ import annotations
 
 import hashlib
+import http.server
 import importlib.util
 import json
 import os
 import subprocess
 import sys
+import threading
 import time
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
@@ -136,9 +139,11 @@ pinned = json.loads(open(files[1]).read())["services"]
 rest = A[A.index(files[1]) + 1:]
 if rest[0] in ("--profile", "rm", "up"):
     log("compose", *rest)  # the exact command, for the tests that assert it
-while rest[0] == "--profile":
-    rest = rest[2:]
+while rest[0] in ("--profile", "--all-resources"):
+    rest = rest[2:] if rest[0] == "--profile" else rest[1:]
 if rest[0] == "config":
+    if "json" in rest:  # rendered: the World's k2-api port, and its networks
+        print(json.dumps(S["rendered"]))
     sys.exit(0)
 if rest[0] == "rm":
     S["containers"] = [c for c in S["containers"] if c["service"] != rest[-1]]
@@ -177,7 +182,31 @@ sys.exit(f"fake docker: no answer for {A}")
                          "K2TOOLS": ROOT / "docker/tools/k2tools.py", "K2_BACKUP_DIR": tmp / "backup"}.items():
                 monkeypatch.setenv(k, str(v))
             images = {r: "sha256:" + r[-64:] for r in (A, B, TRINO, LK, LK2)} | {TOOLS: "sha256:0123456789ab" + "0" * 52}
-            self.write({"containers": [], "images": images, "tables": {}, "oneshots": ["lake-init"]})
+            # k2-api on a loopback port of this test: /v1/release names the release its pointer names,
+            # or another (api_says), or answers 503 (api_says = "down")
+            self.api_says: str | None = None
+            world = self
+
+            class Api(http.server.BaseHTTPRequestHandler):
+                def do_GET(self) -> None:
+                    try:
+                        rid = world.api_says or os.readlink(world.root / "pointers/k2-api").removeprefix("../")
+                    except OSError:
+                        rid = "down"
+                    body = json.dumps({"release": rid}).encode()
+                    self.send_response(503 if rid == "down" else 200)
+                    self.end_headers()
+                    self.wfile.write(body)
+
+                def log_message(self, *a: Any) -> None:
+                    pass
+
+            self.api = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Api)
+            threading.Thread(target=self.api.serve_forever, daemon=True).start()
+            port = {"host_ip": "127.0.0.1", "target": 8095, "published": str(self.api.server_address[1]), "protocol": "tcp"}
+            self.write({"containers": [], "images": images, "tables": {}, "oneshots": ["lake-init"],
+                        "rendered": {"services": {"k2-api": {"ports": [port]}}, "networks": {}}})
+            monkeypatch.setattr(deploy, "API_WAIT_S", 0)
             for f in ("tls/ca.pem", "trino/password.db", "tls/trino.pem", "principals/pub_station_readings.password",
                       "principals/svc.platform.password", *(f"principals/{p}.password" for p in (
                           "dbt_station_readings", "dbt_daily_load", "pub_daily_load", "svc.runs"))):  # the good set's builds
@@ -328,8 +357,10 @@ sys.exit(f"fake docker: no answer for {A}")
                 expect: e.replace("\n    masked: [operator_note]", "").encode()} | bumped_product("2.0.0")
 
     @pytest.fixture
-    def world(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> World:
-        return World(tmp_path, monkeypatch)
+    def world(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[World]:
+        w = World(tmp_path, monkeypatch)
+        yield w
+        w.api.shutdown()
 
     def records(w: World) -> list[dict[str, Any]]:
         return deploy.history(w.root)
@@ -877,6 +908,7 @@ sys.exit(f"fake docker: no answer for {A}")
         back = deploy.make_plan(world.ctx, r_old, [r_new])
         assert back.remove == ["k2-api"] and "k2-api" not in {*back.recreate, *back.oneshots}, back
         world.log.unlink()
+        world.api_says = "down"  # alpha.3.2's k2-api is a profiled stub: verify must not ask it
         with deploy.lock(world.root):
             assert deploy.rollback(world.ctx) == 0  # was exit 3: verify found the branch's k2-api on alpha.3.2
         assert composed(world) == [["--profile", "api", "rm", "--stop", "--force", "k2-api"]], composed(world)
@@ -896,6 +928,19 @@ sys.exit(f"fake docker: no answer for {A}")
         with deploy.lock(world.root):
             assert deploy.rollback(world.ctx) == 0
         assert world.image_of("airflow-migrate") == "sha256:" + "b" * 64 and records(world)[-1]["step"] == "rollback-done"
+
+    @pytest.mark.parametrize("says, ok", [(None, True), ("v0.0.0-other-0123456789ab", False), ("down", False)])
+    def test_verify_asks_k2_api_which_release_it_serves(world: World, says: str | None, ok: bool) -> None:
+        r_old, r_new = real_pair(world)
+        assert world.deploy(r_new) == 0
+        world.api_says = says
+        if ok:
+            assert any(x.startswith("k2-api: GET http://127.0.0.1:") and x.endswith(f"/v1/release names {r_new.id}")
+                       for x in deploy.verify(world.ctx, r_new, None))
+        else:
+            with pytest.raises(deploy.Failed, match="k2-api serves v0.0.0-other" if says != "down" else "k2-api did not answer: .*503"):
+                deploy.verify(world.ctx, r_new, None)
+        assert "k2-api" in deploy.POINTERS  # and the readlink check maps service k2-api to its pointer by name
 
     def test_a_running_service_profiled_in_both_is_recreated_not_removed(world: World) -> None:
         r1 = world.release(compose=compose_doc(), images={"clickhouse": A})
