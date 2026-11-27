@@ -1,10 +1,12 @@
 # 21. Releases and deploy
 
-> **Describes the platform from release `v3.0.0-alpha.3`.**
+> **Describes the platform from release `v3.0.0-alpha.5`.**
 
 > **You will learn** how a product's documents become what the platform runs: the document set of a
 > tag, the checks, the compiler and its emitters, the sealed release and its manifest, the pointer
-> swap, recreating only what changed, verification and rollback.
+> swap and the pointers each service reads, the run code a release carries, recreating only what
+> changed, the drain, verification and rollback, and one product's whole path from a publisher's file to
+> a reader.
 > **Read this if** you will change a product, a grant or the compose file, or you operate the stack.
 > **Before this** chapter 20 (the target this phase builds toward); chapter 22 covers who may see what.
 
@@ -43,9 +45,10 @@ whether the release stays.
 
 ## The document set of a tag
 
-A **document set** is what a tag holds under four roots (`model.DOCUMENT_ROOTS`): `contracts/` (every
+A **document set** is what a tag holds under its roots (`model.DOCUMENT_ROOTS`): `contracts/` (every
 product's ODPS file, its ODCS contracts, SQL, tests and `grants.yaml`, plus `contracts/access/` for
-principals and roles), `domains/`, `tests/access/expectations.yaml` and `docker-compose.yml`. k2gen
+principals and roles), `tests/access/expectations.yaml`, `docker-compose.yml`, and the run code's six
+roots (below), so the tag approves the code that runs as well as the documents. k2gen
 reads each blob as the tag holds it (`git ls-tree`, `git cat-file`), never the working tree and never
 through `git archive`, whose output can follow the checkout's line-ending settings. Its
 `provenance.json` records the tag, its commit and `taggedAt`, and `setSha256`, the hash of the set.
@@ -82,11 +85,11 @@ or previous release, so one set compiles to one tree on any machine.
 | `trino_etc` | `compiled/trino/etc/`: HTTPS only, the Web UI off, a read-only reader catalog without statistics and a writable `<domain>_build` per domain | Trino, at start |
 | `trino_rules` | `compiled/trino/rules.json`, `groups.txt`: default deny, exact names (chapter 22) | Trino, every 5 s |
 | `trino_identity` | `password-authenticator.properties`, pointing at the password file | Trino, at start |
-| `api` | `compiled/api/principals.json`, the principals k2-api may act as | k2-api (phase 003) |
-| `lake` | DDL per table, each reader view's SQL, retention, the storage plan, the backup set | deploy; the dbt wrapper (phase 002) |
-| `pipeline` | one `pipeline.json` per product, the DAG list, the one-shots | Airflow (phase 002) |
-| `dbt` | one compiled dbt project of every dbt product | the dbt wrapper (phase 002) |
-| `catalog` | one catalog JSON per product and an index | the catalog site and REST (phases 003, 007) |
+| `api` | `compiled/api/principals.json`, the principals k2-api may act as | k2-api, at every request |
+| `lake` | DDL per table, each reader view's SQL, retention, the storage plan, the backup set | deploy; `lake-init`; the dbt wrapper; `make backup` |
+| `pipeline` | one `pipeline.json` per product, the DAG list, the one-shot kinds | the DAG factory and the one-shot operator in Airflow |
+| `dbt` | one compiled dbt project of every dbt product, a selector per product | the dbt wrapper (ADR-062) |
+| `catalog` | one catalog JSON per product and an index | k2-api's metadata routes and the catalog site (chapter 22) |
 
 ## The sealed release and its manifest
 
@@ -108,6 +111,21 @@ Desktop, and refuses a release that is not sealed.
   tag approved.
 - Local images are built from the tag's tree with file times set to 0, `SOURCE_DATE_EPOCH=0` and no
   build provenance, so one tree gives one image id and an unchanged service is not recreated.
+
+## The run code a release carries
+
+A release also holds the code its runs execute, copied from the tag under `platform/<repository path>`
+(`model.PLATFORM_CODE`, only the listed suffixes, never a test or a cache), so a deploy moves code and
+configuration together and a run never reads the checkout.
+
+| Root, in the release under `platform/` | What it is | Read by | A change needs |
+|---|---|---|---|
+| `docker/airflow/dags/` (`.py`) | the DAG factory and the one-shot operator | Airflow's DAG folder, through the `airflow` pointer, reread every 30 s | a drain (`dagShapeChange`) |
+| `docker/lake/` (`.py`, `.sh`, `.json`) | the Spark scripts of each run; `lake-init`'s `init-lake.sh` and the MinIO policies | each Spark task, from the release its run pinned; `lake-init`, from the release deploy names | nothing at deploy |
+| `docker/prometheus/rules/` (`.yml`) | alert rules | Prometheus, through its pointer, on the `SIGHUP` deploy sends at the swap | nothing |
+| `domains/` (`.py`) | each product's parser and its audits | the fetch one-shot, from its run's release | nothing |
+| `platform/runs/` (`.py`) | `k2runs`, the run-records client | the DAG's `record` task and the dbt wrapper | nothing |
+| `platform/catalog-site/` (`.py`) | `k2site`, the catalog site generator | deploy's `site` step, in `tools` | nothing |
 
 ## The releases root and the pointer swap
 
@@ -133,6 +151,14 @@ still unseen after 600 s); moved from inside a container that mounts the root re
 temporary name and a relative target, it is seen in 0.1 to 0.2 s. So the swap runs inside the `tools`
 one-shot, and a reader resolves its pointer once per run.
 
+| Pointer | Who reads through it, and when |
+|---|---|
+| `trino` | Trino's `--etc-dir` at start, and its rules, groups and password file every 5 s; `lake-init` by default; `make backup`, for the live release's backup set |
+| `airflow` | the DAG folder (`AIRFLOW__CORE__DAGS_FOLDER`); each DAG run's `resolve` task takes the pointer's target once and every later task reads that release, so a deploy mid-run leaves the run where it started |
+| `spark` | moved and verified with the others; no process resolves it, since each Spark task runs the scripts of the release its run pinned |
+| `prometheus` | the `rule_files` glob, reread on the `SIGHUP` deploy sends after the swap |
+| `k2-api` | every request: the catalog, the principals and the views of whatever release it names at that moment, so a deploy needs no restart |
+
 ## The deploy
 
 `make deploy RELEASE=<id or tag>` is one sequence, each step idempotent and recorded as one line of
@@ -142,26 +168,29 @@ refuses a second deploy at once.
 ```mermaid
 sequenceDiagram
   participant D as make deploy
+  participant A as Airflow
   participant T as tools one-shot
   participant S as services
   participant Q as Trino
-  D->>D: preflight: sealed, hashes, secrets, lock; images; plan from k2gen needs
+  D->>D: preflight: sealed, hashes, secrets named, lock, access suite on a throwaway lake
+  D->>D: images by digest; plan from k2gen needs; dump a database a migration touches
+  D->>A: drain: pause the affected DAGs, wait for their running tasks (300 s)
+  D->>S: one-shots: lake-init from the release's own script and policies
   D->>Q: DDL: compare every table, create Spark's missing ones
   D->>Q: views lose the columns the new contracts drop
-  D->>D: canary password line for this release
-  D->>T: move every pointer to R
-  D->>S: recreate only what needs.recreate names, one at a time, --no-deps
+  D->>T: canary line; move every pointer to R
+  D->>S: remove what R puts behind a profile; recreate only what changed
   Q-->>D: canary admitted: the new rules are loaded
-  D->>Q: late DDL; views gain the new columns
-  D->>D: verify every part
+  D->>Q: late DDL; views gain the new columns; verify every part
+  D->>T: done; site: the catalog site and dbt docs of R
+  D->>A: unpause what the drain paused
   alt any failure from the views step on
-    D->>T: the same steps toward R-1, images included
-    D->>D: exit 1, or 3 if the rollback fails too
+    D->>T: the same steps toward R-1, images included; exit 1, or 3
   end
 ```
 
-*Reading guide.* Top to bottom is the order of `scripts/deploy.py`. Exit 2 is a refusal before
-anything changed.
+*Reading guide.* Top to bottom is the order of `scripts/deploy.py`, whose docstring lists every step.
+Exit 2 is a refusal before anything changed.
 
 **Only what changed is recreated.** The plan is k2gen's own `needs`, the same function CI's
 `k2gen diff` prints, so the plan reviewed in a pull request is the plan deployed (`PLAN=1` prints it
@@ -170,6 +199,24 @@ release's compose file, with an override pinning every image to the manifest's d
 Redpanda, MinIO, Postgres or Lakekeeper is never recreated unless the release changes it and
 `ALLOW_STATEFUL` names it; a service whose profile is off is never started. A release that changes
 only rules or grants recreates nothing: Trino rereads its rules every 5 s.
+
+**The drain.** A deploy that restarts Trino or changes a DAG's tasks or code (`drain_need`) first
+pauses the DAGs it affects, writing their names to `<releases root>/deploy-paused.json` before the
+first pause, and waits for their running tasks, polling every 10 s for up to 300 s (`DRAIN_WAIT_S`).
+Still running then refuses the deploy and unpauses them, unless `ALLOW_RUNNING=1`, which is recorded.
+Deploy unpauses exactly what it paused once one release runs again. `make rollback` does not drain:
+it is the way out of a bad release, and waiting on that release's runs would hold it there.
+
+**One-shots run the release's own code.** `lake-init` runs `init-lake.sh` and the MinIO policies from
+the target release (`K2_LAKE_INIT_RELEASE`), not the checkout's, and reads the target's storage plan;
+compose creates a network only for a service it starts, so deploy creates any network the release
+declares that is missing (`k2-egress`, whose only member Airflow starts with `docker run`). A running
+service that the target declares only behind a profile is stopped and removed (`remove-<service>`), as a
+rollback to a release before `k2-api` joined the default set needs.
+
+**Preflight names every missing secret file** the target's services mount, the build principals' and
+publishers' password files and those the deploy logs in with, each with the `make` command that writes
+it, before anything changes.
 
 **Tables are only added.** A table is created when missing, accepted when its columns and partitioning
 equal the DDL, and refused, naming the difference, when they differ. A column drop or retype is a
@@ -191,8 +238,14 @@ loaded. Its password is written per release into the password file and kept, nev
 `make release-verify` asks every part which release it runs: the pointers as the Docker VM and each
 mounting container see them, the files under each pointer against the manifest, this release's canary
 admitted and the previous one refused, each container's image id against the manifest, each health
-check, then the hand-written access suite and the catalog drift check (chapter 22). It runs at the end
-of every deploy and on demand.
+check, `k2-api`'s own answer (`GET /v1/release`), then the catalog drift check, the hand-written access
+suite on the live stack (its storage-key rows signing from `tools` with each engine's key, by name, for
+that run) and the catalog fence's probes (chapter 22). It runs at the end of every deploy and on demand.
+
+**After done, the sites.** The release's catalog site and dbt docs are written into the `k2-site` volume
+that `k2-api` serves (chapter 22). A failure there is recorded as step `site` and never fails or rolls back
+the deploy; it runs after a rollback too, so the site describes what is live. `make site` reruns it;
+`make site-install` schedules it daily at 05:15 UTC as a systemd user timer.
 
 Before a release is deployed, `make spine-e2e` proves the compile, the rules and the deploy chain together on throwaway containers ([how and when](../development/spine-e2e.md)).
 
@@ -204,13 +257,66 @@ killed after each of its 13 steps and rerun always converged; a reader polling e
 release that dropped a masked column never saw the value. A first deploy has nothing to go back to and
 exits 3.
 
+## One product's path: ECB reference rates
+
+`fx-reference.ecb-fx-rates` is the first product to cross the whole run path. Its documents are
+`contracts/fx-reference/ecb-fx-rates/`, its parser `domains/fx-reference/parsers/ecb_fx.py`; its DAG,
+`ecb_fx_rates`, is one entry of the release's `compiled/airflow/dags.json`, built by the factory, and
+runs `resolve`, `fetch`, `load`, `audit`, `publish`, `build`, `expire`, `record` and a daily `maintain`.
+
+```mermaid
+flowchart TB
+  SRC["ECB 90-day file<br/>www.ecb.europa.eu, weekdays 15:30 UTC"]
+  F["fetch one-shot<br/>k2-egress only, no key<br/>allow-list, 64 MiB, 300 s"]
+  SP[("spool /spool/ecb_fx_rates/run/<br/>raw.xml, fetch.json, rows.jsonl, audits.json")]
+  LD["load, Spark<br/>sha256 again, conditional write"]
+  LAND[("k2-landing, by content hash<br/>expired after 14 days")]
+  AB[("bronze_daily, branch audit")]
+  AU{"audit, Spark<br/>rows, parse errors, checks,<br/>parser audits"}
+  BM[("bronze_daily main")]
+  W["dbt wrapper<br/>silver_rates, gold_eur_rates_daily;<br/>calendars.target_days at its tag"]
+  TAG[("gold base, tag audited")]
+  V["view fx_reference.ecb_fx_rates.gold_eur_rates_daily"]
+  R["p.analyst-a<br/>Trino SQL or k2-api REST"]
+  SRC --> F --> SP --> LD
+  LD --> LAND
+  LD --> AB --> AU
+  AU -->|"pass: publish, fast-forward"| BM --> W
+  AU -.->|"fail: main unmoved, later files wait"| AB
+  W -->|"tests pass: one tag commit"| TAG
+  V -->|"FOR VERSION AS OF 'audited'"| TAG
+  R --> V
+```
+
+*Reading guide.* Top to bottom is one run. Bytes are kept before anything parses them; bronze `main`
+moves only after its audit; readers follow the gold tag, which moves only after every test passed.
+
+Its limits, as built:
+
+- **No timeout of its own yet.** The fetch task stops at Airflow's 10-minute `execution_timeout`; the
+  pipeline's own timeout is set from 20 timed runs, not yet made.
+- **A failed batch holds later ones.** A file that fails its audit stays on the `audit` branch and the
+  next file waits behind it until an operator acts; its landing is kept past 14 days while unpublished.
+- **One slot each.** Every product shares one fetch slot, one Spark slot and two dbt slots, so this
+  product's run can wait behind another's.
+- **Gold only, and for information.** `p.analyst-a` holds `full_reader` on `gold_eur_rates_daily` alone;
+  bronze and silver offer no role. The ECB publishes its reference rates "for information purposes
+  only"; they are a fixing about 16:00 Frankfurt time, not a market close, and the terms (free reuse, the
+  ECB cited as the source, modifications stated) were read on 2026-11-27 before that grant.
+- **The parser is reviewed code with internet access.** The allow-list guards the download, not the
+  parser (ADR-036's Outcome).
+- **The repository holds no ECB data.** Its tests use synthetic files in the ECB's format.
+
 ## The limits, today
 
 - One host: the pointers and the lock are this host's. A second host, or a Linux engine without
   Docker Desktop's file sharing, is a revisit trigger of ADR-058.
-- The drain before a Trino restart or a DAG change prints a visible SKIP: no DAG runs until phase 002
-  brings the product pipelines, the `fetch` and `dbt-runner` images and the dbt wrapper. k2-api arrives
-  in phase 003; its pointer exists and nothing reads it.
+- `make rollback` does not drain, so a run of the release being rolled back can be cut off; its next
+  run's reconcile repairs what it left (ADR-062).
+- A release that changes only a MinIO policy does not apply it: `lake-init` runs only when the plan names
+  it, so the policy waits for a release that reruns `lake-init`.
+- CI compiles each pull request with `--previous none`, so a breaking change without a major version is
+  refused only at `make release`.
 - Images that kept releases name are never pruned, and no pruning exists yet; the releases root is in
   the backup set and must never be recreated.
 - Every change, one line included, goes through a tag and `make release`.
@@ -223,14 +329,17 @@ make release-status                 # the good release, pointers, canary names, 
 make release-diff RELEASE=<id>      # k2gen's diff from the good release, as Markdown
 make deploy RELEASE=<id> PLAN=1     # preflight, images and plan, then stop
 make release-verify                 # every part, the access suite and the drift check
+make site                           # the live release's catalog site and dbt docs, again
 ```
 
 ## Key points
 
 - A release is compiled from one tag's documents, checked first, sealed read-only, and named by the
   hash of its files and images.
-- A deploy moves one pointer per service from inside `tools`, recreates only what k2gen's needs name,
-  and a rules-only change restarts nothing.
+- A release carries its run code under `platform/`; a DAG run pins its release once, so a deploy
+  mid-run leaves it where it started.
+- A deploy drains the DAGs it affects, moves one pointer per service from inside `tools`, recreates
+  only what k2gen's needs name, and a rules-only change restarts nothing.
 - Views narrow before and widen after the rules change, so no masked value shows in between.
 - Verification asks every part; any failure from the views step on rolls everything back, images
   included, by the same steps.

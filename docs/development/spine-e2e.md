@@ -21,7 +21,12 @@ Terms used below:
   access rules in it decide who reads what.
 - **A throwaway lake**: Postgres, MinIO, Lakekeeper and Trino started for one test on a
   Docker network of their own, from a compiled release, and removed afterwards
-  ([`scripts/lib/throwaway-lake.sh`](../../scripts/lib/throwaway-lake.sh)).
+  ([`scripts/lib/throwaway-lake.sh`](../../scripts/lib/throwaway-lake.sh)). It is the lake a
+  deploy leaves: made by the real `docker/lake/init-lake.sh`, with one MinIO user and policy per
+  engine on this run's own keys and Trino on its own pair; the release's Spark tables (each
+  connector product's bronze, `landing_files` and `audit_checks`) made by Spark on its key while
+  Trino starts; and, when a row of the release's expectations runs `via: rest`, k2-api built
+  from the tree and joined to it, with a key for each such row's principal.
 - **A merge point**: a merge into a phase branch (for example
   `phase/001-release-and-rules-spine`), or the moment before a tag.
 
@@ -39,19 +44,20 @@ Every later stage reads that one release. Nothing is committed or tagged in your
 | `access-verify` | a throwaway lake, prefix `spine-e2e-av` | every row of [`tests/access/expectations.yaml`](../../tests/access/expectations.yaml) holds on that release | a role sees what it should not, or cannot see what it should |
 | `test-access` | a throwaway lake, prefix `access-test` | the proofs behind that suite ([`tests/access/prove.sh`](../../tests/access/prove.sh)): a loosened rule fails exactly its row, the drift and marker checks catch their plants, a rules-only release takes effect without a restart, each principal lands in its resource group, and a builder that replaces its base with a view of constants is caught | the verifier itself can no longer fail when it should, which is worse than a failing row |
 | `rules` | one throwaway lake, prefix `spine-e2e` | in order, [`trino_rules_test.py`](../../scripts/trino_rules_test.py) `suite` and `negative`, [`trino_rules_c1_test.py`](../../scripts/trino_rules_c1_test.py) (a builder tampering with its base), `control` (destructive, so after C1), then [`identity.sh --throwaway`](../../scripts/verify/identity.sh) (HTTPS, passwords, certificates, rotations) | a rule, a mask, the fence or the login path is wrong on Trino 484 |
-| `rehearsal` | compose project `k2-rehearsal` ([`deploy_rehearsal.py`](../../scripts/verify/deploy_rehearsal.py)) | the deploy chain: a first deploy that fails verification then succeeds, a planted view the drift check names, a rules-only release that restarts nothing, a forced mismatch that restores the previous release, `make rollback`, a dropped masked column polled every 50 ms, a kill after each of the deploy's steps then a rerun, two deploys at once, the backup-set refusal | a deploy claim of ADR-058 does not hold |
+| `rehearsal` | compose project `k2-rehearsal` ([`deploy_rehearsal.py`](../../scripts/verify/deploy_rehearsal.py)), with a Spark service built from the tag, so deploy's `ddl` step runs its real Spark path | by default `make deploy-rehearsal FAST=1`, for merge points: a first deploy that fails verification then succeeds, a planted view the drift check names, a rules-only release that restarts nothing, and kills after `swap` and `recreate` only, the skipped sections named in its summary. With `FULL=1`, before a tag, the whole chain: also one image changed, a forced mismatch that restores the previous release, `make rollback`, a dropped masked column polled every 50 ms, a kill after each of the deploy's steps then a rerun, two deploys at once, the backup-set refusal | a deploy claim of ADR-058 does not hold |
 
-Times, from the one recorded run (2026-11-27), whose output was `PASS rules 261s`,
-`PASS rehearsal 1347s` and a total of `1609 s` for the release, those two and the other two
-stages together: the rehearsal is most of it. No file in the repository records the other
-stages' times, so none is given. Memory: each throwaway lake refuses to start under 6 GiB
+Times, each from one recorded run, 2026-11-27, `make spine-e2e`: the fast rehearsal 416 s, then
+605 to 615 s after Spark joined the rehearsal's stack; a full run 1085 s. The first recorded run,
+before the fast rehearsal existed, printed `PASS rules 261s`, `PASS rehearsal 1347s` and a total
+of `1609 s`. No file in the repository records the other stages' times, so none is given. Memory: each throwaway lake refuses to start under 6 GiB
 available (`MIN_GIB` in `throwaway-lake.sh`), and the rehearsal under 10 GiB
 (`deploy_rehearsal.py`).
 
 ## How to use it
 
 ```bash
-make spine-e2e                      # all five stages
+make spine-e2e                      # all five stages, the fast rehearsal: after every merge into a phase branch
+FULL=1 make spine-e2e               # the whole rehearsal: before every tag
 ONLY="rules" make spine-e2e         # one stage again (several: ONLY="rules rehearsal")
 KEEP=1 make spine-e2e               # keep the logs
 ```
@@ -83,7 +89,8 @@ then delete the stale `k2-spine-e2e.*` and `s19-rehearsal-*` directories under `
 
 The rule of this project, also in [`CLAUDE.md`](../../CLAUDE.md):
 
-- **Run it** after every merge into a phase branch, and before every tag.
+- **Run it** after every merge into a phase branch, and before every tag with `FULL=1`. The
+  last line says which ran: `(fast rehearsal; FULL=1 before a tag)` or `(full rehearsal)`.
 - **Do not run it per step.** For a step, run the tests of what the step touches.
 - **It is not in CI.** CI runs the half that is fast enough for every pull request: the
   validation runner (`scripts/verify/ci-validate.sh`: docset, check, trial compile), the rules
@@ -121,6 +128,24 @@ And the first live deploy ([first-cutover-to-releases.md](../runbooks/first-cuto
 144 s from the command to verified) worked at the first attempt, after the same path had run
 on the rehearsal.
 
+Later the same day, building phase 002's run path, every unit suite again green, it caught four
+more:
+
+1. The rehearsal's scratch repository held no `docker/lake/`, so the lake it built could not run
+   the real `init-lake.sh` and its engine users: the scratch repository now carries the lake-init
+   files and makes its lake with them.
+2. `access-verify` could not stage the tables Spark builds (a connector product's bronze, its
+   `landing_files` and `audit_checks`): the throwaway lake had no Spark, and stage refused them.
+   The throwaway lake now makes the release's Spark tables itself, by Spark on its own key, and
+   stage checks they exist; the rules suite, which had made them by REST, now reads them too (its
+   create answered 409 once they existed).
+3. Every product's dbt build but one failed at `dbt parse`, because dbt parses every model of the
+   release's one project whatever the selector, and ECB's gold model's input had no pin in the
+   other products' builds.
+4. The cause of 3: the input pin check in `k2_input` ran at parse for the whole project, not at
+   compile for the selected models. It now refuses a missing pin only when the model compiles,
+   and `make test-dbt` builds the products in the order their input ports give.
+
 ## Alternatives considered
 
 | Alternative | Why not |
@@ -128,12 +153,12 @@ on the rehearsal.
 | Unit tests and CI only | Cheap, and what runs per step, but each suite sees one piece; all three faults above passed them |
 | Testing on the live stack | Finds the fault where it costs most: it can lock out readers or leave a half-deployed release |
 | A permanent staging environment | Another stack to keep alive and in step with the first on a single host with a stated 25 CPU / 48 GiB ceiling ([ADR-045](../adr/ADR-045-ceiling-25-cpu-48-gib.md)) |
-| All of it in CI on every pull request | The rehearsal alone is most of a 27-minute run, too slow for every pull request; so the cheap half is there and this is the rest |
+| All of it in CI on every pull request | The rehearsal alone is ten minutes of a run even in its fast form, too slow for every pull request; so the cheap half is there and this is the rest |
 | A container test framework | One more dependency to pin and learn over what a short shell script and the suites' own named rows already give |
 
 ## Known limits
 
-- It takes about 27 minutes (1609 s on 2026-11-27), and the rehearsal is most of it.
+- It takes about 18 minutes (a full run, 1085 s on 2026-11-27), and the rehearsal is most of it.
 - Nothing runs it automatically: a person or the build orchestrator types it.
 - It does not cover a fresh install from an empty host (that is the
   `/release-check` skill's fresh-clone gate), and it deploys nothing real: images are placeholders.

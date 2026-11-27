@@ -4,9 +4,12 @@ The working contract for this repo. K2 is a single-host crypto market data
 platform: Rust capture (`services/capture-rust/`) → Redpanda. The Iceberg lake on
 MinIO, catalogued by Lakekeeper, runs with Spark and Airflow 3 beside it (ADR-034;
 the scheduler Airflow replaced is archived in `legacy/prefect/`, with no rollback in
-the compose file), but the Spark batch ingest that filled it, its DAGs and the dbt
-marts are retired to `legacy/v3-lake-ingest/` and their tables dropped: no live
-crypto data lands in the lake until phase 004, and Airflow runs no DAG until phase 002.
+the compose file); the Spark batch ingest that filled it, its DAGs and the dbt
+marts are retired to `legacy/v3-lake-ingest/` and their tables dropped, and no live
+crypto data lands in the lake until phase 004. Airflow runs one DAG per product of the
+deployed release (`docker/airflow/dags/factory.py`): fetch in a one-shot on `k2-egress`
+alone, bronze landed, audited and published in order by Spark, silver and gold built by
+dbt through its wrapper (`docker/dbt-runner/k2_dbt.py`), a run record on every outcome.
 Trino 484 serves SQL over the lake through a catalog that is read-only at the
 connector (ADR-035), and writes only in one Lakekeeper warehouse per data domain
 of `contracts/domains.yaml` (ADR-044), under default-deny rules (ADR-059); readers see a
@@ -16,10 +19,14 @@ on `127.0.0.1:${K2_TRINO_PORT:-8443}`, with password logins under a local CA (AD
 `~/k2-secrets`, never in the repo). Its etc and rules are not in the checkout: `k2gen`
 compiles a tag's documents into a sealed release (`make release TAG=<annotated tag>`),
 `make deploy RELEASE=<id>` swaps it in by pointer, `make release-verify` checks it and
-`make rollback` undoes it (ADR-058). Airflow, Spark and Prometheus mount the releases root
-too, but the DAGs, Spark jobs and alert rules they would read through a pointer arrive in
-phase 002. Lakekeeper has no authentication, so it is on network `k2-catalog` alone with no
-host port (ADR-059 part 7; `make catalog-fence` probes it). A fresh clone does not start
+`make rollback` undoes it (ADR-058). Airflow, Spark, Prometheus and k2-api mount the releases
+root too: Airflow reads its DAGs and Prometheus its alert rules through their pointers, and each
+DAG run pins one release for its Spark scripts and one-shots. k2-api serves read-only REST, the
+catalog site and the dbt docs on `127.0.0.1:${K2_API_PORT:-8095}`, each data request run on
+Trino as its caller. Lakekeeper has no authentication, so it is on network `k2-catalog` alone
+with no host port (ADR-059 part 7; `make catalog-fence` probes it); MinIO publishes no host port
+either, and each engine, Trino included, signs with its own MinIO key (`make engine-keys`
+writes the five pairs into `.env`). A fresh clone does not start
 with `docker compose up`: `docs/runbooks/first-cutover-to-releases.md` and
 `deploy-a-release.md` give the order.
 The v2 ClickHouse medallion is **gone**: the Kotlin handlers that fed it retired
@@ -157,8 +164,10 @@ considered before committing*.
   `docker compose up -d --force-recreate --no-deps <service>`; `docker restart`
   does not pick it up. Directory mounts go stale too: switching the live
   checkout to a commit without `docker/airflow/dags/` and back left both Airflow
-  containers an empty DAG folder and no runs for 35 minutes (2026-11-25); recreate
-  `airflow-scheduler` and `airflow-dag-processor` after any such switch. The
+  containers an empty DAG folder and no runs for 35 minutes (2026-11-25), and Airflow
+  has read its DAGs through its pointer since; recreate a service whose checkout
+  directory mount moved (`dbt/` in the two Airflow ones, `docker/lake/` in
+  `spark-iceberg`) after any such switch. The
   releases root (`${K2_RELEASES}`, default `~/k2-releases`) is therefore mounted
   whole, read-only, at `/k2/releases`, created once and never recreated, and a
   pointer is moved only inside the `tools` container: on this Docker Desktop host a
@@ -167,15 +176,18 @@ considered before committing*.
 ## Tests
 
 ```bash
-make test          # python + rust + clickhouse + trino + dbt + notebooks + k2gen + airflow
+make test          # python + rust + clickhouse + trino + dbt + notebooks + k2gen + airflow + connectors + api + platform
 make test-python   # uv run --no-project --with pytest==9.2.0 --with pyyaml==6.0.4 --with fastavro==1.12.2 --with duckdb==1.4.4 pytest tests -q
 make test-rust     # rust:1.100.0-bookworm container; no local cargo needed
 make test-clickhouse  # the gold DDL + assertions on a throwaway 24.3 server
 make test-trino    # a compiled release's Trino etc and rules on a throwaway lake, HTTPS logins: each role sees only its policy
-make test-dbt      # dbt/ (its own uv project): lint, parse and compile; no marts until phase 002
+make test-dbt      # dbt/ (its own uv project): lint, parse, compile, then each product built with its tests on a throwaway lake
 make test-k2gen    # k2gen's checks, its emitters against their goldens, each check made to fail; no stack
 make test-dbt-tree # the dbt tree k2gen compiles from its fixtures and contracts/: parse, compile, ls --selector
-make access-verify RELEASE=<dir>  # every tests/access/expectations.yaml row on a throwaway lake; LIVE=1: the stack's
+make test-connectors  # the fetch container's address guard and run contract, every lookup and socket faked
+make test-api      # k2-api's tests and ruff from its own lock; a fake at its one Trino client
+make test-platform # the run-records client, the catalog site generator and the dbt wrapper; fakes only
+make access-verify RELEASE=<dir>  # every tests/access/expectations.yaml row on a throwaway lake; LIVE=1: the stack's, in a tools one-shot, `.env` loaded
 make test-access RELEASE=<dir>    # the suite's own proofs: a loosened rule must fail its row
 make catalog-fence # dial every probe row from its network: Lakekeeper refused or open as expected
 make spine-e2e     # the release and rules spine end to end from a scratch clone; run at merge points

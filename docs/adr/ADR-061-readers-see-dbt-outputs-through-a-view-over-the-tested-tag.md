@@ -257,3 +257,51 @@ Context says the independent review of design (a) "is not in the repository". It
 interfaces proposal it reviewed and the interfaces review are kept, dated and unchanged, in
 [`docs/research/2026-11-26-phase-001-interfaces/`](../research/2026-11-26-phase-001-interfaces.md)
 (`phase001-o8-review.md` is the review Context cites).
+
+## Outcome (2026-11-27, phase 002: the wrapper that moves the tag)
+
+Part 4's wrapper is built (`docker/dbt-runner/k2_dbt.py`; the whole run in
+[ADR-062](ADR-062-dbt-builds-silver-and-gold-per-product-through-one-wrapper.md)). As built, and measured
+by `scripts/verify/dbt-wrapper.sh` on a throwaway lake (21 PASS, 0 FAIL, 2026-11-27):
+
+- **The publish order.** After every test passes, as the publisher: each view whose columns change is
+  narrowed to part 5's C ∩ old ∩ new, then one compare-and-set commit moves `audited` for all of the
+  product's outputs, requiring `main` at the tested snapshot and `audited` where the run found it (null on
+  a first publish), then the views are widened to C ∩ new, then each output's `audited` run record is
+  written. A crash between any two statements leaves narrowed views over the old tag, or narrowed or
+  widened views over the new one; the next run's reconcile finishes from what the tag holds. A real 409,
+  from a tag moved by another publisher just before the commit, exited 3 and left the view narrowed and
+  never widened. A published view with no column common to both snapshots publishes and pages: its
+  readers get an error from the commit to the widen.
+- **The query-id tie.** Before the commit, each output's `main` must be this dbt invocation's own commit:
+  the snapshot summary's `trino_query_id` must be one of the query ids dbt reported in
+  `run_results.json`. In every run of the script each publish matched by id; none fell back to the
+  weaker check by commit time.
+- **Cancel first.** A build killed mid-statement leaves its query running in Trino: an `INSERT` whose
+  client left after 2 s still committed about 25 s later, and Trino reported it failed only after about
+  300 s, its `query.client.timeout`. Had it committed after a later run's tests, part 4's commit would have
+  tagged an untested snapshot. So the wrapper's first step cancels every query the builder still runs,
+  through Trino's REST API as the builder, and waits up to 60 s for none to remain before reading any
+  state; in the script, the next run cancelled the orphan and no snapshot of it ever existed.
+- **Reads at the tag use the tag's schema.** 200 polls each of the base read by tag name, by snapshot id
+  and through the reader view, across four rounds of dbt's create-or-replace that dropped and retyped
+  columns on `main`, always returned the tagged snapshot's columns. Two columns swapped by renames on
+  `main` left every reader seeing the tagged names and values: no data moved under a masked or filtered
+  name.
+- **Restores keep partitioning.** A restore by create-or-replace (a rollback across a column change) must
+  restate the contract's partitioning and sort: Trino 484 made the replaced table unpartitioned without
+  them, which would undo the row-scope fix of the Outcome above.
+- The drift check now holds tags to the run records (a tag no `audited` row records is drift), at every
+  reconcile for the product's own namespaces and at `release-verify` for the whole release; input
+  resolution reads every input's tag twice and retries a straddled publish.
+
+**An open observation.** In one run of the tested-data marker's schema-change check
+(`scripts/verify/tested-data-marker.sh`), a reader's poll failed once with `INVALID_VIEW` during the
+view sync. It was an error, never a wrong row, and it did not reproduce on rerun; its cause is not
+known. Trino analyses a view before it checks the caller's permission, so a view over a base with no tag
+yet fails as `INVALID_VIEW` even for a caller the rules deny, measured through `k2-api` by the access
+suite's REST rows on a throwaway lake: such a caller gets 404 `not_published` rather than 403, so it
+learns that the output is not yet published and nothing more.
+
+**Revisit when**, besides the triggers above: `INVALID_VIEW` appears in a reader's poll again, which
+reopens the view sync's order.

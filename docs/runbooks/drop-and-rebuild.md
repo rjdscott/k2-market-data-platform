@@ -14,7 +14,7 @@ nor rebuilding a product in place, which returns as `make rebuild` in
 | # | Task | Target | Measured |
 |---|------|--------|----------|
 | 1 | Dry run | < 1 min | 5 s for `k2.scratch_p4` (two tables); 13 s for `k2.gold`, the namespace with the most objects; 2026-11-26 |
-| 2 | Drop a namespace | < 5 min plus the copy | 12.5 s for a scratch namespace holding a table and a view; the catalog's purge emptied their locations 2 s and 4 s after each drop; 2026-11-26 |
+| 2 | Drop a namespace | < 5 min plus the copy and the backup | 12.5 s for a scratch namespace holding a table and a view, before step 2b's backup existed; the catalog's purge emptied their locations 2 s and 4 s after each drop; 2026-11-26. With the backup: not yet measured |
 | 3 | Drop a bucket | < 1 min plus the copy | 1.8 s for a versioned scratch bucket, every object version copied; 2026-11-26 |
 | 4 | Restore a table from its copy | < 5 min | drilled 2026-11-26 on a scratch table: its synthetic rows read back through Trino; not timed |
 
@@ -29,7 +29,12 @@ a namespace; `TARGET=bucket:<name>` names a bucket. Each step must hold before t
    current metadata file. It reads every table and view in the warehouse to prove that none
    shares the target's location or nests in it.
 2. **List** each location's objects in MinIO and check the backup disk has room: the copy must
-   leave `K2_BACKUP_MIN_FREE_GIB` (20 by default, the same floor `make backup` keeps) free.
+   leave `K2_BACKUP_MIN_FREE_GIB` (20 by default, the same floor `make backup` keeps) free. A dry
+   run stops here. Then, the script's step 2b, **back up**: the whole nightly backup,
+   `scripts/backup-lake.sh` (`make backup`, the live release's backup set in tools with the backup key,
+   [lake-backup-and-restore.md](./lake-backup-and-restore.md)), runs now, so a drop never runs
+   without a complete backup from just before it. A backup that does not complete stops the drop:
+   `drop: FAIL: the backup (scripts/backup-lake.sh) did not complete; nothing was copied or dropped`.
 3. **Copy** with `mc mirror` to `$K2_BACKUP_DIR/drop/<UTC date>/<target>/` (one directory per
    table or view for a namespace). A versioned bucket also gets every object version, including
    the noncurrent ones `mc mirror` skips, as `<target>.versions/<key>/<version id>`.
@@ -46,7 +51,8 @@ a namespace; `TARGET=bucket:<name>` names a bucket. Each step must hold before t
 Every call to the stack runs in one throwaway container, `k2-drop-<pid>`, on the catalog's network
 `<project>_k2-catalog` (Lakekeeper has no host port since 2026-11-27; before the cutover to releases,
 MinIO's only network), from the image `make backup` pins: curl for the catalog, mc for MinIO. The MinIO credential is in
-that container's environment only.
+that container's environment only, and it is still the root pair from `.env`, not an engine's key:
+only step 2b's backup runs in tools with the backup key.
 
 **It refuses**, before anything is copied: an empty or malformed `TARGET`; a whole warehouse
 (`TARGET=k2`); a bucket that holds a warehouse (`bucket:k2-lake`); a location outside its
@@ -57,14 +63,18 @@ not in storage; a lake object in a versioned bucket; a namespace with nested nam
 **What it does not do**
 
 - **Stop the writers.** A write during the copy stops the run at step 4, but a write between
-  that check and the drop is lost. Stop what writes to the target first. Until phase 002 no DAG
-  writes the lake; check that nothing runs, as the [operator guide](../operations/README.md)
-  section 6 step 1 does.
-- **Keep the target gone.** Nothing in the stack creates a lake table or namespace at start
-  since the v3 lake retired: its `lake-ddl` one-shot is gone, and `lake-init` creates only the
-  bucket and the warehouses (`docker/lake/init-lake.sh`, the list in the storage plan of the
-  release it reads, `compiled/lake/storage-plan.json`). A dropped warehouse would come back on the
-  next run of `lake-init`;
+  that check and the drop is lost. Stop what writes to the target first: since phase 002 each
+  product's DAG writes its landing, bronze and dbt outputs, so pause it
+  (`docker exec k2-airflow-scheduler airflow dags pause <dag id>`) and check that nothing runs, as
+  the [operator guide](../operations/README.md) section 6 step 1 does.
+- **Keep the target gone.** Nothing creates a lake table or namespace at start, but every deploy
+  does: its `ddl` step creates each namespace of the release's storage plan and each table of its
+  DDL that the catalog lacks ([deploy-a-release.md](./deploy-a-release.md) section 3), and a
+  product's next run writes its landing and outputs again. A table or namespace the deployed
+  release still declares comes back; drop it for good by removing it from the contracts in a
+  release first. `lake-init` creates the bucket, the warehouses and the engine users
+  (`docker/lake/init-lake.sh`, the list in the storage plan of the release it runs,
+  `compiled/lake/storage-plan.json`), so a dropped warehouse would come back on its next run;
   `make drop` refuses one anyway.
 - **Prune the copies.** Nothing deletes `$K2_BACKUP_DIR/drop/`. Delete a day's directory by hand
   once nothing needs it.
@@ -108,6 +118,11 @@ make drop TARGET=bucket:spike-drop-n05
 #   drop: bucket:spike-drop-n05: copied s3://spike-drop-n05 to ...: 2 objects, 34 bytes in MinIO; 2 objects, 34 bytes in the copy; 4 object versions, 61 bytes in MinIO; 4, 61 bytes in ....versions: match
 #   drop: bucket:spike-drop-n05: bucket removed
 ```
+
+These outputs predate step 2b. Since phase 002 a drop that is not a dry run prints the backup's own
+lines between `drop: room: ...` and the first `copied` line, ending, from `scripts/backup-lake.sh`,
+`backup-lake: OK in <n> s: <n> files, <n> bytes fetched this run; <n> files, <n> bytes in runs/<UTC>; <dir>/STATUS.json`,
+and takes that much longer.
 
 **Check it is gone**, from the catalog, from Trino and from storage. Each command reaches the
 stack from a throwaway container on the catalog's network, as `scripts/drop.sh` does: the catalog
@@ -256,7 +271,8 @@ read back; and the bucket `spike-drop-n05`, its current objects back. Not timed.
 worktree. Run: every command on this page, on scratch objects of its own (`k2.spike_drop_n05`,
 bucket `spike-drop-n05`), plus the dry run of `k2.scratch_p4`, with `K2_BACKUP_DIR` set to a
 temporary directory under the home directory. The `mcrun rm` of section 2 ran only on an empty
-location.
+location. Step 2b, the backup before the copy, and the DAG pause: not yet: first run after the deploy
+of this release.
 
 ---
 

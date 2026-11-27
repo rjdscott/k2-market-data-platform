@@ -273,3 +273,43 @@ the socket), and both images are pinned by digest.
 behind a socket proxy that allows only read calls, or replaces it; (10) any service that runs code a
 product supplies would need the socket; (11) Lakekeeper gains authentication the engines can use, which
 makes the fence a second line instead of the only one.
+
+## Outcome (2026-11-27, phases 002 and 003: one-shots, storage and the host)
+
+The rules are unchanged in kind. What phases 002 and 003 changed around them:
+
+- **The scheduler starts one-shots from allow-lists.** `docker/airflow/dags/oneshot.py` starts each
+  container kind with exactly what the run's release lists in `compiled/oneshots.json` and never more
+  than its kind may have: `fetch` the network `k2-egress`, the release id and no secret; `dbt-runner` the
+  network `k2-catalog`, its seven environment names, the builder's, publisher's and `svc.runs`'s password
+  files and the CA; `tools` `k2-net` and `k2-catalog`, the release id and the CA. So the scheduler's own
+  variables (its database URL, its JWT secret) and the other secret files (`tls/ca.key`, `password.db`,
+  `principals/`) never reach a one-shot, whatever a release says. Every one-shot runs `--rm`, `--pull
+  never`, with a read-only root, a 64 MiB `noexec` `/tmp`, every capability dropped, no new privileges
+  and at most 256 processes, never privileged and never with the socket; a kind with a secret runs as the
+  host user who owns the mode-600 files. `docker/airflow/tests/test_oneshot.py` holds the lists equal to
+  k2gen's compiled kinds. `scripts/verify/oneshot-slots.sh` measured the slots on a throwaway Airflow
+  (0 FAIL, 2026-11-27): four LocalExecutor slots and the pools `lake_spark` 1, `fetch` 1 and `dbt` 2 held;
+  a task marked failed left no container within about 5 s; after a scheduler crash a running task was
+  reset only by Airflow's orphan check, every 300 s by default, which the stack sets to 30 s
+  (`AIRFLOW__SCHEDULER__ORPHANED_TASKS_CHECK_INTERVAL`).
+- **fetch is off `k2-net`.** It joins `k2-egress` alone, a network no other service joins; the fence
+  rows `fetch -> lakekeeper:8181` and `fetch -> minio:9000` expect `refused`
+  ([ADR-036](ADR-036-connectors-land-verbatim-then-publish-bronze-after-audit.md)'s Outcome).
+- **No path around Trino from the host.** MinIO publishes no host port: its S3 API (9000) and its
+  console (9001, a root-pair login) are reached only from a container on `k2-net` or `k2-catalog`, and
+  the rows `host -> 127.0.0.1:9000` and `host -> 127.0.0.1:9001` expect `refused`. With remote signing off
+  and a storage key per engine ([ADR-054](ADR-054-a-storage-key-per-engine-with-catalog-signing-off.md)),
+  Spark and Trino each hold only their own part of the lake; Spark still bypasses Trino's rules inside
+  its part, and the scheduler's socket is still inside the catalog's boundary (the Outcome above).
+- **What the tools steps hold.** The `tools` service holds no storage key, so swap, pointers and the
+  catalog site generator never hold one; the site step holds `svc.catalog`'s password and the CA. The live
+  access suite, run in `tools` at every verify, holds each engine's storage pair (by name, for that run),
+  the passwords the platform holds under `principals/`, the CA and the readers' API key files.
+  `scripts/backup-lake.sh` starts its own container with the backup pair alone. `make drop` still uses the
+  root pair.
+- **`k2-api` reaches Trino only.** It sits on `k2-net`, never `k2-catalog`, and has one Trino identity,
+  `svc.api`, which impersonates exactly the principals of `compiled/api/principals.json`.
+
+**Still open:** compose configures no authentication for Redpanda or Alertmanager, so every service on
+`k2-net` can reach both; only fetch, which runs product code, was moved off that network.

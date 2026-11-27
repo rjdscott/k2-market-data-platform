@@ -422,3 +422,65 @@ Accepted and not yet implemented.
 - Pull request #239 and commit `9b7d664` (the redirect fix) on branch `feat/file-source-pattern`.
 - Amazon S3 conditional writes, `If-None-Match`:
   <https://docs.aws.amazon.com/AmazonS3/latest/userguide/conditional-writes.html>.
+
+---
+
+## Outcome (2026-11-27, phase 002: `https-file` as built)
+
+The `https-file` kind is built (`docker/fetch/fetch.py`, `docker/lake/connector.py`,
+`docker/airflow/dags/factory.py`) and the design held. Where it moved from the text above:
+
+- **Address pinning is in the process, with full TLS.** The guard runs on the source URL and on each of at
+  most five redirects, followed by hand: `https` on port 443, no user information, no control character,
+  the host IDNA-normalised and exactly one of `allowHosts`. The name is resolved once; any address in the
+  answer that is not public unicast refuses the fetch, and so do CGNAT and every IPv6 form that carries an
+  IPv4 address (NAT64, 6to4, Teredo; v4-mapped is unwrapped). The socket then opens to an address from
+  that one answer while SNI, the certificate's name check and the `Host` header use the host name, so the
+  gap #239's fix named is closed. TLS is the default context, with no way to turn verification off; no
+  proxy variable is read. `make test-connectors` proves each refusal with no network (every lookup and
+  socket faked).
+- **A real deadline.** 10 s to connect, 30 s per read and 300 s for the whole download, each read taking
+  only what has arrived (`read1`) under a timeout cut to the time left, so a host trickling bytes cannot
+  hold a read past the deadline; the fetch task's Airflow `execution_timeout` is 10 minutes when the
+  pipeline sets none (`FETCH_TIMEOUT`).
+- **The parser's audits run in fetch too.** Part 5's "the product's declared audits" are product code,
+  so they run in the fetch container beside the parser, never in Spark beside a storage key: each is a
+  function in the parser module, and the results go to `audits.json` in the spool, which the Spark audit
+  task records in `audit_checks`. A missing `audits.json` fails the audit closed. The fetch exits are 0
+  fetched and parsed, 10 unchanged, 20 refused, 30 parse failed (bytes and fetch record kept), 1 any other
+  error.
+- **Strict XML decoding.** The two parsers (`domains/fx-reference/parsers/ecb_fx.py`,
+  `domains/reference-data/parsers/iso4217.py`) accept UTF-8 only, with no DOCTYPE or entity declaration as
+  expat itself reports them: a refusal by searching the raw bytes passed a UTF-16 document whose internal
+  entities expat then expanded.
+- **fetch is alone on an egress-only network.** "Unable to reach MinIO or Lakekeeper" (part 2) did not hold
+  for the first build: fetch was on `k2-net`, from which a parser could reach Redpanda, Alertmanager,
+  Postgres, MinIO and every other service there, none of which a parser needs. fetch now joins only
+  `k2-egress`, a network no other service joins, and the scheduler's one-shot operator refuses any other
+  network for it. The fence rows `fetch -> lakekeeper:8181` and `fetch -> minio:9000` of
+  `tests/access/expectations.yaml` expect `refused` (`scripts/verify/catalog-fence.sh`). MinIO publishes no
+  host port either, so the host gateway reaches no object store.
+- **A spool per DAG.** Every fetch had mounted the whole spool volume read-write as one user, so one
+  product's parser could rewrite another's raw bytes, rows or audits, which the Spark connector trusts. A
+  fetch now mounts only its DAG's directory, `<project>_k2-spool` subpath `<dagId>` at `/spool/<dagId>`,
+  made first by a helper container with no network that runs no product code
+  (`docker/airflow/dags/oneshot.py`).
+- **Landings expire after 14 days.** Part 6 left retention to phase 004; the owner's decision of
+  2026-11-26 (14 days per product, `docs/research/2026-11-26-decisions-addendum.md`) was built here
+  instead, since this phase builds the landings: the daily `maintain` task (`docker/lake/maintain.py`)
+  deletes a product's landed objects whose key's day is more than 14 days old, keeping any whose batch has
+  no rows published on `main`, any not in `landing_files`, and any key that does not parse. It runs with the
+  maintenance key, which may delete landings and write nothing ([ADR-054](ADR-054-a-storage-key-per-engine-with-catalog-signing-off.md)).
+
+**What a parser can still reach.** The allow-list guards the fetch's own download, not the parser, which
+runs in the same process with ordinary sockets: from `k2-egress` it can reach any internet host on any
+port, and the host's published ports through `host.docker.internal` (Context), which were not re-probed
+from `k2-egress`. It can read and write its own DAG's spool, earlier runs included, and read the releases
+root (every release's documents and compiled files; no release holds a secret). It holds no storage key,
+no secret file and no Docker socket, under a read-only root, a 64 MiB `noexec` `/tmp`, no capability, no
+new privileges, 256 processes and 0.5 CPU / 512 MiB. A parser is reviewed product code; running it in a
+second container with `--network none`, fed the spooled bytes, would close the internet path and is not
+built.
+
+**Revisit when**, besides the triggers above: a product's parser comes from someone outside the owner's
+team (then the parser moves to a container with no network).

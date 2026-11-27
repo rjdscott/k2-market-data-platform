@@ -35,6 +35,18 @@ hardened for production use. What is protected, and what is not, plainly:
   is on the network `k2-catalog` alone, with no host port, and only the platform's own
   services join that network (ADR-059 part 7). `make catalog-fence` dials every probe row of
   `tests/access/expectations.yaml` and fails if the fence is open where it must be refused.
+- **A storage key per engine.** `lake-init` gives Spark, Trino, maintenance, backup and the
+  tools one-shot each a MinIO user of its own, with one policy file each
+  (`docker/lake/minio/policies/`), and switches every warehouse's remote signing off, so
+  Lakekeeper hands out no credential. `make engine-keys` writes the five pairs into `.env`, and
+  `scripts/check-env.py` refuses a pair that is the root's or that two engines share. MinIO
+  publishes no host port: no port on the host reaches the lake's data but Trino's and k2-api's.
+- **Product code runs without keys or a way in.** A product's parser runs only in the fetch
+  one-shot, which holds no secret, joins `k2-egress` alone (a network no other service is on),
+  and connects only to the hosts its contract's `allowHosts` names, over HTTPS, refusing
+  private addresses and redirects off the list (`docker/fetch/fetch.py`). dbt models run in the
+  `dbt-runner` one-shot, on `k2-catalog`, with only their builder's, their publisher's and the
+  run records' (`svc.runs`) passwords and the CA (`docker/airflow/dags/oneshot.py`, `ALLOWED`).
 
 ## What does not
 
@@ -46,8 +58,6 @@ hardened for production use. What is protected, and what is not, plainly:
   reachable only from `k2-catalog`, so this path is closed for it, and still open for every
   service that publishes a port.
   <!-- VERIFY: after the live cutover, nothing listens on 18181 (ss -ltnH | grep ':18181$' prints nothing) and make catalog-fence passes -->
-- **The MinIO root pair still reaches Trino.** Trino's S3 keys are `K2_TRINO_S3_*`, set to
-  MinIO's root user and password until phase 002 gives it a scoped key.
 - **On Docker Engine before 28.0.0, loopback publishing does not stop the LAN either:**
   "hosts within the same L2 segment (for example, hosts connected to the same network
   switch) can reach ports published to localhost" (Docker documentation,
@@ -59,18 +69,20 @@ hardened for production use. What is protected, and what is not, plainly:
   UIs, and Lakekeeper (`authz-backend` `allow-all`; fenced by network, above). Until the
   2026-11-27 compose file Trino took its user from the `X-Trino-User` header without checking
   it ([ADR-044](docs/adr/ADR-044-producer-lake-and-domain-mart-warehouses.md)); it now asks
-  for a password (ADR-060).
+  for a password (ADR-060). k2-api asks for a key on its data route only: its release,
+  product and contract routes, `/catalog/` and `/dbt-docs/` answer anyone who reaches
+  `127.0.0.1:8095`: the release's catalog documents, and on the catalog site the run-time
+  facts `svc.catalog` reads (each output's tested snapshot, the newest run, test counts).
 - **The live MinIO root credential was MinIO's own well-known default pair, and it is
   compromised.** MinIO printed its `Detected default credentials` warning at each start,
   which it prints only for its built-in default, and the API and console listened on every
   interface, so any machine on the local network could sign in as root without reading any
-  log. Trino's log printed the access key as well. One credential is held by every engine:
-  MinIO, `lake-init`, Spark, the six Trino catalogs and each Lakekeeper warehouse's stored
-  storage credential. It is being replaced, root rotated and a scoped key per engine, in the
-  follow-up design `docs/research/2026-11-26-storage-credentials-least-privilege.md`
-  (branch `docs/storage-credentials-least-privilege`). Until that is rolled out, do not edit
-  the pair in `.env` on a stack that holds data: each Lakekeeper warehouse keeps its own
-  stored copy, and the lake stops writing.
+  log. Trino's log printed the access key as well. The engines no longer hold it: each has
+  its own key (above). The root pair is still held by MinIO, `lake-init`, `make drop` (in a
+  throwaway container on MinIO's network), deploy's check for data a dropped backup entry
+  still holds (inside `k2-minio`), and each Lakekeeper warehouse's stored storage credential;
+  rotating it is the owner's step once MinIO publishes no port, and is not yet done. Until then, do not edit the pair in `.env` on a stack
+  that holds data: each Lakekeeper warehouse keeps its own stored copy.
 - No TLS between services or on any port except Trino's (HTTPS only, ADR-060).
 - The compose files under `docs/research/2026-08-26-v3-spikes/` are dated research
   snapshots, outside the CI gate, and publish on every interface. Run one only on a trusted
