@@ -58,6 +58,11 @@ volumes:
   minio-data:
     driver: local
 
+  # The fetch one-shot's spool, /spool/<dagId>/<runId>/ (phase-001-interfaces.md): fetch writes
+  # it; the operator mounts it as <project>_k2-spool, so it keeps compose's default name.
+  k2-spool:
+    driver: local
+
 
 # Every container's local log is capped. Docker's json-file driver keeps a container's
 # output in one file that grows without limit unless told otherwise; on 2026-11-26 the
@@ -1344,8 +1349,9 @@ services:
 #############################################################################
   # Declared now so the budget gate counts and pin-checks them and later steps
   # fill them in place (docs/development/phase-001-interfaces.md A13). Each is
-  # a stub on alpine that prints SKIP and exits: its owning step replaces the
-  # image and command. The default profile and its sums are unchanged.
+  # a stub on alpine that prints SKIP and exits until its owning step replaces the
+  # image and command (tools, fetch and dbt-runner have; k2-api is still a stub).
+  # The default profile and its sums are unchanged.
   # The tools one-shot (ADR-058): `make deploy` runs it to move the release pointers on the VM
   # side of Docker Desktop's file sharing, and `make release` to compile a tag with that tag's
   # k2gen. `make release` builds it from the tag and tags it tools:<image id 12>, which the release
@@ -1372,15 +1378,36 @@ services:
           memory: 256M
     restart: "no"
 
+  # The two run one-shots (phase 002). Airflow starts them with `docker run` from the release's
+  # compiled/oneshots.json (docker/airflow/dags/oneshot.py), never with compose: these services
+  # are what the budget gate counts and pin-checks, what `make release` builds and pins into the
+  # manifest, and what k2gen's ONESHOT_KINDS must agree with (tests/test_catalog_fence_compose.py,
+  # platform/k2gen/tests/test_emit_pipeline.py). Each runs as the operator runs it: a read-only
+  # root, a 64m noexec /tmp, no capability, no new privileges, never the Docker socket.
   fetch:
     profiles: ["fetch"]
     logging: *k2-logging
-    image: alpine:3.20  # stub: phase 002 builds docker/fetch/
-    command: ["echo", "SKIP fetch: built in phase 002"]
+    build:
+      context: .
+      dockerfile: docker/fetch/Dockerfile
+    image: fetch:local
+    command: ["k2-fetch"]
     networks:
       - k2-net  # egress only, never k2-catalog (A8)
+    # No environment but the release (oneshots.json's env); no storage key and no secret mount:
+    # what a parser can reach, it can leak.
+    environment:
+      K2_RELEASE:
     volumes:
       - *k2-releases-ro
+      - k2-spool:/spool
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
     deploy:
       resources:
         limits:
@@ -1391,12 +1418,52 @@ services:
   dbt-runner:
     profiles: ["build"]
     logging: *k2-logging
-    image: alpine:3.20  # stub: phase 002 builds docker/dbt-runner/
-    command: ["echo", "SKIP dbt-runner: built in phase 002"]
+    build:
+      context: .
+      dockerfile: docker/dbt-runner/Dockerfile
+    image: dbt-runner:local
+    command: ["k2-dbt"]
     networks:
-      - k2-catalog  # the tag commit goes to the catalog (A7, A13)
+      - k2-catalog  # Trino is on it too; the tag commit goes to the catalog (A7, A13)
+    # Exactly the wrapper's seven names (phase-001-interfaces.md, "The dbt wrapper"). The builder,
+    # the publisher and the release are per run: the operator passes them; by hand, export
+    # K2_TRINO_USER=dbt_<fence> K2_PUB_USER=pub_<fence> K2_RELEASE=<id>, which also pick the two
+    # password files below. Passwords are files, read by the wrapper alone, never variables.
+    environment:
+      K2_TRINO_HOST: trino
+      K2_TRINO_INTERNAL_PORT: "8443"
+      K2_TRINO_USER:
+      K2_PUB_USER:
+      K2_RUNS_USER: svc.runs
+      K2_CATALOG_URI: http://lakekeeper:8181/catalog
+      K2_RELEASE:
+    # Each file by name (tests/test_secret_mounts.py), never created when missing: a short-syntax
+    # bind would make a directory where `make password` later writes the file.
     volumes:
       - *k2-releases-ro
+      - &k2-secret-file
+        type: bind
+        source: ${K2_SECRETS:-${HOME}/k2-secrets}/principals/${K2_TRINO_USER:-}.password
+        target: /run/k2-secrets/builder.password
+        read_only: true
+        bind:
+          create_host_path: false
+      - <<: *k2-secret-file
+        source: ${K2_SECRETS:-${HOME}/k2-secrets}/principals/${K2_PUB_USER:-}.password
+        target: /run/k2-secrets/publisher.password
+      - <<: *k2-secret-file
+        source: ${K2_SECRETS:-${HOME}/k2-secrets}/principals/svc.runs.password
+        target: /run/k2-secrets/runs.password
+      - <<: *k2-secret-file
+        source: ${K2_SECRETS:-${HOME}/k2-secrets}/tls/ca.pem
+        target: /run/k2-secrets/tls/ca.pem
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
     deploy:
       replicas: 2
       resources:
@@ -1449,8 +1516,8 @@ services:
 # capture-kraken        | 0.25      | 256M         | Rust capture, Kraken (11 pairs, trades + L2)
 # capture-coinbase      | 0.25      | 512M         | Rust capture, Coinbase (11 pairs, trades + L2)
 # tools                 | 0.25      | 256M         | Phase 001 stub, profile tools (step S19), not in the sums
-# fetch                 | 0.5       | 512M         | Phase 001 stub, profile fetch (phase 002), not in the sums
-# dbt-runner            | 0.5 x 2   | 768M x 2     | Phase 001 stub, profile build (phase 002), not in the sums
+# fetch                 | 0.5       | 512M         | Fetch one-shot (docker/fetch/), profile fetch, not in the sums
+# dbt-runner            | 0.5 x 2   | 768M x 2     | dbt wrapper one-shot (docker/dbt-runner/), profile build, not in the sums
 # k2-api                | 0.5       | 512M         | Phase 001 stub, profile api (phase 003), not in the sums
 #
 # The three capture-* containers are also cpuset-pinned to cores 12-14

@@ -7,12 +7,18 @@
 #   scripts/lib/throwaway-lake.sh py    <prefix> <script under the repository> [args ...]
 #   scripts/lib/throwaway-lake.sh down  <prefix>
 #   scripts/lib/throwaway-lake.sh state <prefix>
+#   scripts/lib/throwaway-lake.sh init  <prefix>
 #
 # up: the release (a sealed <root>/<id> from `k2gen release`) is copied to <state>/releases/<id>
 #   and mounted read-only at /k2/releases, `pointers/trino -> ../<id>`, and Trino runs
 #   `launcher run --etc-dir /k2/releases/pointers/trino/compiled/trino/etc`, as A1 starts it.
-#   Lakekeeper gets warehouse k2 and every warehouse a compiled catalog names, all on one MinIO
-#   bucket. Identity is the real path (ADR-060), on this run's own ${K2_SECRETS}, <state>/secrets/k2,
+#   The lake is made by the real docker/lake/init-lake.sh in the MinIO image, as lake-init runs it,
+#   in the live layout (bucket k2-lake, warehouse/<name>, the landing bucket k2-landing): every
+#   warehouse of the release's storage plan with remote signing off, and one MinIO user and policy
+#   per engine (docker/lake/minio/policies/), each on this run's own K2_<ENGINE>_S3_* pair. Trino
+#   runs on its own pair, never the root's, and the tools container holds every pair by name, so a
+#   storage-key row of the access suite signs with the key it names.
+#   Identity is the real path (ADR-060), on this run's own ${K2_SECRETS}, <state>/secrets/k2,
 #   laid out as model.SECRET_FILES says: scripts/tls.sh makes the CA and Trino's certificate, and
 #   scripts/principal-secret.py's own code gives every known principal of the release
 #   (emit/trino_rules.known_principals) its own password and password.db line: a service its
@@ -26,6 +32,8 @@
 #   scripts, k2gen and what it reads, the access suite) is mounted, read-only, at /src/<path>:
 #   never the checkout itself, whose .env holds the live stack's secrets.
 # down: removes every container and the network labelled with the prefix, and <state>.
+# init: runs docker/lake/init-lake.sh again on the running lake, with this run's keys (a rerun is
+#   a no-op, scripts/verify/storage-keys.sh proves).
 #
 # <state> is ${K2_THROWAWAY_ROOT:-$HOME/.k2-throwaway}/<prefix>: under $HOME, the one place Docker
 # Desktop shares. Never touches the running stack: nothing joins k2-net, no port is published,
@@ -35,7 +43,8 @@
 # variable name or as a file under <state>/secrets, and is never printed. Trino mounts only its
 # key file and the password.db directory, read-only at their /run/k2-secrets paths; both stay mode
 # 600, as on the live host, so Trino runs as the invoking user (its data directory a tmpfs), which
-# reads them on any host, a CI runner's uid included. The run's secrets die with <state>.
+# reads them on any host, a CI runner's uid included. The root pair and the engines' pairs are kept
+# in <state>/secrets/s3.env (mode 600) for `init`. The run's secrets die with <state>.
 set -euo pipefail
 REPO=$(cd "$(dirname "$0")/../.." && pwd)
 UV_IMAGE=ghcr.io/astral-sh/uv:0.9.25-python3.12-bookworm-slim@sha256:e47cbc1a37bc146191f85069663f98dff4644667873a0a3051b8d7effe69ea82
@@ -49,7 +58,7 @@ image() {  # image <pattern>: the first image line of docker-compose.yml matchin
 }
 
 cmd=${1:-}; P=${2:-}
-[ -n "$cmd" ] && [ -n "$P" ] || die "usage: $0 up|py|down|state <prefix> ..."
+[ -n "$cmd" ] && [ -n "$P" ] || die "usage: $0 up|py|down|state|init <prefix> ..."
 [[ "$P" =~ ^[a-z][a-z0-9-]{1,30}$ ]] || die "prefix $P: lower-case letters, digits and hyphens"
 [[ "$P" == k2 || "$P" == k2-* ]] && die "prefix $P could collide with the running stack's k2-* names"
 STATE=${K2_THROWAWAY_ROOT:-$HOME/.k2-throwaway}/$P
@@ -82,6 +91,32 @@ down() {
   left=$(docker ps -aq --filter "label=$LABEL" | wc -l)
   [ "$left" = 0 ] && ! docker network inspect "$NET" >/dev/null 2>&1 && [ ! -e "$STATE" ] \
     || die "down: $left containers, the network or $STATE left"
+}
+
+# Every engine's pair, by name: K2_<ENGINE>_S3_ACCESS_KEY and _SECRET_KEY for each policy file
+# (one definition: docker/lake/init-lake.sh reads the same directory).
+S3_NAMES=(K2_S3_ENDPOINT)
+for f in "$REPO"/docker/lake/minio/policies/*.json; do
+  e=${f##*/} e=${e%.json}
+  S3_NAMES+=("K2_${e^^}_S3_ACCESS_KEY" "K2_${e^^}_S3_SECRET_KEY")
+done
+S3_ENV=()
+for n in "${S3_NAMES[@]}"; do S3_ENV+=(-e "$n"); done
+
+lake_init() {  # the real lake-init on this lake: its MinIO image, the release's plan through the pointer
+  docker run --rm --label "$LABEL" --network "$NET" --memory 128m --cpus 0.25 \
+    -v "$REPO/docker/lake:/init:ro" -v "$STATE/releases:/k2/releases:ro" \
+    -e MINIO_ROOT_USER -e MINIO_ROOT_PASSWORD "${S3_ENV[@]}" \
+    --entrypoint /bin/bash "$(image 'ghcr.io/rjdscott/minio@sha256:')" /init/init-lake.sh >> "$STATE/lake-init.log" 2>&1 \
+    || { tail -n 15 "$STATE/lake-init.log" >&2; die "docker/lake/init-lake.sh failed ($STATE/lake-init.log)"; }
+}
+
+init() {
+  [ -f "$STATE/secrets/s3.env" ] || die "init: no lake is up for $P"
+  # shellcheck source=/dev/null
+  set -a; . "$STATE/secrets/s3.env"; set +a
+  lake_init
+  say "init: docker/lake/init-lake.sh ran again ($STATE/lake-init.log)"
 }
 
 py() {
@@ -119,10 +154,20 @@ up() {
 
   # Secrets for this run only.
   local s=$STATE/secrets
-  export POSTGRES_PASSWORD MINIO_ROOT_USER MINIO_ROOT_PASSWORD K2_TRINO_SHARED_SECRET K2_TRINO_S3_ACCESS_KEY K2_TRINO_S3_SECRET_KEY
+  export POSTGRES_PASSWORD MINIO_ROOT_USER MINIO_ROOT_PASSWORD K2_TRINO_SHARED_SECRET
   export LAKEKEEPER__PG_DATABASE_URL_READ LAKEKEEPER__PG_DATABASE_URL_WRITE LAKEKEEPER__PG_ENCRYPTION_KEY MC_HOST_local
   POSTGRES_PASSWORD=$(openssl rand -hex 16); MINIO_ROOT_USER=tl$(openssl rand -hex 6); MINIO_ROOT_PASSWORD=$(openssl rand -hex 20)
-  K2_TRINO_SHARED_SECRET=$(openssl rand -hex 32); K2_TRINO_S3_ACCESS_KEY=$MINIO_ROOT_USER; K2_TRINO_S3_SECRET_KEY=$MINIO_ROOT_PASSWORD
+  K2_TRINO_SHARED_SECRET=$(openssl rand -hex 32)
+  # Each engine's own pair, this run's only; init-lake.sh refuses one equal to the root's.
+  local n e
+  export K2_S3_ENDPOINT=http://minio:9000
+  for n in "${S3_NAMES[@]:1}"; do
+    case $n in
+      *_ACCESS_KEY) e=${n%_S3_ACCESS_KEY} e=${e#K2_}; export "$n=${e,,}-$(openssl rand -hex 3)" ;;
+      *) export "$n=$(openssl rand -hex 16)" ;;
+    esac
+  done
+  (umask 077; for n in MINIO_ROOT_USER MINIO_ROOT_PASSWORD "${S3_NAMES[@]}"; do printf '%s=%s\n' "$n" "${!n}"; done > "$s/s3.env")
   LAKEKEEPER__PG_DATABASE_URL_READ="postgres://lk:$POSTGRES_PASSWORD@postgres:5432/lakekeeper"
   LAKEKEEPER__PG_DATABASE_URL_WRITE=$LAKEKEEPER__PG_DATABASE_URL_READ; LAKEKEEPER__PG_ENCRYPTION_KEY=$(openssl rand -hex 16)
   MC_HOST_local="http://$MINIO_ROOT_USER:$MINIO_ROOT_PASSWORD@localhost:9000"
@@ -141,13 +186,16 @@ up() {
   docker run --rm --label "$LABEL" --network "$NET" --memory 256m "${lk_env[@]}" "$lk_image" migrate >/dev/null
   docker "${run[@]}" --name "$P-lakekeeper" --network-alias lakekeeper "${lk_env[@]}" -e LAKEKEEPER__BASE_URI=http://lakekeeper:8181 \
     -e LAKEKEEPER__AUDIT__TRACING__ENABLED=false "$lk_image" serve >/dev/null
-  for _ in $(seq 60); do docker exec "$P-minio" mc mb --ignore-existing local/lake >/dev/null 2>&1 && break; sleep 1; done
+  for _ in $(seq 60); do docker exec "$P-minio" mc ls local >/dev/null 2>&1 && break; sleep 1; done
+  for _ in $(seq 60); do docker exec "$P-lakekeeper" /home/nonroot/lakekeeper healthcheck >/dev/null 2>&1 && break; sleep 1; done
+  say "lake-init: docker/lake/init-lake.sh, warehouses and engine users"
+  lake_init
   docker run -d --label "$LABEL" --network "$NET" --memory 768m --cpus 1 --name "$TOOLS" --user "$(id -u):$(id -g)" \
-    "${TOOLS_ENV[@]}" -e MINIO_ROOT_USER -e MINIO_ROOT_PASSWORD "${SRC_MOUNTS[@]}" -v "$STATE:/work" -w /src \
+    "${TOOLS_ENV[@]}" -e MINIO_ROOT_USER -e MINIO_ROOT_PASSWORD "${S3_ENV[@]}" "${SRC_MOUNTS[@]}" -v "$STATE:/work" -w /src \
     --entrypoint sleep "$UV_IMAGE" infinity >/dev/null
 
-  # Lakekeeper's warehouses, and every user's password, from the tools side.
-  docker exec -i "${TOOLS_ENV[@]}" -e MINIO_ROOT_USER -e MINIO_ROOT_PASSWORD "$TOOLS" "${PY[@]}" - "/work/releases/$id" "$@" <<'PY'
+  # Every user's password, from the tools side, once lake-init's warehouses are there.
+  docker exec -i "${TOOLS_ENV[@]}" "$TOOLS" "${PY[@]}" - "/work/releases/$id" "$@" <<'PY'
 import contextlib, importlib.util, io, json, os, re, secrets, sys, time, urllib.error, urllib.request
 from pathlib import Path
 import bcrypt
@@ -159,34 +207,17 @@ import lake_env
 release, extra = Path(sys.argv[1]), sys.argv[2:]
 LK = "http://lakekeeper:8181"
 
-def call(method, url, body=None):
-    req = urllib.request.Request(url, json.dumps(body).encode() if body is not None else None, method=method,
-                                 headers={"Content-Type": "application/json"})
-    try:
-        with urllib.request.urlopen(req, timeout=10) as r:
-            return r.status
-    except urllib.error.HTTPError as e:
-        return e.code
-
 for _ in range(60):
     try:
         urllib.request.urlopen(f"{LK}/health", timeout=2)
         break
     except OSError:
         time.sleep(1)
-assert call("POST", f"{LK}/management/v1/bootstrap", {"accept-terms-of-use": True}) in (200, 204), "bootstrap"
 warehouses = {"k2"} | {m.group(1) for f in (release / "compiled/trino/etc/catalog").glob("*.properties")
                        if (m := re.search(r"^iceberg\.rest-catalog\.warehouse=(\S+)$", f.read_text(), re.M))}
-for w in sorted(warehouses):
-    body = {"warehouse-name": w, "project-id": "00000000-0000-0000-0000-000000000000",
-            "storage-profile": {"type": "s3", "bucket": "lake", "key-prefix": w, "endpoint": "http://minio:9000",
-                                "region": "local-01", "path-style-access": True, "flavor": "s3-compat",
-                                "sts-enabled": False, "remote-signing-enabled": False},
-            "storage-credential": {"type": "s3", "credential-type": "access-key",
-                                   "aws-access-key-id": os.environ["MINIO_ROOT_USER"],
-                                   "aws-secret-access-key": os.environ["MINIO_ROOT_PASSWORD"]}}
-    status = call("POST", f"{LK}/management/v1/warehouse", body)
-    assert status in (200, 201), f"warehouse {w}: HTTP {status}"
+with urllib.request.urlopen(f"{LK}/management/v1/warehouse", timeout=10) as r:
+    made = {w["name"] for w in json.load(r)["warehouses"]}
+assert warehouses <= made, f"a catalog names a warehouse lake-init did not make: {sorted(warehouses - made)}"
 # Passwords by scripts/principal-secret.py's own functions (its CLI reads the working tree's
 # principals; these are the release's): a service's to principals/<id>.password, a person's
 # printed once and kept here for the test, each a bcrypt line of password.db in place under its lock.
@@ -254,7 +285,7 @@ import json, ssl, urllib.request
 ctx = ssl.create_default_context(cafile='/work/secrets/k2/tls/ca.pem')
 assert not json.load(urllib.request.urlopen('https://trino:8443/v1/info', context=ctx, timeout=3))['starting']" 2>/dev/null; do
     if [ "$(docker inspect -f '{{.State.Running}}' "$P-trino")" != true ] || [ $((SECONDS - t0)) -gt 300 ]; then
-      docker logs --tail 40 "$P-trino" 2>&1 | grep -vF -e "$MINIO_ROOT_PASSWORD" -e "$K2_TRINO_SHARED_SECRET" >&2 || true
+      docker logs --tail 40 "$P-trino" 2>&1 | grep -vF -e "$MINIO_ROOT_PASSWORD" -e "$K2_TRINO_SHARED_SECRET" -e "$K2_TRINO_S3_SECRET_KEY" >&2 || true
       die "Trino did not start from $POINTER_ETC"
     fi
     sleep 2
@@ -267,5 +298,6 @@ case "$cmd" in
   py) shift 2; py "$@" ;;
   down) down; say "down: $P" ;;
   state) echo "$STATE" ;;
+  init) init ;;
   *) die "unknown command $cmd" ;;
 esac

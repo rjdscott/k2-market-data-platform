@@ -9,12 +9,24 @@ the product's connector from the release's compiled/products/<product>/pipeline.
 raw.<format> and fetch.json. Only then does it load the product's registered parser,
 platform/domains/<domain>/parsers/<parser>.py in the release, and write its rows to rows.jsonl.
 
+Then it runs the parser's audits, the bronze tables' `audits` in pipeline.json (ODCS custom checks
+with engine k2-connector): product code, so they run here and never in Spark beside a storage key.
+Each is a function of that name in the same parser module:
+
+    def <audit>(rows: list[dict]) -> list[str]   # one description per failing row; [] passes
+
+called on the rows as rows.jsonl holds them (a fresh copy each). The results go to audits.json,
+{"audits": [{"name", "passed", "failures", "detail"}]}, one entry per declared audit in order,
+which connector.py's audit task records in audit_checks. An audit that is missing, raises or
+returns anything but a list of str is recorded as passed: false with the reason; no audit changes
+the exit code, so the batch still lands and fails at bronze.
+
 Exits (phase-001-interfaces.md, the fetch container's table):
-  0   fetched and parsed: raw.<ext>, fetch.json, rows.jsonl
+  0   fetched and parsed: raw.<ext>, fetch.json, rows.jsonl, audits.json
   10  unchanged: the sha256 equals that of this DAG's newest earlier fetch.json; nothing new
   20  refused (ADR-036 part 3: scheme, host, redirect, address, size); the message names
       scheme and host only; nothing spooled
-  30  parse failed: raw.<ext> and fetch.json kept, no rows.jsonl
+  30  parse failed: raw.<ext> and fetch.json kept, no rows.jsonl and no audits.json
   1   anything else is a task error: an unreachable publisher, an HTTP error, the deadline, a
       spool entry that already exists (never overwritten), a bad argument
 
@@ -54,6 +66,7 @@ MAX_BYTES = 64 * 2**20  # the container's cap; a connector's maxBytes may only l
 MAX_REDIRECTS = 5
 CONNECT_TIMEOUT_S, READ_TIMEOUT_S, DEADLINE_S = 10, 30, 300  # per connect, per read, the whole download
 CHUNK = 2**16
+MAX_DETAIL, DETAIL_ITEMS = 1000, 5  # an audit's detail: audit_checks.detail's bound, failures quoted
 EXIT_OK, EXIT_UNCHANGED, EXIT_REFUSED, EXIT_PARSE_FAILED, EXIT_ERROR = 0, 10, 20, 30, 1
 REDIRECTS = {301, 302, 303, 307, 308}
 TLS = ssl.create_default_context()
@@ -201,8 +214,36 @@ def newest_sha256(dag_dir: Path) -> str | None:
     return max(records, key=lambda r: r["fetchedAt"])["sha256"] if records else None
 
 
-def parse(module_path: Path, entry: Path, raw: str) -> int:
-    """Runs the registered parser over the spooled bytes and writes rows.jsonl; exit 0 or 30."""
+def write_new(path: Path, text: str) -> None:
+    """Writes `path` whole or not at all, and never over an existing file."""
+    tmp = path.with_name(f".{path.name}.tmp")
+    tmp.write_text(text, encoding="utf-8")
+    try:
+        os.link(tmp, path)  # refuses an existing path
+    finally:
+        tmp.unlink()
+
+
+def audit(module, name: str, lines: str) -> dict:
+    """One declared audit over the rows as they land, as its audits.json entry."""
+    rows = [json.loads(line) for line in lines.splitlines()]
+    try:
+        function = getattr(module, name, None)
+        if not callable(function):
+            raise LookupError(f"the parser has no function {name}")
+        failures = function(rows)
+        if not isinstance(failures, list) or not all(isinstance(f, str) for f in failures):
+            raise TypeError(f"{name}() must return a list of str, not {type(failures).__name__}")
+    except (Exception, SystemExit) as e:  # an audit that breaks fails, and the fetch goes on
+        return {"name": name, "passed": False, "failures": 0, "detail": f"{type(e).__name__}: {e}"[:MAX_DETAIL]}
+    more = f"; and {len(failures) - DETAIL_ITEMS} more" if len(failures) > DETAIL_ITEMS else ""
+    detail = "; ".join(failures[:DETAIL_ITEMS])[:MAX_DETAIL - len(more)] + more
+    return {"name": name, "passed": not failures, "failures": len(failures), "detail": detail}
+
+
+def parse(module_path: Path, entry: Path, raw: str, audits: list[str]) -> int:
+    """Runs the registered parser over the spooled bytes and writes rows.jsonl, then its
+    declared audits and audits.json; exit 0 or 30."""
     try:
         spec = importlib.util.spec_from_file_location("k2_parser", module_path)
         module = importlib.util.module_from_spec(spec)
@@ -214,11 +255,12 @@ def parse(module_path: Path, entry: Path, raw: str) -> int:
     except (Exception, SystemExit) as e:  # a parser's sys.exit(0) is a failure too, never exit 0
         print(f"fetch: parse failed, the bytes are kept: {type(e).__name__}: {e}", file=sys.stderr)
         return EXIT_PARSE_FAILED
-    tmp = entry / ".rows.jsonl.tmp"
-    tmp.write_text(lines, encoding="utf-8")
-    os.link(tmp, entry / "rows.jsonl")  # refuses an existing rows.jsonl
-    tmp.unlink()
+    write_new(entry / "rows.jsonl", lines)
     print(f"fetch: {len(rows)} rows")
+    results = [audit(module, name, lines) for name in audits]
+    write_new(entry / "audits.json", json.dumps({"audits": results}, indent=1) + "\n")
+    for a in results:
+        print(f"fetch: audit {a['name']} {'passed' if a['passed'] else 'FAILED'} {a['detail']}")
     return EXIT_OK
 
 
@@ -265,7 +307,8 @@ def main(argv: list[str] | None = None) -> int:
     finally:
         shutil.rmtree(tmp, ignore_errors=True)  # gone already once renamed
     print(f"fetch: spooled {record['bytes']} bytes, sha256 {record['sha256']}")
-    return parse(root / PARSER.format(domain=pipeline["domain"], parser=connector["parser"]), entry, raw)
+    audits = list(dict.fromkeys(a for b in pipeline.get("bronze", []) for a in b["audits"]))
+    return parse(root / PARSER.format(domain=pipeline["domain"], parser=connector["parser"]), entry, raw, audits)
 
 
 if __name__ == "__main__":

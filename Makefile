@@ -99,7 +99,7 @@ test-clickhouse:  ## gold schema semantics on a throwaway clickhouse:24.3 (OHLCV
 test-trino:  ## The rules suite on a throwaway lake (Trino over TLS, Lakekeeper, MinIO), no stack: a release compiled from fixtures starts, each role sees exactly its policy, the base is fenced, a negative control fails
 	bash scripts/trino-rules-test.sh
 
-test-dbt:  ## dbt/ with no stack and no Trino: sqlfluff lint, dbt parse and compile, the manifest check (scripts/dbt-test.sh); the build on a throwaway Trino SKIPs until phase 002 brings a model
+test-dbt:  ## dbt/: sqlfluff lint, dbt parse and compile, the manifest check, then each compiled product built with its tests on a throwaway lake and its results table read back (scripts/dbt-test.sh; needs Docker, about 75 s)
 	bash scripts/dbt-test.sh
 
 test-rust:  ## Rust capture unit tests (runs in rust:1.100.0-bookworm; no local cargo needed)
