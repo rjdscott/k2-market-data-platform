@@ -1,0 +1,3 @@
+# Owner-only: no table offers a role, so only the owning team and the platform read it. The ECB
+# product reads target_days as an input port, through its tested tag, which needs no grant.
+grants: []

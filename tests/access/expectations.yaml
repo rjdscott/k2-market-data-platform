@@ -125,6 +125,14 @@ expectations:
               planning_time_ms, created, started, last_heartbeat, end, error_type, error_code]
     mustAppear: {where: "\"user\" = 'p.canary-full'", minRows: 1}
 
+  # The owner-only products (reference-data.calendars, reference-data.currency-master,
+  # fx-reference.ecb-fx-rates): no table offers a role yet, so a reader of another product is
+  # refused each reader view, each base, the seed's table, each bronze table and each landing.
+  # ECB's first reader arrives in step W2-9 with its own read rows.
+  - {principal: p.canary-full, table: reference_data.calendars.target_days, denied: true}  # reader view, no role offered
+  - {principal: p.canary-full, table: reference_data.calendars__base.target_days, denied: true}  # base (ADR-061)
+  - {principal: p.canary-full, table: reference_data.calendars__base.target_closing_days, denied: true}  # the seed's table in the base
+
   # The catalog fence (ADR-059 part 7): Lakekeeper has no authentication, so nothing reaches it
   # but the catalog's own network. Run on the stack by scripts/verify/catalog-fence.sh.
   - {probe: {from: k2-net, target: "lakekeeper:8181"}, expect: refused}
