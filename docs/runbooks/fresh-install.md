@@ -59,7 +59,9 @@ restoring from the host copy ([lake-backup-and-restore.md](./lake-backup-and-res
   9002, 9090, 9092, 9093, 9363, 9644, 15432, 18080 and 19092 (the `ports:` of
   `docker-compose.yml`; 8123, 9002 and 9363 only under `hot-gold`). Lakekeeper publishes none
   since 2026-11-27, and MinIO none since phase 002 (9000 and 9001 are gone: the object store and
-  its console answer only inside the containers' networks). `K2_AIRFLOW_PORT` (8090),
+  its console answer only inside the containers' networks; on the live stack both were closed from
+  the host after the deploy of `v3.0.0-alpha.4-rc.2-e2dcf759de67` on 2026-11-27, and its verify
+  printed `catalog-fence: 10 PASS, 0 FAIL`). `K2_AIRFLOW_PORT` (8090),
   `K2_API_PORT` (8095, k2-api) and `K2_TRINO_PORT` (8443, HTTPS) in `.env` move
   three of them; `K2_AIRFLOW_PORT` also moves the base URL Airflow's UI builds its links from,
   so change the variable, not the mapping alone.
@@ -117,6 +119,19 @@ make site-install               # the catalog site and dbt docs, daily at 05:15 
 make health                     # every service healthy, every venue delivering to Redpanda in the last 2 min
 docker exec k2-redpanda rpk topic consume market.crypto.v3.trades.binance --num 1
 ```
+
+What those lines printed when they ran on the live stack, a running one, not an empty host, on
+2026-11-27 ([first-cutover-to-releases.md](./first-cutover-to-releases.md) section 3 has the
+blocks): `make engine-keys` twelve `engine-keys: wrote K2_<...>` lines (the five engines' pairs,
+`K2_RUN_UID`, `K2_RUN_GID`), then `engine-keys: 12 names written to ~/<checkout>/.env (mode 600);
+the old file is ~/<checkout>/.env.bak-<UTC>`, and a second run `engine-keys: nothing to write,
+every name in ~/<checkout>/.env is set`; `make password ... TO_FILE=1` for the `dbt_` and `pub_` ids
+of `calendars`, `currency_master`, `ecb_fx_rates` and `quality_results` and the three `p.canary-*`
+ids, each exit 0 and its file mode 600 (the `svc.*` and access canary ids were filed at the cutover); `make api-key PRINCIPAL=p.analyst-a TO_FILE=1`
+`principal-secret: p.analyst-a: sha256 in ~/k2-secrets/api/keys.json, key in ~/k2-secrets/api-keys/p.analyst-a.key (mode 600)`;
+`make release-verify` exit 0 and `make health` `health: PASS` after
+`v3.0.0-alpha.4-rc.3-48ad71fba732`, whose deploy printed `images and health checked for 23
+container(s)`.
 
 `make up` alone (`scripts/check-env.py`, then `docker compose up -d`) no longer brings up a
 fresh clone: compose stops on an unset `K2_TRINO_*` value or engine key (`required variable
@@ -253,6 +268,7 @@ images. The lost time is the ~10 min of the first attempt, not the recovery.
 ~9.5 min build figure moves).
 
 **Last verified:** 2026-08-28 against a fresh clone on a 28-core host, Docker Desktop VM
-40 GB / 28 CPU. The phase 002 and 003 lines (`make engine-keys`, the password loop, the webhook and
-API key, `make site-install`, the ports without MinIO's, k2-api in the healthy table): not yet: first run
-after the deploy of this release.
+40 GB / 28 CPU, for the sequence as it was then. The phase 002 and 003 lines `make engine-keys`, the
+password loop, the webhook (at the cutover), `make api-key`, the ports without MinIO's, `make release-verify` and `make health`:
+2026-11-27 on the live stack, a running one, not from an empty host. Not yet: `make site-install`,
+the whole sequence from an empty host, and k2-api's row of the healthy table read from `docker ps`.

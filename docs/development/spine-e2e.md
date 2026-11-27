@@ -44,7 +44,7 @@ Every later stage reads that one release. Nothing is committed or tagged in your
 | `access-verify` | a throwaway lake, prefix `spine-e2e-av` | every row of [`tests/access/expectations.yaml`](../../tests/access/expectations.yaml) holds on that release | a role sees what it should not, or cannot see what it should |
 | `test-access` | a throwaway lake, prefix `access-test` | the proofs behind that suite ([`tests/access/prove.sh`](../../tests/access/prove.sh)): a loosened rule fails exactly its row, the drift and marker checks catch their plants, a rules-only release takes effect without a restart, each principal lands in its resource group, and a builder that replaces its base with a view of constants is caught | the verifier itself can no longer fail when it should, which is worse than a failing row |
 | `rules` | one throwaway lake, prefix `spine-e2e` | in order, [`trino_rules_test.py`](../../scripts/trino_rules_test.py) `suite` and `negative`, [`trino_rules_c1_test.py`](../../scripts/trino_rules_c1_test.py) (a builder tampering with its base), `control` (destructive, so after C1), then [`identity.sh --throwaway`](../../scripts/verify/identity.sh) (HTTPS, passwords, certificates, rotations) | a rule, a mask, the fence or the login path is wrong on Trino 484 |
-| `run` | one throwaway lake, prefix `run-path`, with one long-lived Spark container on compose's Spark image and the `dbt-runner` image built from the tree ([`run-path.sh`](../../scripts/verify/run-path.sh)) | one product's run path, each task the release's own code in the shape the DAG factory gives it: calendars built through the dbt wrapper; ECB's synthetic good file landed, audited and published to bronze; ECB built on calendars' tested snapshot and read through the reader view, its rates exact; the same rows through the lake's k2-api as the same reader, with no key refused (401) and bronze and silver refused (403); the same bytes again landing and staging nothing; the corrupt file failing its audit and a third file refused behind it until the operator resets `audit` to `main`; a failing build restored, its snapshots expired by id, maintenance clean; every build's run records under its release | the named claim broke; the stage stops there, since each later claim builds on the lake the one before left |
+| `run` | one throwaway lake, prefix `run-path`, with one long-lived Spark container on compose's Spark image and the `dbt-runner` image built from the tree ([`run-path.sh`](../../scripts/verify/run-path.sh)) | one product's run path, each task the release's own code in the shape the DAG factory gives it: calendars built through the dbt wrapper; ECB's synthetic good file landed, audited and published to bronze; ECB built on calendars' tested snapshot and read through the reader view, its rates exact; the same rows through the lake's k2-api as the same reader, with no key refused (401) and bronze and silver refused (403); the same bytes again landing and staging nothing; the corrupt file failing its audit and a third file refused behind it until the operator resets `audit` to `main`; a failing build restored, its snapshots expired by id, maintenance clean; every build's run records under its release; then every dbt product of the release built through the wrapper, each after the products it reads, a table of no rows among them | the named claim broke; the stage stops there, since each later claim builds on the lake the one before left |
 | `rehearsal` | compose project `k2-rehearsal` ([`deploy_rehearsal.py`](../../scripts/verify/deploy_rehearsal.py)), with a Spark service built from the tag, so deploy's `ddl` step runs its real Spark path | by default `make deploy-rehearsal FAST=1`, for merge points: a first deploy that fails verification then succeeds, a planted view the drift check names, a rules-only release that restarts nothing, and kills after `swap` and `recreate` only, the skipped sections named in its summary. With `FULL=1`, before a tag, the whole chain: also one image changed, a forced mismatch that restores the previous release, `make rollback`, a dropped masked column polled every 50 ms, a kill after each of the deploy's steps then a rerun, two deploys at once, the backup-set refusal | a deploy claim of ADR-058 does not hold |
 
 The `run` stage does not run the fetch itself: a local fixture server would sit on a private
@@ -61,7 +61,8 @@ Times, each from one recorded run, 2026-11-27, `make spine-e2e`: the fast rehear
 before the fast rehearsal existed, printed `PASS rules 261s`, `PASS rehearsal 1347s` and a total
 of `1609 s`. The `run` stage, from recorded runs of 2026-11-27: `run-path: 7 PASS, 0 FAIL in 232 s` before its REST claim
 was added, then `run-path: 8 PASS, 0 FAIL in 227 s`, and inside `ONLY="run" make spine-e2e` the same day
-`PASS run 232s  run-path: 8 PASS, 0 FAIL in 230 s`. No file in the
+`PASS run 232s  run-path: 8 PASS, 0 FAIL in 230 s`; with claim 9 added, one recorded run printed
+`run-path: 9 PASS, 0 FAIL in 263 s`. No file in the
 repository records the other stages' times, so none is given. Memory: each throwaway lake refuses
 to start under 6 GiB available (`MIN_GIB` in `throwaway-lake.sh`), and the `run` stage and the
 rehearsal under 10 GiB (`run-path-lib.sh`, `deploy_rehearsal.py`).
@@ -166,6 +167,26 @@ deployed added a product, so neither path was run. The rehearsal now carries a r
 forced to fail first and then deployed (`scripts/verify/deploy_rehearsal.py`, section 7b), so the next
 change to either path fails here before it reaches the live stack. One recorded run of 2026-11-27 printed
 `PASS rehearsal 848s` after that section was added.
+
+It missed two more on the live stack the same day, after that deploy:
+
+1. **The publish guard on a table that builds empty.** `governance/quality-results` built its table
+   with no rows, and the wrapper refused a clean build: dbt-trino builds a contract-enforced table as a
+   `CREATE OR REPLACE` and then an `INSERT`, reports only the `INSERT`, and an insert of no rows commits
+   nothing, so `main` was the `CREATE`'s snapshot, a query dbt never named. The `run` stage had built
+   calendars and ECB only, each with rows. The guard now knows every statement of the run by a Trino
+   client tag ([ADR-062](../adr/ADR-062-dbt-builds-silver-and-gold-per-product-through-one-wrapper.md)'s
+   Outcome), and `run-path.sh` claim 9 builds every dbt product of the release through the wrapper,
+   `currency-master`'s bronze empty there, so a materialization shape the guard does not know fails on
+   the throwaway lake first.
+2. **The fetch on a connection the server closes.** `currency_master`'s fetch exited 1 with `OSError:
+   [Errno 9] Bad file descriptor`: the response closed its socket as it read the body's last byte, and
+   the read loop set a timeout on it. The `run` stage never runs the fetch (above: a local server would
+   sit on a private address, which the fetch refuses), so no throwaway lake can meet this. What covers it
+   now is `tests/test_fetch.py`, whose fake socket closes as a real one does (after the close,
+   `settimeout` and `recv` raise `EBADF` while a `makefile()` reference keeps the descriptor), across
+   every response shape: length with keep-alive and with close, HTTP/1.0, chunked, read to the close,
+   empty, and each after a redirect that closes.
 
 ## Alternatives considered
 

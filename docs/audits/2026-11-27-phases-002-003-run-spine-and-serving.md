@@ -380,6 +380,45 @@ never rewritten.
 | The two missing chaos scripts, the run stage's pass, the scratch release, the first deploy | pull request #255's description only: not durable (HIGH 4, MED 11) |
 | F8, deploy Q3, access Q4 and Q5 | nowhere (MED 31) |
 
+### Results, 2026-11-27, release `v3.0.0-alpha.4-rc.3-48ad71fba732`
+
+Run by the operator on the live stack after `make deploy RELEASE=v3.0.0-alpha.4-rc.3-48ad71fba732`
+(10:50 to 10:51 UTC); output trimmed, never altered.
+
+1. `make deploy` exit 0 in 56 s, then `make release-verify` exit 0: PASS. `k2-api: GET
+   http://127.0.0.1:8095/v1/release names v3.0.0-alpha.4-rc.3-48ad71fba732`; `catalog-fence: 10 PASS, 0 FAIL`;
+   `catalog drift check clean (0 differences, pending none, 6 skipped, 0 left by a release since)`;
+   `identity.sh: 18 PASS, exit 0`.
+2. MinIO's `127.0.0.1:9000` and `:9001`: PASS, both closed from the host after the `rc.2` deploy, and
+   the fence's `host -> 127.0.0.1:9000` and `:9001` rows are among row 1's 10 PASS.
+3. `python3 scripts/check-budget.py`: PASS, `bootstrap default      23 services   17.30 CPU   29.375 GiB`
+   (29.375, not 29.250: `167b93a` gave `lake-init` 256M).
+4. `airflow dags list`: PASS, the five DAGs; `airflow dags list-import-errors`: `No data found`.
+5. `airflow dags test` not run as written; the first runs instead, each success: `calendars`,
+   `ecb_fx_rates` (121.7 s, every task success, `expire` skipped), `access_canary`, and after `rc.3`
+   `currency_master` (48 s) and `quality_results` (21 s).
+6. not yet run.
+7. `access-verify LIVE=1 passed: {'PASS': 82, 'FAIL': 0, 'SKIP': 30}`, inside row 1's `release-verify`: PASS.
+8. As `p.analyst-a`, the key read from `~/k2-secrets/api-keys/p.analyst-a.key`: gold with `limit=10000`
+   200; no key 401; `bronze_daily` 403: PASS. The plan's `?limit=5` on the whole table is 422
+   `result_too_large`, `more than 5 rows match; narrow the filters (cursors arrive in phase 007)`; the
+   same with two equality filters 200.
+9. not yet run on the live stack (`scripts/verify/run-path.sh` claim 4 compares them on a throwaway lake).
+10. `bash scripts/verify/api-schema.sh`: `8 PASS, 0 FAIL`, and `/v1/openapi.json` says `3.1.0`: PASS (the
+    table expected 7; the script counts 8 today).
+11. `/dbt-docs/` and `/catalog/`: 200 twice: PASS; `/healthz`, `/v1/release` and `/v1/openapi.json` 200
+    too.
+12. `make backup`: `backup-lake: run runs/20261127T100533Z: 60 objects, 426190 bytes fetched`; `make
+    backup-verify`: a snapshot line for each of the six restore tables, `backup-verify: landing
+    s3://k2-landing/fx-reference/ecb-fx-rates/: 1 objects, 69492 bytes`, `backup-verify: OK: 0 problem(s)`:
+    PASS, after the fix `092ba53`.
+13. not yet run.
+14. not yet run.
+15. In part: `rc.3`'s drain met real DAGs, `drained access_canary, calendars, currency_master,
+    ecb_fx_rates, quality_results (the DAG code moved since v3.0.0-alpha.4-rc.2-e2dcf759de67) in 11 s`, and
+    unpaused the three it paused; the run records of a run overtaken by the deploy are not yet checked
+    (`scripts/chaos/deploy-mid-run.sh`, not yet run).
+
 ## This file's own gates
 
 Run at `05c6c18` with this file and the index row: `python3 scripts/check_docs.py words <this file>
@@ -425,3 +464,21 @@ Appended after the audit; the findings above stand as written.
   superuser password; `CHANGELOG.md:153-154` is unchanged.
 - **MED 31. Stated in `4b73b29`, not fixed**: `CHANGELOG.md` 3.0.0-alpha.4 has a "Known and open" heading
   naming F8, deploy Q3 and access Q4 and Q5, each with its file.
+- **HIGH 4. Resolved in `9c61f26` and `ed42d71`**: `scripts/chaos/trino-stop-mid-build.sh` recorded
+  `trino-stop: 6 PASS, 0 FAIL in 159 s` on a throwaway lake on 2026-11-27 (`scripts/chaos/README.md`);
+  `scripts/chaos/deploy-mid-run.sh` is written and not yet run on the live stack.
+- **HIGH 5. Resolved in `5c26fc6`**: `scripts/verify/run-path.sh` claim 4 compares ECB gold read
+  through the lake's `k2-api` as `p.analyst-a` with the rows the same principal reads over SQL, on
+  rows, in key order; no key 401, `bronze_daily` and `silver_rates` 403. The live half is row 9 of the
+  results above, not yet run.
+- **MED 11. Resolved in part in `9c61f26`**: `scripts/chaos/fx-bad-file.sh` exists and recorded
+  `fx-bad-file: 3 PASS, 0 FAIL in 126 s` on 2026-11-27; `tests/test_lake_connector.py:7` still names
+  `scripts/verify/connector-wap.sh`, which does not exist.
+- **MED 12. Resolved in `9c61f26`**: `scripts/chaos/dbt-failing-test.sh` polls gold as `p.analyst-a`
+  through its view every 50 ms across the failed build and asserts the expire task's run record (task
+  `expire`, event `passed`, its detail the ids); `dbt-failing-test: 6 PASS, 0 FAIL in 160 s` on
+  2026-11-27.
+- **MED 20. Resolved in `092ba53`**: the first backup of real tables on the live stack failed reading a
+  gzip-compressed Iceberg metadata file (`<v>.gz.metadata.json`) as JSON; the gzip magic now decides, and
+  `make backup-verify` then printed a snapshot line for each of the six restore tables and `OK: 0
+  problem(s)` on the live stack (results row 12).

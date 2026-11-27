@@ -17,8 +17,8 @@ archived in [`legacy/prefect/`](../../legacy/prefect/README.md), with no rollbac
 |---|---------|-------------|----------|
 | 1 | Scheduler heartbeat lost | < 10 min | alert 301 s after the stop; cleared 59 s after `up` (2026-11-25) |
 | 2 | A task failed | depends on the task | alert 27 s after the failure (2026-11-25, on a v3 lake DAG); not yet measured on a product DAG: the first induced failure after the deploy of this release measures it |
-| 3 | A DAG missing, paused or stale | < 10 min | not yet measured on a product DAG; the old checkout-mount case observed 2026-11-25: 35 min with no run, healthy within a minute of the recreate |
-| 4 | Trigger and read a product's run | < 5 min | not yet measured: the first triggered run after the deploy of this release |
+| 3 | A DAG missing, paused or stale | < 10 min | not yet measured on a product DAG (no product DAG has gone missing); the old checkout-mount case observed 2026-11-25: 35 min with no run, healthy within a minute of the recreate |
+| 4 | Trigger and read a product's run | < 5 min | first runs on the live stack, 2026-11-27: `ecb_fx_rates` 121.7 s, `currency_master` 48 s, `quality_results` 21 s, each a success |
 
 ---
 
@@ -60,14 +60,22 @@ What the sections below act on, from
 - **Where each task runs.** `load`, `audit`, `publish`, `expire` and `maintain` are `docker exec`
   into `k2-spark-iceberg`, running the pinned release's `platform/docker/lake/` scripts; `fetch`
   and `build` are one-shot containers the scheduler starts through the Docker socket, named
-  `k2-<kind>-<dagId>-<try>` (`k2-fetch-ecb_fx_rates-1`, `k2-dbt-runner-ecb_fx_rates-1`), removed
-  when they exit (`--rm`), never pulled at run time (`--pull never`), each with only what the
-  release's `compiled/oneshots.json` lists for its kind. `fetch` runs on `k2-egress` alone with its
+  `k2-<kind>-<dagId>-<try>` (on the live stack on 2026-11-27, `k2-fetch-currency_master-1` and
+  `k2-dbt-runner-ecb_fx_rates-1`), removed when they exit (`--rm`), never pulled at run time
+  (`--pull never`), each with only what the release's `compiled/oneshots.json` lists for its kind,
+  and labelled `com.k2.oneshot=<kind>` and `com.k2.project=<project>` (the spool helper as
+  `fetch-spool`). The labels are how the catalog fence admits a running `build` on `k2-catalog`
+  ([`scripts/verify/catalog-fence.sh`](../../scripts/verify/catalog-fence.sh)): a member with no
+  compose labels passes only with this project's label, a kind named in
+  `tests/access/catalog-fence-allow.txt`, the name `k2-<kind>-<dagId>-<try>` and the image the live
+  release's `compiled/oneshots.json` gives the kind. Before that fix, release-verify on 2026-11-27
+  counted a running build as an intruder (`k2-dbt-runner-ecb_fx_rates-1=/`). `fetch` runs on `k2-egress` alone with its
   DAG's directory of the `k2-spool` volume; `build` runs on `k2-catalog` with its product's builder
   and publisher passwords and `svc.runs`'s. `record` writes the run record as `svc.runs`.
 - **Pools**, created by the `airflow-migrate` one-shot (`airflow pools set ...` in
   `docker-compose.yml`): `lake_spark` 1 slot (every Spark task: one driver at a time in
   `spark-iceberg`), `fetch` 1, `dbt` 2, inside LocalExecutor's 4 (`AIRFLOW__CORE__PARALLELISM`).
+  `airflow pools list` on the live stack, 2026-11-27: `lake_spark` 1, `fetch` 1, `dbt` 2.
 - **A scheduler that dies under a running task** leaves it running until the orphan check resets
   it: compose sets `AIRFLOW__SCHEDULER__ORPHANED_TASKS_CHECK_INTERVAL` to 30 s, against Airflow's
   300 s default (`scripts/verify/oneshot-slots.sh` measured the reset).
@@ -161,7 +169,7 @@ dbt output never keeps a failed build's rows. What each task's failure says in i
 | `load`, `audit`, `publish` | `spark: docker exec k2-spark-iceberg sh -c ...`, the connector's lines, its last line `{"exit": <n>, "task": ...}`, then `<task> exited <n>`: 1 a task error, 2 refused, 3 the batch failed its audit | [file-source-audit-failed.md](./file-source-audit-failed.md) for 2 and 3 |
 | `build` | `one-shot: docker run --rm --name k2-dbt-runner-<dag>-<try> ...`, dbt's output, the wrapper's last line `{"exit": <n>, "expire": [...]}`, then `k2-dbt-runner-<dag>-<try> exited <n>`: 1 tests failed and the outputs restored, 2 a build error and the outputs restored, 3 a restore, the tag commit, the view sync, the reconcile or the drift check failed, 4 a required input was never tested ([`docker/dbt-runner/k2_dbt.py`](../../docker/dbt-runner/k2_dbt.py)) | 1, 2: fix the model or the data in a release; 3: the next run reconciles first, and a second 3 is a page; 4: run the input's DAG |
 | `expire` | skipped with `nothing to expire: build's result is ...` when the build left nothing; else the expire script's exit | read its log |
-| `maintain` | skipped with `maintenance is not due in the run at <time>`; else exit 1 names the ref that vanished, a refused delete or a missing retention entry ([`docker/lake/maintain.py`](../../docker/lake/maintain.py)) | read its log |
+| `maintain` | skipped with `maintenance is not due in the run at <time>`; a build output with no good build yet prints `maintain: <table>: not built yet`, is named in the result's `notBuilt` and expires nothing, and the task goes on; else exit 1 names the ref that vanished, a refused delete, a missing retention entry, or a bronze, checks or landing table that is missing (deploy makes those, never a build) ([`docker/lake/maintain.py`](../../docker/lake/maintain.py)). Before that fix, `currency_master`'s first run on 2026-11-27 failed here with `TABLE_OR_VIEW_NOT_FOUND` | read its log |
 | `record` | `run record not written for <dag>/<run>: <error>`; the run's state is unchanged | Trino or `svc.runs`'s password: `make principals-status` |
 
 A one-shot that never started fails with `docker run ...` or the spool helper's command and its
@@ -207,7 +215,20 @@ are the to-release plan's phase 002).
   the factory's check (`dags.json entry <i> (<dag>): bad <field>`).
 - **Paused**: a product whose status is not `active` starts paused; a deploy paused it while
   draining a DAG whose shape changed and exited 3, which leaves it paused (`scripts/deploy.py`, the
-  `drain` step; the names are in `${K2_RELEASES}/deploy-paused.json`); or a person paused it.
+  `drain` step; the names are in `${K2_RELEASES}/deploy-paused.json`); or a person paused it. A
+  deploy that reaches done unpauses only the DAGs it paused. The deploy of
+  `v3.0.0-alpha.4-rc.3-48ad71fba732` on the live stack, 2026-11-27, met all five DAGs, two of them
+  paused by the operator beforehand:
+
+  ```text
+    drained access_canary, calendars, currency_master, ecb_fx_rates, quality_results (the DAG code moved since v3.0.0-alpha.4-rc.2-e2dcf759de67) in 11 s; paused access_canary, calendars, ecb_fx_rates
+  deploy: drain ok (12.8 s)
+  ...
+  deploy: v3.0.0-alpha.4-rc.3-48ad71fba732 is live and verified
+    unpaused access_canary, calendars, ecb_fx_rates: the DAGs deploy paused
+  ```
+
+  The two the operator had paused were in neither list and stayed as the operator left them.
 - **A stale releases-root mount**: the root was removed and created again on the host while the
   containers kept the old directory. The root is created once and never recreated for this reason
   ([`CLAUDE.md`](../../CLAUDE.md), the bind-mount gotcha; ADR-058). The checkout's
@@ -238,7 +259,11 @@ docker compose up -d --force-recreate --no-deps airflow-scheduler airflow-dag-pr
 No pointer, or a pointer at a release without run code: deploy a release that has it
 ([deploy-a-release.md](./deploy-a-release.md)).
 
-**Measured**, not yet measured on a product DAG.
+Step 1 on the live stack, 2026-11-27, release `v3.0.0-alpha.4-rc.3-48ad71fba732`: `airflow dags list`
+listed five DAGs, `access_canary`, `calendars`, `currency_master`, `ecb_fx_rates` and
+`quality_results`, and `airflow dags list-import-errors` printed `No data found`.
+
+**Measured**, not yet measured on a product DAG: none has gone missing.
 
 ---
 
@@ -275,7 +300,18 @@ trino_cli svc.catalog "SELECT task, event, table_name, rows_written, release_id,
 Order matters for the products that read each other: `calendars` first (`ecb-fx-rates` requires its
 tested `target_days`, or its build exits 4), then `currency_master` and `ecb_fx_rates`.
 
-**Measured**, not yet measured: the first triggered run after the deploy of this release.
+**Measured**, the first runs on the live stack, 2026-11-27. Under
+`v3.0.0-alpha.4-rc.2-e2dcf759de67`: `calendars` a success (`resolve`, `build`, `maintain` and `record`
+success, `expire` skipped), `ecb_fx_rates` a success in 121.7 s with every task a success (`expire`
+skipped), `access_canary` a success. Under `v3.0.0-alpha.4-rc.3-48ad71fba732`: `currency_master` a
+success in 48 s, its fetch log
+
+```text
+fetch: spooled 47491 bytes, sha256 ...
+fetch: <n> rows
+```
+
+and `quality_results` a success in 21 s.
 
 ---
 
@@ -288,10 +324,13 @@ on 2026-11-26. They are in git history; the DAGs are in
 
 ---
 
-**Last verified:** §1 on 2026-11-26 on the live stack, read-only, before the old DAGs were
-removed: steps 1, 2 and 4 (the exporter `1`, both services up, the heartbeat rate `0.2`, `Found one
-alive job.`). Product DAGs: not yet: first run after the deploy of this release. The commands of
-§1 step 5, §2, §3 and §4 are written from `factory.py`, `oneshot.py`, `docker-compose.yml` and the
-Airflow 3.3.2 CLI's own argument table (`airflow/cli/cli_config.py`: `dags list-runs <dag_id>
---state`, `dags trigger <dag_id>`, `tasks states-for-dag-run <dag_id> <run_id>`), and not yet run
-against one.
+**Last verified:** 2026-11-27 on the live stack, for the product DAGs: §3 step 1 (`dags list`,
+`dags list-import-errors`), the pools, the deploy's drain and unpause (§3, release
+`v3.0.0-alpha.4-rc.3-48ad71fba732`), the one-shot names, and §4's first runs of all five products.
+§1 on 2026-11-26 on the live stack, read-only, before the old DAGs were removed: steps 1, 2 and 4
+(the exporter `1`, both services up, the heartbeat rate `0.2`, `Found one alive job.`). Not yet: an
+induced task failure on a product DAG (§2), §1 step 5, §3 steps 2 and 3 against a paused or stale
+DAG, and §4 step 3's run record query in this form; those are written from `factory.py`,
+`oneshot.py`, `docker-compose.yml` and the Airflow 3.3.2 CLI's own argument table
+(`airflow/cli/cli_config.py`: `dags list-runs <dag_id> --state`, `dags trigger <dag_id>`,
+`tasks states-for-dag-run <dag_id> <run_id>`).

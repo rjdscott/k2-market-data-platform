@@ -274,6 +274,10 @@ exits 3.
 `contracts/fx-reference/ecb-fx-rates/`, its parser `domains/fx-reference/parsers/ecb_fx.py`; its DAG,
 `ecb_fx_rates`, is one entry of the release's `compiled/airflow/dags.json`, built by the factory, and
 runs `resolve`, `fetch`, `load`, `audit`, `publish`, `build`, `expire`, `record` and a daily `maintain`.
+`maintain` expires old snapshots and landings past their window (`docker/lake/maintain.py`). Before the
+product's first good build its dbt outputs do not exist: each is skipped as `not built yet` and named in
+the result's `notBuilt`, while a missing bronze, checks or landing table, which deploy makes, still fails
+the task.
 
 ```mermaid
 flowchart TB

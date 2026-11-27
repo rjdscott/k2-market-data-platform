@@ -152,6 +152,20 @@ once its tests passed. Each engine holds its own storage key.
   not `DRIFT`.
 - `make lake-init [RECREATE="<service> ..."]` reruns `lake-init` from the live release, for use after
   `make engine-keys ROTATE=<engine>`.
+- fetch stops reading at a response that has closed its connection: on a server that closes after the
+  body, the next read set a timeout on the closed socket and the fetch exited 1 with `OSError: [Errno 9]
+  Bad file descriptor`; a body short of its `Content-Length` now fails the task.
+- `maintain` skips a dbt output not built yet, names it in its result's `notBuilt` and exits 0, instead
+  of exiting 1 before a product's first good build; a missing bronze, checks or landing table still fails.
+- The dbt wrapper's publish guard knows every statement of its build by a fresh Trino client tag per run,
+  so a table that builds empty, whose `main` is the `CREATE OR REPLACE`'s snapshot that dbt never
+  reports, publishes; an earlier run's leftover query and any write without this run's tag are still
+  refused.
+- The catalog fence admits the platform's own one-shots on `k2-catalog` (labels `com.k2.oneshot` and
+  `com.k2.project`, the name `k2-<kind>-<dagId>-<try>`, the image the live release gives the kind),
+  where a running dbt build failed `release-verify` before; any other container still fails it.
+- `make backup` reads a gzip-compressed Iceberg metadata file (`<v>.gz.metadata.json`), which failed the
+  first backup of real tables.
 
 ### Removed
 

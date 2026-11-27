@@ -15,17 +15,18 @@ section 2.
 DAG id, `<run>` the Airflow run id, `<try>` its try number; the one-shot's container is
 `k2-fetch-<dag>-<try>` (`container_name` in `oneshot.py`).
 
-> **No file product has run on the live stack yet.** The messages quoted below are the code's own
-> strings, from `fetch.py` and `oneshot.py` at this release, and the exits are unit-tested with no
-> network (`make test-connectors`: 74 passed, 2026-11-27); every command here runs for the first
-> time after the deploy of this release.
+> **Both file products ran on the live stack on 2026-11-27.** The exit-0 lines below are what their
+> fetch logs printed, and section 4 holds the one live failure of that day, a defect of the fetch
+> itself. The other messages are the code's own strings, from `fetch.py` and `oneshot.py` at this
+> release, and the exits are unit-tested with no network (`make test-connectors`: 74 passed,
+> 2026-11-27); sections 1, 2, 3 and 5 have not met a live case yet.
 
 | # | Failure | MTTR target | Measured |
 |---|---------|-------------|----------|
 | 1 | fetch exited 10: unchanged, not a failure | none | not a failure |
 | 2 | fetch exited 20: refused (scheme, host, redirect, address, size) | < 1 day to a decision | not yet measured: the first live refusal, or plan 002's redirect drill |
 | 3 | fetch exited 30: the parse failed, the bytes kept | see [file-source-audit-failed.md](./file-source-audit-failed.md) section 2 | not yet measured |
-| 4 | fetch exited 1: network, TLS, HTTP status, deadline | the next scheduled run | not yet measured: the first live outage of a publisher |
+| 4 | fetch exited 1: network, TLS, HTTP status, deadline, or a fetch defect | the next scheduled run; a defect, the next release | a publisher's outage: not yet measured; the fetch defect of 2026-11-27: one release (worked example below) |
 | 5 | The one-shot never started: image, network `k2-egress`, spool helper, the release's one-shot spec | < 15 min | not yet measured: the first live occurrence |
 
 ---
@@ -148,6 +149,7 @@ lands, because the landing is the record of what arrived.
 | `fetch failed: https://<host>: <OSError type>: <message>` | the connection or the read failed: `ConnectionRefusedError`, `TimeoutError` (30 s per read, 10 s per connect), `SSLCertVerificationError` (the certificate chain or name did not verify; TLS verification cannot be turned off) |
 | `fetch failed: https://<host>: HTTP <status>` | the publisher answered other than 200 or a redirect |
 | `fetch failed: https://<host>: past the 300 s deadline` | the whole download, redirects included, took over 300 s |
+| `fetch failed: https://<host>: the body ended <n> bytes short of its Content-Length` | the connection closed before the body the publisher announced had arrived |
 | `fetch failed: --release, --product or --run-id is not a plain name`, `... has no https-file connector, or the run is not of DAG <dag>` | the task's arguments do not match the pinned release's pipeline: a defect, not the publisher's; report it |
 
 The task's own `execution_timeout` (the product's `timeoutMinutes`, else 10 minutes, `FETCH_TIMEOUT`
@@ -172,7 +174,31 @@ A certificate that does not verify from the stack but does from the host is a CA
 fetch image older than the publisher's chain: rebuild the image under a new tag
 ([upgrade-a-pinned-component.md](./upgrade-a-pinned-component.md)), never a flag.
 
-**Measured**, not yet measured live; each path is a unit test in `tests/test_fetch.py`.
+**Worked example: the source, or the fetch? (2026-11-27, live).** `currency_master`'s fetch, under
+`v3.0.0-alpha.4-rc.2-e2dcf759de67`, exited 1 with
+
+```text
+fetch failed: https://<host>: OSError: [Errno 9] Bad file descriptor
+```
+
+while `ecb_fx_rates`'s fetch, the same image on the same network, passed. It was a defect of the
+fetch, not a problem of the source: a 200 with a `Content-Length` on a connection the server closes
+after the body (`Connection: close`, or HTTP/1.0) hands the socket to the response, which closes it
+as it reads the last byte, and the read loop then set a timeout on that closed socket (commit
+`e3b2bbc`, [`docker/fetch/fetch.py`](../../docker/fetch/fetch.py)'s `download()`). The fix stops
+reading once the response is closed; its tests use a fake socket that closes as a real one does
+(`tests/test_fetch.py`). It shipped in `v3.0.0-alpha.4-rc.3-48ad71fba732`, and the next run passed.
+How to tell the two apart:
+
+- **A fetch defect**: exit 1 with an `OSError` on every run against one host, while another host's
+  fetch passes; the host's own `curl` (the Recovery block above) gets a 200; errno 9 (`EBADF`) is a
+  local descriptor error, never a network answer. Report it with the task log; the fix arrives as
+  a release. Do not touch `allowHosts` or retry the DAG in a loop.
+- **A source problem**: the host's `curl` fails too, or the message is a lookup error, a refused or
+  timed-out connection, a certificate, or an HTTP status, and it clears when the publisher recovers.
+
+**Measured**, the fetch defect: fixed in the next release the same day; a publisher's outage: not
+yet measured live. Each path is a unit test in `tests/test_fetch.py`.
 
 ---
 
@@ -213,10 +239,14 @@ exercises the one-shot's limits and its spool helper on a scratch project.
 
 ## Failure modes / incidents
 
-- None yet.
+- **2026-11-27**, `currency_master`'s fetch: `OSError: [Errno 9] Bad file descriptor` on a host that
+  closes the connection, a fetch defect fixed in the release that followed (section 4's worked
+  example).
 
 ---
 
-**Last verified:** not yet: first run after the deploy of this release. The exits and refusals are
+**Last verified:** the exit-0 lines and section 4's worked example on 2026-11-27 on the live stack
+(releases `v3.0.0-alpha.4-rc.2-e2dcf759de67` and `v3.0.0-alpha.4-rc.3-48ad71fba732`); sections 1, 2,
+3 and 5 and section 4's recovery commands: not yet, no live case. The exits and refusals are
 unit-tested (`make test-connectors`, 74 passed, 2026-11-27, no network); the messages are quoted from
 `docker/fetch/fetch.py` and `docker/airflow/dags/oneshot.py` at this release.
