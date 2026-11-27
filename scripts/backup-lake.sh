@@ -1,41 +1,33 @@
 #!/usr/bin/env bash
-# A second copy of what nothing can rebuild, outside Docker, on the host: a
-# pg_dump of the catalog database and of Airflow's, plus each table in TABLES
-# as its own Iceberg files (its data/ and metadata/ objects, mirrored from
-# MinIO), into $K2_BACKUP_DIR (default ~/k2-backup). TABLES is empty until
-# phase 002, and the table copy prints a SKIP line meanwhile.
+# A second copy of what nothing can rebuild, outside Docker, on the host, into
+# $K2_BACKUP_DIR (default ~/k2-backup): a pg_dump of the catalog database and of
+# Airflow's, then what the live release's compiled/lake/backup-set.json lists (each
+# `restore` table at its ref, each landing prefix, the releases root), copied by
+# scripts/backup_lake.py in the release's tools image.
 #
 #   scripts/backup-lake.sh             # `make backup`; the k2-backup.timer user unit runs it daily
-#   scripts/backup-lake.sh --dry-run   # list what it would copy; writes only empty directories
+#   scripts/backup-lake.sh --dry-run   # what it would copy; copies and dumps nothing
+#   scripts/backup-lake.sh --verify    # `make backup-verify`: the newest run against its manifest
 #   scripts/backup-lake.sh --dump <postgres container> <database> <file>
 #                                      # that one database's dump alone (deploy, before a migration)
 #
-# Read-only against the stack: GETs to the catalog and reads from MinIO, each
-# through a throwaway container on the catalog's network, and
-# pg_dump through `docker exec`. Additive only: an Iceberg object is written
-# once under a unique key and never changed, so a file already in the copy is
-# never replaced or removed, and an object whose content differs from its copy
-# stops the run (mc refuses to overwrite; this script turns that into a failure).
-# A re-run copies only what is new. STATUS.json records the result and the
-# restore point, the metadata file per table that a restore registers.
+# The live release is the one pointers/trino names under ${K2_RELEASES} (default
+# ~/k2-releases), read once. The copy runs in a throwaway container of that release's
+# tools image, as this user, on the catalog's network (no host port), with the backup
+# storage key K2_BACKUP_S3_* (read-only on the lake, write nowhere in it), the releases
+# root and scripts/ read-only, and $K2_BACKUP_DIR the one writable mount. Each run is
+# runs/<UTC stamp>/, written as runs/.<stamp>.partial and renamed only once its
+# manifest.json is written; the newest $K2_BACKUP_KEEP runs are kept. STATUS.json
+# records the result and the restore point, the last successful run.
 #
 # What it does not protect against, and the restore steps:
 # docs/runbooks/lake-backup-and-restore.md.
 set -euo pipefail
-set +x   # never trace: the MinIO credential is in this script's environment
+set +x   # never trace: the backup storage key is in this script's environment
 umask 077
 
-# The tables nothing can rebuild, <namespace>.<table> in warehouse k2. None
-# today: the four this copied (the old raw archive, its audit history and two
-# SCD2 dimensions) were dropped with the old lake ingest, retired to
-# legacy/v3-lake-ingest/ (ADR-056). Phase 002 replaces this list with the backup
-# set compiled from the contracts.
-# ponytail: warehouse k2 only; the per-domain warehouses are not copied.
-TABLES=""
-
 ROOT=$(cd "$(dirname "$0")/.." && pwd -P)
-CATALOG=http://lakekeeper:8181/catalog/v1  # on k2-catalog only: no host port (ADR-059 part 7)
-KEEP=${K2_BACKUP_KEEP:-14}                    # catalog dumps kept, per database
+KEEP=${K2_BACKUP_KEEP:-14}                    # catalog dumps and runs kept
 FLOOR_GIB=${K2_BACKUP_MIN_FREE_GIB:-20}       # refuse to start below this much free space
 
 die() { ERR=$*; echo "backup-lake: FAIL: $*" >&2; exit 1; }
@@ -51,9 +43,10 @@ dump() {  # dump <database> <file>
   mv "$2.partial" "$2"
 }
 
-DRY=0
+MODE=copy
 case "${1:-}" in
-  --dry-run) DRY=1 ;;
+  --dry-run) MODE=dry ;;
+  --verify) MODE=verify ;;
   --dump)
     [ $# -eq 4 ] || { echo "usage: $0 --dump <postgres container> <database> <file>" >&2; exit 2; }
     PG=$2
@@ -62,7 +55,7 @@ case "${1:-}" in
     echo "backup-lake: database $3 dumped to $4"
     exit 0 ;;
   "") ;;
-  *) echo "usage: $0 [--dry-run | --dump <postgres container> <database> <file>]" >&2; exit 2 ;;
+  *) echo "usage: $0 [--dry-run | --verify | --dump <postgres container> <database> <file>]" >&2; exit 2 ;;
 esac
 [[ $KEEP =~ ^[1-9][0-9]*$ ]] || die "K2_BACKUP_KEEP must be a whole number of 1 or more"
 [[ $FLOOR_GIB =~ ^[0-9]+$ ]] || die "K2_BACKUP_MIN_FREE_GIB must be a whole number"
@@ -81,36 +74,37 @@ main=$(git -C "$ROOT" rev-parse --path-format=absolute --git-common-dir 2>/dev/n
 for top in "$ROOT" ${main:+"$(dirname "$main")"}; do
   case "$DIR/" in "$top"/*) die "K2_BACKUP_DIR $DIR is inside the checkout $top; choose a directory outside it" ;; esac
 done
+[[ $DIR != *[:,]* ]] || die "K2_BACKUP_DIR $DIR holds a colon or a comma, which a docker mount cannot take"
 
-MINIO_ROOT_USER=$(env_var MINIO_ROOT_USER)
-MINIO_ROOT_PASSWORD=$(env_var MINIO_ROOT_PASSWORD)
-[ -n "$MINIO_ROOT_USER" ] && [ -n "$MINIO_ROOT_PASSWORD" ] || die "MINIO_ROOT_USER or MINIO_ROOT_PASSWORD is not set in .env"
-# Exported so the line below reads them from the environment.
-export MINIO_ROOT_USER MINIO_ROOT_PASSWORD
-# mc reads its endpoint and credential from MC_HOST_<alias>. Built here from the
-# environment (never an argument, so it is in no process's command line), with the
-# two parts URL-encoded so a password holding @ : or / still parses.
-MC_HOST_k2=$(python3 -c 'import os, urllib.parse as u; e = os.environ; print("http://%s:%s@minio:9000" % (u.quote(e["MINIO_ROOT_USER"], safe=""), u.quote(e["MINIO_ROOT_PASSWORD"], safe="")))')
-export MC_HOST_k2
+# The live release: pointers/trino -> ../<id>, read once, so both sides of the copy use one id.
+RELEASES=${K2_RELEASES:-$(env_var K2_RELEASES)}
+RELEASES=$(realpath -m "${RELEASES:-$HOME/k2-releases}")
+id=$(readlink "$RELEASES/pointers/trino" 2>/dev/null || true)
+id=${id#../}
+SET=$RELEASES/$id/compiled/lake/backup-set.json
+if [ "$MODE" = verify ]; then
+  [[ $id =~ ^[A-Za-z0-9._-]+$ && -f $SET ]] || SET=$RELEASES/pointers/trino/compiled/lake/backup-set.json
+  exec python3 "$ROOT/scripts/backup_lake.py" verify --dir "$DIR" --backup-set "$SET"
+fi
 
-mkdir -p "$DIR/lake" "$DIR/catalog"
+mkdir -p "$DIR/catalog" "$DIR/runs"
 chmod 700 "$DIR"
 exec 9>"$DIR/.lock"
 flock -n 9 || die "another backup-lake run holds $DIR/.lock"
 
 STARTED=$(date -u +%FT%TZ)
 T0=$SECONDS
-ROWS=()            # name|location|metadata location|objects|bytes|objects this run|bytes this run
+ts=$(date -u +%Y%m%dT%H%M%SZ)
 DUMP_lakekeeper="" DUMP_airflow=""
 
 # STATUS.json, on every exit after this point: this run's result, and the restore
-# point, the last successful run's tables and dumps. A failed run keeps the
+# point, the last successful run's manifest summary and dumps. A failed run keeps the
 # previous restore point: its copy may be incomplete, so a restore must not use it.
 write_status() {
   local rc=$?
-  if RC=$rc ERR=$ERR DIR=$DIR STARTED=$STARTED DURATION=$((SECONDS - T0)) \
-    DUMP_lakekeeper=$DUMP_lakekeeper DUMP_airflow=$DUMP_airflow python3 - "${ROWS[@]}" <<'PY'
-import json, os, sys
+  if RC=$rc ERR=$ERR DIR=$DIR STARTED=$STARTED DURATION=$((SECONDS - T0)) RUN=runs/$ts \
+    DUMP_lakekeeper=$DUMP_lakekeeper DUMP_airflow=$DUMP_airflow python3 - <<'PY'
+import json, os
 from datetime import datetime, timezone
 
 d = os.environ["DIR"]
@@ -122,19 +116,17 @@ except (OSError, ValueError):
     prev = {}
 rc = int(os.environ["RC"])
 now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-tables = {}
-for row in sys.argv[1:]:
-    name, loc, meta, n, b, dn, db = row.split("|")
-    tables[name] = {"location": loc, "metadata_location": meta, "objects_total": int(n),
-                    "bytes_total": int(b), "objects_this_run": int(dn), "bytes_this_run": int(db)}
-dumps = {}
-for db in ("lakekeeper", "airflow"):
-    f = os.environ.get(f"DUMP_{db}")
-    if f:
-        dumps[db] = {"file": os.path.relpath(f, d), "bytes": os.path.getsize(f)}
-point = {"utc": now, "tables": tables, "dumps": dumps,
-         **{k: sum(t[k] for t in tables.values())
-            for k in ("objects_total", "bytes_total", "objects_this_run", "bytes_this_run")}}
+point = None
+if rc == 0:
+    with open(os.path.join(d, os.environ["RUN"], "manifest.json")) as f:
+        m = json.load(f)
+    tables = {t["table"]: {k: t[k] for k in ("location", "metadata_location", "snapshot_id", "ref", "objects", "bytes")}
+              for t in m["tables"]}
+    files = [*m["tables"], *m["landings"]]
+    point = {"utc": now, "run": os.environ["RUN"], "manifest": os.environ["RUN"] + "/manifest.json",
+             "release": m["release"], "tables": tables, "dumps": m["dumps"],
+             "objects_total": sum(x["objects"] for x in files), "bytes_total": sum(x["bytes"] for x in files),
+             "objects_copied": m["objects_copied"], "bytes_copied": m["bytes_copied"]}
 status = {
     "status": "ok" if rc == 0 else "failed",
     "exit_status": rc,
@@ -150,109 +142,65 @@ with open(path + ".tmp", "w") as f:
     json.dump(status, f, indent=2)
 os.replace(path + ".tmp", path)
 if rc == 0:
-    print(f"backup-lake: OK in {status['duration_s']} s: {point['objects_this_run']} files, "
-          f"{point['bytes_this_run']} bytes copied this run; {point['objects_total']} files, "
-          f"{point['bytes_total']} bytes held; {path}")
+    print(f"backup-lake: OK in {status['duration_s']} s: {point['objects_copied']} files, "
+          f"{point['bytes_copied']} bytes fetched this run; {point['objects_total']} files, "
+          f"{point['bytes_total']} bytes in {point['run']}; {path}")
 PY
   then :; else echo "backup-lake: FAIL: could not write $DIR/STATUS.json" >&2; exit 1; fi
 }
-[ "$DRY" = 1 ] || trap write_status EXIT
+[ "$MODE" = dry ] || trap write_status EXIT
 
 # Free space on the target's filesystem, before anything is written to it.
 free=$(df -B1 --output=avail "$DIR" | tail -n 1)
 [ "$free" -ge $((FLOOR_GIB * 1024 ** 3)) ] ||
   die "$DIR has $((free / 1024 ** 3)) GiB free, under the floor of $FLOOR_GIB GiB (K2_BACKUP_MIN_FREE_GIB)"
 
-# mc <args>, in a throwaway container on k2-minio's network ($net, found in
-# (1)), as this user so the files are ours, with $DIR/lake at /backup. The
-# credential reaches it as one environment variable (MC_HOST_k2), never as an
-# argument.
-mc_run() {
-  docker run --rm --network "$net" --user "$(id -u):$(id -g)" --cpus 1 --memory 512m \
-    -e MC_CONFIG_DIR=/tmp/.mc -e MC_HOST_k2 -v "$DIR/lake:/backup" \
-    --entrypoint mc ghcr.io/rjdscott/minio@sha256:a1a8bd4ac40ad7881a245bab97323e18f971e4d4cba2c2007ec1bedd21cbaba2 "$@"
-}
-# A GET to the catalog, from a throwaway container on $net, with no credential.
-catalog() {
-  docker run --rm --network "$net" --cpus 0.5 --memory 128m \
-    --entrypoint curl ghcr.io/rjdscott/minio@sha256:a1a8bd4ac40ad7881a245bab97323e18f971e4d4cba2c2007ec1bedd21cbaba2 -fsS "$CATALOG/$1"
-}
-
-# (1) Each table's location and current metadata file, from the catalog: read
-# first, so every file that metadata names already exists when the copy starts.
-# With no table to copy, neither MinIO nor the catalog is asked anything: an
-# outage of either must not cost the night's database dumps.
-declare -A LOC META
-if [ -z "$TABLES" ]; then
-  echo "backup-lake: SKIP the lake table copy: the old lake ingest's tables were dropped (legacy/v3-lake-ingest/, ADR-056); returns in phase 002"
-else
-  net=$(docker inspect -f '{{range $k, $v := .NetworkSettings.Networks}}{{$k}} {{end}}' k2-minio 2>/dev/null) ||
-    die "k2-minio is not running"
-  # The catalog's network, where both Lakekeeper and MinIO are; before the cutover
-  # to releases Lakekeeper is on MinIO's only network.
-  cat_net=$(grep -o '[^ ]*_k2-catalog' <<<"$net" || true)
-  net=${cat_net:-${net%% *}}
-  prefix=$(catalog "config?warehouse=k2" 2>/dev/null |
-    python3 -c 'import json, sys; print(json.load(sys.stdin)["defaults"]["prefix"])' 2>/dev/null) ||
-    die "the catalog did not answer on $net (is k2-lakekeeper up?)"
-fi
-for t in $TABLES; do
-  # The response is never printed: its config block can carry storage settings.
-  read -r loc meta < <(catalog "$prefix/namespaces/${t%%.*}/tables/${t#*.}" 2>/dev/null |
-    python3 -c 'import json, sys; d = json.load(sys.stdin); print(d["metadata"]["location"], d["metadata-location"])' 2>/dev/null) ||
-    die "the catalog has no table $t"
-  # An unauthenticated catalog's answer decides what is read: keep it in the lake's bucket.
-  [[ $loc == s3://k2-lake/warehouse/* && $loc != *..* && $meta == "$loc"/metadata/* ]] ||
-    die "$t: the catalog gave a location outside s3://k2-lake/warehouse/"
-  LOC[$t]=$loc META[$t]=$meta
-done
-
-if [ "$DRY" = 1 ]; then
-  for t in $TABLES; do
-    mkdir -p "$DIR/lake/$t"
-    echo "== $t: ${LOC[$t]} -> $DIR/lake/$t (current metadata ${META[$t]##*/})"
-    echo "   '<' would be copied; '!' differs from the copy and would stop the run"
-    mc_run diff "k2/${LOC[$t]#s3://}" "/backup/$t"
-  done
-  exit 0
+# (1) The catalog database, then Airflow's, before the copy: a MinIO or catalog
+# outage below never costs the night's dumps.
+dumps=(--dry-run)
+if [ "$MODE" = copy ]; then
+  DUMP_lakekeeper=$DIR/catalog/$ts.sql.gz
+  dump lakekeeper "$DUMP_lakekeeper"
+  DUMP_airflow=$DIR/catalog/$ts.airflow.sql.gz
+  dump airflow "$DUMP_airflow"
+  dumps=(--dump "lakekeeper=catalog/$ts.sql.gz" --dump "airflow=catalog/$ts.airflow.sql.gz")
 fi
 
-# (2) The catalog database, then Airflow's, before the copy: every metadata file a
-# dumped pointer names exists already, so the copy below holds it (dump(), above).
-ts=$(date -u +%Y%m%dT%H%M%SZ)
-prune() {  # prune <dir> <glob>: keep the newest $KEEP; the UTC names sort by time
+[[ $id =~ ^[A-Za-z0-9._-]+$ && -f $SET && -f $RELEASES/$id/manifest.json ]] ||
+  die "no live release: $RELEASES/pointers/trino does not name a release with compiled/lake/backup-set.json"
+
+# (2) The copy, in a throwaway container of the live release's tools image on the
+# catalog's network, where Lakekeeper and MinIO both are. The key reaches it as two
+# environment variables, by name, never as an argument.
+image=$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["images"]["tools"])' "$RELEASES/$id/manifest.json") ||
+  die "the release $id names no tools image"
+net=$(docker inspect -f '{{range $k, $v := .NetworkSettings.Networks}}{{$k}} {{end}}' k2-minio 2>/dev/null) ||
+  die "k2-minio is not running"
+cat_net=$(grep -o '[^ ]*_k2-catalog' <<<"$net" || true)
+net=${cat_net:-${net%% *}}
+K2_BACKUP_S3_ACCESS_KEY=$(env_var K2_BACKUP_S3_ACCESS_KEY)
+K2_BACKUP_S3_SECRET_KEY=$(env_var K2_BACKUP_S3_SECRET_KEY)
+[ -n "$K2_BACKUP_S3_ACCESS_KEY" ] && [ -n "$K2_BACKUP_S3_SECRET_KEY" ] ||
+  die "K2_BACKUP_S3_ACCESS_KEY or K2_BACKUP_S3_SECRET_KEY is not set in .env (make engine-keys)"
+export K2_BACKUP_S3_ACCESS_KEY K2_BACKUP_S3_SECRET_KEY
+docker run --rm --network "$net" --user "$(id -u):$(id -g)" --cpus 1 --memory 512m \
+  --read-only --tmpfs /tmp:rw,noexec,nosuid,size=64m --cap-drop ALL --security-opt no-new-privileges:true \
+  -e K2_BACKUP_S3_ACCESS_KEY -e K2_BACKUP_S3_SECRET_KEY \
+  -v "$RELEASES:/k2/releases:ro" -v "$ROOT/scripts:/opt/k2/scripts:ro" -v "$DIR:/backup" \
+  "$image" python3 /opt/k2/scripts/backup_lake.py copy --release "/k2/releases/$id" --dir /backup --run "$ts" \
+  "${dumps[@]}" || die "the lake copy did not complete (runs/$ts was not written)"
+[ "$MODE" = copy ] || exit 0
+[ -f "$DIR/runs/$ts/manifest.json" ] || die "the copy exited 0 but runs/$ts/manifest.json is not there"
+
+# Old dumps and runs go only now, after the copy held: a run that fails above never
+# removes what the last good restore point names. The UTC names sort by time.
+prune() {  # prune <dir> <glob>: keep the newest $KEEP
   local files=()
   shopt -s nullglob
   files=("$1"/$2)
   shopt -u nullglob
-  [ "${#files[@]}" -le "$KEEP" ] || rm -f -- "${files[@]:0:${#files[@]}-KEEP}"
+  [ "${#files[@]}" -le "$KEEP" ] || rm -rf -- "${files[@]:0:${#files[@]}-KEEP}"
 }
-DUMP_lakekeeper=$DIR/catalog/$ts.sql.gz
-dump lakekeeper "$DUMP_lakekeeper"
-DUMP_airflow=$DIR/catalog/$ts.airflow.sql.gz
-dump airflow "$DUMP_airflow"
-
-# (3) Each table's objects, additive. mc exits 0 when it refuses an overwrite and
-# prints a JSON error line instead, so the lines are what decide.
-tally() { find "$1" -type f -printf '%s\n' | { n=0 b=0; while read -r s; do n=$((n + 1)) b=$((b + s)); done; echo "$n $b"; }; }
-for t in $TABLES; do
-  dest=$DIR/lake/$t
-  mkdir -p "$dest"
-  read -r n0 b0 < <(tally "$dest")
-  out=$(mc_run mirror --json "k2/${LOC[$t]#s3://}" "/backup/$t" 2>&1) || {
-    printf '%s\n' "$out" | tail -n 5 >&2; die "$t: mc mirror failed"; }
-  errors=$(printf '%s\n' "$out" | grep '"status":"error"' || true)
-  if [ -n "$errors" ]; then
-    printf '%s\n' "$errors" | head -n 20 >&2
-    die "$t: $(printf '%s\n' "$errors" | wc -l) object(s) differ from the copy or could not be read; nothing was overwritten"
-  fi
-  [ -f "$dest/${META[$t]#"${LOC[$t]}"/}" ] || die "$t: the current metadata file ${META[$t]##*/} is not in the copy"
-  read -r n b < <(tally "$dest")
-  echo "backup-lake: $t: $((n - n0)) files, $((b - b0)) bytes copied; $n files, $b bytes held"
-  ROWS+=("$t|${LOC[$t]}|${META[$t]}|$n|$b|$((n - n0))|$((b - b0))")
-done
-
-# Old dumps go only now, after the copy held: a run that fails above never
-# removes the dump the last good restore point names.
 prune "$DIR/catalog" '*Z.sql.gz'
 prune "$DIR/catalog" '*Z.airflow.sql.gz'
+prune "$DIR/runs" '[0-9]*Z'
