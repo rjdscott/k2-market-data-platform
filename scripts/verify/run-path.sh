@@ -61,7 +61,7 @@ FIX=domains/fx-reference/tests/fixtures
 avail=$(awk '/MemAvailable/ {print int($2 / 1048576)}' /proc/meminfo)
 [ "$avail" -ge 10 ] || { echo "run-path: MemAvailable ${avail} GiB, under 10 GiB: not starting" >&2; exit 2; }
 docker info >/dev/null 2>&1 || { echo "run-path: no Docker" >&2; exit 2; }
-others=$(docker ps --format '{{.Names}}' | grep -v '^k2-' || true)
+others=$(docker ps --format '{{.Names}}' | grep -E -v '^k2-' ; docker ps --format '{{.Names}}' | grep '^k2-rehearsal' || true)  # the rehearsal's names start k2- too
 [ -z "$others" ] || { echo "run-path: another container job is running ($others): not starting" >&2; exit 2; }
 
 W=$(mktemp -d "$HOME/.k2-run-path.XXXXXX")  # under $HOME, the one place Docker Desktop shares
@@ -336,7 +336,7 @@ elif cmd == "claim":  # claim <name> [release ids]: one PASS or FAIL line; exit 
             (not read.error and len(read.rows) > 0, f"{READER} on {READER_GOLD}: {read.says()}"),
             (s["silver_rows"] == s["bronze_keys"] and bool(s["silver_rows"]),
              f"silver {s['silver_rows']} rows, bronze {s['bronze_keys']} distinct (rate_date, currency)"),
-            (dict(read.columns).get("rate") == "decimal(20,10)" and bool(pairs)
+            (dict(read.columns).get("rate", "").replace(" ", "") == "decimal(20,10)" and bool(pairs)
              and all(g == f"{Decimal(w):.10f}" for g, w in pairs),
              f"gold rate {dict(read.columns).get('rate')}; {sum(g != f'{Decimal(w):.10f}' for g, w in pairs)} of {len(pairs)} "
              f"published rates differ: {[(g, w) for g, w in pairs if g != f'{Decimal(w):.10f}'][:3]}")],
