@@ -1026,6 +1026,21 @@ sys.exit(f"fake docker: no answer for {A}")
         world.log.unlink()
         assert world.deploy(old) == 0 and world.ups() == ["standin"]
 
+    def test_preflight_refuses_when_a_storage_key_the_live_suite_signs_with_is_not_in_the_environment(
+            world: World, monkeypatch: pytest.MonkeyPatch) -> None:
+        rows = "".join(f"  - {{storageKey: {{engine: {e}, target: k2-lake/warehouse/k2, operation: read}}, expect: allowed}}\n"
+                       for e in ("spark", "backup"))
+        r1 = world.release(over={EXPECT: (GOOD / EXPECT).read_bytes() + rows.encode()})
+        assert deploy.live_key_names(r1) == ["K2_BACKUP_S3_ACCESS_KEY", "K2_BACKUP_S3_SECRET_KEY",
+                                             "K2_SPARK_S3_ACCESS_KEY", "K2_SPARK_S3_SECRET_KEY"]
+        for n in deploy.live_key_names(r1):
+            monkeypatch.setenv(n, "a-value-of-this-test")
+        monkeypatch.delenv("K2_BACKUP_S3_SECRET_KEY")
+        with pytest.raises(deploy.Refused, match=r"sign with K2_BACKUP_S3_SECRET_KEY, not in deploy's environment.*set -a") as e:
+            world.deploy(r1)
+        assert "a-value-of-this-test" not in str(e.value) and world.ups() == []
+        assert deploy.live_key_names(world.release()) == []  # no storage-key row: nothing asked
+
     # --- the drain (W1-6, ADR-058) ------------------------------------------------------
 
     CODE = "docker/airflow/dags/factory.py"  # in a release at platform/docker/airflow/dags/factory.py

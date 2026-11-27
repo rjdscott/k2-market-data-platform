@@ -705,6 +705,15 @@ def required_secrets(ctx: Ctx, p: Plan) -> list[str]:
     return sorted([n for n in need if not (ctx.secrets / n).is_file()] + [d for d in dirs if not (ctx.secrets / d).exists()])
 
 
+def live_key_names(rel: Release) -> list[str]:
+    """The K2_<ENGINE>_S3_* names the release's storage-key rows sign with on the live stack
+    (access_verify.key_pair): access_live passes them to the suite by name from this environment."""
+    path = rel.root / model.DOCUMENTS_DIR / model.EXPECTATIONS
+    rows = ((yaml.safe_load(path.read_bytes()) or {}).get("expectations") or []) if path.is_file() else []
+    engines = sorted({r["storageKey"]["engine"] for r in rows if isinstance(r, dict) and "storageKey" in r})
+    return [f"K2_{e.upper()}_S3_{k}" for e in engines for k in ("ACCESS_KEY", "SECRET_KEY")]
+
+
 def floors(ctx: Ctx) -> None:
     free = shutil.disk_usage(ctx.root).free / 2**30
     if free < DISK_FLOOR_GIB:
@@ -774,6 +783,9 @@ def preflight(ctx: Ctx, p: Plan) -> None:
     if missing := required_secrets(ctx, p):
         raise Refused(f"secret files missing under {ctx.secrets}: "
                       + "; ".join(f"{n} ({make_for(n)})" for n in missing) + "; nothing changed")
+    if unset := [n for n in live_key_names(p.target) if not os.environ.get(n)]:  # else 21 rows fail at verify, after the swap
+        raise Refused(f"the live access suite's storage-key rows sign with {', '.join(unset)}, not in deploy's environment: "
+                      "load the env file first (set -a; . ./.env; set +a), where make engine-keys writes them; nothing changed")
     if held := dropped_storage(ctx, p.sources[0], p.target):
         raise Refused(f"the release's backup set drops {'; '.join(held)}, which storage still holds; "
                       "copy and drop it first with `make drop TARGET=...` (docs/runbooks/drop-and-rebuild.md)")
