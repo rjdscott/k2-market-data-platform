@@ -192,7 +192,9 @@ def test_a_breach_of_the_fence_fails(mutate, says):
 # ---- storage keys (W1-3): every engine on its own MinIO user, the root pair in lake-init alone -------
 
 ENGINES = sorted(p.stem.upper() for p in (ROOT / "docker/lake/minio/policies").glob("*.json"))  # init-lake.sh's list
-HOLDS = {"lake-init": set(ENGINES), "trino": {"TRINO"}, "spark-iceberg": {"SPARK", "MAINTENANCE"}, "tools": {"TOOLS", "BACKUP"}}
+# tools holds none: nothing it runs reads a storage key (scripts/backup-lake.sh passes BACKUP to its own
+# `docker run -e`, and a step that needs one passes it by name for that run alone).
+HOLDS = {"lake-init": set(ENGINES), "trino": {"TRINO"}, "spark-iceberg": {"SPARK", "MAINTENANCE"}}
 ROOT_PAIR = {"minio", "lake-init"}  # MinIO itself; lake-init makes the users and the warehouses
 # Spark's pair under the AWS SDK's names, in spark-iceberg alone: scripts/deploy.py's spark-sql DDL sets no key.
 SDK = {"AWS_ACCESS_KEY_ID": "K2_SPARK_S3_ACCESS_KEY", "AWS_SECRET_ACCESS_KEY": "K2_SPARK_S3_SECRET_KEY"}
@@ -234,7 +236,7 @@ def storage_problems(doc: dict) -> list[str]:
 def test_every_engine_holds_its_own_storage_pair_and_only_lake_init_the_root():
     assert ENGINES == ["BACKUP", "MAINTENANCE", "SPARK", "TOOLS", "TRINO"]
     assert storage_problems(COMPOSE) == []
-    for n in ("fetch", "dbt-runner", "k2-api", "prometheus", "grafana", "airflow-scheduler", "airflow-dag-processor",
+    for n in ("fetch", "dbt-runner", "k2-api", "tools", "prometheus", "grafana", "airflow-scheduler", "airflow-dag-processor",
               "airflow-api-server", "airflow-migrate"):
         assert not [k for k in env_items(COMPOSE["services"][n]) if "S3_" in k or k.startswith(("AWS_", "MINIO_"))], n
 
@@ -251,8 +253,10 @@ def env_set(svc, key, value):
     (env_set("spark-iceberg", "K2_TRINO_S3_ACCESS_KEY", "${K2_TRINO_S3_ACCESS_KEY:?x}"), "not its own"),
     (env_set("spark-iceberg", "AWS_SECRET_ACCESS_KEY", "${K2_MAINTENANCE_S3_SECRET_KEY:?x}"), "not Spark's own pair"),
     (env_set("tools", "K2_SPARK_S3_SECRET_KEY", "${K2_SPARK_S3_SECRET_KEY:?x}"), "not its own"),
-    (env_set("tools", "K2_TOOLS_S3_SECRET_KEY", "${K2_BACKUP_S3_SECRET_KEY:?x}"), "required, never a default or another"),
-    (lambda d: d["services"]["tools"]["environment"].pop("K2_BACKUP_S3_ACCESS_KEY"), "lacks its own pair"),
+    (env_set("tools", "K2_TOOLS_S3_SECRET_KEY", "${K2_TOOLS_S3_SECRET_KEY:?x}"), "tools names storage keys not its own"),
+    (env_set("tools", "K2_BACKUP_S3_ACCESS_KEY", "${K2_BACKUP_S3_ACCESS_KEY:?x}"), "tools names storage keys not its own"),
+    (env_set("spark-iceberg", "K2_SPARK_S3_SECRET_KEY", "${K2_MAINTENANCE_S3_SECRET_KEY:?x}"), "required, never a default or another"),
+    (lambda d: d["services"]["trino"]["environment"].pop("K2_TRINO_S3_ACCESS_KEY"), "lacks its own pair"),
     (env_set("airflow-scheduler", "K2_MAINTENANCE_S3_ACCESS_KEY", "${K2_MAINTENANCE_S3_ACCESS_KEY:?x}"), "not its own"),
     (env_set("airflow-scheduler", "AWS_ACCESS_KEY_ID", "${K2_SPARK_S3_ACCESS_KEY:?x}"), "not Spark's own pair"),
     (env_set("prometheus", "PASS", "${K2_TOOLS_S3_SECRET_KEY}"), "reads another engine's key"),
@@ -270,6 +274,9 @@ def test_a_storage_key_out_of_place_fails(mutate, says):
 AIRFLOW = ("airflow-migrate", "airflow-api-server", "airflow-scheduler", "airflow-dag-processor")
 DAGS_FOLDER = "/k2/releases/pointers/airflow/platform/docker/airflow/dags"  # factory.py's POINTER + the release's platform/
 RULES = "/k2/releases/pointers/prometheus/platform/docker/prometheus/rules/*.yml"
+# Where a release before phase 002 mounts the checkout's rules (its compose); prometheus.yml is the
+# checkout's under every release, so after a rollback to one this glob is the only one that matches.
+OLD_RULES = "/etc/prometheus/rules/*.yml"
 POOLS = {"lake_spark": "1", "fetch": "1", "dbt": "2"}  # factory.py POOLS, slots as W0-8 proved them
 # oneshot.py's host-side names, and dbt-runner's fixed values it passes on by name (record reads three of them).
 ONESHOT_ENV = {"K2_RELEASES", "K2_SECRETS", "K2_COMPOSE_PROJECT", "K2_RUN_UID", "K2_RUN_GID"}
@@ -306,9 +313,13 @@ def run_path_problems(doc: dict, prometheus: dict, spark_dockerfile: str, fetch_
     if OWNER.findall(spark_dockerfile) != OWNER.findall(fetch_dockerfile) or len(OWNER.findall(fetch_dockerfile)) != 1:
         out.append(f"/spool's owner in the Spark image {OWNER.findall(spark_dockerfile)} is not fetch's "
                    f"{OWNER.findall(fetch_dockerfile)}: the first to mount the empty volume decides its owner")
-    if prometheus.get("rule_files") != [RULES]:
-        out.append(f"prometheus.yml reads rules from {prometheus.get('rule_files')}, not the pointer's {RULES}")
-    if any("docker/prometheus/rules" in str(v) for v in services["prometheus"].get("volumes") or []):
+    if prometheus.get("rule_files") != [RULES, OLD_RULES]:
+        out.append(f"prometheus.yml reads rules from {prometheus.get('rule_files')}, not the pointer's {RULES} "
+                   f"then a pre-phase-002 release's {OLD_RULES}")
+    # Nothing at the old path under this compose, so the two globs never both match: no group loads twice.
+    targets = [v.get("target", "") if isinstance(v, dict) else str(v).split(":")[1] for v in services["prometheus"].get("volumes") or []]
+    if any("docker/prometheus/rules" in str(v) for v in services["prometheus"].get("volumes") or []) \
+            or any(t.rstrip("/") in ("/etc/prometheus", "/etc/prometheus/rules") or t.startswith("/etc/prometheus/rules/") for t in targets):
         out.append("prometheus mounts the checkout's rules")
     return out
 
@@ -341,6 +352,10 @@ def test_the_run_code_is_read_through_the_pointers_and_the_scheduler_is_wired():
     (lambda d: d["services"]["spark-iceberg"]["volumes"].__setitem__(-1, "k2-spool:/spool"), "not k2-spool:/spool:ro"),
     (lambda d: d["services"]["prometheus"]["volumes"].append("./docker/prometheus/rules:/etc/prometheus/rules:ro"),
      "prometheus mounts the checkout's rules"),
+    (lambda d: d["services"]["prometheus"]["volumes"].append({"type": "bind", "source": "./rules", "target": "/etc/prometheus/rules"}),
+     "prometheus mounts the checkout's rules"),
+    (lambda d: d["services"]["prometheus"]["volumes"].append("./x.yml:/etc/prometheus/rules/x.yml:ro"),
+     "prometheus mounts the checkout's rules"),
 ])
 def test_a_run_path_off_the_pointers_fails(mutate, says):
     doc = copy.deepcopy(COMPOSE)
@@ -349,7 +364,7 @@ def test_a_run_path_off_the_pointers_fails(mutate, says):
     assert any(says in p for p in found), found
 
 
-@pytest.mark.parametrize("rules", [["rules/*.yml"], [RULES, "rules/*.yml"], None])
+@pytest.mark.parametrize("rules", [["rules/*.yml"], [RULES], [OLD_RULES], [OLD_RULES, RULES], [RULES, "rules/*.yml"], None])
 def test_prometheus_rules_off_the_pointer_fail(rules):
     found = run_path_problems(COMPOSE, {**PROMETHEUS, "rule_files": rules}, *DOCKERFILES)
     assert any("not the pointer's" in p for p in found), found

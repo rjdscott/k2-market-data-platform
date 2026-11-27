@@ -120,7 +120,7 @@ for view, p, t, cat in outputs():
 if "--no-schema-change" in sys.argv or failed:
     print(f"SKIP schema change: {'--no-schema-change' if not failed else 'a check above failed'}")
 else:
-    view, p, t, cat = next(outputs())
+    view, p, t, cat = next(o for o in outputs() if o[1].grants)  # a grantee polls the view
     filters = {c for pol in t.policies.values() for c in ([pol.delay.column] if pol.delay else []) + ([pol.row_scope.column] if pol.row_scope else [])}
     col = next((c for c in view.columns if c != key_of(t) and c not in filters), None)
     if col is None:  # a contract of only its key and its filters' columns: nothing to drop and add back

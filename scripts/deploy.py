@@ -1169,6 +1169,30 @@ def drift(ctx: Ctx, target: Release) -> dict[str, Any]:
     return {"exit": done.returncode, "doc": doc, "text": tail(done, 12)}
 
 
+def access_live(ctx: Ctx, rel: Release, out: Path) -> subprocess.CompletedProcess[str]:
+    """S20's live suite (`access_verify.py run --scope live`, `make access-verify LIVE=1`) in a tools
+    one-shot of the release on the stack's networks: Trino by name, and each storage-key row's request
+    to minio:9000 from the lake's own network, which has no host port. Each engine's pair goes in by -e
+    name from this process's environment, for this run only: never written, never on a command line.
+    The passwords the platform holds and the CA, read-only. The result is copied to `out`."""
+    names = [f"K2_{f.stem.upper()}_S3_{k}" for f in sorted((ctx.home / "docker/lake/minio/policies").glob("*.json"))
+             for k in ("ACCESS_KEY", "SECRET_KEY")]  # one per policy, as throwaway-lake.sh and init-lake.sh read them
+    verify_dir(ctx)
+    cmd = compose(ctx, rel, "run", "--rm", "--no-deps", "--pull", "never", "--user", f"{os.getuid()}:{os.getgid()}",
+                  "-e", "K2_TRINO_HOST=trino", "-e", "K2_TRINO_PORT=8443", "-e", f"{model.SECRETS_ENV}=/run/k2-secrets",
+                  *(a for n in names if os.environ.get(n) for a in ("-e", n)),
+                  "-v", f"{ctx.home / 'scripts'}:/opt/k2/scripts:ro",
+                  "-v", f"{ctx.secrets / 'principals'}:/run/k2-secrets/principals:ro",
+                  "-v", f"{ctx.secrets / CA}:/run/k2-secrets/{CA}:ro",
+                  "tools", "python3", "/opt/k2/scripts/access_verify.py", "run", "--scope", "live",
+                  "--release", f"{model.RELEASES_MOUNT}/{rel.id}", "--out", f"{model.RELEASES_MOUNT}/verify/{rel.id}.access-live.json")
+    done = run(*cmd, env=compose_env(ctx), check=False)
+    found = ctx.root / "verify" / f"{rel.id}.access-live.json"
+    if found.exists() and found.resolve() != out.resolve():
+        shutil.copy(found, out)
+    return done
+
+
 def s20_checks(ctx: Ctx, target: Release) -> tuple[list[str], list[str]]:
     """(lines, what is wrong): the drift check, then the access suite on the live system
     (`make access-verify LIVE=1`), its rows for every product the drift check finds published."""
@@ -1185,8 +1209,7 @@ def s20_checks(ctx: Ctx, target: Release) -> tuple[list[str], list[str]]:
                      "every row ran on a throwaway lake at release time (preflight); phase 002 publishes them")
         return lines, wrong
     result = verify_dir(ctx) / f"{target.id}.access-live.json"
-    env = {**compose_env(ctx), "K2_TRINO_HOST": ctx.trino.split("//")[1].rsplit(":", 1)[0], "K2_TRINO_PORT": ctx.trino.rsplit(":", 1)[1]}
-    done = make_target(ctx, "access-verify", env, LIVE="1", RELEASE=str(ctx.root / target.id), OUT=str(result))
+    done = access_live(ctx, target, result)
     counts = json.loads(result.read_text()).get("counts") if result.exists() else None
     if done.returncode:
         wrong.append(f"access-verify LIVE=1 exit {done.returncode} ({counts}): {tail(done)}")
@@ -1634,6 +1657,9 @@ def _main(argv: list[str] | None) -> int:
     df = sub.add_parser("diff")
     df.add_argument("release")
     df.add_argument("--from", dest="frm", default="")
+    al = sub.add_parser("access-live")  # make access-verify LIVE=1
+    al.add_argument("release")
+    al.add_argument("--out", required=True, type=Path)
     args = ap.parse_args(argv)
     with tempfile.TemporaryDirectory(prefix="k2-deploy-") as tmp:
         ctx = ctx_from_env(Path(tmp))
@@ -1649,6 +1675,11 @@ def _main(argv: list[str] | None) -> int:
                 frm = args.frm or (resolve(ctx)[0] or open_release(ctx, args.release)).id
                 print(k2diff.diff(ctx.root / frm, ctx.root / args.release))
                 return EXIT_OK
+            if args.cmd == "access-live":  # no lock: a deploy's verify runs it too
+                done = access_live(ctx, open_release(ctx, args.release), args.out)
+                sys.stdout.write(done.stdout)
+                sys.stderr.write(done.stderr)
+                return done.returncode
             with lock(ctx.root):
                 if args.cmd == "release":
                     compile_release(ctx, args.tag, args.images)

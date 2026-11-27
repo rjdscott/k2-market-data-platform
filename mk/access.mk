@@ -7,8 +7,11 @@
 #                                              release (every principal, generated passwords), the
 #                                              release's products staged, every row run, the lake removed
 #   make access-verify LIVE=1                  the running stack: the canary's and the platform's rows
-#                                              (RELEASE defaults to ${K2_RELEASES}/pointers/trino);
-#                                              refused while .env is open to anyone but its owner
+#                                              (RELEASE defaults to ${K2_RELEASES}/pointers/trino), in a
+#                                              tools one-shot on the stack's networks, each engine's
+#                                              storage pair by -e name from your environment
+#                                              (scripts/deploy.py access_live); refused while .env is
+#                                              open to anyone but its owner
 #   make test-access RELEASE=<release dir>     the proofs behind the suite on a throwaway lake
 #                                              (tests/access/prove.sh)
 #
@@ -28,7 +31,7 @@ access-verify:  ## RELEASE=<release dir>: every tests/access/expectations.yaml r
 	  [ -f "$$rel/manifest.json" ] || { echo "access-verify: no release at $$rel (deploy points pointers/trino at one)" >&2; exit 2; }; \
 	  rel=$$(realpath "$$rel"); \
 	  out=$${OUT:-$$(dirname "$$rel")/verify/$$(basename "$$rel").access-live.json}; \
-	  $(ACCESS_PY) scripts/access_verify.py run --scope live --release "$$rel" --out "$$out"; \
+	  $(DEPLOY) access-live "$$(basename "$$rel")" --out "$$out"; \
 	else \
 	  [ -n "$${RELEASE:-}" ] || { echo "access-verify: RELEASE=<release dir>, or LIVE=1" >&2; exit 2; }; \
 	  [ -f "$$RELEASE/manifest.json" ] || { echo "access-verify: $$RELEASE is not a compiled release" >&2; exit 2; }; \
