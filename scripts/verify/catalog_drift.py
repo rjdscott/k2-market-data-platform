@@ -11,8 +11,10 @@ container (scripts/lib/throwaway-lake.sh py).
 - the namespaces of every warehouse its storage plan lists (compiled/lake/storage-plan.json), and
   nothing else;
 - the tables of each namespace: every location of compiled/lake/retention.json, and each dbt or
-  code product's seed tables in its base namespace (model.dbt_seed); nothing else, so a table
-  planted in a reader namespace, or beside the bases, is named; and each an Iceberg TABLE: a view
+  code product's seed tables in its base namespace (model.dbt_seed), and there the one table its
+  build writes beside its outputs, RESULTS_TABLE (dbt/macros/k2_results.sql), which may be absent;
+  nothing else, so a table planted in a reader namespace, or beside the bases, is named; and each
+  an Iceberg TABLE: a view
   at a base's name (a builder owns every name of its base namespace, so it can drop the table and
   create one) is named, since Trino ignores the view SQL's `FOR VERSION AS OF 'audited'` on a
   view and readers would be served its rows (the review of S12, C1);
@@ -27,8 +29,13 @@ container (scripts/lib/throwaway-lake.sh py).
   once the table's own main (in its snapshot log) and whose manifest list lies under the table's
   own location, so a snapshot grafted from another table is named. A product whose outputs have
   neither a tag nor a view has not published yet: PENDING, not drift; anything it does hold is
-  still checked. Whether each tag equals its table's newest audited run record needs the run
-  records of phase 002: until then each tag prints a SKIP line, never a pass.
+  still checked. Each tag must equal its table's newest audited run record (newest_audited, read
+  as svc.runs; the run records name the table where the builder writes it,
+  <domain>_build.<fence>__base.<table>), so a tag moved by anyone but a recorded publish is named.
+  drift() is given that reader by the dbt wrapper's reconcile (docker/dbt-runner/k2_dbt.py), which
+  checks its own product's namespaces only (drift's `only`: a product running beside it is
+  mid-change for a moment); run without one, as the CLI is, each tag prints a SKIP line saying so,
+  never a pass, and every namespace of the release is checked.
 
 Exits 0 when the catalog equals the release (PENDING and SKIP lines allowed), 1 naming every
 difference on a DRIFT line, 2 when the catalog cannot be reached or the release cannot be read.
@@ -49,11 +56,13 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from collections import defaultdict
+from collections.abc import Callable, Collection
 from pathlib import Path
 from typing import Any
 
 OWNER_PROPERTY = "trino.run-as-owner"  # where Trino's Iceberg REST views keep a definer view's owner
 CATALOG_URI = "http://lakekeeper:8181/catalog"  # emit/trino_etc.CATALOG_URI, Lakekeeper's name on k2-catalog
+RESULTS_TABLE = "dq_test_results"  # dbt/macros/k2_results.sql: the builder's test results, beside its outputs
 _TOKEN = re.compile(r"'(?:[^']|'')*'|\"(?:[^\"]|\"\")*\"|[A-Za-z0-9_$]+|\S")
 
 
@@ -236,8 +245,10 @@ def expected(release: Path) -> dict[str, Any]:
         w, ns, t = location.split(".")
         tables[w, ns].add(t)
     pending_tables: dict[tuple[str, str], set[str]] = defaultdict(set)  # what a product creates at its first build
+    results: set[tuple[str, str]] = set()  # the base namespaces RESULTS_TABLE may sit in
     for p in m.products:
         if any(t.build.kind in ("dbt", "code") for t in p.tables):
+            results.add((model.warehouse(p.domain), model.base_namespace(p.name)))
             for path in p.seeds:  # <stem>.csv: the table model.dbt_seed aliases to <stem>
                 key = (model.warehouse(p.domain), model.base_namespace(p.name))
                 tables[key].add(path.removesuffix(".csv"))
@@ -247,42 +258,56 @@ def expected(release: Path) -> dict[str, Any]:
         view = model.View(v["relation"], v["base"], tuple(v["columns"]), v["owner"])
         catalog, ns, name = view.relation.split(".")
         _, base_ns, base_t = view.base.split(".")
-        views[warehouse_of[catalog], ns][name] = {"view": view, "base": (base_ns, base_t)}
+        record = f"{model.build_catalog(catalog)}.{base_ns}.{base_t}"  # where the builder writes it (catalog is a fence)
+        views[warehouse_of[catalog], ns][name] = {"view": view, "base": (base_ns, base_t), "record": record}
         pending_tables[warehouse_of[catalog], base_ns].add(base_t)
     return {"namespaces": namespaces, "tables": tables, "views": views, "pending_tables": pending_tables,
-            "sql": generated_sql, "release": release.name}
+            "results": results, "sql": generated_sql, "release": release.name}
 
 
-def drift(uri: str, want: dict[str, Any]) -> dict[str, list[str]]:
-    """Every difference between the catalog and `want` (expected()), as named lines."""
+def drift(uri: str, want: dict[str, Any], newest_audited: Callable[[str], int | None] | None = None,
+          only: Collection[tuple[str, str]] | None = None) -> dict[str, list[str]]:
+    """Every difference between the catalog and `want` (expected()), as named lines. With
+    newest_audited (a table's newest audited run record, k2runs.newest_audited), each tag is held
+    to it; without, each tag is a SKIP line. `only` limits the check to those (warehouse,
+    namespace) pairs: the dbt wrapper's own product's reader and base namespaces, since another
+    product's run, concurrent with it, plants dbt's transient tables in its base namespace, moves
+    its tags before their audited rows and holds its views narrowed between the tag commit and the
+    widen, each a difference here for that moment. None checks the whole release (release-verify)."""
     found: dict[str, list[str]] = {"differences": [], "pending": [], "skipped": []}
 
     def diff(line: str) -> None:
         found["differences"].append(line)
 
+    def mine(w: str, ns: str) -> bool:
+        return only is None or (w, ns) in only
+
     for w in sorted(want["namespaces"]):
+        if only is not None and w not in {x for x, _ in only}:
+            continue
         cat = Catalog(uri, w)
         present = set(cat.namespaces())
-        for ns in sorted(present - want["namespaces"][w]):
+        for ns in sorted(present - want["namespaces"][w]) if only is None else ():
             diff(f"DRIFT namespace {w}.{ns}: the release declares no such namespace")
-        for ns in sorted(want["namespaces"][w] - present):
+        for ns in sorted(ns for ns in want["namespaces"][w] - present if mine(w, ns)):
             diff(f"DRIFT namespace {w}.{ns}: missing; the release's storage plan declares it")
         # A product has published once any of its outputs carries a tag or a view.
         products: dict[str, list[tuple[str, str, dict[str, Any]]]] = defaultdict(list)
         for (vw, ns), vs in want["views"].items():
             if vw == w:
                 for name, spec in vs.items():
-                    products[spec["base"][0]].append((ns, name, spec))
+                    if mine(w, ns) and mine(w, spec["base"][0]):
+                        products[spec["base"][0]].append((ns, name, spec))
         metas = {(spec["base"]): cat.table(*spec["base"]) if spec["base"][0] in present else None
                  for outs in products.values() for _, _, spec in outs}
         published = {base_ns: any(((metas[spec["base"]] or {}).get("refs") or {}).get("audited")
                                   or (ns in present and name in cat.views(ns)) for ns, name, spec in outs)
                      for base_ns, outs in products.items()}
-        for ns in sorted(present & want["namespaces"][w]):
+        for ns in sorted(ns for ns in present & want["namespaces"][w] if mine(w, ns)):
             here, listed = set(cat.tables(ns)), set(cat.views(ns))
             expect = want["tables"].get((w, ns), set())
             reader = ns in {n for (vw, n) in want["views"] if vw == w}
-            for t in sorted(here - expect):
+            for t in sorted(here - expect - ({RESULTS_TABLE} if (w, ns) in want["results"] else set())):
                 where = "a reader namespace, which holds views only" if reader else "a namespace of the release"
                 diff(f"DRIFT table {w}.{ns}.{t}: in {where}, and the release declares no such table")
             for t in sorted(expect - here):
@@ -339,9 +364,14 @@ def drift(uri: str, want: dict[str, Any]) -> dict[str, list[str]]:
                     continue
                 for problem in tag_problems(meta, "audited"):
                     diff(f"DRIFT tag {where}: {problem}")
-                if tag:
+                if not tag:
+                    continue
+                if newest_audited is None:
                     found["skipped"].append(f"SKIP tag {where} audited = {tag['snapshot-id']} against its newest audited "
-                                            "run record: run records are written from phase 002")
+                                            "run record: no run-records reader given (the dbt wrapper's reconcile gives one)")
+                elif (recorded := newest_audited(spec["record"])) != tag["snapshot-id"]:
+                    diff(f"DRIFT tag {where} audited = {tag['snapshot-id']}: the newest audited run record of "
+                         f"{spec['record']} says {recorded}; a tag no recorded publish moved")
     return found
 
 
