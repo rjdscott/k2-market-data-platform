@@ -2,7 +2,7 @@
   "id": "fx-reference.ecb-fx-rates",
   "name": "ecb-fx-rates",
   "domain": "fx-reference",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "status": "active",
   "type": "sourceAligned",
   "owner": "fx-reference-team",

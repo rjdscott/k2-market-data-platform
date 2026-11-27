@@ -308,8 +308,9 @@ moves only after its audit; readers follow the gold tag, which moves only after 
 
 Its limits, as built:
 
-- **No timeout of its own yet.** The fetch task stops at Airflow's 10-minute `execution_timeout`; the
-  pipeline's own timeout is set from 20 timed runs, not yet made.
+- **A 10-minute timeout from one long run.** `timeoutMinutes: 10` stops a whole run and its fetch at
+  10 minutes: factor 5 on the largest run measured, a new file end to end at 121.7 s, n = 1; 20
+  runs on an unchanged file took 31.2 to 34.8 s ([benchmark](../benchmarks/2026-11-27-ecb-fx-run-times.md)).
 - **A failed batch holds later ones.** A file that fails its audit stays on the `audit` branch and the
   next file waits behind it until an operator acts; its landing is kept past 14 days while unpublished.
 - **One slot each.** Every product shares one fetch slot, one Spark slot and two dbt slots, so this

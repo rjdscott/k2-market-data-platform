@@ -138,6 +138,8 @@ once its tests passed. Each engine holds its own storage key.
 - Deploy drains the DAGs it affects, runs `lake-init` from the release, creates missing networks, names
   every missing secret file in preflight, and removes a service the target puts behind a profile.
 - The `fetch` and `dbt-runner` stubs are real images, under the same limits.
+- `fx-reference.ecb-fx-rates` 1.1.1 stops a run at 10 minutes (`timeoutMinutes`), factor 5 on its
+  largest measured run; the run times, with their commands, in `docs/benchmarks/2026-11-27-ecb-fx-run-times.md`.
 - `make test` and CI run the connector, run-records, catalog site and wrapper tests; CI builds the Spark
   image its throwaway lakes need.
 
