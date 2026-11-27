@@ -205,7 +205,7 @@ def test_the_quality_builder_alone_reads_every_writers_results_and_svc_catalog_i
     rules, _ = emitted(m)
     results = [r for r in rules["tables"] if r.get("table") == model.TEST_RESULTS]
     want = {model.base_relation(p.domain, p.name, model.TEST_RESULTS) for p in model.test_results_writers(m)}
-    assert len(want) == 6 and _relations(results) == want and len(results) == len(want)
+    assert len(want) == 8 and _relations(results) == want and len(results) == len(want)
     assert {r["user"] for r in results} == {"dbt_quality_results"} and all(r["privileges"] == ["SELECT"] for r in results)
     catalog = [r for r in rules["tables"] if r.get("user") == "svc\\.catalog"]
     assert _relations(catalog) == {"governance.run_records.run_record", "governance.run_records.holds", "governance.quality_results.test_results"}

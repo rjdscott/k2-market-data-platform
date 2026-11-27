@@ -1,0 +1,430 @@
+{
+  "id": "market-capture.kraken-trades",
+  "name": "kraken-trades",
+  "domain": "market-capture",
+  "version": "1.1.0",
+  "status": "active",
+  "type": "sourceAligned",
+  "owner": "capture-team",
+  "purpose": "Every trade Kraken's WebSocket v2 trade channel sent the capture: the frames exactly as read (bronze_trade), and one typed row per trade and delivery (silver_trade) with the instrument its symbol names, every delivery kept and a repeat of a trade id flagged, never dropped.",
+  "limitations": "Only frames the capture received are here; a capture outage is a hole in time, not in offsets, and the offset checks cannot see it. A trade whose symbol the security master does not resolve at the trade's time is held in silver_trade_unresolved, owner-only, and missing from silver_trade until the master resolves it; the audit unresolved_rows_zero then warns and the product shows degraded. Every delivery is a row: a reader counting trades filters is_duplicate false. The venue's terms of reuse are not yet recorded here: the owner confirms them before any grant outside the owning team (k2gen check refuses such a grant while no terms are recorded).",
+  "usage": "Read market_capture.kraken_trades.silver_trade, one row per trade and delivery keyed by (kafka_partition, kafka_offset, trade_ordinal, trade_ts); is_duplicate false keeps each trade once, its first delivery by offset. bronze_trade and silver_trade_unresolved are the owning team's.",
+  "issued": "2026-01-01T00:00:00Z",
+  "periodicity": "*/5 * * * *",
+  "productFile": "documents/contracts/market-capture/kraken-trades/product.odps.yaml",
+  "inputs": [
+    {
+      "contractId": "reference-data.security-master.venue_symbol",
+      "version": "1.0.0",
+      "relation": "reference_data.security_master.venue_symbol",
+      "required": true,
+      "maxLagMinutes": null
+    }
+  ],
+  "outputs": [
+    {
+      "contractId": "market-capture.kraken-trades.bronze_trade",
+      "relation": "lake.kraken_trades.bronze_trade",
+      "build": "connector",
+      "testedRef": "main",
+      "contractFile": "documents/contracts/market-capture/kraken-trades/bronze_trade.odcs.yaml",
+      "layer": "bronze",
+      "version": "1.0.0",
+      "purpose": "One row per record of the raw Kraken topic whose envelope stream is trade, the landing's columns as landed (I-1): staged from lake.kraken_trades.landing by offset, so a retry or a kill between the landing commit and the stage adds no row twice and leaves no hole. The connector's audit (accounting, parses, keys_unique) passes before a batch publishes.",
+      "columns": [
+        {
+          "name": "kafka_partition",
+          "type": "integer",
+          "required": true,
+          "primaryKey": true,
+          "description": "The topic partition; with kafka_offset, the row's lineage to the landing and the topic.",
+          "primaryKeyPosition": 1
+        },
+        {
+          "name": "kafka_offset",
+          "type": "bigint",
+          "required": true,
+          "primaryKey": true,
+          "description": "The record's offset in its partition.",
+          "primaryKeyPosition": 2
+        },
+        {
+          "name": "kafka_timestamp",
+          "type": "timestamp(6) with time zone",
+          "required": false,
+          "primaryKey": false,
+          "description": "The record's Kafka timestamp, set when the capture produced it."
+        },
+        {
+          "name": "record_key",
+          "type": "varbinary",
+          "required": false,
+          "primaryKey": false,
+          "description": "The key's bytes as read, the envelope's symbol as the venue spells it in UTF-8; null for a frame of no single instrument."
+        },
+        {
+          "name": "record_value",
+          "type": "varbinary",
+          "required": false,
+          "primaryKey": false,
+          "description": "The value's bytes as read and never decoded here: a Confluent-framed RawMessage (schemas/avro/raw-message.avsc), the magic byte, the writer schema id, then the Avro body whose payload is the venue's JSON frame."
+        },
+        {
+          "name": "batch_id",
+          "type": "varchar",
+          "required": false,
+          "primaryKey": false,
+          "description": "The landing batch that landed the record, its k2.batch-id."
+        },
+        {
+          "name": "landed_at",
+          "type": "timestamp(6) with time zone",
+          "required": false,
+          "primaryKey": false,
+          "description": "When that landing batch committed, UTC."
+        },
+        {
+          "name": "run_id",
+          "type": "varchar",
+          "required": false,
+          "primaryKey": false,
+          "description": "The run that landed the record, <dag_id>/<run_id>."
+        },
+        {
+          "name": "release_id",
+          "type": "varchar",
+          "required": false,
+          "primaryKey": false,
+          "description": "The release that run resolved at its start."
+        }
+      ],
+      "retentionDays": null,
+      "roles": [],
+      "readers": [],
+      "dbtDocs": null
+    },
+    {
+      "contractId": "market-capture.kraken-trades.silver_trade",
+      "relation": "market_capture.kraken_trades.silver_trade",
+      "build": "dbt",
+      "testedRef": "audited",
+      "contractFile": "documents/contracts/market-capture/kraken-trades/silver_trade.odcs.yaml",
+      "layer": "silver",
+      "version": "1.0.0",
+      "purpose": "One typed row per trade and delivery: each element of a bronze trade frame's data array, its symbol resolved to the security master's instrument at the trade's time. A trade the venue sent twice is two rows, the later one flagged is_duplicate. A frame is here only once every trade in it resolves; until then it is held in silver_trade_unresolved.",
+      "columns": [
+        {
+          "name": "kafka_partition",
+          "type": "integer",
+          "required": true,
+          "primaryKey": true,
+          "description": "The topic partition of the frame; with kafka_offset, the row's lineage to bronze_trade, the landing and the topic.",
+          "primaryKeyPosition": 1
+        },
+        {
+          "name": "kafka_offset",
+          "type": "bigint",
+          "required": true,
+          "primaryKey": true,
+          "description": "The frame's offset in its partition.",
+          "primaryKeyPosition": 2
+        },
+        {
+          "name": "trade_ordinal",
+          "type": "integer",
+          "required": true,
+          "primaryKey": true,
+          "description": "The trade's position in the frame's data array, from 1 (UNNEST ... WITH ORDINALITY).",
+          "primaryKeyPosition": 3
+        },
+        {
+          "name": "trade_ts",
+          "type": "timestamp(6) with time zone",
+          "required": true,
+          "primaryKey": true,
+          "description": "The venue's timestamp of the trade (timestamp), in UTC to the microsecond. The partition source (day), so it is in the key, as an incremental merge's unique key holds every partition source column; the first three key columns alone are already unique.",
+          "time": "event",
+          "primaryKeyPosition": 4
+        },
+        {
+          "name": "trade_id",
+          "type": "bigint",
+          "required": true,
+          "primaryKey": false,
+          "description": "The venue's trade id (trade_id), sequential per symbol."
+        },
+        {
+          "name": "venue_symbol",
+          "type": "varchar",
+          "required": true,
+          "primaryKey": false,
+          "description": "The symbol as the venue spells it (symbol), the security master's venue_symbol."
+        },
+        {
+          "name": "instrument_id",
+          "type": "varchar",
+          "required": true,
+          "primaryKey": false,
+          "description": "The security master's instrument the symbol named at trade_ts, from the version valid then."
+        },
+        {
+          "name": "side",
+          "type": "varchar",
+          "required": true,
+          "primaryKey": false,
+          "description": "The taker's side as the venue sends it, buy or sell."
+        },
+        {
+          "name": "price",
+          "type": "decimal(38,18)",
+          "required": true,
+          "primaryKey": false,
+          "description": "The price in the quote asset, the venue's JSON number cast exactly to a decimal: twenty integer and eighteen fractional digits, the precision of the listing's tick_size, so a price is compared with its tick exactly and nothing the venue sends is rounded."
+        },
+        {
+          "name": "quantity",
+          "type": "decimal(38,18)",
+          "required": true,
+          "primaryKey": false,
+          "description": "The quantity in the base asset (qty), cast exactly as price is; the listing's order_min has the same precision."
+        },
+        {
+          "name": "order_type",
+          "type": "varchar",
+          "required": false,
+          "primaryKey": false,
+          "description": "The taker order's type as the venue sends it (ord_type), market or limit."
+        },
+        {
+          "name": "frame_type",
+          "type": "varchar",
+          "required": true,
+          "primaryKey": false,
+          "description": "The frame's type: snapshot, the recent trades the venue sends on subscribing, or update, trades as they happen. A snapshot repeats trades an earlier connection delivered, which is_duplicate then flags."
+        },
+        {
+          "name": "is_duplicate",
+          "type": "boolean",
+          "required": true,
+          "primaryKey": false,
+          "description": "True when an earlier delivery of the same trade_id for the same venue_symbol is in this table: the first delivery by (kafka_partition, kafka_offset, trade_ordinal) is the original, every later one is flagged and kept."
+        },
+        {
+          "name": "received_at",
+          "type": "timestamp(6) with time zone",
+          "required": true,
+          "primaryKey": false,
+          "description": "When the capture received the frame (the envelope's recv_ts_ns), in UTC, truncated to the microsecond."
+        },
+        {
+          "name": "conn_id",
+          "type": "varchar",
+          "required": true,
+          "primaryKey": false,
+          "description": "The capture's websocket connection that received the frame."
+        },
+        {
+          "name": "conn_msg_seq",
+          "type": "bigint",
+          "required": true,
+          "primaryKey": false,
+          "description": "The frame's number within that connection, from the envelope."
+        }
+      ],
+      "partitioning": [
+        "day(trade_ts)"
+      ],
+      "retentionDays": null,
+      "roles": [
+        {
+          "role": "full_reader",
+          "inWords": "every row and column"
+        },
+        {
+          "role": "delayed_reader",
+          "policies": {
+            "delay": {
+              "column": "trade_ts",
+              "minutes": 20
+            },
+            "mask": [
+              "conn_id",
+              "conn_msg_seq"
+            ]
+          },
+          "inWords": "only rows whose trade_ts is at least 20 minutes old; conn_id and conn_msg_seq read as null"
+        }
+      ],
+      "readers": [],
+      "dbtDocs": "dbt-docs/#!/model/model.k2.kraken_trades__silver_trade"
+    },
+    {
+      "contractId": "market-capture.kraken-trades.silver_trade_unresolved",
+      "relation": "market_capture.kraken_trades.silver_trade_unresolved",
+      "build": "dbt",
+      "testedRef": "audited",
+      "contractFile": "documents/contracts/market-capture/kraken-trades/silver_trade_unresolved.odcs.yaml",
+      "layer": "silver",
+      "version": "1.0.0",
+      "purpose": "The held trades: every trade of a bronze trade frame that is not in silver_trade, because a trade in it has a symbol the security master resolves to nothing at the trade's time. Rebuilt on every build, so a frame leaves it on the build that moves it into silver_trade.",
+      "columns": [
+        {
+          "name": "kafka_partition",
+          "type": "integer",
+          "required": true,
+          "primaryKey": true,
+          "description": "The topic partition of the frame.",
+          "primaryKeyPosition": 1
+        },
+        {
+          "name": "kafka_offset",
+          "type": "bigint",
+          "required": true,
+          "primaryKey": true,
+          "description": "The frame's offset in its partition.",
+          "primaryKeyPosition": 2
+        },
+        {
+          "name": "trade_ordinal",
+          "type": "integer",
+          "required": true,
+          "primaryKey": true,
+          "description": "The trade's position in the frame's data array, from 1.",
+          "primaryKeyPosition": 3
+        },
+        {
+          "name": "trade_ts",
+          "type": "timestamp(6) with time zone",
+          "required": true,
+          "primaryKey": false,
+          "description": "The venue's timestamp of the trade, in UTC to the microsecond; the time the symbol must resolve at."
+        },
+        {
+          "name": "trade_id",
+          "type": "bigint",
+          "required": true,
+          "primaryKey": false,
+          "description": "The venue's trade id."
+        },
+        {
+          "name": "venue_symbol",
+          "type": "varchar",
+          "required": true,
+          "primaryKey": false,
+          "description": "The symbol as the venue spells it."
+        },
+        {
+          "name": "side",
+          "type": "varchar",
+          "required": true,
+          "primaryKey": false,
+          "description": "The taker's side as the venue sends it."
+        },
+        {
+          "name": "price",
+          "type": "decimal(38,18)",
+          "required": true,
+          "primaryKey": false,
+          "description": "The price, cast exactly as in silver_trade."
+        },
+        {
+          "name": "quantity",
+          "type": "decimal(38,18)",
+          "required": true,
+          "primaryKey": false,
+          "description": "The quantity, cast exactly as in silver_trade."
+        },
+        {
+          "name": "order_type",
+          "type": "varchar",
+          "required": false,
+          "primaryKey": false,
+          "description": "The taker order's type as the venue sends it."
+        },
+        {
+          "name": "frame_type",
+          "type": "varchar",
+          "required": true,
+          "primaryKey": false,
+          "description": "The frame's type, snapshot or update."
+        },
+        {
+          "name": "received_at",
+          "type": "timestamp(6) with time zone",
+          "required": true,
+          "primaryKey": false,
+          "description": "When the capture received the frame, in UTC, truncated to the microsecond."
+        },
+        {
+          "name": "conn_id",
+          "type": "varchar",
+          "required": true,
+          "primaryKey": false,
+          "description": "The capture's websocket connection that received the frame."
+        },
+        {
+          "name": "conn_msg_seq",
+          "type": "bigint",
+          "required": true,
+          "primaryKey": false,
+          "description": "The frame's number within that connection."
+        }
+      ],
+      "retentionDays": null,
+      "quality": [
+        {
+          "name": "unresolved_rows_zero",
+          "type": "custom",
+          "description": "No trade is held. A held one warns: the build still publishes the rest, the run is degraded, and an instruments run is started so the master can resolve the symbol."
+        }
+      ],
+      "roles": [],
+      "readers": [],
+      "dbtDocs": "dbt-docs/#!/model/model.k2.kraken_trades__silver_trade_unresolved"
+    }
+  ],
+  "joinKeys": [],
+  "lineage": {
+    "nodes": [
+      {
+        "id": "reference-data.security-master.venue_symbol",
+        "product": "reference-data.security-master",
+        "relation": "reference_data.security_master.venue_symbol"
+      },
+      {
+        "id": "market-capture.kraken-trades.bronze_trade",
+        "product": "market-capture.kraken-trades",
+        "relation": "lake.kraken_trades.bronze_trade"
+      },
+      {
+        "id": "market-capture.kraken-trades.silver_trade",
+        "product": "market-capture.kraken-trades",
+        "relation": "market_capture.kraken_trades.silver_trade"
+      },
+      {
+        "id": "market-capture.kraken-trades.silver_trade_unresolved",
+        "product": "market-capture.kraken-trades",
+        "relation": "market_capture.kraken_trades.silver_trade_unresolved"
+      }
+    ],
+    "edges": [
+      {
+        "from": "market-capture.kraken-trades.bronze_trade",
+        "to": "market-capture.kraken-trades.silver_trade"
+      },
+      {
+        "from": "reference-data.security-master.venue_symbol",
+        "to": "market-capture.kraken-trades.silver_trade"
+      },
+      {
+        "from": "market-capture.kraken-trades.bronze_trade",
+        "to": "market-capture.kraken-trades.silver_trade_unresolved"
+      },
+      {
+        "from": "market-capture.kraken-trades.silver_trade",
+        "to": "market-capture.kraken-trades.silver_trade_unresolved"
+      }
+    ]
+  },
+  "tag": "v3.0.0-alpha.3-rc.1"
+}

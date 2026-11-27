@@ -55,6 +55,9 @@ models:
       kraken_instruments:
         +database: market_capture_build
         +schema: kraken_instruments__base
+      kraken_trades:
+        +database: market_capture_build
+        +schema: kraken_trades__base
     reference_data:
       calendars:
         +database: reference_data_build
@@ -62,6 +65,9 @@ models:
       currency_master:
         +database: reference_data_build
         +schema: currency_master__base
+      security_master:
+        +database: reference_data_build
+        +schema: security_master__base
 seeds:
   k2:
     governance:
@@ -72,3 +78,6 @@ seeds:
       calendars:
         +database: reference_data_build
         +schema: calendars__base
+      security_master:
+        +database: reference_data_build
+        +schema: security_master__base

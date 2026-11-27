@@ -1,0 +1,144 @@
+{
+  "id": "governance.quality-results",
+  "name": "quality-results",
+  "domain": "governance",
+  "version": "1.0.0",
+  "status": "active",
+  "type": "consumerAligned",
+  "owner": "platform-team",
+  "purpose": "One place to read every dbt test result the platform records: each product's builder writes its own tests' results beside its outputs, and this product unions them, one row per test per dbt invocation, with the product it belongs to.",
+  "limitations": "As current as its last build, hourly at minute 50, so a product's build since then is not in it yet. A product that has never built with a test has no results table and no rows here. Only tests that ran are recorded: a build Airflow never started leaves no row. The bronze audit's checks (lake.<fence>.audit_checks) are not in it yet.",
+  "usage": "The newest status of each test of a product: the rows of its product_id with the greatest run_started_at per unique_id. run_id joins a row to the product's run records (governance.run_records.run_record).",
+  "terms": {
+    "redistribution": "allowed"
+  },
+  "issued": "2026-01-01T00:00:00Z",
+  "periodicity": "50 * * * *",
+  "productFile": "documents/contracts/governance/quality-results/product.odps.yaml",
+  "inputs": [],
+  "outputs": [
+    {
+      "contractId": "governance.quality-results.test_results",
+      "relation": "governance.quality_results.test_results",
+      "build": "dbt",
+      "testedRef": "audited",
+      "contractFile": "documents/contracts/governance/quality-results/test_results.odcs.yaml",
+      "layer": "mart",
+      "version": "1.0.0",
+      "purpose": "One row per dbt data test and unit test a product's builder ran, from the results table that builder writes beside its outputs (dbt/macros/k2_results.sql), with the product it belongs to.",
+      "columns": [
+        {
+          "name": "product_id",
+          "type": "varchar",
+          "required": true,
+          "primaryKey": true,
+          "description": "The product whose builder ran the test, <domain>.<product>.",
+          "primaryKeyPosition": 1
+        },
+        {
+          "name": "run_id",
+          "type": "varchar",
+          "required": false,
+          "primaryKey": false,
+          "description": "The Airflow run, <dag_id>/<run_id>; joins the product's run records."
+        },
+        {
+          "name": "dbt_invocation_id",
+          "type": "varchar",
+          "required": true,
+          "primaryKey": true,
+          "description": "dbt's invocation id.",
+          "primaryKeyPosition": 2
+        },
+        {
+          "name": "release_id",
+          "type": "varchar",
+          "required": false,
+          "primaryKey": false,
+          "description": "The release the run resolved at its start, <tag>-<sha12>."
+        },
+        {
+          "name": "run_started_at",
+          "type": "timestamp(6) with time zone",
+          "required": true,
+          "primaryKey": false,
+          "description": "When the dbt invocation started, UTC.",
+          "time": "event"
+        },
+        {
+          "name": "writer",
+          "type": "varchar",
+          "required": true,
+          "primaryKey": false,
+          "description": "The builder that ran the test, dbt_<fence>; always the product's own."
+        },
+        {
+          "name": "unique_id",
+          "type": "varchar",
+          "required": true,
+          "primaryKey": true,
+          "description": "The test's dbt node id.",
+          "primaryKeyPosition": 3
+        },
+        {
+          "name": "test_name",
+          "type": "varchar",
+          "required": true,
+          "primaryKey": false,
+          "description": "The test's dbt name."
+        },
+        {
+          "name": "tested",
+          "type": "varchar",
+          "required": false,
+          "primaryKey": false,
+          "description": "The relation of the model or seed tested, <catalog>.<namespace>.<table>; null when dbt did not say."
+        },
+        {
+          "name": "status",
+          "type": "varchar",
+          "required": true,
+          "primaryKey": false,
+          "description": "dbt's status, pass, fail, warn, error or skipped (a test behind a failure in the same invocation)."
+        },
+        {
+          "name": "failures",
+          "type": "bigint",
+          "required": false,
+          "primaryKey": false,
+          "description": "The failing rows dbt counted; null when it counted none."
+        },
+        {
+          "name": "execution_time",
+          "type": "double",
+          "required": true,
+          "primaryKey": false,
+          "description": "Seconds the test ran."
+        },
+        {
+          "name": "message",
+          "type": "varchar",
+          "required": false,
+          "primaryKey": false,
+          "description": "dbt's message, at most 1000 characters; a failed unit test's is the diff."
+        }
+      ],
+      "retentionDays": null,
+      "roles": [],
+      "readers": [],
+      "dbtDocs": "dbt-docs/#!/model/model.k2.quality_results__test_results"
+    }
+  ],
+  "joinKeys": [],
+  "lineage": {
+    "nodes": [
+      {
+        "id": "governance.quality-results.test_results",
+        "product": "governance.quality-results",
+        "relation": "governance.quality_results.test_results"
+      }
+    ],
+    "edges": []
+  },
+  "tag": "v3.0.0-alpha.3-rc.1"
+}

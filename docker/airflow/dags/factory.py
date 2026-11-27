@@ -385,7 +385,11 @@ def make_dag(release: Path, e: dict) -> DAG:
     kafka = (doc.get("connector") or {}).get("kind") == "kafka"
     with DAG(e["dagId"], schedule=e["schedule"], start_date=START, catchup=False, max_active_runs=1,
              dagrun_timeout=timedelta(minutes=timeout) if timeout else None,
-             is_paused_upon_creation=e["status"] != "active", tags=[e["product"]]) as dag:
+             # Created paused, whatever its status: a DAG a release adds must not start under the deploy
+             # that adds it (a Kafka product's first load reads its whole retained backlog, and a first
+             # publish mid-verify fails the drift check). The operator unpauses it after
+             # `make release-verify`; Airflow applies this at creation only, so an existing DAG keeps its state.
+             is_paused_upon_creation=True, tags=[e["product"]]) as dag:
         product, tasks = e["product"], e["tasks"]
         ops = {"resolve": Resolve(task_id="resolve", kafka=kafka)}
         for t in tasks:

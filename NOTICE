@@ -42,6 +42,14 @@ patterns proof (scripts/verify/dbt-patterns.sh):
   platform/k2gen/tests/fixtures/dbt-patterns/second/seeds/symbols.csv
   platform/k2gen/tests/fixtures/dbt-patterns/second/seeds/trades.csv
 
+Hand-written public naming facts, no prices and no row copied from a feed,
+reviewed by the owner, for the security master
+(contracts/reference-data/security-master/): a venue's older code for an asset,
+and which asset codes are stablecoins:
+
+  contracts/reference-data/security-master/seeds/code_exceptions.csv
+  contracts/reference-data/security-master/seeds/stablecoins.csv
+
 Hand-written synthetic response, invented pairs and round numbers in the shape
 Kraken's public AssetPairs documentation describes, for the market-capture
 parser tests (domains/market-capture/tests/):

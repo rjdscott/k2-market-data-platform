@@ -35,6 +35,7 @@
 #      anything listens on the profile's port.
 #
 #   make test-dbt              # locally
+#   make test-dbt SELECTOR=x   # one selector and the products its inputs name, transitively
 #   CI job "dbt (marts)" runs the same script.
 set -euo pipefail
 cd "$(dirname "$0")/../dbt"
@@ -111,23 +112,15 @@ done
 echo "ok k2_input: pinned, unpinned, a unit test with the var set, a var without the key, $n snapshots that are not integers, absent (zero typed rows; a unit test's CTE) and $m absent entries of another form (dbt/tests/k2_input/)"
 
 rel=$(bash ../scripts/verify/ci-validate.sh "$tmp/ci" 2>"$tmp/ci.log" | tail -1) || { cat "$tmp/ci.log"; exit 1; }
+# Every selector, each after the products its input ports name (scripts/dbt_order.py); with SELECTOR,
+# that one and its inputs only. An unknown one fails here, before any container starts.
+order=$(python3 ../scripts/dbt_order.py "$rel" "${SELECTOR:-}") || exit 1
+echo "dbt-test: building in order: $order"
 bash ../scripts/lib/throwaway-lake.sh up "$P" "$rel"
 state=$(bash ../scripts/lib/throwaway-lake.sh state "$P")
 uv_image=$(sed -n 's/^UV_IMAGE=//p' ../scripts/lib/throwaway-lake.sh)  # the lake's tools pin, not a second one
 release=$(basename "$rel") built=0 failed=()
 mkdir -p "$HOME/.cache/k2-dbt-test-uv"  # uv's download cache across runs; the venv is per run
-# Every selector, each after the products its input ports name (compiled/products/*/pipeline.json).
-order=$(python3 - "$rel" $(sed -n 's/^- name: //p' "$rel/compiled/dbt/selectors.yml") <<'PY'
-import json, sys
-from graphlib import TopologicalSorter
-from pathlib import Path
-pipes = [json.loads(f.read_text()) for f in Path(sys.argv[1], "compiled/products").glob("*/pipeline.json")]
-selector = {d["product"]: d["build"]["selector"] for d in pipes if d.get("build", {}).get("selector") in sys.argv[2:]}
-deps = {selector[d["product"]]: {selector[c] for i in d.get("inputs", []) if (c := i["contractId"].rsplit(".", 1)[0]) in selector}
-        for d in pipes if d["product"] in selector}
-print(" ".join(TopologicalSorter(deps).static_order()))
-PY
-)
 for sel in $order; do
   run_id="dbt-test/$P-$sel" out=$state/dbt-$sel
   mkdir -p "$out"

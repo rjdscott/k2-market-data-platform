@@ -127,9 +127,10 @@ class Shape(unittest.TestCase):
         self.assertEqual(sorted(dags), ["daily_load", "station_readings"])
         self.assertEqual(set(dags["station_readings"].task_dict), set(FULL))
         self.assertEqual(set(dags["daily_load"].task_dict), set(DBT_ONLY))
-        self.assertEqual(sorted(factory.build(CANARY)), ["access_canary", "calendars", "currency_master", "ecb_fx_rates", "quality_results"])
+        self.assertEqual(sorted(factory.build(CANARY)), ["access_canary", "calendars", "currency_master", "ecb_fx_rates", "kraken_instruments", "kraken_trades",
+                          "quality_results", "security_master"])
         for d in dags.values():
-            self.assertEqual((d.max_active_runs, d.catchup, d.is_paused_upon_creation), (1, False, False))
+            self.assertEqual((d.max_active_runs, d.catchup, d.is_paused_upon_creation), (1, False, True))  # a new DAG never starts under its own deploy
         self.assertEqual((dags["station_readings"].schedule, dags["daily_load"].schedule), ("15 * * * *", "30 1 * * *"))
         self.assertEqual(dags["station_readings"].dagrun_timeout.total_seconds(), 600)  # its timeoutMinutes
         self.assertIsNone(dags["daily_load"].dagrun_timeout)

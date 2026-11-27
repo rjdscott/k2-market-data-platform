@@ -1,0 +1,3 @@
+venue,venue_code,asset_code,reason
+kraken,XBT,BTC,Kraken's older code for bitcoin; its websocket v2 trades stream spells it BTC
+kraken,XDG,DOGE,Kraken's older code for dogecoin; its websocket v2 trades stream spells it DOGE

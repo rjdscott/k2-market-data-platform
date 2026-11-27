@@ -35,7 +35,10 @@ first failure:
                  unpauses them, unless ALLOW_RUNNING=1 (recorded as step allow-running). No scheduler
                  running, or no DAG in it: recorded, and the deploy goes on. Deploy unpauses what it
                  paused once one release runs again: done, rolled back, or a failed ddl; on exit 3 they
-                 stay paused, and a rerun or `make rollback` that reaches done unpauses them
+                 stay paused, and a rerun or `make rollback` that reaches done unpauses them. Never a
+                 DAG whose product is held (k2runs.held as svc.platform, under the release that runs
+                 then; unread holds keep them all paused). A DAG new in the release is never paused or
+                 unpaused by deploy: Airflow creates it at its first parse after the swap
  4 ddl           the one-shots the plan names (lake-init reads the target's storage plan), the storage plan's missing namespaces, and each table of
                  needs.ddl compared with the catalog: missing is queued, equal is satisfied, different
                  is refused (never an alter or a drop); Spark's tables created now if Spark runs
@@ -125,6 +128,7 @@ def _load(name: str, path: Path) -> Any:
 k2tools = _load("k2tools", HERE.parent / "docker" / "tools" / "k2tools.py")  # the Trino client, and its catalog types
 ps = _load("principal_secret", HERE / "principal-secret.py")  # locked(), read(), write(): in place, never renamed
 drift_lib = _load("catalog_drift", HERE / "verify" / "catalog_drift.py")  # its tokens(): one SQL comparison
+k2runs = _load("k2runs", HERE.parent / "platform" / "runs" / "k2runs.py")  # held(): the holds' one reader (I-7)
 
 POINTERS = ("trino", "airflow", "spark", "prometheus", "k2-api")  # A1
 REFRESH_S = 5  # Trino rereads rules, groups and the password file this often (compiled etc, S11 and S13)
@@ -145,6 +149,8 @@ DRAIN_WAIT_S = 300
 DRAIN_POLL_S = 10  # a poll starts one Airflow CLI (a few seconds of CPU) per drained DAG, two with a run
 DRAIN_STATE = "deploy-paused.json"  # at the releases root: the DAGs deploy paused, written before the first pause
 SCHEDULER = "airflow-scheduler"  # the compose service deploy asks Airflow through
+HOLDS_DDL = model.ddl_path("trino", "governance", "run_records", "holds")  # a release with it has the holds table
+HOLDS_READER = "svc.platform"  # SELECT on the holds by the emitted rules, and no write: deploy never ends a hold
 BUSY = ("queued", "running", "restarting")  # a task instance's states a pause does not stop
 PASSWORD_DB = "trino/password.db"
 CA = "tls/ca.pem"
@@ -567,23 +573,35 @@ def dags_json(rel: Release) -> bytes | None:
     return (rel.root / model.DAGS).read_bytes() if model.DAGS in rel.manifest.files else None
 
 
+def new_dags(p: Plan) -> list[str]:
+    """The DAGs of the target no release the plan moves from has: Airflow creates each at its first parse
+    after the swap, paused or not as the factory says, and deploy never pauses or unpauses one."""
+    if None in p.sources:
+        return []  # a first deploy: every DAG is new, and its drain is every DAG Airflow has
+    known = {d for s in p.sources if s for d in k2release._dag_tasks(dags_json(s))}
+    return sorted(set(k2release._dag_tasks(dags_json(p.target))) - known)
+
+
 def drain_need(p: Plan) -> tuple[set[str] | None, str]:
     """(the DAGs to drain, None for every DAG Airflow has; why). Every one when Trino restarts (each
     product DAG's build runs on it), when the DAG code moves (the factory decides every DAG's tasks) or
     from no release (its DAGs are unknown); else each DAG of a source whose task list the target changes
-    or drops, as k2gen.release.needs compares them. A DAG new in the target has no run to drain."""
+    or drops, as k2gen.release.needs compares them. A DAG new in the target has no run to drain, and the
+    reason says so, whichever case drains."""
+    added = new_dags(p)
+    more = f"; new in this release, with no run to drain, never paused or unpaused by deploy: {', '.join(added)}" if added else ""
     if "trino" in p.recreate:  # trinoRestart, or a changed Trino service: either restarts it
-        return None, "Trino restarts"
+        return None, "Trino restarts" + more
     new, some = k2release._dag_tasks(dags_json(p.target)), set()
     for s in p.sources:
         if s is None:
             return None, "no release before this one, so its DAGs are unknown"
         a, b = s.manifest.files, p.target.manifest.files
         if any(f != model.DAGS and model.need_of(f) == "dagShapeChange" and a.get(f) != b.get(f) for f in a.keys() | b.keys()):
-            return None, f"the DAG code moved since {s.id}"
+            return None, f"the DAG code moved since {s.id}" + more
         some |= {d for d, t in k2release._dag_tasks(dags_json(s)).items() if new.get(d) != t}
     return some, (f"the task list of {', '.join(sorted(some))} changes or goes" if some
-                  else "no Trino restart and no DAG's task list changes")
+                  else "no Trino restart and no DAG's task list changes") + more
 
 
 def airflow(ctx: Ctx, cid: str, *argv: str) -> Any:
@@ -633,19 +651,64 @@ def running_tasks(ctx: Ctx, cid: str, dags: list[str]) -> list[str]:
     return out
 
 
-def resume(ctx: Ctx) -> list[str]:
-    """Exactly the DAGs a deploy paused unpaused, then forgotten; never one an operator paused."""
-    held = sorted(paused_by_deploy(ctx))
-    if not held:
+class _HoldsConn:
+    """The DB-API calls k2runs.held makes, over deploy's own Trino client as HOLDS_READER: each `?` of
+    k2runs' frozen statement bound as a literal (model.sql_literal), so the statement is k2runs' own."""
+
+    def __init__(self, ctx: Ctx):
+        self.ctx, self.rows = ctx, []
+
+    def cursor(self) -> _HoldsConn:
+        return self
+
+    def execute(self, statement: str, params: list[Any]) -> None:
+        parts = statement.split("?")
+        if len(parts) != len(params) + 1:
+            raise Failed(f"k2runs statement takes {len(parts) - 1} parameters, given {len(params)}")
+        bound = "".join(a + model.sql_literal(v) for a, v in zip(parts, params)) + parts[-1]
+        self.rows = sql(self.ctx, HOLDS_READER, bound)["rows"]
+
+    def fetchall(self) -> list[Any]:
+        return list(self.rows)
+
+
+def holds(ctx: Ctx, rel: Release | None, dags: list[str]) -> dict[str, dict[str, Any]]:
+    """{DAG: its product's open hold} for each of `dags` whose product k2runs.held finds held, read
+    under `rel`, the release that runs now. A release without the holds table: {}, nothing can hold."""
+    if rel is None or HOLDS_DDL not in rel.manifest.files:
+        return {}
+    product = {e["dagId"]: e["product"] for e in json.loads(dags_json(rel) or b'{"dags": []}')["dags"]}
+    conn = _HoldsConn(ctx)
+    return {d: h for d in dags if d in product and (h := k2runs.held(conn, product[d]))}
+
+
+def resume(ctx: Ctx, rel: Release | None) -> list[str]:
+    """Exactly the DAGs a deploy paused unpaused, then forgotten; never one an operator paused, and never
+    one whose product is held (W1-12) under `rel`, the release that runs now: a hold is the operator's,
+    so such a DAG is dropped from the set and stays paused until its hold ends. A plain Airflow pause
+    of a DAG deploy had paused cannot be told from deploy's own (audit LOW 40): `make hold` is how an
+    operator keeps one paused across a deploy. Holds that cannot be read keep every one paused."""
+    paused = sorted(paused_by_deploy(ctx))
+    if not paused:
         return []
     cid = scheduler(ctx)
     if cid is None:
-        raise Failed(f"{SCHEDULER} is not running, so the DAGs deploy paused stay paused: {', '.join(held)} "
+        raise Failed(f"{SCHEDULER} is not running, so the DAGs deploy paused stay paused: {', '.join(paused)} "
                      f"({ctx.root / DRAIN_STATE}); the next deploy or rollback that reaches done unpauses them")
-    for d in held:
+    try:
+        held = holds(ctx, rel, paused)
+    except Exception as e:  # never unpause past a hold that could not be read
+        return [f"kept paused {', '.join(paused)}: the holds could not be read as {HOLDS_READER} ({type(e).__name__}: "
+                f"{str(e)[:160]}), so none is unpaused past one; the next deploy or rollback that reaches done "
+                f"unpauses them ({ctx.root / DRAIN_STATE})"]
+    for d in (d for d in paused if d not in held):
         airflow(ctx, cid, "dags", "unpause", d, "-y")
     (ctx.root / DRAIN_STATE).unlink()
-    return [f"unpaused {', '.join(held)}: the DAGs deploy paused"]
+    lines = [f"unpaused {', '.join(d for d in paused if d not in held)}: the DAGs deploy paused"] if len(held) < len(paused) else []
+    if held:
+        lines.append("kept paused, held: " + "; ".join(f"{d} ({h['kind']} hold by {h['held_by']} at {h['held_at']}: {h['reason']})"
+                                                       for d, h in sorted(held.items())) + "; each stays paused until its hold is released")
+    return lines
 
 
 def drain(ctx: Ctx, p: Plan, frm: str | None) -> list[str]:
@@ -671,11 +734,11 @@ def drain(ctx: Ctx, p: Plan, frm: str | None) -> list[str]:
         while (busy := running_tasks(ctx, cid, dags)) and time.monotonic() - t0 < DRAIN_WAIT_S:
             time.sleep(DRAIN_POLL_S)
     except Exception:
-        resume(ctx)
+        resume(ctx, p.sources[0])
         raise
     lines = [f"drained {', '.join(dags)} ({why}) in {time.monotonic() - t0:.0f} s; paused {', '.join(pause) or 'none'}"]
     if busy and not ctx.allow_running:
-        lines += resume(ctx)
+        lines += resume(ctx, p.sources[0])
         raise Refused(f"drain: still running after {DRAIN_WAIT_S} s: {'; '.join(busy)}; {'; '.join(lines)}. Nothing "
                       "changed: deploy again once they finish, or with ALLOW_RUNNING=1 to go on under them")
     if busy:
@@ -741,8 +804,8 @@ def required_secrets(ctx: Ctx, p: Plan) -> list[str]:
         else:  # a bind model.SECRET_FILES does not describe: it must at least exist
             dirs.add(b)
     need |= {model.password_file(x) for x in run_principals(p.target)}
-    if any(model.ddl_path("trino", *t.split(".")) in p.target.manifest.files for t in p.ddl):
-        need.add(model.password_file("svc.platform"))
+    if any(model.ddl_path("trino", *t.split(".")) in p.target.manifest.files for t in p.ddl) or HOLDS_DDL in p.target.manifest.files:
+        need.add(model.password_file("svc.platform"))  # the ddl's creator, and the holds' reader at resume
     need |= {model.password_file(v.owner) for v in p.views}
     return sorted([n for n in need if not (ctx.secrets / n).is_file()] + [d for d in dirs if not (ctx.secrets / d).exists()])
 
@@ -1706,7 +1769,7 @@ def deploy(ctx: Ctx, rid: str, plan_only: bool) -> int:
                     f"pointers may already name a newer release ({ctx.root / DRAIN_STATE}); a deploy or rollback "
                     "that reaches done unpauses them")
         else:
-            say_all(ctx, resume(ctx))
+            say_all(ctx, resume(ctx, good))
         raise
     try:
         converge(ctx, p, frm)
@@ -1718,7 +1781,7 @@ def deploy(ctx: Ctx, rid: str, plan_only: bool) -> int:
             return EXIT_ROLLBACK_FAILED
         return EXIT_FAILED if rollback_to(ctx, good, [target, *(s for s in sources[1:] if s)], rid) else EXIT_ROLLBACK_FAILED
     ctx.say(f"deploy: {rid} is live and verified")
-    say_all(ctx, resume(ctx))
+    say_all(ctx, resume(ctx, target))
     return EXIT_OK
 
 
@@ -1744,7 +1807,7 @@ def rollback_to(ctx: Ctx, good: Release, sources: list[Release], frm: str) -> bo
                 "follow docs/runbooks/roll-back-a-release.md")
         return False
     ctx.say(f"deploy: rolled back; {good.id} is live and verified")
-    say_all(ctx, resume(ctx))  # a drained deploy's DAGs, or a dead one's (DRAIN_STATE)
+    say_all(ctx, resume(ctx, good))  # a drained deploy's DAGs, or a dead one's (DRAIN_STATE)
     return True
 
 

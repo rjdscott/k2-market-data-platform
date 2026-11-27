@@ -503,3 +503,16 @@ most one target run; the target is one of the product's own input ports' product
 refuses a refresh target that itself declares one, so the chain is one hop. A held or paused target
 gets the run queued, and `resolve` fails it while held. Where `pipeline.json` gets the target, and
 the contract field it comes from, is W1-6's, with `make test-airflow`.
+
+## The role order, 2026-11-28 (phases 004 and 005)
+
+A10 gains one optional field, additively: a role in `contracts/access/roles.yaml` may list the roles
+it is `within` (roles whose holders see no less), schema `k2-v2.schema.json#/$defs/roles`. The
+repository declares one pair, `delayed_reader` within `full_reader`. `access.inherit-role` then lets
+an output offer a role over an input that offers, instead, a role it is declared within, and holds
+the output to that role's policy on the input (delay, mask, row scope, as for the role itself). No
+chain is followed, a role within none is comparable only to itself (`public_reader`), and an input
+offering no role still blocks every role. Why: `silver_trade` of `kraken-trades` offers
+`delayed_reader` (plan 004) over `security-master`, reference data with no event time to delay,
+which offers `full_reader` alone (ADR-056 part 8: an enriched product is never less restricted
+than its inputs).

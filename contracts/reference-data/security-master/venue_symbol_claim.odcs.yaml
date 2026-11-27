@@ -1,0 +1,96 @@
+apiVersion: v3.2.0
+kind: DataContract
+id: reference-data.security-master.venue_symbol_claim
+name: venue_symbol_claim
+version: 1.0.0
+domain: reference-data
+description:
+  purpose: >-
+    One row per span in which a venue's pair is listed with one set of attributes: the listing's
+    websocket name resolved by rule into canonical base and quote codes, the venue spelling and
+    instrument id composed from them, and whether the claim is held. The one place the matching
+    rule lives: instrument and venue_symbol publish the claims that are not held, and
+    venue_symbol_held lists the ones that are.
+team:
+  name: reference-data-team
+schema:
+  - id: venue_symbol_claim
+    name: venue_symbol_claim
+    physicalName: security_master.venue_symbol_claim
+    physicalType: table
+    properties:
+      - name: venue
+        physicalType: varchar
+        required: true
+        primaryKey: true
+        primaryKeyPosition: 1
+        description: The venue whose listing states the pair (kraken).
+      - name: pair_code
+        physicalType: varchar
+        required: true
+        primaryKey: true
+        primaryKeyPosition: 2
+        description: The pair's REST code in the venue's listing.
+      - name: claimed_from
+        physicalType: timestamp(6) with time zone
+        required: true
+        primaryKey: true
+        primaryKeyPosition: 3
+        description: The first fetch that stated this listing of the pair (the listing version's first_fetched_at), in UTC.
+        customProperties:
+          - property: time
+            value: valid
+      - name: claimed_to
+        physicalType: timestamp(6) with time zone
+        required: true
+        description: The pair's next listing version, changed or unlisted; 9999-12-31 23:59:59 UTC while none follows.
+        customProperties:
+          - property: time
+            value: valid
+      - name: ws_name
+        physicalType: varchar
+        required: true
+        description: The websocket name as the listing spells it.
+      - name: base_asset
+        physicalType: varchar
+        description: >-
+          The canonical base code: the websocket name's part before its one slash, upper-cased,
+          then mapped through seeds/code_exceptions.csv for the venue. Null when the name is not
+          of the form base/quote.
+      - name: quote_asset
+        physicalType: varchar
+        description: The canonical quote code, by the same rule from the part after the slash; null as base_asset is.
+      - name: venue_symbol
+        physicalType: varchar
+        description: base_asset/quote_asset, the spelling the venue's trades stream carries; null when either is.
+      - name: instrument_id
+        physicalType: varchar
+        description: base_asset-quote_asset, the canonical instrument id; null when either is.
+      - name: tick_size
+        physicalType: decimal(38,18)
+        description: The smallest price step the listing states.
+      - name: pair_decimals
+        physicalType: integer
+        description: Digits after the decimal point of a price.
+      - name: lot_decimals
+        physicalType: integer
+        description: Digits after the decimal point of a volume.
+      - name: order_min
+        physicalType: decimal(38,18)
+        description: The smallest order volume in the base asset.
+      - name: status
+        physicalType: varchar
+        description: The pair's trading status as the venue states it.
+      - name: held_reason
+        physicalType: varchar
+        description: >-
+          Null for a claim that is published. claimed_twice: another pair of the venue claims
+          the same venue_symbol over an overlapping span, so every claim of that spelling is held.
+          not_base_slash_quote: the websocket name has no single slash to split.
+customProperties:
+  - property: layer
+    value: silver
+  - property: build
+    value: dbt
+  - property: backup
+    value: rebuild  # rebuilt from the listing and the seeds

@@ -786,6 +786,48 @@ def test_anything_else_a_left_release_did_not_declare_is_still_drift(drift, stat
     assert any(named in x for x in found["differences"]), found
 
 
+def platform_tables(**change) -> tuple[dict, dict]:
+    """The live release declares namespace run_records with run_record alone; the catalog holds the holds
+    table too, which a release attempted since (I-8's first deploy, rolled back) created at its ddl."""
+    want = {**WANT, "namespaces": {"governance": {"c", "c__base", "run_records"}},
+            "tables": {**WANT["tables"], ("governance", "run_records"): {"run_record"}}, **change}
+    state = catalog()
+    state["governance"]["run_records"] = {"tables": {"run_record": table(tag=None), "holds": table(tag=None)}, "views": {}}
+    return want, state
+
+
+HOLDS9 = {"id": "v9-000000000009", "namespaces": {("governance", "run_records")},
+          "tables": {("governance", "run_records", "run_record"), ("governance", "run_records", "holds")}, "views": {}}
+
+
+def test_a_platform_table_a_release_since_added_is_left_while_no_live_rule_reaches_it(drift):
+    want, state = platform_tables(reached=lambda w, ns, t: t == "run_record")
+    found = drift(state, want=want, left=[HOLDS9])
+    assert found["differences"] == [] and [x.split(":")[0] for x in found["left"]] == ["LEFT table governance.run_records.holds"]
+    assert "no table rule of the live release grants a privilege on it" in found["left"][0]
+    reached, _ = platform_tables(reached=lambda w, ns, t: True)  # a live rule names it: DRIFT, whoever declared it
+    assert any("governance.run_records.holds" in x and "a rule of the live release reaches it" in x
+               for x in drift(state, want=reached, left=[HOLDS9])["differences"])
+    unknown, _ = platform_tables()  # no rules read: never LEFT
+    assert any("DRIFT table governance.run_records.holds" in x for x in drift(state, want=unknown, left=[HOLDS9])["differences"])
+    assert any("DRIFT table governance.run_records.holds" in x for x in drift(state, want=want)["differences"])  # no --left-by
+
+
+def test_rule_reach_reads_the_releases_own_rules_and_catalogs(tmp_path):
+    (tmp_path / "compiled/trino/etc/catalog").mkdir(parents=True)
+    for c, w in (("governance", "governance"), ("governance_build", "governance"), ("lake", "k2")):
+        (tmp_path / f"compiled/trino/etc/catalog/{c}.properties").write_text(f"# x\niceberg.rest-catalog.warehouse={w}\n")
+    rules = [{"user": "svc\\.platform", "catalog": "governance_build", "schema": "run_records", "table": "run_record", "privileges": ["SELECT"]},
+             {"user": "dbt_c", "catalog": "governance_build", "schema": "c__base", "privileges": ["SELECT", "OWNERSHIP"]},
+             {"user": "svc\\.platform", "catalog": "system", "privileges": ["SELECT"]},
+             {"user": ".*", "privileges": []}]
+    (tmp_path / "compiled/trino/rules.json").write_text(json.dumps({"tables": rules}))
+    reached = cd.rule_reach(tmp_path)
+    assert reached("governance", "run_records", "run_record") and not reached("governance", "run_records", "holds")
+    assert reached("governance", "c__base", "anything")  # a builder's rule covers its whole base namespace
+    assert not reached("k2", "run_records", "run_record")  # another warehouse's catalogs
+
+
 def test_a_namespace_no_release_declares_is_drift_with_left_by_given(drift):
     state = left_behind()
     state["governance"]["z"] = {"tables": {}, "views": {}}
