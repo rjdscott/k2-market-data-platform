@@ -642,6 +642,22 @@ def test_the_filter_keeps_its_values_and_what_does_not_decode():
         K.keep_sql({"field": "stream) OR (true", "in": ["trade"]})
 
 
+def test_a_body_that_does_not_read_is_kept_for_parses_never_skipped():
+    """Spark's PERMISSIVE from_avro gives a corrupt body a struct of nulls, not a null (kafka-path.sh
+    claim 9): decoded_sql makes it null, so the filter keeps it and parses fails it."""
+    con = duckdb.connect()
+    con.execute("CREATE TABLE t (i INTEGER, envelope STRUCT(stream VARCHAR, symbol VARCHAR))")
+    con.executemany("INSERT INTO t VALUES (?, ?)", [[0, {"stream": None, "symbol": None}],
+                                                    [1, {"stream": None, "symbol": "A/B"}],
+                                                    [2, {"stream": "trade", "symbol": "A/B"}]])
+    decoded = K.decoded_sql(["stream", "symbol"]).replace("`", '"')
+    keep = K.keep_sql({"field": "stream", "in": ["trade"]}).replace("`", '"')
+    got = con.execute(f"SELECT envelope IS NULL, {keep} FROM (SELECT i, {decoded} AS envelope FROM t) ORDER BY i")
+    assert got.fetchall() == [(True, True), (False, False), (False, True)]
+    with pytest.raises(ValueError):
+        K.decoded_sql(["stream) OR (true"])
+
+
 def test_the_range_predicate_selects_each_partitions_half_open_range():
     where, args = K.range_sql({0: (2, 4), 1: (0, 1)})
     con = duckdb.connect()

@@ -138,6 +138,19 @@ def keep_sql(rule: dict | None, envelope: str = "envelope") -> str:
     return f"coalesce({e} IS NULL OR {e}.{C.name(rule['field'])} IN ({values}), false)"
 
 
+def decoded_sql(fields: list[str], envelope: str = "envelope") -> str:
+    """The decoded envelope, or NULL when its body did not read. Spark's PERMISSIVE from_avro gives
+    such a body a struct whose every field is null, never a null struct (Spark 3.5.9, seen by
+    scripts/verify/kafka-path.sh claim 9), so without this keep_sql would skip a corrupt frame as
+    one whose field is null and parses would count it decoded: skipped unseen.
+
+    ponytail: a real record with every field null reads as undecoded too, so it is kept and fails
+    parses (closed); RawMessage has six required fields, so it cannot be one."""
+    e = C.name(envelope)
+    nulls = " AND ".join(f"{e}.{C.name(f)} IS NULL" for f in fields)
+    return f"CASE WHEN {nulls} THEN NULL ELSE {e} END"
+
+
 def range_sql(ranges: dict) -> tuple[str, dict]:
     """`(where, args)` selecting the landing's rows in `{partition: (start, end)}`, end exclusive;
     the values bound as Spark named parameters."""
@@ -472,11 +485,10 @@ class SparkLanding(C.SparkLake):
 
     def landed(self, landing: str, snapshot: int, ranges: dict, keep: str):
         """The landing's rows in `ranges` at `snapshot` with KEPT, the envelope decoded once per
-        writer schema id (PERMISSIVE: a body that does not read decodes to null and is kept, as is a
-        record unframed or of an id the registry does not serve; see keep_sql)."""
+        writer schema id (a body that does not read decodes to null, decoded_sql, and is kept, as is
+        a record unframed or of an id the registry does not serve; see keep_sql)."""
         from catalog import UnresolvableSchema, fetch_schema
         from pyspark.sql import functions as F
-        from pyspark.sql.avro.functions import from_avro
 
         import wire
 
@@ -492,11 +504,22 @@ class SparkLanding(C.SparkLake):
         out = raw.where(F.col("k2_schema_id").isNull() | ~F.col("k2_schema_id").isin(list(schemas)))
         out = out.withColumn(KEPT, F.lit(True))
         for sid, schema in sorted(schemas.items()):
-            body = F.expr(wire.body_expr("record_value"))
-            out = out.unionByName(raw.where(F.col("k2_schema_id") == sid)
-                                  .withColumn("envelope", from_avro(body, schema, {"mode": "PERMISSIVE"}))
+            out = out.unionByName(SparkLanding._decoded(raw.where(F.col("k2_schema_id") == sid), schema)
                                   .withColumn(KEPT, F.expr(keep)).drop("envelope"))
         return out
+
+    @staticmethod
+    def _decoded(raw, schema: str):
+        """`raw` with column `envelope`: record_value's body under `schema`, NULL where it does not
+        read (decoded_sql)."""
+        from pyspark.sql import functions as F
+        from pyspark.sql.avro.functions import from_avro
+
+        import wire
+
+        out = raw.withColumn("envelope", from_avro(F.expr(wire.body_expr("record_value")), schema,
+                                                   {"mode": "PERMISSIVE"}))
+        return out.withColumn("envelope", F.expr(decoded_sql(out.schema["envelope"].dataType.fieldNames())))
 
     @staticmethod
     def stage_counts(frames) -> list:
@@ -535,10 +558,9 @@ class SparkLanding(C.SparkLake):
     def unparsed(self, table: str, snapshot: int, ranges: dict, keep: str) -> tuple[int, list]:
         """How many frames of `ranges` at `snapshot` fail parses, and the first LISTED by partition
         and offset as `(partition, offset, schema id, registered, decoded)`: only the facts, never
-        the bytes. PERMISSIVE: a body that does not read decodes to null, and fails."""
+        the bytes. A body that does not read decodes to null (decoded_sql), and fails."""
         from catalog import UnresolvableSchema, fetch_schema
         from pyspark.sql import functions as F
-        from pyspark.sql.avro.functions import from_avro
 
         import wire
 
@@ -561,9 +583,7 @@ class SparkLanding(C.SparkLake):
                  .select(*cols, F.lit(False).alias("registered"), F.lit(False).alias("decoded"),
                          F.lit(False).alias("kept")))
         for sid, schema in sorted(envelopes.items()):
-            decoded = (raw.where(F.col("k2_schema_id") == sid)
-                       .withColumn("envelope", from_avro(F.expr(wire.body_expr("record_value")), schema,
-                                                         {"mode": "PERMISSIVE"})))
+            decoded = self._decoded(raw.where(F.col("k2_schema_id") == sid), schema)
             facts = facts.unionByName(decoded.select(*cols, F.lit(True).alias("registered"),
                                                      F.col("envelope").isNotNull().alias("decoded"),
                                                      F.coalesce(F.expr(keep), F.lit(False)).alias("kept")))
