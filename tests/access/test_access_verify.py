@@ -386,11 +386,11 @@ def test_the_signature_is_aws_signature_v4():
 
 class FakeS3:
     """MinIO's answers, in memory, by the access key a request is signed with: a policy per key
-    (rw, ro, wo: write but no delete, none) and, as MinIO does, the policy checked before the
+    (rw, ro, wo: write but no delete, go: GetObject alone, no list, none) and, as MinIO does, the policy checked before the
     bucket exists, so a refused key gets AccessDenied on a bucket that is not there; `ak-unknown` is a
     key MinIO does not know."""
 
-    POLICY = {"ak-rw": "rw", "ak-ro": "ro", "ak-wo": "wo", "ak-none": "none", "root-ak": "rw"}
+    POLICY = {"ak-rw": "rw", "ak-ro": "ro", "ak-wo": "wo", "ak-none": "none", "ak-go": "go", "root-ak": "rw"}
 
     def __init__(self):
         import http.server
@@ -420,8 +420,8 @@ class FakeS3:
                 if policy is None:
                     return self.answer(403, "InvalidAccessKeyId")
                 write = self.command in ("PUT", "DELETE")
-                if policy == "none" or (write and policy == "ro") or (self.command == "DELETE" and policy == "wo") \
-                        or (self.command == "GET" and policy == "wo"):
+                if policy == "none" or (write and policy in ("ro", "go")) or (self.command == "DELETE" and policy == "wo") \
+                        or (self.command == "GET" and policy == "wo") or (policy == "go" and (not key or query)):
                     return self.answer(403, "AccessDenied")
                 if bucket not in fake.buckets:
                     return self.answer(404, "NoSuchBucket")
@@ -455,7 +455,8 @@ from types import SimpleNamespace  # noqa: E402
 # Every name and secret holds a non-hex letter (k, s, n, u), so none can turn up inside a probe
 # object's hex name: "bad", the unknown key's first name, was all hex and sometimes did.
 SECRETS = {"ak-rw": "sk-rw-0123456789", "ak-ro": "sk-ro-0123456789", "ak-wo": "sk-wo-0123456789",
-           "ak-none": "sk-none-0123456789", "ak-unknown": "sk-unknown-0123456789", "root-ak": "sk-root-0123456789"}
+           "ak-none": "sk-none-0123456789", "ak-unknown": "sk-unknown-0123456789", "root-ak": "sk-root-0123456789",
+           "ak-go": "sk-go-0123456789"}
 PROBE_UUID = "6b3c0e3a-5f1e-4c2d-9a7b-1e2f3a4b5c6d"  # the write probe's name, fixed: no run differs from another
 
 
@@ -493,6 +494,13 @@ def row(engine, target, operation, expect):
     # a key MinIO does not know is a 403 too, but not AccessDenied
     ({"tools": "ak-unknown"}, row("tools", "k2-lake/warehouse/governance", "read", "refused"), False, "InvalidAccessKeyId"),
     ({"spark": "ak-rw"}, row("spark", "k2-typo", "write", "allowed"), False, "NoSuchBucket"),
+    # F11: a refused list is not a refused read: the key reads an object another key lists, or a
+    # probe another key puts there for it; a key with GetObject and no ListBucket fails.
+    ({"tools": "ak-none", "trino": "ak-ro"}, row("tools", "k2-lake/warehouse/governance", "read", "refused"), True, "listed by the trino key"),
+    ({"tools": "ak-go", "trino": "ak-ro"}, row("tools", "k2-lake/warehouse/governance", "read", "refused"), False, "HTTP 206"),
+    ({"tools": "ak-none", "spark": "ak-rw"}, row("tools", "k2-lake/warehouse/fx", "read", "refused"), True, "put by the spark key"),
+    ({"tools": "ak-go", "spark": "ak-rw"}, row("tools", "k2-lake/warehouse/fx", "read", "refused"), False, "put by the spark key"),
+    ({"tools": "ak-none", "trino": "ak-ro"}, row("tools", "k2-lake/warehouse/fx", "read", "refused"), False, "proves nothing"),
 ])
 def test_a_storage_key_row_passes_on_its_outcome_alone(s3, engines, r, passes, says, capsys):
     passed, why = av.storage_key(r, keys(s3, **engines))

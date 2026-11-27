@@ -24,7 +24,8 @@ column null in every row, no row younger than `minRowAgeMinutes` by the table's 
 row matching `mustNotAppear`, and at least `mustAppear.minRows` matching its `where`. A storage-key
 row (phase 002) sends its S3 request from this process to $K2_S3_ENDPOINT (default minio:9000, so
 it runs inside a container on the lake's network) with K2_<ENGINE>_S3_*: `refused` is 403
-AccessDenied on a bucket some key shows exists, never a connection error or a missing bucket.
+AccessDenied on a bucket some key shows exists, never a connection error or a missing bucket, and a
+refused read is refused a real object too (one another key lists, else a probe another key puts).
 A read or denial row with `rest` in its `via` (phase 003, W3-7) is held again through k2-api at
 $K2_API_URL (default http://k2-api:8095) as its principal, with its own key from
 <K2_API_KEY_DIR>/<principal>.key: a denial is 403 forbidden and nothing else, a read 200 with
@@ -268,6 +269,42 @@ def bucket_shown(endpoint: str, bucket: str, environ: Mapping[str, str], first: 
     return False, f"no key here shows bucket {bucket} exists, so a refusal proves nothing"
 
 
+def other_pairs(environ: Mapping[str, str], own: tuple[str, str]) -> dict[str, tuple[str, str]]:
+    """Every other pair here, by whose: the engines' (as bucket_shown asks them), then the root's."""
+    pairs = {e: p for e in ("spark", "trino", "maintenance", "backup", "tools")
+             if isinstance(p := key_pair(e, environ), tuple) and p != own}
+    if environ.get("MINIO_ROOT_USER") and environ.get("MINIO_ROOT_PASSWORD"):
+        pairs["root"] = (environ["MINIO_ROOT_USER"], environ["MINIO_ROOT_PASSWORD"])
+    return pairs
+
+
+def refused_get(endpoint: str, bucket: str, prefix: str, environ: Mapping[str, str],
+                own: tuple[str, str]) -> tuple[str | None, str]:
+    """The own key's read of a real object under the target, and what was done: an object another
+    key lists, else a probe another key puts there for this read alone and removes after (an empty
+    landing on a fresh lake). None and why when there is neither: a refusal of nothing proves nothing."""
+    where, others = (f"{prefix}/" if prefix else ""), other_pairs(environ, own)
+    for who, p in others.items():
+        status, _, body = s3(endpoint, p, "GET", bucket, query={"list-type": "2", "max-keys": "1", "prefix": where})
+        if 200 <= status < 300 and (first := re.search(rb"<Key>([^<]+)</Key>", body)):
+            obj, how = first.group(1).decode(), f"listed by the {who} key"
+            break
+    else:
+        obj = f"{where}{PROBE_DIR}/{uuid.uuid4().hex}"
+        who = next((w for w, p in others.items() if 200 <= s3(endpoint, p, "PUT", bucket, obj)[0] < 300), None)
+        if who is None:
+            return None, f"; no key here shows an object under s3://{bucket}/{where} or can put one, so the refusal proves nothing"
+        how = f"put by the {who} key for this read"
+    status, code, body = s3(endpoint, own, "GET", bucket, obj)
+    did = f"; reading {obj} ({how}): {answered(status, code, body)}"
+    if how.startswith("put"):  # its writer first, then maintenance and the rest, as a write row's probe goes
+        gone = next((w for w, p in {who: others[who], **others}.items() if 200 <= s3(endpoint, p, "DELETE", bucket, obj)[0] < 300), None)
+        if gone is None:
+            return None, f"{did}; left s3://{bucket}/{obj} behind: no key here removed it"
+        did += f"; removed with the {gone} key"
+    return outcome(status, code), did
+
+
 def storage_key(e: Any, environ: Mapping[str, str] = os.environ) -> tuple[bool, str]:
     """A storage-key row: the operation, signed with the engine's key, ends as the row expects."""
     pair = key_pair(e.engine, environ)
@@ -285,6 +322,14 @@ def storage_key(e: Any, environ: Mapping[str, str] = os.environ) -> tuple[bool, 
             did += f"; 1 object listed and read: {answered(status, code, body)}" if got else f"; listed, but reading {obj}: {answered(status, code, body)}"
         elif got == "allowed":
             did += "; 0 objects listed"
+        elif got == "refused" and e.expect == "refused":
+            # F11: a key with GetObject and no ListBucket is refused the list and still reads any object
+            # by its key (a landing's keys are in landing_files), so it must be refused a real object too.
+            there, shown = bucket_shown(endpoint, bucket, environ, pair)
+            if not there:
+                return False, f"{did}; {shown}"
+            got, more = refused_get(endpoint, bucket, prefix, environ, pair)
+            return got == "refused", f"{'' if got == 'refused' else 'expected refused, '}{did}; {shown}{more}"
     else:
         obj = f"{prefix}/{PROBE_DIR}/{uuid.uuid4().hex}" if prefix else f"{PROBE_DIR}/{uuid.uuid4().hex}"
         status, code, body = s3(endpoint, pair, "PUT", bucket, obj)

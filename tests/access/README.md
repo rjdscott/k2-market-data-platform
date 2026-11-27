@@ -27,7 +27,7 @@ the run time: a row naming a principal or relation the running release does not 
 | statement | `{principal, sql, session?, expect}` | the statement ends as `expect` says: `denied` is an access denial; `error` is `NOT_SUPPORTED` (a version on a view); `noBounds` is `SHOW STATS` with no low value, high value or row count; `ok` is a statement that completes without error |
 | probe | `{probe: {from, target}, expect}` | the network connection is refused or open; step S22's `scripts/verify/catalog-fence.sh` runs these |
 | drift | `{drift: catalog, expect: clean}` | the catalog holds exactly what the release generates (`scripts/verify/catalog_drift.py`) |
-| storage key | `{storageKey: {engine, target, operation}, expect}` | the engine's own `K2_<ENGINE>_S3_*` key, sent from where the suite runs to `$K2_S3_ENDPOINT`: `allowed` when every request answers 2xx; `refused` when the first answers 403 `AccessDenied` and some key shows the bucket exists (`scripts/access_verify.py`, `storage_key`) |
+| storage key | `{storageKey: {engine, target, operation}, expect}` | the engine's own `K2_<ENGINE>_S3_*` key, sent from where the suite runs to `$K2_S3_ENDPOINT`: `allowed` when every request answers 2xx; `refused` when the first answers 403 `AccessDenied` and some key shows the bucket exists; a refused `read` must also be refused a real object, one another key lists or, under an empty target, a probe another key puts there and removes after, so a key that may get objects but not list them fails (`scripts/access_verify.py`, `storage_key`) |
 
 A row passes only on the outcome it names. A syntax error, a missing table, `NOT_SUPPORTED` or a
 refused login never counts as a denial. Each of those means the row named something wrong, not
