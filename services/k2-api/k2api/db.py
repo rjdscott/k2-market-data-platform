@@ -8,10 +8,17 @@ k2-api's own reads, the tested snapshot id from a base's `t$refs`, run as svc.ap
 
 Values are always bound: the client sends `EXECUTE IMMEDIATE '<statement>' USING <values>`, each
 value a typed literal it escapes, so no value is ever part of a statement's text.
+
+Every query ends on Trino by TIMEOUT_S. The client blocks in execute() until a first row and in
+fetchmany() until the next, so a clock read between batches decides nothing for a query that
+scans long before its first row; a timer cancels the query on Trino at the deadline instead, which
+ends either wait. Any query that has not finished when run() returns, for whatever reason, is
+cancelled too: closing the connection alone leaves it running until Trino's client timeout.
 """
 
+import contextlib
 import os
-import time
+import threading
 from typing import Any
 
 import requests
@@ -40,6 +47,16 @@ class Unavailable(Exception):
     """No answer: Trino unreachable, the login refused, the TLS check failed, or the timeout."""
 
 
+CLIENT_ERRORS = (trino.exceptions.Error, trino.exceptions.HttpError, requests.RequestException, OSError)
+
+
+def cancel(cur: Any) -> None:
+    """Cancel cur's query on Trino if it has not finished (the client sends nothing for one that
+    has); a failure here is never the answer, so it is dropped."""
+    with contextlib.suppress(*CLIENT_ERRORS):
+        cur.cancel()
+
+
 def run(user: str, sql: str, params: list[Any]) -> list[list[Any]]:
     """Every row of `sql` with `params` bound, run on Trino as `user`: svc.api, or a caller
     svc.api may become. No row is kept after it returns."""
@@ -49,22 +66,30 @@ def run(user: str, sql: str, params: list[Any]) -> list[list[Any]]:
         host=os.environ.get("K2_TRINO_HOST", "trino"), port=int(os.environ.get("K2_TRINO_INTERNAL_PORT", "8443")),
         user=user, auth=trino.auth.BasicAuthentication(API_USER, password), http_scheme="https", verify=CA_FILE,
         source="k2-api", timezone="UTC", request_timeout=TIMEOUT_S, legacy_prepared_statements=False)
-    deadline = time.monotonic() + TIMEOUT_S
+    cur = conn.cursor()
+    expired = threading.Event()
+    # ponytail: one timer thread per query; Trino's query_max_execution_time as a session property
+    # is the server-side bound, once rules.json lets svc.api and the p.* it becomes set it.
+    timer = threading.Timer(TIMEOUT_S, lambda: (expired.set(), cancel(cur)))
+    timer.start()
     try:
-        cur = conn.cursor()
         cur.execute(sql, params)
         rows: list[list[Any]] = []
         while batch := cur.fetchmany(BATCH):
             rows += batch
-            if time.monotonic() > deadline:
-                cur.cancel()
-                raise Unavailable("timeout")
+        if expired.is_set():  # a cancelled query can end with no error and part of its rows
+            raise Unavailable("timeout")
         return rows
     except trino.exceptions.TrinoUserError as e:
+        if expired.is_set():
+            raise Unavailable("timeout") from None
         if e.error_name == "PERMISSION_DENIED":
             raise Denied() from None
         raise Failed(e.error_name) from None
-    except (trino.exceptions.Error, trino.exceptions.HttpError, requests.RequestException, OSError) as e:
-        raise Unavailable(type(e).__name__) from None  # the type alone: never a header or the password
+    except CLIENT_ERRORS as e:
+        # the type alone: never a header or the password
+        raise Unavailable("timeout" if expired.is_set() else type(e).__name__) from None
     finally:
+        timer.cancel()
+        cancel(cur)
         conn.close()

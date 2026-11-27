@@ -6,7 +6,10 @@
 The names: K2_<ENGINE>_S3_ACCESS_KEY and _SECRET_KEY for every policy file under
 docker/lake/minio/policies/ (the engines lake-init makes a MinIO user for), and K2_RUN_UID and
 K2_RUN_GID (os.getuid(), os.getgid()). Only a name that is missing, empty or still the value
-.env.example ships is written; an engine named by --rotate gets a new pair whatever it holds.
+.env.example ships is written, and both names of a pair that holds the root user or password (as
+the release before phase 002 shipped Trino's); an engine named by --rotate gets a new secret whatever
+it holds, under the same access key, so the next lake-init replaces that MinIO user's secret and the
+old one stops working (a new access key would leave the old user, its policy and its secret valid).
 An access key is k2-<engine>-<8 hex>, distinct from every other engine's and the root user; a
 secret is 40 characters of secrets.token_urlsafe. Before a change the file is copied to
 <file>.bak-<UTC time>, mode 600; the new file is written beside it at mode 600 and renamed over it
@@ -45,16 +48,22 @@ def values(text: str) -> dict[str, str]:
 def plan(current: dict[str, str], shipped: dict[str, str], rotate: set[str], uid: int, gid: int) -> dict[str, str]:
     """The names to write and their new values. Pure, so a test can hand it dicts."""
     unset = lambda n: current.get(n, "") in ("", shipped.get(n))  # noqa: E731
+    # A pair holding either half of the root pair is unset, both names of it: the release before
+    # phase 002 shipped Trino on the root pair, and lake-init refuses one.
+    root = {v for v in (current.get("MINIO_ROOT_USER"), current.get("MINIO_ROOT_PASSWORD")) if v}
     out = {}
     taken = {current.get("MINIO_ROOT_USER", "")} | {current.get(pair_names(e)[0], "") for e in ENGINES}
     for e in ENGINES:
         ak, sk = pair_names(e)
-        if e in rotate or unset(ak):
+        on_root = bool(root & {current.get(ak), current.get(sk)})
+        # A rotation keeps the access key: lake-init's `mc admin user add` then sets that user's
+        # secret, so the old one stops working. A new key would leave the old user and policy valid.
+        if on_root or unset(ak):
             while (key := f"k2-{e}-{secrets.token_hex(4)}") in taken:
                 pass
             taken.add(key)
             out[ak] = key
-        if e in rotate or unset(sk):
+        if on_root or e in rotate or unset(sk):
             out[sk] = secrets.token_urlsafe(30)  # 40 characters
     for name, value in (("K2_RUN_UID", uid), ("K2_RUN_GID", gid)):
         if unset(name):
@@ -88,7 +97,7 @@ def write_600(path: Path, data: str) -> None:
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--env-file", default=str(ROOT / ".env"))
-    ap.add_argument("--rotate", default="", help="engines whose pair is replaced, comma-separated")
+    ap.add_argument("--rotate", default="", help="engines whose secret is replaced, comma-separated")
     a = ap.parse_args(argv)
     path = Path(a.env_file)
     rotate = {e.strip().lower() for e in a.rotate.split(",") if e.strip()}

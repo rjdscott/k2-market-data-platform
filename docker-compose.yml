@@ -1459,13 +1459,10 @@ services:
     networks:
       - k2-net
       - k2-catalog
-    # Two read-only storage keys: its own, and the backup's for the backup that runs here (W1-22;
-    # until then scripts/backup-lake.sh runs from the host on the root pair it reads from .env).
+    # No storage key: nothing a `compose run tools` step runs reads one. scripts/backup-lake.sh
+    # passes the backup's to its own `docker run -e`, and a step that needs a key passes it by
+    # name for that run alone, so swap, pointers and k2site never hold one.
     environment:
-      K2_TOOLS_S3_ACCESS_KEY: ${K2_TOOLS_S3_ACCESS_KEY:?set K2_TOOLS_S3_ACCESS_KEY in .env (make engine-keys)}
-      K2_TOOLS_S3_SECRET_KEY: ${K2_TOOLS_S3_SECRET_KEY:?set K2_TOOLS_S3_SECRET_KEY in .env (make engine-keys)}
-      K2_BACKUP_S3_ACCESS_KEY: ${K2_BACKUP_S3_ACCESS_KEY:?set K2_BACKUP_S3_ACCESS_KEY in .env (make engine-keys)}
-      K2_BACKUP_S3_SECRET_KEY: ${K2_BACKUP_S3_SECRET_KEY:?set K2_BACKUP_S3_SECRET_KEY in .env (make engine-keys)}
       # The catalog site's run-time facts, read as svc.catalog (platform/catalog-site/k2site.py).
       K2_TRINO_HOST: trino
       K2_TRINO_INTERNAL_PORT: "8443"

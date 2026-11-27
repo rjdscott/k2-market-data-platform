@@ -27,6 +27,10 @@
 #   release canary's (deploy's, S19, at canary/<canary>.password) and each extra user's (a stranger
 #   no document declares). Writes <state>/env.json for the tools side by scripts/lib/lake_env.py,
 #   which its readers read it with: Trino's URL by name, the CA, and each user's password file.
+#   When the release has Spark DDL (compiled/lake/ddl/spark/: the connector products' bronze,
+#   landing_files and audit_checks in warehouse k2), the Spark image of the compose pin makes those
+#   tables while Trino starts, through docker/lake/spark_conf.py on Spark's own pair, one JVM for
+#   all of them, a table already there left as it is: every caller gets the lake a deploy leaves.
 # py: runs a Python script with k2gen importable, in the tools container when the lake is up, else
 #   in a one-off container of the same image; <state> is /work. Of the repository, only SRC (the
 #   scripts, k2gen and what it reads, the access suite) is mounted, read-only, at /src/<path>:
@@ -118,6 +122,34 @@ init() {
   set -a; . "$STATE/secrets/s3.env"; set +a
   lake_init
   say "init: docker/lake/init-lake.sh ran again ($STATE/lake-init.log)"
+}
+
+spark_ddl() {  # the release's Spark tables (warehouse k2), as deploy's ddl step makes them: by Spark on its own key
+  local n; n=$(find "$STATE/releases/pointers/trino/compiled/lake/ddl/spark/" -name '*.sql' 2>/dev/null | wc -l)
+  [ "$n" -gt 0 ] || return 0
+  say "spark-ddl: $n table(s) of warehouse k2, by Spark on its own key"
+  docker run --rm -i --label "$LABEL" --network "$NET" --memory 1536m --cpus 1 --name "$P-spark" \
+    -e K2_SPARK_S3_ACCESS_KEY -e K2_SPARK_S3_SECRET_KEY -v "$REPO/docker/lake:/home/iceberg/lake:ro" \
+    -v "$STATE/releases:/k2/releases:ro" --entrypoint python3 "$(image 'k2-spark-iceberg:')" - \
+    >> "$STATE/spark-ddl.log" 2>&1 <<'PY' || { tail -n 15 "$STATE/spark-ddl.log" >&2; die "spark-ddl failed ($STATE/spark-ddl.log)"; }
+import re, sys
+from pathlib import Path
+sys.path.insert(0, "/home/iceberg/lake")
+from spark_conf import lake_session  # the lake's one session builder, on K2_SPARK_S3_*
+spark = lake_session("throwaway-spark-ddl", driver_memory="512m")
+made = 0
+for f in sorted(Path("/k2/releases/pointers/trino/compiled/lake/ddl/spark").glob("*.sql")):
+    _, ns, table = f.stem.split(".")  # <warehouse>.<namespace>.<table>, model.ddl_path
+    spark.sql(f"CREATE NAMESPACE IF NOT EXISTS lake.{ns}")
+    if table in {r.tableName for r in spark.sql(f"SHOW TABLES IN lake.{ns}").collect()}:
+        continue  # idempotent: a rerun on the same lake makes nothing twice
+    for statement in re.split(r";\s*$", f.read_text(), flags=re.M):
+        if statement.strip():
+            spark.sql(statement)
+    made += 1
+print(f"spark-ddl: {made} table(s) made")
+spark.stop()
+PY
 }
 
 py() {
@@ -281,6 +313,7 @@ PY
     -e K2_TRINO_SHARED_SECRET -e K2_TRINO_S3_ACCESS_KEY -e K2_TRINO_S3_SECRET_KEY \
     "$trino_image" /usr/lib/trino/bin/launcher run --etc-dir "$POINTER_ETC" >/dev/null
   local t0=$SECONDS
+  spark_ddl  # while Trino starts: the two JVMs' starts overlap
   until docker exec "${TOOLS_ENV[@]}" "$TOOLS" python3 -c "
 import json, ssl, urllib.request
 ctx = ssl.create_default_context(cafile='/work/secrets/k2/tls/ca.pem')

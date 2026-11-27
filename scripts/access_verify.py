@@ -47,9 +47,10 @@ Where the endpoint and each principal's password come from:
   file fails its row.
 
 stage (throwaway lake only) makes the lake the release describes, as its build and deploy would:
-every namespace of the storage plan by REST; each dbt or code product's seeds and models, built as
-its builder through `<domain>_build` (only ref() and config() are rendered; anything else is
-refused, being dbt-runner's work in phase 002); one tag commit per warehouse; each view as its
+every namespace of the storage plan by REST; Spark's tables checked present (the lake made them);
+each dbt or code product's seeds and models, built as its builder through `<domain>_build` (only
+ref() and config() are rendered; a model with any other Jinja is dbt's, and its output is made in
+its contract's shape with one placeholder row, refused if a read row reads it); one tag commit per warehouse; each view as its
 publisher (lake.create_view); then one untested write per output, every row again with its key
 moved (+1000 or a zz-untested- prefix), which no reader may ever see; and the platform's Trino DDL
 as svc.platform.
@@ -306,10 +307,13 @@ def load(release: Path) -> Any:
 
 def relations(m: Any) -> dict[str, Any]:
     """Every relation the release declares, reader names, bases and their names through the
-    writer catalog alike, to its table (a seed's to None)."""
+    writer catalog alike, to its table (a seed's and a connector's platform tables to None)."""
     from k2gen import model
     out: dict[str, Any] = {}
     for p in m.products:
+        if p.connector:  # its landing and audit tables in warehouse k2 (emit/lake.py), as checks/access names the landing
+            for name in (model.KAFKA_LANDING if p.connector.kind == "kafka" else model.LANDING_FILES, model.AUDIT_CHECKS):
+                out[model.lake_relation(p.name, name)] = None
         for t in p.tables:
             if t.build.kind in model.LAKE_BUILDS:
                 out[model.reader_relation(t)] = t
@@ -581,8 +585,11 @@ def stage(release: Path, env_file: Path) -> int:
     m = load(release)
     trino, env = connect(env_file)
     uri = f"{env['lakekeeper']}/catalog"
-    if list((release / "compiled/lake/ddl/spark").glob("*.sql")) if (release / "compiled/lake/ddl/spark").exists() else []:
-        raise SystemExit("stage: this release has Spark tables (warehouse k2); stage builds none, Spark does (phase 002)")
+    # Spark's tables (warehouse k2) are made by Spark when the lake comes up (throwaway-lake.sh spark_ddl), as deploy's ddl step makes them.
+    spark = [f.stem.split(".") for f in sorted((release / "compiled/lake/ddl/spark").glob("*.sql"))]
+    if missing := [".".join(s) for s in spark if catalog_drift.Catalog(uri, s[0]).table(s[1], s[2]) is None]:
+        raise SystemExit(f"stage: the release's Spark tables {missing} are not in the catalog; scripts/lib/throwaway-lake.sh up makes them")
+    reads = {e.table for e in m.expectations if isinstance(e, model.TableExpectation)}
     for w in json.loads((release / model.STORAGE_PLAN).read_text())["warehouses"]:
         cat = catalog_drift.Catalog(uri, w["name"])
         for ns in w["namespaces"]:
@@ -610,7 +617,14 @@ def stage(release: Path, env_file: Path) -> int:
             refs = {name: model.quote_relation(model.build_relation(p.domain, p.name, table)) for name, table in names.items()}
             sql = _REF.sub(lambda r, refs=refs: refs[r.group(1)], sql)
             if "{{" in sql or "{%" in sql:
-                raise SystemExit(f"stage: {p.id} {t.name}: Jinja beyond ref() and config(); dbt-runner builds it (phase 002)")
+                # Jinja beyond ref() and config() (source(), a K2 macro, is_incremental()) is dbt's to render
+                # (make test-dbt builds every model): here the output is its contract's columns with one row,
+                # its key a literal and the rest null, enough for the rows that deny it, the drift check and
+                # the marker. A read row needs the model's own rows, so one is refused.
+                if {model.reader_relation(t), model.input_relation(t)} & reads:
+                    raise SystemExit(f"stage: {p.id} {t.name}: a read row reads it, and only dbt renders its model")
+                sql = "SELECT " + ", ".join(f"CAST({placeholder(c) if c is key_column(t) else 'NULL'} AS {c.physical_type}) "
+                                            f"AS {model.quote_ident(c.name)}" for c in t.columns)
             rel = model.build_relation(p.domain, p.name, t.name)
             trino.ok(dbt, f"CREATE TABLE {model.quote_relation(rel)} AS {sql}")
             meta = cat.table(model.base_namespace(p.name), t.name)
@@ -639,13 +653,25 @@ def stage(release: Path, env_file: Path) -> int:
     return 0
 
 
+def key_column(t: Any) -> Any:
+    """t's primary key's first column, else its first column."""
+    return min((c for c in t.columns if c.primary_key_position), key=lambda c: c.primary_key_position, default=t.columns[0])
+
+
+def placeholder(c: Any) -> str:
+    """A literal of c's type for a stand-in output's one row (stage): what moved_key can move."""
+    return ("1" if c.physical_type in ("bigint", "integer") else "DATE '2000-01-01'" if c.physical_type == "date"
+            else "'stage'")
+
+
 def moved_key(t: Any, by: int = 1000) -> str:
     """Every column of t, its primary key's first column moved so that no row of the result is a
-    tested one: an integer key plus `by`, any other key prefixed zz-untested-."""
+    tested one: an integer key plus `by`, a date key `by` years on, any other key prefixed zz-untested-."""
     from k2gen.model import quote_ident
-    key = min((c for c in t.columns if c.primary_key_position), key=lambda c: c.primary_key_position, default=t.columns[0])
-    moved = (f"{quote_ident(key.name)} + {by}" if key.physical_type in ("bigint", "integer")
-             else f"'zz-untested-' || CAST({quote_ident(key.name)} AS varchar)")
+    key = key_column(t)
+    q = quote_ident(key.name)
+    moved = (f"{q} + {by}" if key.physical_type in ("bigint", "integer") else f"date_add('year', {by}, {q})"
+             if key.physical_type == "date" else f"'zz-untested-' || CAST({q} AS varchar)")
     return ", ".join(f"{moved} AS {quote_ident(c.name)}" if c is key else quote_ident(c.name) for c in t.columns)
 
 

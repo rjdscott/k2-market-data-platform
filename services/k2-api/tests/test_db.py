@@ -1,6 +1,8 @@
 """db.run, the one Trino client, against a stand-in for trino.dbapi.connect: the login is svc.api's
 password, the session user is the one asked for, values are bound, errors are classified."""
 
+import threading
+import time
 from pathlib import Path
 from typing import Any
 
@@ -20,14 +22,25 @@ class Cursor:
 
     def execute(self, sql: str, params: list[Any]) -> None:
         self.conn.executed.append((sql, params))
+        if self.conn.slow:  # the real client blocks here until a first row, the end or a cancel
+            self.conn.cancel_seen.wait(5)
+            raise trino.exceptions.TrinoUserError({"errorName": "USER_CANCELED", "errorType": "USER_ERROR"}, "q1")
         if self.conn.error:
             raise self.conn.error
 
     def fetchmany(self, size: int) -> list[list[Any]]:
+        if self.conn.fetch_error:
+            raise self.conn.fetch_error
+        if not self.conn.batches:
+            self.conn.finished = True
         return self.conn.batches.pop(0) if self.conn.batches else []
 
     def cancel(self) -> None:
-        self.conn.cancelled = True
+        if self.conn.cancel_error:
+            raise self.conn.cancel_error
+        if not self.conn.finished:  # as the client: a finished query has no next URI to DELETE
+            self.conn.cancelled = True
+            self.conn.cancel_seen.set()
 
 
 class Conn:
@@ -35,6 +48,9 @@ class Conn:
         self.kwargs, self.executed, self.closed, self.cancelled = kwargs, [], False, False
         self.batches: list[list[list[Any]]] = [[[1]], [[2]]]
         self.error: Exception | None = None
+        self.fetch_error: Exception | None = None
+        self.cancel_error: Exception | None = None
+        self.slow, self.finished, self.cancel_seen = False, False, threading.Event()
 
     def cursor(self) -> Cursor:
         return Cursor(self)
@@ -65,7 +81,7 @@ def test_a_query_logs_in_as_svc_api_and_runs_as_the_user_asked(conn: Conn) -> No
                            "verify": "/run/k2-secrets/tls/ca.pem", "source": "k2-api", "timezone": "UTC",
                            "request_timeout": db.TIMEOUT_S, "legacy_prepared_statements": False}
     assert conn.executed == [('SELECT "a" FROM "x"."y"."z" WHERE "a" = ? LIMIT 2', ["it's"])]  # bound, as given
-    assert conn.closed
+    assert conn.closed and not conn.cancelled
 
 
 def test_the_trino_address_comes_from_the_environment(conn: Conn, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -99,9 +115,29 @@ def test_errors_are_classified_and_carry_neither_password_nor_message(conn: Conn
     assert conn.closed
 
 
-def test_a_query_past_its_deadline_is_cancelled(conn: Conn, monkeypatch: pytest.MonkeyPatch) -> None:
-    clock = iter([0.0, db.TIMEOUT_S + 1.0])
-    monkeypatch.setattr(db.time, "monotonic", lambda: next(clock))
+def test_a_query_with_no_row_by_its_deadline_is_cancelled_on_trino(conn: Conn, monkeypatch: pytest.MonkeyPatch) -> None:
+    # A filter on a non-key column of a large table: execute blocks with no batch to check a clock
+    # between. The deadline cancels the query on Trino, which ends the wait.
+    monkeypatch.setattr(db, "TIMEOUT_S", 0.2)
+    conn.slow = True
+    started = time.monotonic()
+    with pytest.raises(db.Unavailable) as caught:
+        run("p.analyst-full", "SELECT 1", [])
+    assert str(caught.value) == "timeout" and conn.cancelled and conn.closed
+    assert time.monotonic() - started < 2
+
+
+def test_a_query_that_fails_midway_is_cancelled_not_left_running(conn: Conn) -> None:
+    # Closing the connection alone does not cancel (the client only closes its HTTP session), so a
+    # read timeout would leave the query running on Trino until its client timeout.
+    conn.fetch_error = requests.exceptions.ReadTimeout("read timed out")
     with pytest.raises(db.Unavailable):
         run("p.analyst-full", "SELECT 1", [])
     assert conn.cancelled and conn.closed
+
+
+def test_a_cancel_that_fails_does_not_hide_the_answer(conn: Conn) -> None:
+    conn.error, conn.cancel_error = user_error("PERMISSION_DENIED"), trino.exceptions.TrinoConnectionError("gone")
+    with pytest.raises(db.Denied):
+        run("p.analyst-full", "SELECT 1", [])
+    assert conn.closed

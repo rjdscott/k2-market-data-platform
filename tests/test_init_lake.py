@@ -238,6 +238,22 @@ def test_a_rerun_makes_the_same_users_and_attaches_nothing_twice(tmp_path: Path)
     assert not [c for c in calls if c["tool"] == "mc" and c["argv"][:3] == ["admin", "policy", "attach"]]
 
 
+def test_a_rotated_secret_replaces_the_users_secret_and_makes_no_user(tmp_path: Path) -> None:
+    # `make engine-keys ROTATE=trino` keeps the access key and replaces the secret; the rerun must
+    # hand MinIO the new secret for the same user (mc admin user add sets it), so the old one dies.
+    done, _, first = run(tmp_path, PLAN.read_text())
+    assert done.returncode == 0, done.stderr
+    done, calls, second = run(tmp_path, PLAN.read_text(), env=keys(K2_TRINO_S3_SECRET_KEY="trino-rotated-0123456789"),
+                              fresh=False)
+    assert done.returncode == 0, done.stderr
+    assert sorted(second["users"]) == sorted(first["users"])
+    assert second["users"]["k2-trino-key"] == {**first["users"]["k2-trino-key"], "secret": "trino-rotated-0123456789"}
+    assert {u: v for u, v in second["users"].items() if u != "k2-trino-key"} == \
+        {u: v for u, v in first["users"].items() if u != "k2-trino-key"}
+    assert [c["stdin"] for c in calls if c["argv"][:5] == ["admin", "user", "add", "k2", "k2-trino-key"]] == \
+        ["trino-rotated-0123456789\n"]
+
+
 def test_a_user_holding_another_policy_is_refused(tmp_path: Path) -> None:
     done, _, _ = run(tmp_path, PLAN.read_text())
     assert done.returncode == 0, done.stderr
