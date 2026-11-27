@@ -34,6 +34,12 @@ pipeline runs yet; the run spine (phase 002) brings the first.
 - Products are defined once in ODPS and ODCS documents (ADR-055, superseding ADR-032's
   descriptor format in part) and connectors land verbatim before bronze is published
   (ADR-036, revised).
+- Owner's rulings of 2026-11-27: Airflow, Spark and Prometheus mount the releases root now and
+  read their DAGs, scripts and rules through a pointer from phase 002; Trino keeps the MinIO
+  root pair until phase 002's scoped keys; the compose project keeps its live name, given to
+  deploy by `K2_COMPOSE_PROJECT`; folding the review's extra rows into the main rules suite
+  waits for the hardening sprint; a fresh install of the release-shaped stack on an empty
+  host is not yet proven.
 - The decisions taken under the owner's delegation, and the owner's two rulings on FX content
   and landing retention, are listed in `docs/research/2026-11-26-decisions-addendum.md`.
 

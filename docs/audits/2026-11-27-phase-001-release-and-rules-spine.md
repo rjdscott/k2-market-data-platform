@@ -141,6 +141,23 @@ to the auditor by this session's permission policy, and was not worked around.
 
 Counts: 0 BLOCKER · 6 HIGH · 5 MED · 8 LOW.
 
+## Resolutions
+
+Appended after the audit; the findings above stand as written.
+
+- Finding 1: Resolved in `b20b1af`. The image is the project's unmodified mirror `ghcr.io/rjdscott/minio`, pinned by tag and digest; a throwaway lake started from it (`ONLY="access-verify" bash scripts/verify/spine-e2e.sh`, PASS in 29 s, 2026-11-27). Replacing MinIO is left to the hardening sprint.
+- Finding 2: Resolved in `91b4513`. A deploy dumps a database before a one-shot migrates it and refuses when the dump fails; the restore is section 5 of `docs/runbooks/roll-back-a-release.md`. The dump's place moved out of the releases root in `fbe20fa`.
+- Finding 3: Resolved in `91b4513`. With Trino down a rollback moves the pointers and recreates first, then narrows the views; both orders are tested and the rehearsal stops Trino before one rollback.
+- Finding 4: Resolved in `91b4513`. Preflight refuses when an image the good release pins is gone, and `make release-status` prints the same check.
+- Finding 5: Not fixed, stated. `docs/adr/ADR-059-access-rules-compiled-default-deny-over-two-catalogs-per-domain.md`, Outcome of 2026-11-27 (`9fdeb80`): the two services that hold the Docker socket are inside the catalog's trust boundary; a read-only socket proxy for cAdvisor is a hardening item.
+- Finding 6: Resolved in `c35ef39` and `91b4513`. A test holds `docker-compose.yml` to the allow-list on every pull request; `scripts/verify/catalog-fence.sh` checks the running stack's structure and probes, and every `release-verify` runs it. On the live stack, 2026-11-27 00:33 UTC: `catalog-fence: 6 PASS, 0 FAIL`.
+- Finding 7: Resolved in `21929fd` and `6aafd73` (the golden and the test), and finding 1's commit for the Trino job.
+- Finding 8: Resolved in `4d2673a`. `make spine-e2e` on the merged branch, 2026-11-27: `PASS test-access 114s`, all five stages PASS in 1995 s.
+- Findings 9 and 11: Resolved in `ab77577`.
+- Finding 10: Open, for the hardening sprint.
+- Finding 16: Resolved in the commit that adds this section.
+- Finding 18: Resolved in the commit that adds this section (`CHANGELOG.md`, 3.0.0-alpha.3, Decided).
+
 ## Not checked
 
 - Anything that deploys, rolls back, or logs in to the live Trino as a principal (see the sample's

@@ -136,7 +136,7 @@ one-shot, and a reader resolves its pointer once per run.
 ## The deploy
 
 `make deploy RELEASE=<id or tag>` is one sequence, each step idempotent and recorded as one line of
-`deploy-log.jsonl` (who, what, from where, and each secret file by sha256 only). A lock on the root
+`deploy-log.jsonl` (who, what, from where, and each secret file by presence, mode and size, never by content or digest). A lock on the root
 refuses a second deploy at once.
 
 ```mermaid
