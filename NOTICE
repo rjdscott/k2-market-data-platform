@@ -32,6 +32,16 @@ ClickHouse schema test (scripts/clickhouse-schema-test.sh):
   tests/clickhouse/trades_block1.jsonl
   tests/clickhouse/trades_block2.jsonl
 
+Hand-written synthetic rows, invented symbols and values, for the dbt
+patterns proof (scripts/verify/dbt-patterns.sh):
+
+  platform/k2gen/tests/fixtures/dbt-patterns/pattern-lab/seeds/listing.csv
+  platform/k2gen/tests/fixtures/dbt-patterns/pattern-lab/seeds/symbols.csv
+  platform/k2gen/tests/fixtures/dbt-patterns/pattern-lab/seeds/trades.csv
+  platform/k2gen/tests/fixtures/dbt-patterns/second/seeds/listing.csv
+  platform/k2gen/tests/fixtures/dbt-patterns/second/seeds/symbols.csv
+  platform/k2gen/tests/fixtures/dbt-patterns/second/seeds/trades.csv
+
 The platform's own measurements, no venue data: recovery times written by
 `make chaos` (scripts/chaos/):
 
