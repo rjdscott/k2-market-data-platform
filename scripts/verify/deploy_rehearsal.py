@@ -82,7 +82,7 @@ RESULTS: list[tuple[str, bool, str]] = []
 CODE = ("platform/k2gen/k2gen", "platform/k2gen/pyproject.toml", "platform/k2gen/uv.lock", "platform/runs",
         "contracts", "dbt", "docker/tools", "scripts/deploy.py", "scripts/principal-secret.py",
         "scripts/tls.sh", "scripts/check-env.py", "scripts/backup-lake.sh", "scripts/lib", "scripts/access_verify.py", "scripts/verify", "tests/access", "mk",
-        "docker/lake", "scripts/engine-keys.py", ".env.example")  # lake-init's script and policies; make engine-keys and the placeholders it replaces
+        "docker/lake", "scripts/engine-keys.py", ".env.example", "docker/spark")  # lake-init's script and policies; make engine-keys and the placeholders it replaces; Spark's image
 
 COMPOSE = """\
 # The rehearsal's compose file, release-shaped (scripts/verify/deploy_rehearsal.py): what S22 makes live.
@@ -173,6 +173,20 @@ services:
     volumes: [*releases-ro]
     restart: unless-stopped
     deploy: {resources: {limits: {cpus: '0.1', memory: 32M}}}
+  spark-iceberg:  # warehouse k2's writer: deploy's ddl step runs spark-sql in it, as on the live stack
+    build: {context: ., dockerfile: docker/spark/Dockerfile}  # make release builds it from the tag, as live (layer cache: no COPY)
+    image: SPARK_IMAGE
+    command: ["sleep", "infinity"]  # no History Server here: the drivers deploy starts by docker exec are the point
+    environment:
+      K2_SPARK_S3_ACCESS_KEY: "${K2_SPARK_S3_ACCESS_KEY:?make engine-keys}"
+      K2_SPARK_S3_SECRET_KEY: "${K2_SPARK_S3_SECRET_KEY:?make engine-keys}"
+      AWS_ACCESS_KEY_ID: "${K2_SPARK_S3_ACCESS_KEY:?make engine-keys}"  # deploy's spark-sql takes S3FileIO's default chain
+      AWS_SECRET_ACCESS_KEY: "${K2_SPARK_S3_SECRET_KEY:?make engine-keys}"
+      AWS_REGION: us-east-1
+    networks: [k2-net, k2-catalog]
+    volumes: [*releases-ro]
+    restart: unless-stopped
+    deploy: {resources: {limits: {cpus: '1.0', memory: 1536M}}}  # scripts/verify/storage-keys.sh's Spark limits
   capture-binance:  # a stand-in capture: deploy and the cutover must never restart it
     image: alpine@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc
     command: ["sleep", "infinity"]
@@ -195,6 +209,7 @@ configs:
 """
 ALPINE_A = "alpine@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc"  # alpine:3.20, local
 ALPINE_B = "alpine:3"  # pinned by make release to its local digest; another image id than A
+SPARK = re.search(r"image: *(k2-spark-iceberg:\S+)", (REPO / "docker-compose.yml").read_text())[1]  # type: ignore[index]  # the stack's pin
 
 
 def sh(*argv: str, check: bool = True, env: dict[str, str] | None = None, cwd: Path | None = None,
@@ -306,8 +321,7 @@ def real_secrets() -> None:
     """The CA and Trino's certificate by scripts/tls.sh; each service principal's password by
     `make password TO_FILE=1`; the canary's people by principal-secret.py's own locked write."""
     sh("bash", str(CLONE / "scripts/tls.sh"), "init", env=env())
-    doc = (CLONE / "contracts/access/principals.yaml").read_text()
-    ids = re.findall(r"^  - id: (\S+)$", doc, re.M)
+    ids = sorted(ps.known()[0])  # principal-secret.py's own: the declared ones, and each dbt product's builder and publisher
     for pid in ids:
         if pid.startswith("p."):
             secret = secrets.token_urlsafe(32)
@@ -332,28 +346,6 @@ def dotenv() -> None:
     make("engine-keys")
     ek = _load("engine_keys", CLONE / "scripts/engine-keys.py")
     DOTENV.update({n: v for n, v in ek.values((CLONE / ".env").read_text()).items() if n not in DOTENV})
-
-
-# Today's lake for deploy_cutover.py alone (bucket lake, root credential): the release-shaped chain runs the real
-# lake-init instead (lake_setup).
-LAKE_SETUP = '''
-import json, os, sys, urllib.request
-def call(m, u, b=None):
-    r = urllib.request.Request(u, data=None if b is None else json.dumps(b).encode(), method=m, headers={"Content-Type": "application/json"})
-    try:
-        with urllib.request.urlopen(r, timeout=30) as x: return x.status
-    except urllib.error.HTTPError as e: return e.code
-lk = sys.argv[1]
-print("bootstrap", call("POST", f"{lk}/management/v1/bootstrap", {"accept-terms-of-use": True}))
-for w in sys.argv[2:]:
-    body = {"warehouse-name": w, "project-id": "00000000-0000-0000-0000-000000000000",
-            "storage-profile": {"type": "s3", "bucket": "lake", "key-prefix": w, "endpoint": "http://minio:9000",
-                                "region": "local-01", "path-style-access": True, "flavor": "s3-compat", "sts-enabled": False,
-                                "remote-signing-enabled": False},
-            "storage-credential": {"type": "s3", "credential-type": "access-key",
-                                   "aws-access-key-id": os.environ["MINIO_ROOT_USER"], "aws-secret-access-key": os.environ["MINIO_ROOT_PASSWORD"]}}
-    print("warehouse", w, call("POST", f"{lk}/management/v1/warehouse", body))
-'''
 
 
 def lake_setup(release: str, network: str) -> None:
@@ -463,14 +455,14 @@ def emitters(old: bool) -> None:
 
 
 def rehearse() -> int:
-    scratch_repo(COMPOSE.replace("STANDIN_IMAGE", ALPINE_A))
+    scratch_repo(COMPOSE.replace("STANDIN_IMAGE", ALPINE_A).replace("SPARK_IMAGE", SPARK))
     emitters(old=True)
     dotenv()
     real_secrets()
     t0 = time.monotonic()
     r1 = cut("v0.0.1-rehearsal.1", "R1: the repository's own documents, the reader view in its old shape")
     check("make release compiles R1 at a scratch tag", (ROOT / r1 / "manifest.json").is_file(), f"{r1} in {time.monotonic() - t0:.0f} s")
-    compose("up", "-d", "--wait", "prefect-db", "minio", "lakekeeper", "capture-binance")  # running already, as live
+    compose("up", "-d", "--wait", "prefect-db", "minio", "lakekeeper", "spark-iceberg", "capture-binance")  # running already, as live
     lake_setup(r1, f"{PROJECT}_k2-catalog")
     capture = started()["capture-binance"]
 
