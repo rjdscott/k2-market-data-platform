@@ -34,9 +34,9 @@ release-diff:  ## RELEASE=<id> [FROM=<id>]: k2gen diff from FROM (default: the g
 	@$(DEPLOY) diff "$$RELEASE" $${FROM:+--from "$$FROM"}
 
 .PHONY: deploy-rehearsal
-deploy-rehearsal:  ## [KEEP=1] [CUTOVER=1] Every deploy claim on a throwaway compose project k2-rehearsal under your home directory, never the live stack: the release-time and live suites, a failing first deploy, rules-only, one image, the view shape crossing, forced mismatch, rollback, a dropped masked column polled, a kill after each step, two at once, M4 (about 25 min); CUTOVER=1: the one-time cutover from today's shape, and back
+deploy-rehearsal:  ## [KEEP=1] [CUTOVER=1] [FAST=1] Every deploy claim on a throwaway compose project k2-rehearsal under your home directory, never the live stack: the release-time and live suites, a failing first deploy, rules-only, one image, the view shape crossing, forced mismatch, rollback, a dropped masked column polled, a kill after each step, two at once, M4 (about 25 min); CUTOVER=1: the one-time cutover from today's shape, and back; FAST=1: for merge points, sections 1 to 3 and kills after swap and recreate only, the skipped ones named in its summary (about 7 min)
 	@uv run --project platform/k2gen --locked -q --with bcrypt==5.0.0 python scripts/verify/deploy_rehearsal.py
 
 .PHONY: spine-e2e
-spine-e2e:  ## [KEEP=1] The release and rules spine end to end from a scratch clone of the current tree: a release, access-verify, test-access, the rules suite with C1 and identity on one lake, the deploy rehearsal; one line per stage (scripts/verify/spine-e2e.sh)
+spine-e2e:  ## [KEEP=1] [FULL=1] The release and rules spine end to end from a scratch clone of the current tree: a release, access-verify, test-access, the rules suite with C1 and identity on one lake, the deploy rehearsal (FAST=1 unless FULL=1, which runs before a tag); one line per stage (scripts/verify/spine-e2e.sh)
 	@bash scripts/verify/spine-e2e.sh
