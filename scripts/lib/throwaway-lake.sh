@@ -167,14 +167,15 @@ api_up() {  # k2-api, when a REST row needs it (the key step above made api/keys
   docker build -q --load -f "$REPO/services/k2-api/Dockerfile" -t "$API_IMAGE" "$REPO" >> "$STATE/k2-api-build.log" 2>&1 \
     || { tail -n 15 "$STATE/k2-api-build.log" >&2; die "k2-api's image did not build ($STATE/k2-api-build.log)"; }
   # docker-compose.yml's service k2-api, flag for flag: the host user with group 0, a read-only root, a
-  # 16 MB /tmp, no capability, no new privileges, its two variables, its four read-only mounts and an
-  # empty k2-site; no host port.
+  # 16 MB /tmp, no capability, no new privileges, its two variables and its four read-only mounts; no
+  # host port. The k2-site volume is the image's own empty /srv/k2-site under the read-only root, as a
+  # fresh volume mounted read-only is (Docker refuses an anonymous volume read-only).
   docker run -d --label "$LABEL" --network "$NET" --network-alias k2-api --name "$P-k2-api" --user "$(id -u):0" \
     --read-only --tmpfs /tmp:rw,noexec,nosuid,size=16m --cap-drop ALL --security-opt no-new-privileges:true \
     --cpus 0.5 --memory 512m -e K2_TRINO_HOST=trino -e K2_TRINO_INTERNAL_PORT=8443 \
     -v "$STATE/releases:/k2/releases:ro" -v "$k/api:/run/k2-secrets/api:ro" \
     -v "$k/principals/svc.api.password:/run/k2-secrets/api.password:ro" -v "$k/tls/ca.pem:/run/k2-secrets/tls/ca.pem:ro" \
-    --mount type=volume,target=/srv/k2-site,readonly "$API_IMAGE" >/dev/null
+    "$API_IMAGE" >/dev/null
   local t0=$SECONDS
   until docker exec "${TOOLS_ENV[@]}" "$TOOLS" python3 -c "
 import urllib.request; urllib.request.urlopen('http://k2-api:8095/healthz', timeout=3)" 2>/dev/null; do

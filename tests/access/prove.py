@@ -164,7 +164,8 @@ def live() -> int:
 def rest() -> int:
     """The REST legs (W3-7) beyond their PASS lines: each run again, then what Trino saw of k2-api
     (svc.api's password login, the caller as session user, values bound by EXECUTE IMMEDIATE, `$refs`
-    read as svc.api), a refused impersonation's error, and every leg failing on a key k2-api does not know."""
+    read as svc.api), a refused impersonation's error, an output whose tag is gone answering an allowed
+    reader 404 not_published, and every leg failing on a key k2-api does not know."""
     rows = [e for e in M.expectations if "rest" in getattr(e, "via", ())]
     if not rows:
         say("rest: no row runs via rest, so k2-api is not on this lake; nothing to prove")
@@ -182,6 +183,33 @@ def rest() -> int:
     builder = model.builder(P.name)
     refused = TRINO.run("svc.api", "SELECT 1", as_user=builder)
     say(f"rest: svc.api logged in as itself, run as {builder} by X-Trino-User: {refused.says()}")
+    untagged = True
+    if (r := next((e for e in rows if isinstance(e, model.TableExpectation)), None)) is not None:
+        # An output never tested: its base's tag removed by REST, then put back. An allowed reader
+        # gets Trino's own error over SQL, and k2-api answers 404 not_published (neither 403 nor 503).
+        t = av.relations(M)[r.table]
+        p = next(p for p in M.products if t in p.tables)
+        cat, ns = cd.Catalog(f"{ENV['lakekeeper']}/catalog", model.warehouse(p.domain)), model.base_namespace(p.name)
+        tag = cat.table(ns, t.name)["refs"][model.AUDITED_TAG]["snapshot-id"]
+
+        def move(updates: list[dict[str, Any]], at: int | None) -> None:
+            st, doc = cd.call("POST", f"{cat.base}/namespaces/{ns}/tables/{t.name}", {"updates": updates, "requirements": [
+                {"type": "assert-ref-snapshot-id", "ref": model.AUDITED_TAG, "snapshot-id": at}]})
+            assert st == 200, f"tag of {ns}.{t.name}: HTTP {st} {doc}"
+
+        move([{"action": "remove-snapshot-ref", "ref-name": model.AUDITED_TAG}], tag)
+        try:
+            sql = TRINO.run(r.principal, f"SELECT * FROM {quote_relation(r.table)} LIMIT 0")
+            denied = next((e.principal for e in M.expectations if isinstance(e, model.DeniedExpectation) and e.table == r.table), None)
+            other = TRINO.run(denied, f"SELECT * FROM {quote_relation(r.table)} LIMIT 0") if denied else None
+            status, body = av.api_get((os.environ.get("K2_API_URL") or av.API_URL) + av.route(RELEASE, r.table)[0],
+                                      av.api_key(ENV, r.principal) or "", {"limit": "1"})
+        finally:
+            move([{"action": "set-snapshot-ref", "ref-name": model.AUDITED_TAG, "type": "tag", "snapshot-id": tag}], None)
+        say(f"rest: {ns}.{t.name} without its {model.AUDITED_TAG} tag: {r.principal} over SQL gets {sql.error}: "
+            f"{sql.message[:200]}; through k2-api: HTTP {status} {body.get('error')}"
+            + (f"; {denied}, denied it, over SQL gets {other.error}: {other.message[:200]}" if other else ""))
+        untagged = sql.error is not None and (status, body.get("error")) == (404, "not_published")
     wrong = Path("/work/wrong-keys")
     wrong.mkdir(exist_ok=True)
     for u in callers:
@@ -189,10 +217,11 @@ def rest() -> int:
     control = [av.rest(TRINO, ENV | {"apiKeys": str(wrong)}, RELEASE, e) for e in rows]
     shutil.rmtree(wrong)
     say(f"rest: with keys k2-api does not know: {[v for v, _ in control]}, each {sorted({w.split(':')[0] for _, w in control})}")
-    ok = all(v == "PASS" for v, _ in legs) and as_caller and bound_refs and refused.error \
+    ok = all(v == "PASS" for v, _ in legs) and as_caller and bound_refs and refused.error and untagged \
         and all(v == "FAIL" and "HTTP 401" in w for v, w in control)
     say(f"rest: {'PASS' if ok else 'FAIL'}: {len(legs)} leg(s); {len(as_caller)} read(s) as the caller, "
-        f"{len(bound_refs)} bound $refs read(s) as svc.api, impersonation refused {bool(refused.error)}, wrong keys fail")
+        f"{len(bound_refs)} bound $refs read(s) as svc.api, impersonation refused {bool(refused.error)}, "
+        f"an untested output not_published {untagged}, wrong keys fail")
     return 0 if ok else 1
 
 
