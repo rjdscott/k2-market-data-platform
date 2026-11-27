@@ -397,3 +397,15 @@ owners, and a closed set of named ways to build a table.
 - Target chapter: [`20-target-data-product-platform.md`](../architecture/20-target-data-product-platform.md)
   sections 4.3 and 4.5.
 - [`contracts/schema/README.md`](../../contracts/schema/README.md): the vendored ODCS schema.
+
+## Outcome (2026-11-28, phase 004: terms checked transitively over inputs)
+
+The decision stands. Built on branch `phase/004-005-kraken-and-enriched`; **not yet in a deployed release**. `docs.terms-missing` now holds a grant outside the owning team to recorded
+terms on the product and on every product upstream of it through input ports, directly or through
+others, since a derived product passes its inputs' data on. An upstream product is exempt only when
+everything it holds was written on the platform (no connector, no input port, every table built by
+dbt from synthetic seeds or SQL alone), as `calendars` is. No phase 004 product grants anyone yet: a
+grant on `candles` outside its team is refused until `canonical-trades`, `kraken-trades`,
+`security-master`, `kraken-instruments`, `currency-master` and `candles` record terms. Provenance:
+`platform/k2gen/k2gen/checks/docs.py` and `platform/k2gen/tests/test_repository_documents.py`, the failing case in
+`platform/k2gen/tests/fixtures/v2/bad/docs/cases.yaml`.

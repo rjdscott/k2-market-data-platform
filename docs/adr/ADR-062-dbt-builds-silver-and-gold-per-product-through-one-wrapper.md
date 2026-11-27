@@ -309,3 +309,16 @@ run's orphan (`test_each_run_has_its_own_client_tag_so_an_earlier_runs_orphan_is
 
 **Revisit when**, besides the triggers above: a build is measured near 15 minutes from its first
 statement to its publish.
+
+## Outcome (2026-11-28, phase 004: the wrapper reports degraded and input lag)
+
+The decision stands. Built on branch `phase/004-005-kraken-and-enriched`; **not yet in a deployed release**. A build whose `warn`-severity tests fail still passes and publishes, and the
+wrapper now says so: each `audited` run record's detail is `{"degraded": true, "warned": [<test
+unique_id>, ...]}` and the XCom gains `"degraded": true`, which the DAG's `refresh` task reads to
+start the product's declared refresh target once. Each input in the `started` record carries
+`lagMinutes`, the run's start minus the audited commit time of the snapshot it read, never below 0,
+null when none was read, and its `state` in the release. An optional input whose port says
+`whenAbsent: empty` is read as zero rows of its columns while paused or never tested; `fail`, the
+default, keeps a `table` model from being rebuilt empty. `platform/runs/k2runs.py` `state` reads
+these records as `complete`, `partial: <inputs>` or `degraded`. Provenance:
+`docker/dbt-runner/test_k2_dbt.py`; `scripts/verify/dbt-patterns.sh` claim (c), whose rerun is pending.
