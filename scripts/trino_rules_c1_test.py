@@ -65,8 +65,8 @@ def q(user: str, sql: str, zone: str | None = None) -> tuple[list, str | None, d
 
 
 class Twin:
-    def __init__(self) -> None:
-        self.f = T.fixtures_by_name("station-readings-twin")
+    def __init__(self, name: str = "station-readings-twin") -> None:
+        self.f = T.fixtures_by_name(name)
         self.dbt, self.pub = model.builder(self.f.p.name), model.publisher(self.f.p.name)
         self.reader = next(g.principal for g in self.f.p.grants)
         self.view = model.View(self.f.view, self.f.base, tuple(self.f.cols), self.pub)
@@ -84,6 +84,10 @@ class Twin:
         """The base back to the release's state: rows 1 to 5 tagged, row 6 untested, the
         release's view SQL; any relation the attacks left at the base's names dropped."""
         f = self.f
+        # The main suite's control ends by DROP SCHEMA CASCADE on a base namespace: stage both
+        # schemas here, so a shared lake and a fresh one reach the same state.
+        T.ok(self.dbt, f"CREATE SCHEMA IF NOT EXISTS {qr(f.build.rsplit('.', 1)[0])}")
+        T.ok(self.pub, f"CREATE SCHEMA IF NOT EXISTS {qr(f.view_build.rsplit('.', 1)[0])}")
         T.tq(self.dbt, f"DROP VIEW IF EXISTS {qr(f.build)}")
         T.tq(self.dbt, f"DROP TABLE IF EXISTS {qr(f.build)}")
         # A view named <table>$refs cannot be dropped through Trino, which reads the name as the
@@ -275,6 +279,7 @@ def schema_change(tw: Twin) -> None:
 def cost(tw: Twin) -> None:
     """INFO: Trino's elapsed time for one reader query, the view unguarded against guarded."""
     f = T.fixtures_by_name("station-readings")
+    Twin("station-readings").rebuild()  # the control left this base's schema dropped
     pub, reader = model.publisher(f.p.name), "p.analyst-delayed"
     guarded = T.view_sql(f)
     plain = guarded.split(" WHERE EXISTS ")[0]
