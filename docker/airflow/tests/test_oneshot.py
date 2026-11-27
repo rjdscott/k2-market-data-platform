@@ -46,6 +46,12 @@ SPOOL_HELPER = ["docker", "run", "--rm", "--pull", "never", "--network", "none",
                 "mkdir", "-p", "/spool/ecb_fx"]
 
 
+DBT_ENV = ["K2_TRINO_HOST", "K2_TRINO_INTERNAL_PORT", "K2_TRINO_USER", "K2_PUB_USER", "K2_RUNS_USER", "K2_CATALOG_URI",
+           "K2_RELEASE"]
+DBT_SECRETS = ["/run/k2-secrets/builder.password", "/run/k2-secrets/publisher.password", "/run/k2-secrets/runs.password",
+               "/run/k2-secrets/tls/ca.pem"]
+
+
 def secret_mount(source: str, target: str) -> list[str]:
     return ["--mount", f"type=bind,source=/home/owner/k2-secrets/{source},target=/run/k2-secrets/{target},readonly"]
 
@@ -203,6 +209,24 @@ class Refusals(unittest.TestCase):
     def test_a_dag_id_that_could_leave_its_spool_directory(self):
         for dag_id in ("", ".", "..", "../ecb_fx", "ecb_fx/..", "a/b", "ecb_fx,target=/x", "Ecb", "ecb-fx"):
             self.assertIn("dag id", self.refused(dag_id=dag_id))
+
+    def test_a_secret_or_env_name_the_frozen_contract_does_not_list_for_the_kind(self):
+        """R11: never ca.key, a directory, password.db or principals/; env only the kind's own names."""
+        for secret in ("/run/k2-secrets/tls/ca.key", "/run/k2-secrets/principals", "/run/k2-secrets/principals/svc.runs.password",
+                       "/run/k2-secrets/trino/password.db", "/run/k2-secrets/canary/keys.json", "/run/k2-secrets/tls",
+                       "/run/k2-secrets/api.password"):
+            self.assertIn(secret, self.refused(kinds=self.golden("dbt-runner", secrets=[*DBT_SECRETS, secret]), **DBT))
+        self.assertIn("builder.password", self.refused(kinds=self.golden("tools", secrets=[
+            "/run/k2-secrets/tls/ca.pem", "/run/k2-secrets/builder.password"]), kind="tools"))
+        for env in ("AIRFLOW__DATABASE__SQL_ALCHEMY_CONN", "AIRFLOW__API_AUTH__JWT_SECRET", "K2_SECRETS"):
+            self.assertIn(env, self.refused(kinds=self.golden("dbt-runner", env=[*DBT_ENV, env]), **DBT))
+        self.assertIn("K2_TRINO_HOST", self.refused(kinds=self.golden("fetch", env=["K2_RELEASE", "K2_TRINO_HOST"])))
+
+    def test_the_allow_lists_are_k2gens_one_shot_kinds_exactly(self):
+        """Mirrors k2gen.emit.pipeline.ONESHOT_KINDS through its golden, so the two cannot drift."""
+        golden = oneshot.load_oneshots(str(GOLDEN))
+        self.assertEqual({k: {f: set(v[f]) for f in ("networks", "env", "secrets")} for k, v in golden.items()},
+                         oneshot.ALLOWED)
 
     def test_a_release_path_that_is_not_one_release(self):
         self.refused(release_path="/k2/releases/pointers")
