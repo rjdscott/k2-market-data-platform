@@ -808,6 +808,20 @@ _REF = re.compile(r"\{\{\s*ref\(\s*'([a-z0-9_]+)'\s*\)\s*\}\}")
 _CONFIG = re.compile(r"\{\{-?\s*config\(.*?\)\s*-?\}\}", re.S)
 
 
+def ref_order(tables: list[Any], sql: dict[str, str], names: dict[str, str]) -> list[Any]:
+    """The tables with each after the product's own models its SQL names by ref(): a model is staged
+    by CREATE TABLE AS, so one that reads a sibling (security-master's instrument reads
+    venue_symbol_claim) needs it made first. Contract order is kept among the rest; a cycle is dbt's
+    to refuse (make test-dbt-tree), so it falls back to contract order here."""
+    by_name = {t.name: t for t in tables}
+    needs = {t.name: {names[r] for r in _REF.findall(sql[t.name]) if names.get(r) in by_name} - {t.name} for t in tables}
+    out: list[Any] = []
+    while len(out) < len(tables):
+        ready = [t for t in tables if t not in out and needs[t.name] <= {o.name for o in out}]
+        out += ready or [t for t in tables if t not in out]
+    return out
+
+
 def stage(release: Path, env_file: Path) -> int:
     from k2gen import model
     from k2gen.emit import lake
@@ -841,7 +855,7 @@ def stage(release: Path, env_file: Path) -> int:
             trino.ok(dbt, f"CREATE TABLE {model.quote_relation(rel)} ({', '.join(f'{model.quote_ident(h)} {ty}' for h, ty in zip(head, types, strict=True))})")
             values = ", ".join("(" + ", ".join(v if ty == "bigint" else model.sql_literal(v) for v, ty in zip(r, types, strict=True)) + ")" for r in body)
             trino.ok(dbt, f"INSERT INTO {model.quote_relation(rel)} VALUES {values}")
-        for t in tables:
+        for t in ref_order(tables, {t.name: p.models[f"{t.name}.sql"] for t in tables}, names):
             sql = _CONFIG.sub("", p.models[f"{t.name}.sql"])
             refs = {name: model.quote_relation(model.build_relation(p.domain, p.name, table)) for name, table in names.items()}
             sql = _REF.sub(lambda r, refs=refs: refs[r.group(1)], sql)
