@@ -376,7 +376,10 @@ def test_dbt_parses_compiles_and_selects_the_tree(tmp_path: Path, name: str) -> 
         compiled[incremental] = {p.relative_to(target).as_posix(): p.read_text() for p in (target / "compiled").rglob("*.sql")}
     for p, t in built:
         sql = compiled[False][f"compiled/k2/models/{model.fence(p.domain)}/{model.fence(p.name)}/{model.dbt_model(p.name, t.name)}.sql"]
-        for port in p.input_ports:
+        for port in p.input_ports:  # each port a model names through k2_input is read pinned; a model need not read every port
+            _, producer, table = port.contract_id.split(".")
+            if f"k2_input('{model.fence(producer)}', '{table}')" not in str(p.models[f"{t.name}.sql"]):
+                continue
             assert f"{model.quote_relation(model.base_relation(*port.contract_id.split('.')))} FOR VERSION AS OF BIGINT '42'" in sql
         if model.model_config(p.models[f"{t.name}.sql"]).get("materialized") == "incremental":
             assert compiled[True][f"compiled/k2/models/{model.fence(p.domain)}/{model.fence(p.name)}/{model.dbt_model(p.name, t.name)}.sql"] != sql
