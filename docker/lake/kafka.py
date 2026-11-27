@@ -23,6 +23,17 @@ stage  takes, per partition, every landing row after the offset bronze has stage
        skipped counts. While `audit` holds another unpublished batch it is refused, after the
        landing has committed (bronze publishes in order; a blocked bronze never blocks the landing).
 
+audit  checks the batch at `audit`'s head over the range it staged (main's through-offsets to its
+       own), never the whole branch, one audit_checks row per check of CHECKS:
+       accounting   per partition the landing, at the snapshot the stage read, holds every offset
+                    of the range but those an accepted loss records, once each; staged plus
+                    skipped equals that count; the commit added only rows of its range.
+       parses       every staged frame is Confluent-framed with an id the registry serves as
+                    RawMessage, its body reads, and the filter keeps it; a failure names
+                    partition and offset, at most LISTED of them, never a byte of the frame.
+       keys_unique  (kafka_partition, kafka_offset) once within the batch, and none on main.
+       A run whose batch staged nothing passes each, saying so.
+
 A paused product lands nothing. The first run after a resume is an accept-data-loss run: what the
 topic evicted during the pause is gone, and it resumes at the log start with the gap recorded.
 """
@@ -47,6 +58,10 @@ KEPT = "k2_kept"  # the filter's verdict on a landing row (a column of the stage
 LANDING_SOURCE = (("kafka_partition", "partition"), ("kafka_offset", "offset"),
                   ("kafka_timestamp", "timestamp"), ("record_key", "key"), ("record_value", "value"))
 LANDING_RUN = ("batch_id", "landed_at", "run_id", "release_id")
+CHECKS = ("accounting", "parses", "keys_unique")  # a Kafka batch's audit_checks names: what publish requires
+DETAIL_MAX = 1000  # model.PLATFORM_TABLES["audit_checks"]: detail, at most 1000 characters
+LISTED = 10  # frames a parses failure names
+ENVELOPE = "com.k2.market.v3.RawMessage"  # schemas/avro/raw-message.avsc, held equal by the tests
 
 
 # --- The pure core ---------------------------------------------------------------------------
@@ -164,6 +179,95 @@ def summary(run: C.Run, **props) -> dict:
     return {**dict(zip(C.SUMMARY_KEYS[:3], (run.run_id, run.release, run.run_id))), O.JOB: JOB_CONNECTOR, **props}
 
 
+def accepted_losses(history: list, topic: str) -> dict:
+    """`{partition: [(first, last)]}`, inclusive: the offsets the landing's commits record as an
+    accepted loss (KAFKA_GAPS), which no landing row holds and no bronze row can."""
+    out: dict = {}
+    for _, s in history:
+        for p, (committed, log_start) in json.loads((s or {}).get(KAFKA_GAPS, "{}")).get(topic, {}).items():
+            out.setdefault(int(p), []).append((int(committed), int(log_start) - 1))
+    return out
+
+
+def planned(start: int, end: int, lost: list):
+    """`(rows, first, last)` the landing must hold in `start..end - 1`: every offset but the
+    accepted losses in it (offsets.batch_audit's rule, less those); None when none is left.
+
+    ponytail: compared as count, distinct offsets, first and last, so with a loss inside the
+    range (a kill between landing and staging across an accept-data-loss run) a row inside the
+    loss and a hole elsewhere net to a pass; count the rows inside each loss if one is ever seen."""
+    spans, cursor = [], start
+    for first, last in sorted(lost):
+        if first > cursor:
+            spans.append((cursor, min(first, end)))
+        cursor = max(cursor, last + 1)
+    spans = [(lo, hi) for lo, hi in [*spans, (cursor, end)] if lo < hi]
+    return (sum(hi - lo for lo, hi in spans), spans[0][0], spans[-1][1] - 1) if spans else None
+
+
+def accounting(topic: str, ranges: dict, lost: dict, landed: list, staged: list, skipped: dict,
+               added: int) -> tuple[bool, str]:
+    """`landed` and `staged` are offset counts `[(partition, rows, offsets, first, last)]` over
+    `ranges`, of the landing at the snapshot the stage read and of bronze at `audit`'s head;
+    `skipped` the batch's KAFKA_SKIPPED for the topic, `added` its commit's added-records."""
+    land = {p: (n, d, lo, hi) for p, n, d, lo, hi in landed}
+    bron = {p: n for p, n, *_ in staged}
+    bad, want_all = [], 0
+    for p, (start, end) in sorted(ranges.items()):
+        want = planned(start, end, lost.get(p, []))
+        rows = want[0] if want else 0
+        want_all += rows
+        n, d, lo, hi = land.get(p, (0, 0, None, None))
+        if (n, lo, hi) != (want or (0, None, None)) or d != n:
+            bad.append(f"{topic}/{p}: the landing holds {n} rows, {d} offsets, at {lo}..{hi} of {start}..{end - 1}; "
+                       f"planned {rows}")
+        if bron.get(p, 0) + skipped.get(p, 0) != rows:
+            bad.append(f"{topic}/{p}: {bron.get(p, 0)} staged + {skipped.get(p, 0)} skipped, planned {rows}")
+    if sum(bron.values()) != added:
+        bad.append(f"the batch's commit added {added} rows, {sum(bron.values())} of them in its range")
+    if bad:
+        return False, "; ".join(bad)
+    return True, (f"{sum(bron.values())} staged + {sum(skipped.get(p, 0) for p in ranges)} skipped = "
+                  f"{want_all} landed over {len(ranges)} partitions")
+
+
+def unparsed_reason(schema_id, registered: bool, decoded: bool) -> str:
+    """Why a staged frame fails parses, from facts about it alone: never a byte of it."""
+    if schema_id is None:
+        return "not Confluent-framed"
+    if not registered:
+        return f"schema id {int(schema_id)} is not a registered {ENVELOPE}"
+    return f"its body does not read as {ENVELOPE}" if not decoded else "the filter does not keep it"
+
+
+def parses(topic: str, frames: int, failing: int, listed: list) -> tuple[bool, str]:
+    """`listed` is the first `[(partition, offset, schema id, registered, decoded)]` of the
+    `failing` frames, by partition and offset."""
+    if not failing:
+        return True, f"{frames} frames parse"
+    shown = listed[:LISTED]
+    named = "; ".join(f"{topic}/{p} offset {o}: {unparsed_reason(*facts)}" for p, o, *facts in shown)
+    more = f"; {failing - len(shown)} more" if failing > len(shown) else ""
+    return False, f"{failing} of {frames} frames do not parse: {named}{more}"
+
+
+def keys_unique(staged: list, on_main: list) -> tuple[bool, str]:
+    """`staged` and `on_main` are offset counts over the batch's range at `audit`'s head and at main."""
+    repeats, published = sum(n - d for _, n, d, _, _ in staged), sum(n for _, n, *_ in on_main)
+    if repeats or published:
+        return False, f"{repeats} rows repeat a key of the batch; {published} rows of its range are on main already"
+    return True, f"{sum(n for _, n, *_ in staged)} keys, each once, none on main"
+
+
+def is_envelope(schema: str) -> bool:
+    """Whether a registered schema is the RawMessage record, by its full name."""
+    s = json.loads(schema)
+    if not isinstance(s, dict) or s.get("type") != "record":
+        return False
+    full = s.get("name", "") if "." in s.get("name", "") else f"{s.get('namespace')}.{s.get('name')}"
+    return full == ENVELOPE
+
+
 # --- The tasks: flows over a source (the topic) and a lake -------------------------------------
 
 
@@ -269,9 +373,50 @@ def load(run: C.Run, source, lake) -> tuple[int, dict]:
     return code, {**landed, **staged}
 
 
+def audit_results(run: C.Run, lake, refs: dict) -> list[tuple[str, bool, str]]:
+    """`(check, passed, detail)` in CHECKS order for the batch at `audit`'s head, over the range
+    from main's through-offsets to the batch's own, as stage chose it."""
+    [bronze] = run.pipeline["bronze"]
+    table, landing, head = bronze["table"], run.pipeline["landing"]["table"], refs[C.AUDIT]
+    batch = lake.summary_of(table, head)
+    before = newest(lake.history(table)[1])
+    after = O.decode(batch[O.KAFKA_OFFSETS])
+    [topic] = after
+    ranges = stage_ranges(O.decode(before[O.KAFKA_OFFSETS]) if before else {}, after)
+    staged = lake.offset_counts(table, head, ranges)
+    failing, listed = lake.unparsed(table, head, ranges, keep_sql(run.pipeline["connector"].get("filter")))
+    return [
+        ("accounting", *accounting(topic, ranges, accepted_losses(lake.history(landing)[1], topic),
+                                   lake.offset_counts(landing, int(batch[O.SRC_SNAPSHOT_ID]), ranges), staged,
+                                   O.decode(batch[KAFKA_SKIPPED]).get(topic, {}), int(batch.get("added-records") or 0))),
+        ("parses", *parses(topic, sum(n for _, n, *_ in staged), failing, listed)),
+        ("keys_unique", *keys_unique(staged, lake.offset_counts(table, refs.get("main"), ranges))),
+    ]
+
+
 def audit(run: C.Run, source, lake) -> tuple[int, dict]:
-    print("audit: the Kafka batch audit is not built yet, so no Kafka batch publishes", file=sys.stderr)
-    return C.EXIT_ERROR, {}
+    """Runs every check of CHECKS on the batch at `audit`'s head and records each in audit_checks."""
+    [bronze] = run.pipeline["bronze"]
+    table = bronze["table"]
+    refs = lake.refs(table)
+    pending = C.pending_batch(lake, table, refs)
+    if pending not in (None, run.run_id):
+        print(f"audit refused: {C.AUDIT} of {table} holds batch {pending}, not this one", file=sys.stderr)
+        return C.EXIT_REFUSED, {"table": table}
+    head = refs.get(C.AUDIT, refs.get("main"))
+    results = (audit_results(run, lake, refs) if pending else
+               [(c, True, f"batch {run.run_id} staged nothing unpublished on {C.AUDIT}") for c in CHECKS])
+    at = C.now()
+    lake.append(bronze["checks"], [
+        {"table_name": table, "batch_id": run.run_id, "snapshot_id": head, "check_name": check, "passed": passed,
+         "detail": detail[:DETAIL_MAX], "checked_at": at, "run_id": run.run_id, "release_id": run.release}
+        for check, passed, detail in results], summary(run))
+    for check, passed, detail in results:
+        print(f"  {'pass' if passed else 'FAIL'}  {check:<12} {detail[:DETAIL_MAX]}")
+    failed = [c for c, passed, _ in results if not passed]
+    print(f"audit: batch {run.run_id} at {C.AUDIT} snapshot {head}: "
+          f"{'FAILED ' + ', '.join(failed) + '; main not moved' if failed else 'passed'}")
+    return (C.EXIT_FAILED if failed else C.EXIT_OK), {"table": table, "snapshot": head, "failed": failed}
 
 
 TASKS = {"load": load, "audit": audit, "publish": C.publish}
@@ -372,3 +517,56 @@ class SparkLanding(C.SparkLake):
         head = self.refs(table)[C.AUDIT]
         return int(self._sql(f"SELECT `summary`['added-records'] FROM {C.rel(table)}.`snapshots` "
                              "WHERE `snapshot_id` = :s", s=head)[0][0] or 0)
+
+    def summary_of(self, table: str, snapshot: int) -> dict:
+        found = self._sql(f"SELECT `summary` FROM {C.rel(table)}.`snapshots` WHERE `snapshot_id` = :s",
+                          s=C.snapshot_id(snapshot))
+        return dict(found[0][0] or {}) if found else {}
+
+    def offset_counts(self, table: str, snapshot, ranges: dict) -> list:
+        """`[(partition, rows, offsets, first, last)]` of `table` at `snapshot` in `ranges`."""
+        if snapshot is None or not ranges:
+            return []
+        where, args = range_sql(ranges)
+        return self._sql("SELECT `kafka_partition`, count(*), count(DISTINCT `kafka_offset`), min(`kafka_offset`), "
+                         f"max(`kafka_offset`) FROM {C.rel(table)} VERSION AS OF {C.snapshot_id(snapshot)} "
+                         f"WHERE {where} GROUP BY `kafka_partition`", **args)
+
+    def unparsed(self, table: str, snapshot: int, ranges: dict, keep: str) -> tuple[int, list]:
+        """How many frames of `ranges` at `snapshot` fail parses, and the first LISTED by partition
+        and offset as `(partition, offset, schema id, registered, decoded)`: only the facts, never
+        the bytes. PERMISSIVE: a body that does not read decodes to null, and fails."""
+        from catalog import UnresolvableSchema, fetch_schema
+        from pyspark.sql import functions as F
+        from pyspark.sql.avro.functions import from_avro
+
+        import wire
+
+        if not ranges:
+            return 0, []
+        where, args = range_sql(ranges)
+        raw = self.spark.sql(f"SELECT `kafka_partition`, `kafka_offset`, `record_value` FROM {C.rel(table)} "
+                             f"VERSION AS OF {C.snapshot_id(snapshot)} WHERE {where}", args
+                             ).withColumn("k2_schema_id", F.expr(wire.schema_id_guarded_expr("record_value")))
+        envelopes = {}
+        for (sid,) in raw.select("k2_schema_id").where("k2_schema_id IS NOT NULL").distinct().collect():
+            try:
+                schema = fetch_schema(sid, self.registry)
+            except UnresolvableSchema:
+                continue
+            if is_envelope(schema):
+                envelopes[sid] = schema
+        cols = ["kafka_partition", "kafka_offset", "k2_schema_id"]
+        facts = (raw.where(F.col("k2_schema_id").isNull() | ~F.col("k2_schema_id").isin(list(envelopes)))
+                 .select(*cols, F.lit(False).alias("registered"), F.lit(False).alias("decoded"),
+                         F.lit(False).alias("kept")))
+        for sid, schema in sorted(envelopes.items()):
+            decoded = (raw.where(F.col("k2_schema_id") == sid)
+                       .withColumn("envelope", from_avro(F.expr(wire.body_expr("record_value")), schema,
+                                                         {"mode": "PERMISSIVE"})))
+            facts = facts.unionByName(decoded.select(*cols, F.lit(True).alias("registered"),
+                                                     F.col("envelope").isNotNull().alias("decoded"),
+                                                     F.coalesce(F.expr(keep), F.lit(False)).alias("kept")))
+        bad = facts.where(~(F.col("registered") & F.col("decoded") & F.col("kept")))
+        listed = [tuple(r)[:5] for r in bad.orderBy("kafka_partition", "kafka_offset").limit(LISTED).collect()]
+        return bad.count(), listed
