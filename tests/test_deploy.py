@@ -1176,10 +1176,14 @@ sys.exit(f"fake docker: no answer for {A}")
         def plan(target: Any, *sources: Any, recreate: tuple[str, ...] = ()) -> Any:
             return deploy.Plan(target, list(sources), list(recreate), [], False, [], [], [])
 
-        assert deploy.drain_need(plan(new, old)) == ({"a", "b"}, "the task list of a, b changes or goes")  # d is new: no run
-        assert deploy.drain_need(plan(same, new))[0] == set()
+        fresh = "; new in this release, with no run to drain, never paused or unpaused by deploy: d"
+        assert deploy.drain_need(plan(new, old)) == ({"a", "b"}, "the task list of a, b changes or goes" + fresh)  # d: no run
+        # A release adding DAGs and moving the factory (phase 004's first): every DAG Airflow has, the new named apart
+        assert deploy.drain_need(plan(new, moved)) == (None, "the DAG code moved since v1-d" + fresh)
+        assert deploy.drain_need(plan(new, old, recreate=("trino",))) == (None, "Trino restarts" + fresh)
+        assert deploy.drain_need(plan(same, new)) == (set(), "no Trino restart and no DAG's task list changes")
+        assert deploy.new_dags(plan(new, None)) == []  # a first deploy: its drain is every DAG Airflow has
         assert deploy.drain_need(plan(same, new, recreate=("standin", "trino"))) == (None, "Trino restarts")
-        assert deploy.drain_need(plan(new, moved)) == (None, "the DAG code moved since v1-d")
         assert deploy.drain_need(plan(same, new, moved))[0] is None  # any source the code moved from: all
         assert deploy.drain_need(plan(new, None))[0] is None  # no release before: its DAGs are unknown
 
@@ -1266,6 +1270,72 @@ sys.exit(f"fake docker: no answer for {A}")
         held = earlier in ("canary", "swap")  # past the one-shots: the pointers may name r2 already
         assert world.paused()[SR] is held and (world.root / deploy.DRAIN_STATE).exists() is held
         assert (["dags", "unpause", SR] in world.airflow_calls()) is not held
+
+    def held_world(world: World, monkeypatch: pytest.MonkeyPatch, held: dict[str, str]) -> tuple[Any, Any, list[tuple[str, str]]]:
+        """drained_world, the releases standing in for ones with the holds table (every release has DAGS), and
+        Trino answering k2runs' HELD statement with `held` (product -> reason); each read as (user, statement)."""
+        monkeypatch.setattr(deploy, "HOLDS_DDL", model.DAGS)
+        r1, r2 = drained_world(world, {SR: False, DL: False})
+        asked: list[tuple[str, str]] = []
+        real = world.sql
+
+        def sql(ctx: Any, user: str, statement: str) -> dict[str, Any]:
+            if "run_records.holds" not in statement:
+                return real(ctx, user, statement)
+            asked.append((user, statement))
+            product = re.search(r"h\.product_id = '([^']+)'", statement)[1]  # type: ignore[index]
+            row = [product, "operator", held.get(product), "rob", "2026-11-28 01:02:03 UTC", None, None]
+            return {"columns": [], "rows": [row] if product in held else []}
+
+        monkeypatch.setattr(deploy, "sql", sql)
+        return r1, r2, asked
+
+    def test_a_drained_dag_whose_product_is_held_stays_paused_and_the_deploy_says_so(
+            world: World, monkeypatch: pytest.MonkeyPatch) -> None:
+        """W1-12, and audit LOW 40: an operator holds a product while deploy has its DAG paused (a hold
+        taken mid-drain, or after a deploy died there); done unpauses every other DAG deploy paused."""
+        r1, r2, asked = held_world(world, monkeypatch, {"sensor-net.station-readings": "re-staging bronze"})
+        said: list[str] = []
+        world.ctx.say = said.append
+        assert world.deploy(r2) == 0
+        assert world.paused() == {SR: True, DL: False} and ["dags", "unpause", SR] not in world.airflow_calls(), [x for x in said if "paused" in x]
+        assert not (world.root / deploy.DRAIN_STATE).exists()  # the hold is the operator's now: never unpaused by a later deploy
+        assert "  unpaused daily_load: the DAGs deploy paused" in said
+        assert ("  kept paused, held: station_readings (operator hold by rob at 2026-11-28 01:02:03 UTC: re-staging bronze); "
+                "each stays paused until its hold is released") in said
+        assert {u for u, _ in asked} == {"svc.platform"}  # SELECT alone, by the emitted rules: deploy never ends a hold
+        bound = deploy.k2runs.HELD.replace("?", "'sensor-net.station-readings'")
+        assert any(s == bound for _, s in asked), asked  # k2runs' own statement, its one parameter bound
+
+    def test_holds_that_cannot_be_read_keep_every_dag_deploy_paused(world: World, monkeypatch: pytest.MonkeyPatch) -> None:
+        r1, r2, _ = held_world(world, monkeypatch, {})
+        real = deploy.sql
+
+        def refused(ctx: Any, user: str, statement: str) -> dict[str, Any]:
+            if "run_records.holds" in statement:
+                raise deploy.k2tools.TrinoError("TABLE_NOT_FOUND", "Table 'governance_build.run_records.holds' does not exist")
+            return real(ctx, user, statement)
+
+        monkeypatch.setattr(deploy, "sql", refused)
+        said: list[str] = []
+        world.ctx.say = said.append
+        assert world.deploy(r2) == 0  # live and verified; the DAGs wait for the next deploy or rollback that reads them
+        assert world.paused() == {SR: True, DL: True} and deploy.paused_by_deploy(world.ctx) == {SR, DL}
+        assert any(x.startswith("  kept paused daily_load, station_readings: the holds could not be read as svc.platform") for x in said)
+
+    def test_a_release_without_the_holds_table_unpauses_without_reading_them(world: World) -> None:
+        r1, r2 = drained_world(world, {SR: False, DL: False})
+        assert deploy.HOLDS_DDL == "compiled/lake/ddl/trino/governance.run_records.holds.sql"  # what k2gen emits (I-7)
+        assert deploy.HOLDS_DDL not in r2.manifest.files
+        assert world.deploy(r2) == 0 and world.paused() == {SR: False, DL: False}
+        assert not [e for e in world.timeline() if e[0] == "sql" and "holds" in e[2]]
+
+    def test_the_holds_ddl_is_read_as_the_catalog_spells_it() -> None:
+        """The table deploy's ddl step creates from the release (needs.ddl names it, the file is k2gen's
+        copy of platform/runs/holds.sql) compares equal to what the catalog prints for it."""
+        want = deploy.expected_table(model.HOLDS_SQL.read_text(), "trino")
+        assert [c[0] for c in want["columns"]] == list(deploy.k2runs.HOLD_COLUMNS) and want["partitioning"] == []
+        assert {c[1] for c in want["columns"]} == {"string", "timestamptz"} and not any(c[2] for c in want["columns"])
 
     def test_no_drain_no_scheduler_and_no_dags_are_recorded_and_the_deploy_goes_on(world: World) -> None:
         r1 = world.release(over={CODE: b"# one\n"})
