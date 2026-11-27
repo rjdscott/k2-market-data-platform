@@ -56,6 +56,25 @@
       "relation": "governance.quality_results.test_results"
     },
     {
+      "base": "market_capture.kraken_instruments__base.silver_listing",
+      "columns": [
+        "pair_code",
+        "first_fetched_at",
+        "is_listed",
+        "ws_name",
+        "base",
+        "quote",
+        "tick_size",
+        "pair_decimals",
+        "lot_decimals",
+        "order_min",
+        "status",
+        "source_file_sha256"
+      ],
+      "owner": "pub_kraken_instruments",
+      "relation": "market_capture.kraken_instruments.silver_listing"
+    },
+    {
       "base": "reference_data.calendars__base.target_days",
       "columns": [
         "calendar_date",

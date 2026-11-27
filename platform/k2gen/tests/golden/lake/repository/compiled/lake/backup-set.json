@@ -8,6 +8,11 @@
     {
       "bucket": "k2-landing",
       "kind": "landing",
+      "prefix": "market-capture/kraken-instruments/"
+    },
+    {
+      "bucket": "k2-landing",
+      "kind": "landing",
       "prefix": "reference-data/currency-master/"
     },
     {
@@ -86,6 +91,24 @@
       "kind": "table",
       "mode": "restore",
       "ref": "main",
+      "table": "k2.kraken_instruments.audit_checks"
+    },
+    {
+      "kind": "table",
+      "mode": "restore",
+      "ref": "main",
+      "table": "k2.kraken_instruments.bronze_pairs"
+    },
+    {
+      "kind": "table",
+      "mode": "restore",
+      "ref": "main",
+      "table": "k2.kraken_instruments.landing_files"
+    },
+    {
+      "kind": "table",
+      "mode": "restore",
+      "ref": "main",
       "table": "k2.kraken_trades.audit_checks"
     },
     {
@@ -99,6 +122,12 @@
       "mode": "restore",
       "ref": "main",
       "table": "k2.kraken_trades.landing"
+    },
+    {
+      "kind": "table",
+      "mode": "rebuild",
+      "ref": "audited",
+      "table": "market_capture.kraken_instruments__base.silver_listing"
     },
     {
       "kind": "table",

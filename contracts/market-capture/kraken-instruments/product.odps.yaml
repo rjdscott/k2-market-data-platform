@@ -1,0 +1,64 @@
+# Kraken's pair listing: the public AssetPairs response fetched every hour in the fetch container,
+# landed verbatim when it changed, parsed by domains/market-capture/parsers/kraken_asset_pairs.py
+# (which fails the fetch on the venue's error array, no pairs, a pair without base or quote, or a
+# websocket name claimed twice), published to bronze after its audit, and turned into one row per
+# pair and version by dbt (silver_listing), which the security master reads.
+apiVersion: v1.1.0
+kind: DataProduct
+id: market-capture.kraken-instruments
+name: kraken-instruments
+version: 1.0.0
+status: active
+domain: market-capture
+type: sourceAligned
+description:
+  purpose: >-
+    The pairs Kraken lists, as its public AssetPairs endpoint states them: each pair's websocket
+    name (the symbol on the trades stream), its REST pair code, its base and quote as the venue
+    spells them, its tick size, price and lot decimals, minimum order size and trading status,
+    one row per pair and version, a version valid from the first fetch that saw it.
+  limitations: >-
+    The venue's terms of reuse are not yet recorded here: the owner confirms them before any grant
+    outside the owning team (k2gen check refuses such a grant while no terms are recorded).
+    History starts at the first fetch landed; the endpoint shows only the listing as it is now.
+    A version's start is the fetch that first saw it, so it is late by up to the hour between
+    fetches. A pair missing from a later response is recorded as unlisted from that fetch
+    (is_listed false), not deleted.
+  usage: >-
+    Read market_capture.kraken_instruments.silver_listing; the version in force for a pair at a
+    time t is its row with the newest first_fetched_at at or before t. Join trades on ws_name.
+team:
+  name: capture-team
+outputPorts:
+  - name: bronze_pairs
+    version: 1.0.0
+    contractId: market-capture.kraken-instruments.bronze_pairs
+  - name: silver_listing
+    version: 1.0.0
+    contractId: market-capture.kraken-instruments.silver_listing
+    inputContracts:  # a sibling, not an input port: the catalog's lineage edge bronze to silver
+      - id: market-capture.kraken-instruments.bronze_pairs
+        version: 1.0.0
+customProperties:
+  - property: connector
+    value:
+      kind: public-api
+      url: "https://api.kraken.com/0/public/AssetPairs"
+      allowHosts: [api.kraken.com]
+      pagination: none  # one response holds every pair
+      minIntervalS: 1  # between pages; with pagination none a run makes one request
+      records: result
+      # No volatileFields: the response carries no timestamp, nonce or counter, every field is a
+      # pair's attribute, so a response whose bytes changed has changed. A change only in the
+      # attributes silver does not keep (fees, leverage, margin, position limits) lands a file
+      # whose rows add no version. Add those names here once live fetches show such landings.
+      parser: kraken_asset_pairs
+  - property: schedule
+    value:
+      # Hourly at minute 17, off the hour's peak. An unchanged response adds nothing (fetch exits
+      # 10). On demand: a manual trigger of DAG kraken_instruments runs the same fetch, and a
+      # degraded kraken-trades build starts one (step W1-6). The timeout is not yet measured for
+      # this product: ten minutes, the ECB product's, set from its largest measured run (121.7 s,
+      # docs/benchmarks/2026-11-27-ecb-fx-run-times.md); reset from this product's first runs.
+      cron: "17 * * * *"
+      timeoutMinutes: 10

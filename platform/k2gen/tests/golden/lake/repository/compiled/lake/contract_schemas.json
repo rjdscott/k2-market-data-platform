@@ -224,6 +224,67 @@
     "partitioning": [],
     "sort": []
   },
+  "k2.kraken_instruments.bronze_pairs": {
+    "columns": [
+      {
+        "name": "pair_code",
+        "required": true,
+        "type": "varchar"
+      },
+      {
+        "name": "ws_name",
+        "required": true,
+        "type": "varchar"
+      },
+      {
+        "name": "base",
+        "required": true,
+        "type": "varchar"
+      },
+      {
+        "name": "quote",
+        "required": true,
+        "type": "varchar"
+      },
+      {
+        "name": "tick_size",
+        "required": true,
+        "type": "varchar"
+      },
+      {
+        "name": "pair_decimals",
+        "required": true,
+        "type": "integer"
+      },
+      {
+        "name": "lot_decimals",
+        "required": true,
+        "type": "integer"
+      },
+      {
+        "name": "order_min",
+        "required": true,
+        "type": "varchar"
+      },
+      {
+        "name": "status",
+        "required": true,
+        "type": "varchar"
+      },
+      {
+        "name": "fetched_at",
+        "required": true,
+        "type": "timestamp(6) with time zone"
+      },
+      {
+        "name": "source_file_sha256",
+        "required": true,
+        "type": "varchar"
+      }
+    ],
+    "partitioning": [],
+    "sort": []
+  },
   "k2.kraken_trades.bronze_trade": {
     "columns": [
       {
@@ -269,6 +330,72 @@
       {
         "name": "release_id",
         "required": false,
+        "type": "varchar"
+      }
+    ],
+    "partitioning": [],
+    "sort": []
+  },
+  "market_capture.kraken_instruments__base.silver_listing": {
+    "columns": [
+      {
+        "name": "pair_code",
+        "required": true,
+        "type": "varchar"
+      },
+      {
+        "name": "first_fetched_at",
+        "required": true,
+        "type": "timestamp(6) with time zone"
+      },
+      {
+        "name": "is_listed",
+        "required": true,
+        "type": "boolean"
+      },
+      {
+        "name": "ws_name",
+        "required": false,
+        "type": "varchar"
+      },
+      {
+        "name": "base",
+        "required": false,
+        "type": "varchar"
+      },
+      {
+        "name": "quote",
+        "required": false,
+        "type": "varchar"
+      },
+      {
+        "name": "tick_size",
+        "required": false,
+        "type": "decimal(38,18)"
+      },
+      {
+        "name": "pair_decimals",
+        "required": false,
+        "type": "integer"
+      },
+      {
+        "name": "lot_decimals",
+        "required": false,
+        "type": "integer"
+      },
+      {
+        "name": "order_min",
+        "required": false,
+        "type": "decimal(38,18)"
+      },
+      {
+        "name": "status",
+        "required": false,
+        "type": "varchar"
+      },
+      {
+        "name": "source_file_sha256",
+        "required": true,
         "type": "varchar"
       }
     ],
