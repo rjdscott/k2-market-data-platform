@@ -163,7 +163,8 @@ api_up() {  # k2-api, when a REST row needs it (the key step above made api/keys
   local k=$STATE/secrets/k2
   [ -f "$k/api/keys.json" ] || return 0
   say "k2-api: $API_IMAGE from services/k2-api/Dockerfile (Docker's layer cache: an unchanged tree rebuilds in seconds)"
-  docker build -q -f "$REPO/services/k2-api/Dockerfile" -t "$API_IMAGE" "$REPO" >> "$STATE/k2-api-build.log" 2>&1 \
+  # --load: into the daemon whatever the builder (a CI runner's setup-buildx-action builder keeps images in itself).
+  docker build -q --load -f "$REPO/services/k2-api/Dockerfile" -t "$API_IMAGE" "$REPO" >> "$STATE/k2-api-build.log" 2>&1 \
     || { tail -n 15 "$STATE/k2-api-build.log" >&2; die "k2-api's image did not build ($STATE/k2-api-build.log)"; }
   # docker-compose.yml's service k2-api, flag for flag: the host user with group 0, a read-only root, a
   # 16 MB /tmp, no capability, no new privileges, its two variables, its four read-only mounts and an
