@@ -543,7 +543,8 @@ elif cmd == "claim":  # claim <name> [release ids]: one PASS or FAIL line; exit 
             return json.loads((RP / f"chain-{label}.json").read_text())
 
         def rows(st, table, *cols):
-            return sorted(tuple(r[c] for c in cols) for r in st[table]["rows"]) if cols else st[table]["rows"]
+            return sorted(tuple(r[c] for c in cols) for r in st[table]["rows"]) if cols else \
+                sorted(st[table]["rows"], key=lambda r: json.dumps(r, sort_keys=True))  # Trino's order is no order
 
         def checks(label):  # the audit task's "  pass  <check> ..." lines, by check
             return {x.split()[1]: x.split()[0] == "pass" for x in text(label).splitlines() if x.startswith(("  pass ", "  FAIL "))}
@@ -710,7 +711,7 @@ elif cmd == "claim":  # claim <name> [release ids]: one PASS or FAIL line; exit 
                  and in_silver(r)[0]["instrument_id"] == late["symbol"].replace("/", "-") and not in_silver(r)[0]["is_duplicate"],
                  f"after kt-3: silver {[(x['venue_symbol'], x['trade_id'], x['instrument_id']) for x in rows(r, 'silver_trade')]}, held {rows(r, 'unresolved')}"),
                 (x3.get("degraded") is not True, f"kt-3's XCom {x3}"),
-                (state_of(KT) == "complete", f"k2runs.state after kt-3 {state_of(KT)!r}")],
+                (state_of(KT, "kraken_trades/kt-3") == "complete", f"k2runs.state through kt-3 {state_of(KT, 'kraken_trades/kt-3')!r}")],
                 f"after kt-2 {late['symbol']} trade {late['trade_id']} held, silver {n1} rows, XCom degraded, warned "
                 f"{[w.split('.')[2] for w in x2.get('warned', [])]}, k2runs.state degraded; after the second listing, kt-3 took it in "
                 f"once ({n1 + 1} rows), nothing held, state complete")
@@ -752,7 +753,7 @@ elif cmd == "claim":  # claim <name> [release ids]: one PASS or FAIL line; exit 
             b, a = chain("idle"), chain("paused")
             started = [x for x in records("canonical_trades/ct-5") if x["event"] == "started"]
             inputs = [i for x in started for i in json.loads(x["inputs"] or "[]")]
-            st = state_of(CT)
+            st = state_of(CT, "canonical_trades/ct-5")
             verdict("canonical-trades with kraken-trades paused builds, adds nothing, and is partial", [
                 built("ct-5"),
                 (all(x["release"] == args[2] for x in started) and bool(started), f"ct-5 started rows {started}"),
@@ -772,7 +773,8 @@ elif cmd == "claim":  # claim <name> [release ids]: one PASS or FAIL line; exit 
                 task("kt-5", "load"), task("kt-5", "audit"), task("kt-5", "publish"),
                 (len(rows(v, "bronze_trade")) == len(rows(b, "bronze_trade")) + 1, f"bronze_trade {len(rows(b, 'bronze_trade'))} -> {len(rows(v, 'bronze_trade'))} rows"),
                 built("kt-5", 1),
-                (any("k2_unique_key" in json.dumps(f) for f in failed), f"the failed tests of kt-5 {failed}"),
+                # silver_trade's unit tests run first in the build and catch the duplicate, so its data test never runs
+                (bool(failed) and all(".kraken_trades__silver_trade" in json.dumps(f) for f in failed), f"the failed tests of kt-5 {failed}"),
                 (all(x["release"] == args[2] for x in history(KT) if x["run"] == "kraken_trades/kt-5"), "kt-5's records not all under its release"),
                 (all(v[t]["refs"].get("main") == v[t]["refs"].get("audited") == b[t]["refs"].get("audited") is not None for t in ("silver_trade", "unresolved"))
                  and rows(v, "silver_trade") == rows(b, "silver_trade"),
@@ -780,7 +782,7 @@ elif cmd == "claim":  # claim <name> [release ids]: one PASS or FAIL line; exit 
                 (bool(rolled), f"rolled_back rows of kt-5 {rolled}"),
                 (not any(x["trade_id"] == bad["trade_id"] for x in rows(a, "silver_trade")), "the bad trade reached silver_trade"),
                 built("ct-6"), built("ca-6"), (not derived, f"changed after the failed venue build: {derived}")],
-                f"kt-5 exit 1 on release {args[2]}, k2_unique_key failed; silver_trade and the held table back on audited "
+                f"kt-5 exit 1 on release {args[2]}, failed {sorted({x for f in failed for x in f if isinstance(x, str) and x.startswith(('unit_test.', 'test.'))})}; silver_trade and the held table back on audited "
                 f"{v['silver_trade']['refs'].get('audited')}; canonical-trades and candles then build and change nothing")
     else:
         sys.exit(f"no claim {name}")
