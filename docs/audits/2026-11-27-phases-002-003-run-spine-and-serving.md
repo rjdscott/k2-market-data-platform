@@ -482,3 +482,9 @@ Appended after the audit; the findings above stand as written.
   gzip-compressed Iceberg metadata file (`<v>.gz.metadata.json`) as JSON; the gzip magic now decides, and
   `make backup-verify` then printed a snapshot line for each of the six restore tables and `OK: 0
   problem(s)` on the live stack (results row 12).
+- **HIGH 4, the live half. Resolved in `e34c6d5`**: `scripts/chaos/deploy-mid-run.sh ecb_fx_rates <release>` ran
+  on the live stack on 2026-11-27. Onto `v3.0.0-alpha.5` it printed `deploy-mid-run: 2 PASS, 2 FAIL in 119 s`:
+  the run finished on R-1 and its run-record rows carry R-1, and the deploy failed its verify step on
+  `DRIFT view fx_reference.ecb_fx_rates__base.silver_rates__dbt_tmp`, a relation dbt holds while it builds,
+  and rolled back. With the drift check waiting for such relations, onto `v3.0.0-alpha.5.1-rc.1` it
+  printed `deploy-mid-run: 4 PASS, 0 FAIL in 105 s`.
