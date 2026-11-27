@@ -175,7 +175,14 @@ that reaches it could forge a view or move a tag. It therefore sits on network `
 only with the platform's own services (Lakekeeper and its migration job, Postgres, MinIO, Trino,
 Spark, `lake-init`, `tools` and `dbt-runner`, listed in `tests/access/catalog-fence-allow.txt`), with no
 host port; `fetch` and third-party images never join. `fetch`, where product parsers run, is alone on
-`k2-egress`, from which neither Lakekeeper nor MinIO answers. Inside that network a forgery still
+`k2-egress`, from which neither Lakekeeper nor MinIO answers. A build the scheduler starts with
+`docker run` carries no compose labels, so the fence (`scripts/verify/catalog-fence.sh`) admits such a
+member only as one of this stack's own one-shots: labels `com.k2.project=<project>` and
+`com.k2.oneshot=<kind>` (which `docker/airflow/dags/oneshot.py` puts on every container it starts),
+a kind on the allow list, the name `k2-<kind>-<dagId>-<try>`, and the image the live release's
+`compiled/oneshots.json` gives that kind (unchecked, and the PASS line says so, when no live release
+can be read). A labelled `fetch`, another project's one-shot, a wrong name or image, and an
+unlabelled container still fail it. Inside that network a forgery still
 works, so the **drift check**
 (`scripts/verify/catalog_drift.py`) runs at every `release-verify` and fails on any view, owner or
 view SQL the release does not hold, token for token, and on any tag no publish recorded in the run
