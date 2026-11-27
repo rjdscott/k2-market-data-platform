@@ -421,16 +421,26 @@ def test_a_storage_key_row_passes_on_its_outcome_alone(s3, engines, r, passes, s
     assert not any(v in shown for v in [*SECRETS.values(), *SECRETS])  # neither half of any pair, ever
 
 
-def test_a_write_probe_is_removed_with_the_root_key_when_its_own_cannot_delete(s3):
+def test_a_write_probe_is_removed_by_maintenance_then_the_root_when_its_own_key_cannot_delete(s3):
     r = row("backup", "k2-backup", "write", "allowed")
-    passed, why = av.storage_key(r, keys(s3, backup="ak-wo"))
-    assert not passed and f"left s3://k2-backup/k2-access-probe/{av.uuid.UUID(PROBE_UUID).hex} " in why
-    assert list(s3.buckets["k2-backup"]) == [f"k2-access-probe/{av.uuid.UUID(PROBE_UUID).hex}"]
+    probe = f"k2-access-probe/{av.uuid.UUID(PROBE_UUID).hex}"
+    root = {"MINIO_ROOT_USER": "root-ak", "MINIO_ROOT_PASSWORD": SECRETS["root-ak"]}
+    # Nothing can delete it: the row fails naming what it left.
+    passed, why = av.storage_key(r, keys(s3, backup="ak-wo", maintenance="ak-ro"))
+    assert not passed and f"left s3://k2-backup/{probe} " in why and "neither the maintenance pair nor a root pair" in why
+    assert list(s3.buckets["k2-backup"]) == [probe]
     s3.buckets["k2-backup"].clear()
-    env = keys(s3, backup="ak-wo") | {"MINIO_ROOT_USER": "root-ak", "MINIO_ROOT_PASSWORD": SECRETS["root-ak"]}
-    passed, why = av.storage_key(r, env)
+    # The maintenance key first, with no root pair at all: a live run leaves nothing behind.
+    passed, why = av.storage_key(r, keys(s3, backup="ak-wo", maintenance="ak-rw"))
+    assert passed and "removed with the maintenance key" in why and s3.buckets["k2-backup"] == {}
+    # Maintenance first even when a root pair is set; the root only when maintenance cannot.
+    passed, why = av.storage_key(r, keys(s3, backup="ak-wo", maintenance="ak-rw") | root)
+    assert passed and "removed with the maintenance key" in why and s3.buckets["k2-backup"] == {}
+    passed, why = av.storage_key(r, keys(s3, backup="ak-wo", maintenance="ak-ro") | root)
     assert passed and "removed with the root key" in why and s3.buckets["k2-backup"] == {}
-    assert SECRETS["root-ak"] not in why and "root-ak" not in why
+    passed, why = av.storage_key(r, keys(s3, backup="ak-wo") | root)
+    assert passed and "removed with the root key" in why and s3.buckets["k2-backup"] == {}
+    assert not any(v in why for v in [*SECRETS.values(), *SECRETS])
 
 
 def test_an_unreachable_storage_fails_a_refused_row(s3):

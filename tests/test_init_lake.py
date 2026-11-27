@@ -256,15 +256,19 @@ def rendered(tmp: Path) -> dict[str, dict]:
     return {name.removeprefix("k2-"): doc for name, doc in state["policies"].items()}
 
 
+BUCKET_ACTIONS = ("s3:ListBucket", "s3:GetBucketLocation")  # on the bucket, not an object
+
+
 def allows(policy: dict, action: str, key: str) -> bool:
     """Whether an Allow statement grants `action` on object `bucket/key` (or, for ListBucket, a listing
-    of bucket under prefix key). Only Allow and StringLike s3:prefix appear in these policies."""
+    of bucket under prefix key; for GetBucketLocation, the bucket). Only Allow and StringLike s3:prefix
+    appear in these policies."""
     bucket, _, rest = key.partition("/")
     for s in policy["Statement"]:
         assert s["Effect"] == "Allow" and set(s) <= {"Effect", "Action", "Resource", "Condition"}
         if action not in s["Action"]:
             continue
-        target = f"arn:aws:s3:::{bucket}" if action == "s3:ListBucket" else f"arn:aws:s3:::{key}"
+        target = f"arn:aws:s3:::{bucket}" if action in BUCKET_ACTIONS else f"arn:aws:s3:::{key}"
         if not any(fnmatchcase(target, r) for r in s["Resource"]):
             continue
         cond = s.get("Condition")
@@ -277,7 +281,7 @@ def allows(policy: dict, action: str, key: str) -> bool:
 
 
 def test_every_policy_is_object_actions_on_named_buckets_only(tmp_path: Path) -> None:
-    allowed = {"s3:GetObject", "s3:PutObject", "s3:DeleteObject", "s3:AbortMultipartUpload", "s3:ListBucket"}
+    allowed = {"s3:GetObject", "s3:PutObject", "s3:DeleteObject", "s3:AbortMultipartUpload", *BUCKET_ACTIONS}
     warehouses = plan_names()
     for engine, doc in rendered(tmp_path).items():
         assert "@" not in json.dumps(doc), f"{engine}: a placeholder left unrendered"
@@ -288,7 +292,10 @@ def test_every_policy_is_object_actions_on_named_buckets_only(tmp_path: Path) ->
                 assert r.startswith("arn:aws:s3:::") and bucket in ("k2-lake", "k2-landing"), f"{engine}: {r}"
                 assert "*" not in bucket and "?" not in r
                 if bucket == "k2-lake":   # never the whole lake bucket: one warehouse prefix per resource
-                    assert path in [f"warehouse/{w}/*" for w in warehouses] or (path == "" and s["Action"] == ["s3:ListBucket"]), f"{engine}: {r}"
+                    assert path in [f"warehouse/{w}/*" for w in warehouses] or (path == "" and len(s["Action"]) == 1
+                                                                                and s["Action"][0] in BUCKET_ACTIONS), f"{engine}: {r}"
+                if path == "":   # a bucket-level grant is a bucket-level action, never an object one
+                    assert set(s["Action"]) <= set(BUCKET_ACTIONS), f"{engine}: {s['Action']} on {r}"
 
 
 def test_each_key_reaches_its_own_scope_and_nothing_else(tmp_path: Path) -> None:
@@ -311,8 +318,10 @@ def test_each_key_reaches_its_own_scope_and_nothing_else(tmp_path: Path) -> None
     assert all(can("trino", a, d) for a in (R, W, D) for d in doms)
     assert can("trino", R, k2) and not can("trino", W, k2) and not can("trino", D, k2)
     assert not any(can("trino", a, landing) for a in (R, W, D))
-    # maintenance: reads and deletes in every warehouse (expire, orphan cleanup), writes nothing.
+    # maintenance: reads and deletes in every warehouse (expire, orphan cleanup), lists and deletes
+    # landings (expired after 14 days), writes nothing and reads no landing.
     assert all(can("maintenance", a, x) for a in (R, D) for x in [k2, *doms])
+    assert can("maintenance", D, landing) and can("maintenance", "s3:ListBucket", "k2-landing/sensor-net/")
     assert not any(can("maintenance", W, x) for x in [k2, *doms, landing]) and not can("maintenance", R, landing)
     # backup and tools: read everything backed up, write and delete nothing.
     for e in ("backup", "tools"):
@@ -325,6 +334,12 @@ def test_each_key_reaches_its_own_scope_and_nothing_else(tmp_path: Path) -> None
     assert can("spark", L, "k2-lake/warehouse/k2/ns/") and not can("spark", L, f"k2-lake/warehouse/{domains[0]}/")
     assert can("trino", L, f"k2-lake/warehouse/{domains[0]}/ns/") and not can("trino", L, "k2-landing/x/")
     assert not any(can(e, L, "k2-lake/") for e in ENGINES)   # nobody lists the bucket root
+    # GetBucketLocation (metadata only) on exactly the buckets each engine holds anything in, so a
+    # refused storage-key row confirms the bucket with its own key (scripts/access_verify.py).
+    located = {e: sorted(b for b in ("k2-lake", "k2-landing") if can(e, "s3:GetBucketLocation", f"{b}/")) for e in ENGINES}
+    assert located == {"backup": ["k2-lake", "k2-landing"], "maintenance": ["k2-lake", "k2-landing"],
+                       "spark": ["k2-lake", "k2-landing"], "tools": ["k2-lake", "k2-landing"], "trino": ["k2-lake"]}
+    assert not any(can(e, "s3:GetBucketLocation", "other-bucket/") for e in ENGINES)
 
 
 # --- refusals and secrets ------------------------------------------------------------------------
