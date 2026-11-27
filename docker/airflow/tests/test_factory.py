@@ -125,7 +125,7 @@ class Shape(unittest.TestCase):
         self.assertEqual(sorted(dags), ["daily_load", "station_readings"])
         self.assertEqual(set(dags["station_readings"].task_dict), set(FULL))
         self.assertEqual(set(dags["daily_load"].task_dict), set(DBT_ONLY))
-        self.assertEqual(sorted(factory.build(CANARY)), ["access_canary"])
+        self.assertEqual(sorted(factory.build(CANARY)), ["access_canary", "calendars", "currency_master", "ecb_fx_rates", "quality_results"])
         for d in dags.values():
             self.assertEqual((d.max_active_runs, d.catchup, d.is_paused_upon_creation), (1, False, False))
         self.assertEqual((dags["station_readings"].schedule, dags["daily_load"].schedule), ("15 * * * *", "30 1 * * *"))
@@ -137,14 +137,15 @@ class Shape(unittest.TestCase):
         edges = {(t.task_id, down) for t in d.tasks for down in t.downstream_task_ids}
         self.assertEqual(edges, {("resolve", "fetch"), ("fetch", "load"), ("load", "audit"), ("audit", "publish"),
                                  ("publish", "build"), ("build", "expire"), ("expire", "record"),
-                                 ("resolve", "maintain"), ("maintain", "record")})
+                                 ("expire", "maintain"), ("maintain", "record")})
         self.assertEqual({t.task_id: t.pool for t in d.tasks},
                          {"resolve": "default_pool", "fetch": "fetch", "load": "lake_spark", "audit": "lake_spark",
                           "publish": "lake_spark", "build": "dbt", "expire": "lake_spark", "record": "default_pool",
                           "maintain": "lake_spark"})
         rules = {t.task_id: t.trigger_rule for t in d.tasks}
-        self.assertEqual({t for t, r in rules.items() if r != TriggerRule.ALL_SUCCESS}, {"build", "expire", "record"})
+        self.assertEqual({t for t, r in rules.items() if r != TriggerRule.ALL_SUCCESS}, {"build", "expire", "record", "maintain"})
         self.assertEqual(rules["build"], TriggerRule.NONE_FAILED)
+        self.assertEqual(rules["maintain"], TriggerRule.ALL_DONE)
         self.assertEqual({rules["expire"], rules["record"]}, {TriggerRule.ALL_DONE_SETUP_SUCCESS})
         self.assertEqual({t.task_id for t in d.tasks if t.is_teardown}, {"expire", "record"})
         self.assertFalse(any(t.is_setup for t in d.tasks))  # no setup: the teardowns behave as all_done
@@ -152,7 +153,7 @@ class Shape(unittest.TestCase):
         dbt_only = factory.build(GOLDEN)["daily_load"]
         self.assertEqual({(t.task_id, down) for t in dbt_only.tasks for down in t.downstream_task_ids},
                          {("resolve", "build"), ("build", "expire"), ("expire", "record"),
-                          ("resolve", "maintain"), ("maintain", "record")})
+                          ("expire", "maintain"), ("maintain", "record")})
 
     def test_a_failed_build_or_audit_fails_the_run_and_record_does_not_decide_it(self):
         """Airflow's own rule for a run's state: the leaves, teardowns left out."""
@@ -226,6 +227,17 @@ class Scheduling(unittest.TestCase):
         for dag in factory.build(GOLDEN).values():
             states, run = schedule(dag, {"build": F})
             self.assertEqual((states["expire"], states["record"], run), (S, S, "failed"), dag.dag_id)
+
+    def test_maintain_runs_after_the_data_path_whatever_build_did_and_a_failed_one_fails_the_run(self):
+        # review F9: maintain beside build could expire the snapshot_before a rollback needs
+        for dag in factory.build(GOLDEN).values():
+            self.assertIn("build", dag.get_task("maintain").get_flat_relative_ids(upstream=True), dag.dag_id)
+            cases = [({}, "success"), ({"build": F}, "failed")] + ([({"audit": F}, "failed")] if "audit" in dag.task_dict else [])
+            for outcomes, want in cases:  # audit failed: build upstream_failed, and maintain still runs
+                states, run = schedule(dag, outcomes)
+                self.assertEqual((states["maintain"], run), (S, want), (dag.dag_id, outcomes))
+            states, run = schedule(dag, {"maintain": F})
+            self.assertEqual((states["build"], states["record"], run), (S, S, "failed"), dag.dag_id)
 
     def test_a_clean_run_and_a_dbt_only_run_succeed(self):
         for dag in factory.build(GOLDEN).values():

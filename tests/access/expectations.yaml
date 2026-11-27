@@ -164,6 +164,9 @@ expectations:
   # the lake's storage resolves or answers there.
   - {probe: {from: fetch, target: "lakekeeper:8181"}, expect: refused}
   - {probe: {from: fetch, target: "minio:9000"}, expect: refused}
+  # No path around Trino (W1-23): MinIO publishes no port, so the host reaches no object but through Trino.
+  - {probe: {from: host, target: "127.0.0.1:9000"}, expect: refused}  # MinIO's S3 API
+  - {probe: {from: host, target: "127.0.0.1:9001"}, expect: refused}  # MinIO's console, a root-pair login
 
   # Storage keys (phase 002): each engine's own MinIO key, signed by scripts/access_verify.py, does
   # what its policy (docker/lake/minio/policies/) allows and nothing else. They mean something only
