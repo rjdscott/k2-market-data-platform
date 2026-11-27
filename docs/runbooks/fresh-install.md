@@ -104,6 +104,7 @@ for id in svc.runs svc.catalog svc.platform svc.api \
   make password PRINCIPAL=$id TO_FILE=1; done
 make alerts-install-webhook     # Alertmanager's Slack URL, on stdin (where-an-alert-goes.md)
 make api-key PRINCIPAL=<a reader> # k2-api's keys.json; the key is printed once (create-or-rotate-a-principal.md)
+#   or TO_FILE=1: the key to ${K2_SECRETS}/api-keys/<id>.key, printed nowhere, for the access suite's REST rows
 # the catalog's network, labelled so compose adopts it
 P=$K2_COMPOSE_PROJECT
 docker network create --label com.docker.compose.project=$P --label com.docker.compose.network=k2-catalog ${P}_k2-catalog

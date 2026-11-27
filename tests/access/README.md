@@ -50,8 +50,9 @@ fails when either leg fails.
   An empty table answers no row, so the response states no column: the leg then proves the 200
   alone, and its PASS line says so.
 - Keys: on a throwaway lake, the lake makes one per principal of a REST row (only its sha256 goes
-  to k2-api's `api/keys.json`) and starts k2-api from this tree with compose's flags. On the live
-  system each key is the operator's file `${K2_SECRETS}/api/<principal>.key` (`K2_API_KEY_DIR`
+  to k2-api's `api/keys.json`, the key to `<secrets>/api-keys/<principal>.key`) and starts k2-api
+  from this tree with compose's flags. On the live system each key is the operator's file
+  `${K2_SECRETS}/api-keys/<principal>.key`, written by `make api-key PRINCIPAL=<id> TO_FILE=1` (`K2_API_KEY_DIR`
   overrides the directory), read by path and never printed; a missing file skips that leg, naming
   the command that makes it. k2-api is `$K2_API_URL`, default `http://k2-api:8095`.
 

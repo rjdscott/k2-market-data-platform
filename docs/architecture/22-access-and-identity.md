@@ -234,8 +234,9 @@ identity, `svc.api`. Its routes are the frozen `services/k2-api/openapi.yaml`, s
 key once and stores only its sha256 in `${K2_SECRETS}/api/keys.json`, mode 600, rewritten in place
 under a lock; k2-api rereads the map whenever the file changes, compares the key's hash with every
 entry in constant time, and accepts it only if the principal is in the release's
-`compiled/api/principals.json`. An operator who must keep a key for the live access rows writes it to
-`${K2_SECRETS}/api/<principal>.key`, mode 600; no key is in git or a release.
+`compiled/api/principals.json`. An operator who must keep a reader's key for the live access rows has
+it written to `${K2_SECRETS}/api-keys/<principal>.key` instead of printed (`make api-key PRINCIPAL=<id>
+TO_FILE=1`), mode 600, in a directory k2-api never mounts; no key is in git or a release.
 
 **Impersonation.** Every query logs in as `svc.api` with its password file and names the caller as the
 user to act as (`X-Trino-User`); Trino runs it as the caller only because the rules let `svc.api` become exactly the
@@ -324,9 +325,11 @@ Taken from the Outcomes of ADR-059, ADR-060 and ADR-061; each has a revisit trig
 - **A denied caller learns whether an output is published.** Trino analyses a view before it checks
   permission, so a never-published output fails as `INVALID_VIEW` even for a caller the rules deny, and
   k2-api answers it 404 `not_published` rather than 403.
-- **k2-api can read the operator's key files.** It mounts `${K2_SECRETS}/api/` to read `keys.json`, and the
-  operator's `<principal>.key` files sit there too; it can already act as every declared `p.*` through
-  `svc.api`, so this adds no reach.
+- **A reader's key file is plaintext on the host.** `make api-key TO_FILE=1` keeps it in
+  `${K2_SECRETS}/api-keys/`, mode 600, for the live access rows. That is not `api/`, which k2-api mounts
+  whole for `keys.json` and which holds hashes alone; no compose service mounts `api-keys/`
+  (`tests/test_secret_mounts.py`), and deploy mounts each key file by name, read-only, into the live
+  suite's one-shot only. Whoever reads the operator's files can use the key, as with a password file.
 - **Not built:** single sign-on, mutual TLS, a secrets manager, password expiry, REST cursors and `as_of`
   (phase 007).
 

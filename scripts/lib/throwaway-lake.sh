@@ -33,10 +33,11 @@
 #   all of them, a table already there left as it is: every caller gets the lake a deploy leaves.
 #   When a row of the release's expectations runs `via: rest`, k2-api joins (step W3-7): each such
 #   row's principal gets a key by scripts/principal-secret.py's own api_key (its sha256 alone in
-#   <secrets>/api/keys.json, mode 600; the key itself in <secrets>/throwaway/<id>.key, mode 600, for
-#   the suite), and the image k2-api:throwaway, built from this tree's services/k2-api/Dockerfile,
-#   runs with compose's flags for service k2-api, on `pointers/k2-api -> ../<id>`, reached by name
-#   from the tools container only.
+#   <secrets>/api/keys.json, mode 600; the key itself in <secrets>/api-keys/<id>.key, mode 600, for
+#   the suite, as `make api-key TO_FILE=1` writes it, and never in api/, which k2-api mounts), and
+#   the image k2-api:throwaway, built from this tree's services/k2-api/Dockerfile, runs with
+#   compose's flags for service k2-api, on `pointers/k2-api -> ../<id>`, reached by name from the
+#   tools container only.
 # py: runs a Python script with k2gen importable, in the tools container when the lake is up, else
 #   in a one-off container of the same image; <state> is /work. Of the repository, only SRC (the
 #   scripts, k2gen and what it reads, the access suite) is mounted, read-only, at /src/<path>:
@@ -331,13 +332,10 @@ with contextlib.redirect_stderr(io.StringIO()):
     for u in sorted(set(extra) - known):
         passwords[u] = keep(root / "throwaway" / f"{u}.password", line(u))
     # A key per principal of a `via: rest` row, by principal-secret's api_key: its sha256 to
-    # api/keys.json under its lock (what k2-api reads), the key printed once and kept for the suite.
+    # api/keys.json under its lock (what k2-api reads), the key to api-keys/<u>.key for the suite.
     rest = sorted({e.principal for e in m.expectations if "rest" in getattr(e, "via", ())})
     for u in rest:
-        out = io.StringIO()
-        with contextlib.redirect_stdout(out):
-            ps.api_key(root, u, False)
-        keep(root / "throwaway" / f"{u}.key", out.getvalue().strip())
+        ps.api_key(root, u, False, True)
 users = sorted(passwords)
 db_users = [x.split(":", 1)[0] for x in ps.lines_of((root / ps.PASSWORD_DB).read_text()) if x]
 assert sorted(db_users) == users, "one password.db line per user"
