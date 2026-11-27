@@ -89,3 +89,48 @@ def newest_audited(conn: Any, table: str) -> int | None:
     cur.execute(NEWEST, [table])
     rows = cur.fetchall()
     return int(rows[0][0]) if rows else None
+
+
+def _json(value: Any) -> Any:
+    """A JSON text column as its value; anything that is not JSON as None."""
+    if not isinstance(value, str):
+        return value
+    try:
+        return json.loads(value)
+    except ValueError:
+        return None
+
+
+def state(records: list[dict[str, Any]]) -> str:
+    """A product's state from its run records (dicts keyed by COLUMNS, any order, any runs): exactly
+    one of `complete`, `partial: <contract ids, sorted, ", " separated>` or `degraded`.
+
+    The newest build is the run_id of the newest `build` row; only that run's build rows count.
+    degraded: a build row's detail is JSON with `"degraded": true` (the wrapper's word for a failed
+    `warn` test such as "unresolved rows = 0"). partial: a row's `inputs` (JSON text or list) holds
+    an input whose state is `paused` or whose snapshot is null (never audited). When both hold,
+    degraded wins: the output has known-bad rows, which matters more to a reader than a late input.
+    No build rows: `complete`, since no input is known missing; a caller shows "not built" itself.
+    ponytail: an input over its maxLagMinutes is not partial, the record has no limit to compare;
+    deprecated and retired inputs read their last audited snapshot and are not partial."""
+    builds = [r for r in records if r.get("task") == "build"]
+    if not builds:
+        return "complete"
+    newest = max(builds, key=lambda r: r["recorded_at"])["run_id"]
+    rows = [r for r in builds if r["run_id"] == newest]
+    if any(isinstance(d := _json(r.get("detail")), dict) and d.get("degraded") is True for r in rows):
+        return "degraded"
+    missing = {i["contractId"] for r in rows for i in _json(r.get("inputs")) or []
+               if i.get("state") == "paused" or i.get("snapshot") is None}
+    return f"partial: {', '.join(sorted(missing))}" if missing else "complete"
+
+
+def offset_gaps(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The product's `offset_gap` rows, newest first: {at, partitions, reason}; a detail that is not
+    the schema's offsetGapDetail is skipped."""
+    gaps = []
+    for r in sorted((r for r in records if r.get("event") == "offset_gap"), key=lambda r: r["recorded_at"], reverse=True):
+        d = _json(r.get("detail"))
+        if isinstance(d, dict) and "partitions" in d and "reason" in d:
+            gaps.append({"at": r["recorded_at"], "partitions": d["partitions"], "reason": d["reason"]})
+    return gaps
