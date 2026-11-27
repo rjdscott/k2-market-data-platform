@@ -268,8 +268,14 @@ site-install` at 05:15 UTC. A reader the grant names reads the gold view over SQ
 make site
 curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:${K2_API_PORT:-8095}/catalog/fx-reference/ecb-fx-rates/index.html   # 200
 curl -s http://127.0.0.1:${K2_API_PORT:-8095}/v1/products/fx-reference/ecb-fx-rates | python3 -m json.tool | head -20
-make access-verify LIVE=1              # the product's rows on the stack, once it is published
+make access-verify LIVE=1              # the canary's, the platform's and the storage-key rows; this product's SKIP
 ```
+
+Live, the suite runs the storage-key rows and the rows of principals whose password the platform holds
+that name nothing but the access canary (`scripts/access_verify.py`, `live_skip`), so this product's own
+rows print a SKIP there. They ran at release
+time on a throwaway lake started from the release, in deploy's preflight;
+`make access-verify RELEASE=<release dir>` runs them again.
 
 The REST data route is `GET /v1/data/<domain>/<product>/<table>` with `Authorization: Bearer
 <key>` (`services/k2-api/openapi.yaml`); the key's principal must hold a role on the table.
