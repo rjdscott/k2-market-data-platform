@@ -20,6 +20,7 @@ A deploy that fails verification rolls itself back; that case is section 6 of
 | 2 | A rollback was interrupted | <2 min | 8.3 s for the resumed rollback (2026-11-27) |
 | 3 | A rollback failed (exit 3) | <15 min | not induced: the steps below are the same commands as 1 and 2 |
 | 4 | A first deploy failed (exit 3, nothing to go back to) | <15 min | not induced on the rehearsal |
+| 5 | A migration ran forward: restore the database's dump | <15 min | the restore commands ran on a throwaway Postgres from compose's pinned image (2026-11-27); not induced on a stack |
 
 ---
 
@@ -35,7 +36,14 @@ views lose what the older contract lacks before the pointers move, the older can
 pointers move, the services that differ are recreated on the older compose file and image digests, the
 older rules are proven loaded, views gain what the older contract has, every part is verified. After an
 interrupted deploy it restores the good release instead, and after an interrupted rollback it resumes it
-(section 2). A second `make rollback` goes back one more good release.
+(section 2). A second `make rollback` goes back one more good release. When Trino does not answer, the
+pointers move and the services are recreated first, Trino among them on the good release's etc and rules,
+and the views are synced right after; a view that cannot be synced then fails the rollback (exit 3) and the
+message names it. A release deployed with `ALLOW_STATEFUL=<service>` is rolled back with the same
+`make rollback ALLOW_STATEFUL=<service>`. A rollback runs the good release's images: never run
+`docker image prune -a` (or `docker system prune -a`, or Docker Desktop's clean-up) on this host; if one is
+gone, `make release-status` names it with the fix (a registry image: `docker pull <ref>`; a local build:
+`make release TAG=<its tag>` and deploy that release instead, since a rebuild has another image id).
 
 **Recovery**
 
@@ -123,7 +131,7 @@ deploy: exit 0: done
 the good one in the log.
 
 **Recovery**, find the cause from the failed step's line (a service that would not become healthy:
-`docker compose -p ${K2_COMPOSE_PROJECT:-k2} logs --tail 50 <service>`; Trino not loading the rules:
+`docker compose -p "${K2_COMPOSE_PROJECT:-$(basename "$PWD")}" logs --tail 50 <service>`; Trino not loading the rules:
 `make release-status` for the canary lines), fix it, then converge on the good release; `make rollback`
 does that after an unfinished attempt, and a deploy of the good release by id does it too:
 
@@ -151,6 +159,44 @@ tag:
 ```bash
 make deploy RELEASE=<release id>
 ```
+
+---
+
+## 5. A migration ran forward: restore the database's dump
+
+**Symptom**, a rollback across a release whose `airflow-migrate` or `lakekeeper-migrate` one-shot ran
+(its image changed) fails, or the good release's Airflow or Lakekeeper does not become healthy: the
+database is at the failed release's schema, and no rollback runs a migration backwards.
+
+**Detection**, the failed step's line (`rollback-recreate`, a service not healthy); the deploy log's
+`backup` record of the failed release names the dump: `backups.<database>.path` and `.sha256`.
+
+**Expected behaviour**, the dump was taken by `scripts/backup-lake.sh --dump` right before the
+migration, so it holds the good release's schema. Restoring it loses what was written to that database
+since the migration.
+
+**Recovery**, stop the database's users (Airflow's services, or `lakekeeper`), restore the dump into a
+recreated database of the same owner, then converge on the good release:
+
+```bash
+grep '"step": "backup"' "$K2_RELEASES/deploy-log.jsonl" | tail -n 1     # backups.<database>.path, .sha256
+DB=airflow DUMP=<backups.airflow.path>                                   # or DB=lakekeeper
+sha256sum "$DUMP"                                                        # equal to the record's sha256
+P=${K2_COMPOSE_PROJECT:-$(basename "$PWD")}
+docker compose -p "$P" stop airflow-api-server airflow-scheduler airflow-dag-processor   # or: lakekeeper
+PG=$(docker ps -q --filter label=com.docker.compose.project="$P" --filter label=com.docker.compose.service=prefect-db)
+OWNER=$(echo "SELECT pg_get_userbyid(datdba) FROM pg_database WHERE datname = '$DB'" |
+  docker exec -i "$PG" sh -c 'psql -U "$POSTGRES_USER" -d postgres -tA')
+docker exec "$PG" sh -c 'dropdb -U "$POSTGRES_USER" --force "$1" && createdb -U "$POSTGRES_USER" -O "$2" "$1"' sh "$DB" "$OWNER"
+gunzip -c "$DUMP" | docker exec -i "$PG" sh -c 'psql -U "$POSTGRES_USER" -d "$1" -q -v ON_ERROR_STOP=1' sh "$DB"
+make rollback
+make release-verify
+```
+
+**Measured**, the `OWNER`, `dropdb`/`createdb` and `psql` lines, 2026-11-27, on a throwaway Postgres from
+compose's pinned image, a database `airflow` owned by role `airflow` dumped by `backup-lake.sh --dump`, then
+changed: the restore brought back its rows and owner and removed the table added after the dump. The
+`stop` line and the whole sequence on a stack were not run.
 
 ---
 

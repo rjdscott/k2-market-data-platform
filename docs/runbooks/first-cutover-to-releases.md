@@ -87,7 +87,8 @@ for id in svc.runs svc.catalog svc.platform svc.api dbt_access_canary pub_access
 #    K2_TRINO_SHARED_SECRET=$(openssl rand -hex 32), K2_TRINO_S3_ACCESS_KEY and K2_TRINO_S3_SECRET_KEY
 #    (MinIO's root pair until phase 002's scoped keys); then load it again
 set -a && . ./.env && set +a
-# 5. the checkout at the release's tag (deploy refuses a checkout whose emitter differs), the release
+# 5. the checkout at the release's tag, clean: deploy does not check it, and the checkout's tree is what
+#    every relative bind mount and every script deploy calls reads; then the release
 git checkout <tag>
 make release TAG=<tag>          # captures, Redpanda, MinIO, Postgres, Lakekeeper keep the images they run
 # 6. the catalog's network, and MinIO and Postgres joined to it in place: no restart

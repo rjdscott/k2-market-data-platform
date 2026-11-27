@@ -8,7 +8,8 @@ that failed, are [roll-back-a-release.md](./roll-back-a-release.md). Why it work
 
 **Run every command from the repo root with `set -a && . ./.env && set +a` loaded.** The defaults:
 `K2_RELEASES=$HOME/k2-releases` (created by the first `make release`, never removed or recreated),
-`K2_SECRETS=$HOME/k2-secrets`, compose project `k2` (`K2_COMPOSE_PROJECT`), Trino at
+`K2_SECRETS=$HOME/k2-secrets`, compose project `K2_COMPOSE_PROJECT` (unset: the checkout directory's
+name, the project `make up` gives it; set but empty is refused), Trino at
 `https://localhost:${K2_TRINO_PORT:-8443}` by name, with `${K2_SECRETS}/tls/ca.pem`. View statements come
 from each release's own k2gen, in its tools image, so the checkout's version does not matter to them;
 the scripts deploy calls (S20's checks, S13's `identity.sh`) are the checkout's. Memory: a deploy of a
@@ -124,7 +125,7 @@ deploy: exit 0: done
 **Detection**, manual.
 
 **Expected behaviour**, the steps run in order, each printed with its time and recorded in
-`$K2_RELEASES/deploy-log.jsonl` (a failed step with its `reason`): preflight, images, plan, ddl,
+`$K2_RELEASES/deploy-log.jsonl` (a failed step with its `reason`): preflight, images, plan, backup, ddl,
 views-narrow, canary, swap, recreate, rules-loaded, ddl-late, views-widen, verify, done. Preflight runs
 the release-time suites on a throwaway lake from the release: S20's access rows (63 today) and the
 tested-data marker; a sealed release's pass is kept under `$K2_RELEASES/verify/<id>.*.json` and not run
@@ -132,6 +133,12 @@ again. Views lose dropped columns before the rules move (in the target's shape w
 it, else the old one) and take the target's shape and new columns once its rules are loaded. Only the services in the plan are recreated, one at a
 time, each waited healthy; a rules-only release recreates none. The last line is the exit code and what it
 means. `make deploy RELEASE=<tag>` compiles the tag first when no release of that id exists.
+Before a one-shot that migrates a database (`airflow-migrate`, `lakekeeper-migrate`), `backup` dumps that
+database to `$K2_RELEASES/backups/<id>/` (`scripts/backup-lake.sh --dump`) and records its path and sha256;
+it prints `SKIP dump` when every release the deploy moves from pins the same image. A rollback never runs a
+migration backwards: restoring the dump is section 5 of [roll-back-a-release.md](./roll-back-a-release.md).
+Verify also fails when no container of the project, or not every default-profile long-running service of
+the release, is running, and when the catalog fence's probes fail (`scripts/verify/catalog-fence.sh`).
 
 **Recovery**
 
@@ -245,6 +252,9 @@ message, fix the cause, run the same command again.
 | `the release fails its access suite at release time` | a row of `tests/access/expectations.yaml` fails on the throwaway lake | read `$K2_RELEASES/verify/<id>.access-release.json` ([verify-access-after-a-release.md](./verify-access-after-a-release.md)); fix the documents or the row, tag again |
 | `the release fails the tested-data marker check` | a view, its tag or its shape fails on the throwaway lake | read `$K2_RELEASES/verify/<id>.marker.json` |
 | `local build ... is not on this host` | a local image the release names was removed | compile the tag again (`make release`) |
+| `the rollback target <id> names images this host no longer has` | an image the good release pins, which a rollback would run, was removed | a registry image: `docker pull <ref>`; a local build cannot be rebuilt to its id: `make release TAG=<the good release's tag>`, deploy that, then this one. Never run `docker image prune -a` (or `docker system prune -a`, or Docker Desktop's clean-up) on this host: a kept release's images go with it. `make release-status` prints the same check |
+| `the dump of database <db> before <db>-migrate failed` | `scripts/backup-lake.sh --dump` could not dump the database a one-shot migrates | is prefect-db running and healthy? Then deploy again |
+| `K2_COMPOSE_PROJECT is set but empty` | `.env` or the shell sets it to nothing | set it to the project the running containers carry, or unset it |
 
 ---
 
