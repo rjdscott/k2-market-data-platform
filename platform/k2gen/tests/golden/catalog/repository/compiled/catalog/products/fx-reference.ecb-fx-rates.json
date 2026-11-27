@@ -2,13 +2,17 @@
   "id": "fx-reference.ecb-fx-rates",
   "name": "ecb-fx-rates",
   "domain": "fx-reference",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "status": "active",
   "type": "sourceAligned",
   "owner": "fx-reference-team",
   "purpose": "The euro foreign exchange reference rates the European Central Bank publishes each TARGET day: how many units of each currency one euro is worth at the daily fixing, as published, typed, and laid out one row per TARGET day and currency.",
-  "limitations": "A reference fixing, not a market close or a tradable price, published at about 16:00 CET on each TARGET day. The 90-day file holds the last 90 days only, so history starts at the first file landed. The ECB's terms of reuse are linked below but not yet recorded as terms here: the owner confirms them against the terms page before any grant outside the owning team (k2gen check refuses such a grant while no terms are recorded). A published rate that a later file changes fails the bronze audit (values_unchanged), which holds every later file until someone looks.",
+  "limitations": "A reference fixing, not a market close or a tradable price, published at about 16:00 CET on each TARGET day. The 90-day file holds the last 90 days only, so history starts at the first file landed. A published rate that a later file changes fails the bronze audit (values_unchanged), which holds every later file until someone looks. The ECB's reference rates page says \"The reference rates are published for information purposes only.\" and \"Using the rates for transaction purposes is strongly discouraged.\": do not price, settle or trade with them. The ECB accepts no liability for their use. Terms of reuse (the terms property and the licence link below, read by the owner on 2026-11-27): the rates may be used freely and passed on, provided they appear accurately, the ECB is cited as the source, and any change made to them is stated; a document sold with them in it tells its buyers the ECB's website gives them free of charge. How this product meets the last condition: bronze and silver_rates keep the published fixings unchanged (silver only types and keys them); gold_eur_rates_daily adds rows the ECB did not publish, a missing fixing carried forward for at most five TARGET days, each marked by is_carried and carried_days. Anyone passing gold on keeps those two columns and says the carried rows are not ECB fixings.",
   "usage": "Read fx_reference.ecb_fx_rates.gold_eur_rates_daily for one row per TARGET day and currency, a missing fixing carried from the last published one for at most five TARGET days (is_carried, carried_days); join on rate_available_at, not rate_date, to use a rate only once it was published. silver_rates holds the fixings exactly as published, one per day and currency.",
+  "terms": {
+    "redistribution": "allowed",
+    "attribution": "Source: European Central Bank"
+  },
   "licence": "https://www.ecb.europa.eu/home/disclaimer/html/index.en.html",
   "issued": "2026-01-01T00:00:00Z",
   "periodicity": "30 15 * * 1-5",
@@ -17,7 +21,7 @@
     {
       "type": "licence",
       "url": "https://www.ecb.europa.eu/home/disclaimer/html/index.en.html",
-      "description": "The ECB's disclaimer and copyright page, which states its terms of reuse; to be confirmed by the owner against the terms page before any non-owner grant."
+      "description": "The ECB's \"Disclaimer & copyright\" page, which states its terms of reuse; read by the owner on 2026-11-27 (the page shows no last-updated date). It allows free use of the information on condition that \"it must appear accurately and the ECB must be cited as the source\", and that a modification by the user \"must be stated explicitly\". Its one exception, documents that bear their authors' names, does not cover statistics."
     }
   ],
   "inputs": [
@@ -98,7 +102,7 @@
       "testedRef": "audited",
       "contractFile": "documents/contracts/fx-reference/ecb-fx-rates/gold_eur_rates_daily.odcs.yaml",
       "layer": "gold",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "purpose": "One row per TARGET day and currency, from the currency's first published fixing to the newest fixing of any currency: the day's rate, or the last published one carried for at most five TARGET days when the day has none, with when the rate could first be known.",
       "columns": [
         {
@@ -148,8 +152,18 @@
         }
       ],
       "retentionDays": null,
-      "roles": [],
-      "readers": [],
+      "roles": [
+        {
+          "role": "full_reader",
+          "inWords": "every row and column"
+        }
+      ],
+      "readers": [
+        {
+          "principal": "p.analyst-a",
+          "role": "full_reader"
+        }
+      ],
       "dbtDocs": "dbt-docs/#!/model/model.k2.ecb_fx_rates__gold_eur_rates_daily"
     },
     {

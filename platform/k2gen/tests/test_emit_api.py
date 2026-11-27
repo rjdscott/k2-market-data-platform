@@ -38,6 +38,6 @@ def test_the_callers_are_exactly_whom_the_rules_let_svc_api_become() -> None:
         assert callers == ["p.analyst-delayed", "p.analyst-full"]
 
 
-def test_the_repository_callers_are_the_canary_readers() -> None:
+def test_the_repository_callers_are_the_readers_holding_a_role() -> None:
     out = json.loads(api.emit(model.load(repository_set()))[model.API_PRINCIPALS])
-    assert out == {"principals": ["p.canary-delayed", "p.canary-full", "p.canary-scoped"]}
+    assert out == {"principals": ["p.analyst-a", "p.canary-delayed", "p.canary-full", "p.canary-scoped"]}
