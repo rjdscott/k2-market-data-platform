@@ -80,6 +80,47 @@ cases:
     code: access.inherit-role
     changes:
       - {file: contracts/ops-insight/daily-load/gold_daily_load.odcs.yaml, append: roles, value: {role: public_reader, access: read}}
+  # the order (roles.yaml: delayed_reader within full_reader) never runs the other way
+  - name: an output offering full_reader over an input offering only delayed_reader, which is more restricted
+    code: access.inherit-role
+    changes:
+      - {file: contracts/sensor-net/station-readings/silver_readings.odcs.yaml, remove: roles/0}
+      - {file: contracts/sensor-net/station-readings/grants.yaml, set: grants/0/role, value: delayed_reader}
+      - {file: tests/access/expectations.yaml, remove: expectations/0}
+  - name: an output over an input offering no role, owner-only bronze
+    code: access.inherit-role
+    changes:
+      - {file: contracts/ops-insight/daily-load/product.odps.yaml, set: outputPorts/0/inputContracts/0/id, value: sensor-net.station-readings.bronze_readings}
+  - name: an output offering delayed_reader over an input offering only full_reader, which masks a column the output shows
+    code: access.inherit-mask
+    changes:
+      - {file: contracts/sensor-net/station-readings/silver_readings.odcs.yaml, remove: roles/1}
+      - {file: contracts/sensor-net/station-readings/silver_readings.odcs.yaml, set: customProperties/6/value, value: {full_reader: {mask: [operator_note]}}}
+      - {file: contracts/sensor-net/station-readings/grants.yaml, set: grants/1/role, value: full_reader}
+      - {file: tests/access/expectations.yaml, set: expectations/0/masked, value: [operator_note]}
+      - {file: contracts/ops-insight/daily-load/gold_daily_load.odcs.yaml, set: roles/0/role, value: delayed_reader}
+      - {file: contracts/ops-insight/daily-load/grants.yaml, set: grants/0/role, value: delayed_reader}
+      - {file: tests/access/expectations.yaml, set: expectations/2/minRowAgeMinutes, value: 20}
+      - {file: contracts/ops-insight/daily-load/gold_daily_load.odcs.yaml, append: customProperties, value: {property: policies, value: {delayed_reader: {delay: {column: load_date, minutes: 20}}}}}
+      - {file: contracts/ops-insight/daily-load/gold_daily_load.odcs.yaml, set: schema/0/properties/0/physicalType, value: timestamp(6) with time zone}
+      - {file: contracts/ops-insight/daily-load/gold_daily_load.odcs.yaml, set: schema/0/properties/0/transformSourceObjects, value: [sensor-net.station-readings.silver_readings.read_at]}
+      - {file: contracts/ops-insight/daily-load/gold_daily_load.odcs.yaml, set: schema/0/properties/1/transformSourceObjects, value: [sensor-net.station-readings.silver_readings.station_id]}
+      - {file: contracts/ops-insight/daily-load/gold_daily_load.odcs.yaml, set: schema/0/properties/2/transformSourceObjects, value: [sensor-net.station-readings.silver_readings.operator_note]}
+      - {file: contracts/ops-insight/daily-load/gold_daily_load.odcs.yaml, set: schema/0/properties/3/transformSourceObjects, value: [sensor-net.station-readings.silver_readings.value]}
+  - name: an output offering delayed_reader over an input offering only full_reader, which delays it longer
+    code: access.inherit-delay
+    changes:
+      - {file: contracts/sensor-net/station-readings/silver_readings.odcs.yaml, remove: roles/1}
+      - {file: contracts/sensor-net/station-readings/silver_readings.odcs.yaml, set: customProperties/6/value, value: {full_reader: {delay: {column: read_at, minutes: 30}}}}
+      - {file: contracts/sensor-net/station-readings/grants.yaml, set: grants/1/role, value: full_reader}
+      - {file: tests/access/expectations.yaml, set: expectations/0/minRowAgeMinutes, value: 30}
+      - {file: tests/access/expectations.yaml, set: expectations/1/minRowAgeMinutes, value: 30}
+      - {file: contracts/ops-insight/daily-load/gold_daily_load.odcs.yaml, set: roles/0/role, value: delayed_reader}
+      - {file: contracts/ops-insight/daily-load/grants.yaml, set: grants/0/role, value: delayed_reader}
+      - {file: tests/access/expectations.yaml, set: expectations/2/minRowAgeMinutes, value: 20}
+      - {file: contracts/ops-insight/daily-load/gold_daily_load.odcs.yaml, append: customProperties, value: {property: policies, value: {delayed_reader: {delay: {column: load_date, minutes: 20}}}}}
+      - {file: contracts/ops-insight/daily-load/gold_daily_load.odcs.yaml, set: schema/0/properties/0/physicalType, value: timestamp(6) with time zone}
+      - {file: contracts/ops-insight/daily-load/gold_daily_load.odcs.yaml, set: schema/0/properties/0/transformSourceObjects, value: [sensor-net.station-readings.silver_readings.read_at]}
   - name: a delay shorter than the input's
     code: access.inherit-delay
     changes:

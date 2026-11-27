@@ -700,7 +700,8 @@
             "required": ["description"],
             "properties": {
               "description": {"description": "What a holder of the role sees.", "$ref": "#/$defs/text"},
-              "requires": {"description": "Policies every table offering the role must set for it (S07).", "type": "array", "uniqueItems": true, "items": {"enum": ["delay", "mask", "rowScope"]}}
+              "requires": {"description": "Policies every table offering the role must set for it (S07).", "type": "array", "uniqueItems": true, "items": {"enum": ["delay", "mask", "rowScope"]}},
+              "within": {"description": "Roles whose holders see no less than this role's: an output may offer this role over an input offering one of them instead, held to that role's policy on the input (checks.access, access.inherit-role). Declared one pair at a time; no chain is followed.", "type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/identifier"}}
             }
           }
         }

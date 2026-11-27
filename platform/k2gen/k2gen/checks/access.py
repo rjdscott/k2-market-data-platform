@@ -36,8 +36,13 @@ that O derives from (the contracts its output port lists in `inputContracts`, a 
 the product replaced by what that sibling derives from; every input port of the product when it
 lists none), O's policy for R is at least as strict as I's when:
 
-- role: I offers R. A role I does not offer is I's strictest policy, no access at all, so O may not
-  offer it either (`access.inherit-role`);
+- role: I offers R, or, where it does not, a role that roles.yaml declares R `within` (a role whose
+  holders see no less: `delayed_reader` within `full_reader`), and then each such role's policy on I
+  stands in for R's in the three rules below. A role I offers neither itself nor through a
+  declaration is I's strictest policy, no access at all, so O may not offer it either
+  (`access.inherit-role`), and an input offering no role blocks every role of O. The order is only
+  what roles.yaml declares, one pair at a time: no chain is followed, and a role declared within
+  none (`public_reader`, whose holders may take data off the platform) is comparable only to itself;
 - delay: if I delays R by m minutes on column c, O delays R by at least m minutes, on a column
   declared to derive from I.c (`access.inherit-delay`);
 - mask: if I masks column x for R, every column of O declared to derive from I.x is masked for R
@@ -168,7 +173,7 @@ def check(docs: DocumentSet, previous: DocumentSet | None) -> list[Finding]:
         elif product and model.document_kind(path) == "grants":
             product.grants = list(doc.get("grants", []))
     return [*_declarations(roles, principals, products), *_grants(roles, principals, products),
-            *_deprecated(products, previous), *_inheritance(products), *_coverage(principals, products, rows)]
+            *_deprecated(products, previous), *_inheritance(roles, products), *_coverage(principals, products, rows)]
 
 
 def _declarations(roles: dict[str, Any], principals: list[str], products: dict[str, _Product]) -> list[Finding]:
@@ -293,7 +298,7 @@ def _derives(column: dict[str, Any]) -> set[str] | None:
     return None if sources is None else set(sources)
 
 
-def _inheritance(products: dict[str, _Product]) -> list[Finding]:
+def _inheritance(roles: dict[str, Any], products: dict[str, _Product]) -> list[Finding]:
     contracts = {t["id"]: t for p in products.values() for t in p.tables.values()}
     out = []
     for product in products.values():
@@ -301,16 +306,22 @@ def _inheritance(products: dict[str, _Product]) -> list[Finding]:
             columns = {c["name"]: c for c in _columns(o)}
             for role in _offered(o):
                 mine = _policies(o).get(role, {})
+                within = list(roles.get(role, {}).get("within", []))  # ponytail: one declared pair, no chain followed
                 for input_id in _inputs(product, o):
                     i = contracts.get(input_id)
                     if i is None:  # an unknown input is the docs check's
                         continue
-                    if role not in _offered(i):
+                    # the input's own policy for the role, else each declared looser role's, every one applied
+                    floors = [role] if role in _offered(i) else [r for r in within if r in _offered(i)]
+                    if not floors:
                         out.append(_err("inherit-role", path,
-                                        f"{o['id']} offers {role}, but its input {input_id} does not: holders of {role} may not read "
-                                        f"the input, so not what is derived from it; offer {role} on {input_id} or stop offering it here"))
+                                        f"{o['id']} offers {role}, but its input {input_id} offers neither {role} nor a role "
+                                        f"{model.ROLES} declares {role} within ({', '.join(within) or 'none'}): holders of {role} may "
+                                        f"not read the input, so not what is derived from it; offer {role} on {input_id} or stop "
+                                        f"offering it here"))
                         continue
-                    out += _inherit(path, o, columns, role, mine, input_id, _policies(i).get(role, {}))
+                    for floor in floors:
+                        out += _inherit(path, o, columns, role, mine, input_id, floor, _policies(i).get(floor, {}))
     return out
 
 
@@ -331,13 +342,15 @@ def _carrier(path: str, o: dict[str, Any], column: dict[str, Any] | None, role: 
 
 
 def _inherit(path: str, o: dict[str, Any], columns: dict[str, dict[str, Any]], role: str, mine: dict[str, Any],
-             input_id: str, theirs: dict[str, Any]) -> list[Finding]:
+             input_id: str, floor: str, theirs: dict[str, Any]) -> list[Finding]:
+    """O's policy for `role` against `theirs`, I's policy for `floor` (the role itself, or a role
+    roles.yaml declares it within)."""
     out: list[Finding | None] = []
     if "delay" in theirs:
         need, source = theirs["delay"]["minutes"], f"{input_id}.{theirs['delay']['column']}"
         if "delay" not in mine or mine["delay"]["minutes"] < need:
             have = f"{mine['delay']['minutes']} minutes" if "delay" in mine else "no delay"
-            out.append(_err("inherit-delay", path, f"{input_id} delays {role} by {need} minutes on {source}; {o['id']} has {have} for "
+            out.append(_err("inherit-delay", path, f"{input_id} delays {floor} by {need} minutes on {source}; {o['id']} has {have} for "
                                                    f"{role}: delay it by at least {need} minutes on a column derived from {source}"))
         else:
             out.append(_carrier(path, o, columns.get(mine["delay"]["column"]), role, "delay", source))
@@ -346,7 +359,7 @@ def _inherit(path: str, o: dict[str, Any], columns: dict[str, dict[str, Any]], r
         extra = [v for v in mine["rowScope"]["values"] if v not in allowed] if "rowScope" in mine else None
         if extra is None or extra:
             have = f"adds {extra}" if extra else "has no row scope"
-            out.append(_err("inherit-row-scope", path, f"{input_id} scopes {role} to {allowed} on {source}; {o['id']} {have} for {role}: "
+            out.append(_err("inherit-row-scope", path, f"{input_id} scopes {floor} to {allowed} on {source}; {o['id']} {have} for {role}: "
                                                        f"scope it to a subset of {allowed} on a column derived from {source}"))
         else:
             out.append(_carrier(path, o, columns.get(mine["rowScope"]["column"]), role, "row scope", source))
@@ -357,12 +370,12 @@ def _inherit(path: str, o: dict[str, Any], columns: dict[str, dict[str, Any]], r
         derives = _derives(column)
         if derives is None:
             out.append(_err("inherit-undeclared", path,
-                            f"{input_id} masks {', '.join(sorted(masked))} for {role}, and k2gen cannot tell whether {o['id']}.{name} "
+                            f"{input_id} masks {', '.join(sorted(masked))} for {floor}, and k2gen cannot tell whether {o['id']}.{name} "
                             f"is computed from it; declare transformSourceObjects on {name} (the input columns it derives from), "
                             f"or mask {name} for {role}"))
         elif derives & masked:
             out.append(_err("inherit-mask", path, f"{o['id']}.{name} derives from {', '.join(sorted(derives & masked))}, which the "
-                                                  f"input masks for {role}; mask {name} for {role} on {o['id']}"))
+                                                  f"input masks for {floor}; mask {name} for {role} on {o['id']}"))
     return [f for f in out if f]
 
 

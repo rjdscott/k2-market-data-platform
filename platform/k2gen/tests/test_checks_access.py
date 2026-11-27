@@ -142,6 +142,22 @@ def test_a_masked_input_column_may_reach_the_output_masked() -> None:
     assert codes(changed(steps)) == set()
 
 
+def test_an_output_may_offer_a_role_within_one_its_input_offers() -> None:
+    """roles.yaml declares delayed_reader within full_reader: an output may offer it over an input
+    offering full_reader alone with no policy (reference data, with no event time to delay), its
+    delay on a column of its own. Without the declaration the same documents fail: the order is
+    read, never inferred. The other way, and over an input offering nothing, cases.yaml fails."""
+    full_only = [{"file": SILVER, "remove": "roles/1"}, {"file": SILVER, "remove": "customProperties/6"},
+                 {"file": "contracts/sensor-net/station-readings/grants.yaml", "set": "grants/1/role", "value": "full_reader"},
+                 {"file": GOLD, "append": "roles", "value": {"role": "delayed_reader", "access": "read"}},
+                 {"file": GOLD, "append": "customProperties", "value": {"property": "policies", "value": {
+                     "delayed_reader": {"delay": {"column": "load_date", "minutes": 20}}}}},
+                 {"file": GOLD, "set": "schema/0/properties/0/physicalType", "value": "timestamp(6) with time zone"}]
+    assert codes(changed(full_only)) == set()
+    undeclared = [*full_only, {"file": "contracts/access/roles.yaml", "remove": "roles/delayed_reader/within"}]
+    assert codes(changed(undeclared)) == {"access.inherit-role"}
+
+
 def test_inputs_are_every_input_port_when_the_output_port_lists_none() -> None:
     # without inputContracts the gold table still derives from silver, through the input port
     steps = [{"file": "contracts/ops-insight/daily-load/product.odps.yaml", "remove": "outputPorts/0/inputContracts"},
