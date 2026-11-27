@@ -127,6 +127,36 @@
       "kind": "table",
       "mode": "rebuild",
       "ref": "audited",
+      "table": "market_analytics.candles__base.ohlcv_1d"
+    },
+    {
+      "kind": "table",
+      "mode": "rebuild",
+      "ref": "audited",
+      "table": "market_analytics.candles__base.ohlcv_1h"
+    },
+    {
+      "kind": "table",
+      "mode": "rebuild",
+      "ref": "audited",
+      "table": "market_analytics.candles__base.ohlcv_1m"
+    },
+    {
+      "kind": "table",
+      "mode": "rebuild",
+      "ref": "audited",
+      "table": "market_analytics.candles__base.ohlcv_5m"
+    },
+    {
+      "kind": "table",
+      "mode": "rebuild",
+      "ref": "audited",
+      "table": "market_analytics.canonical_trades__base.trades"
+    },
+    {
+      "kind": "table",
+      "mode": "rebuild",
+      "ref": "audited",
       "table": "market_capture.kraken_instruments__base.silver_listing"
     },
     {

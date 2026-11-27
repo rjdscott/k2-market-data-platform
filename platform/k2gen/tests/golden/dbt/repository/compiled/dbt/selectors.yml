@@ -18,6 +18,18 @@ selectors:
   definition:
     method: fqn
     value: k2.governance.quality_results
+- name: candles
+  description: 'market-analytics.candles: its seeds and models, with their tests and unit tests; built as dbt_candles (the
+    wrapper''s dbt build --selector).'
+  definition:
+    method: fqn
+    value: k2.market_analytics.candles
+- name: canonical_trades
+  description: 'market-analytics.canonical-trades: its seeds and models, with their tests and unit tests; built as dbt_canonical_trades
+    (the wrapper''s dbt build --selector).'
+  definition:
+    method: fqn
+    value: k2.market_analytics.canonical_trades
 - name: kraken_instruments
   description: 'market-capture.kraken-instruments: its seeds and models, with their tests and unit tests; built as dbt_kraken_instruments
     (the wrapper''s dbt build --selector).'

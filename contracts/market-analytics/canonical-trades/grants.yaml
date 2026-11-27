@@ -1,0 +1,4 @@
+# Owner-only until the venues' terms are recorded, as the venue products are: nobody holds a role.
+# trades offers full_reader and delayed_reader (trade_ts delayed 20 minutes, as the venue's
+# silver_trade is) so candles can offer them over it (access.inherit-role).
+grants: []

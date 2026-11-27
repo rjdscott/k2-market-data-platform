@@ -1,0 +1,56 @@
+# dbt unit tests: each runs one model's SQL on the rows written here instead of its real inputs,
+# and compares the result with the expected rows (only the columns each test lists). They prove
+# the logic, not the data. Every symbol, id, price and time is invented (AAA/ZZZ, round numbers):
+# no real trade is written here. Every fixture is format sql, every column typed. trades is
+# incremental, so each test states its branch; for an incremental run the expected rows are what
+# the model hands the MERGE, not the merged table.
+unit_tests:
+  - name: trades_carries_each_venue_row_once
+    model: canonical_trades__trades
+    description: >-
+      Three Kraken silver rows give three rows, each once, venue kraken, numbered in key order.
+      The later delivery of trade 1 (offset 12) is kept with its flag, not dropped.
+    overrides:
+      macros:
+        is_incremental: false
+    given:
+      - input: source('kraken_trades', 'silver_trade')  # k2_input renders source() in a unit test
+        format: sql
+        rows: |
+          select 0 as kafka_partition, cast(10 as bigint) as kafka_offset, 1 as trade_ordinal, cast(timestamp '2026-01-05 10:00:00 UTC' as timestamp(6) with time zone) as trade_ts, cast(1 as bigint) as trade_id, cast('AAA/ZZZ' as varchar) as venue_symbol, cast('i-aaa' as varchar) as instrument_id, cast('buy' as varchar) as side, cast(10 as decimal(38, 18)) as price, cast(1 as decimal(38, 18)) as quantity, false as is_duplicate
+          union all select 0, 10, 2, timestamp '2026-01-05 10:00:01 UTC', 2, 'AAA/ZZZ', 'i-aaa', 'sell', 11, 2, false
+          union all select 0, 12, 1, timestamp '2026-01-05 10:00:00 UTC', 1, 'AAA/ZZZ', 'i-aaa', 'buy', 10, 1, true
+    expect:
+      rows:
+        - {venue: kraken, kafka_offset: 10, trade_ordinal: 1, trade_id: 1, instrument_id: i-aaa, venue_symbol: AAA/ZZZ, side: buy, price: 10, quantity: 1, is_duplicate: false, trade_ts: "2026-01-05 10:00:00 UTC", load_seq: 1}
+        - {venue: kraken, kafka_offset: 10, trade_ordinal: 2, trade_id: 2, instrument_id: i-aaa, venue_symbol: AAA/ZZZ, side: sell, price: 11, quantity: 2, is_duplicate: false, trade_ts: "2026-01-05 10:00:01 UTC", load_seq: 2}
+        - {venue: kraken, kafka_offset: 12, trade_ordinal: 1, trade_id: 1, instrument_id: i-aaa, venue_symbol: AAA/ZZZ, side: buy, price: 10, quantity: 1, is_duplicate: true, trade_ts: "2026-01-05 10:00:00 UTC", load_seq: 3}
+
+  - name: trades_takes_new_taken_back_and_reflagged_rows_only
+    model: canonical_trades__trades
+    description: >-
+      Here: offsets 10 (trade 5) and 11 (trade 6), numbered 1 and 2. The venue then took back a
+      held frame at offset 9, below both, holding trade 5's first delivery, so it flagged offset
+      10 a duplicate; offset 12 is new. Offset 9, offset 10 with its new flag and offset 12 are
+      handed to the MERGE, numbered from 3; offset 11, unchanged, is not.
+    overrides:
+      macros:
+        is_incremental: true
+    given:
+      - input: this
+        format: sql
+        rows: |
+          select cast('kraken' as varchar) as venue, 0 as kafka_partition, cast(10 as bigint) as kafka_offset, 1 as trade_ordinal, cast(timestamp '2026-01-05 10:00:00 UTC' as timestamp(6) with time zone) as trade_ts, cast('i-aaa' as varchar) as instrument_id, cast('AAA/ZZZ' as varchar) as venue_symbol, cast(5 as bigint) as trade_id, cast('buy' as varchar) as side, cast(10 as decimal(38, 18)) as price, cast(1 as decimal(38, 18)) as quantity, false as is_duplicate, cast(1 as bigint) as load_seq
+          union all select 'kraken', 0, 11, 1, timestamp '2026-01-05 10:00:01 UTC', 'i-aaa', 'AAA/ZZZ', 6, 'buy', 10, 1, false, 2
+      - input: source('kraken_trades', 'silver_trade')
+        format: sql
+        rows: |
+          select 0 as kafka_partition, cast(9 as bigint) as kafka_offset, 1 as trade_ordinal, cast(timestamp '2026-01-05 10:00:00 UTC' as timestamp(6) with time zone) as trade_ts, cast(5 as bigint) as trade_id, cast('AAA/ZZZ' as varchar) as venue_symbol, cast('i-aaa' as varchar) as instrument_id, cast('buy' as varchar) as side, cast(10 as decimal(38, 18)) as price, cast(1 as decimal(38, 18)) as quantity, false as is_duplicate
+          union all select 0, 10, 1, timestamp '2026-01-05 10:00:00 UTC', 5, 'AAA/ZZZ', 'i-aaa', 'buy', 10, 1, true
+          union all select 0, 11, 1, timestamp '2026-01-05 10:00:01 UTC', 6, 'AAA/ZZZ', 'i-aaa', 'buy', 10, 1, false
+          union all select 0, 12, 1, timestamp '2026-01-05 10:00:02 UTC', 7, 'AAA/ZZZ', 'i-aaa', 'sell', 10, 1, false
+    expect:
+      rows:
+        - {venue: kraken, kafka_offset: 9, trade_id: 5, is_duplicate: false, load_seq: 3}
+        - {venue: kraken, kafka_offset: 10, trade_id: 5, is_duplicate: true, load_seq: 4}
+        - {venue: kraken, kafka_offset: 12, trade_id: 7, is_duplicate: false, load_seq: 5}

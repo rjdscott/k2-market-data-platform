@@ -1,0 +1,153 @@
+# dbt unit tests: each runs one model's SQL on the rows written here instead of its real inputs,
+# and compares the result with the expected rows (only the columns each test lists; a row the
+# model returns that is not expected fails). They prove the logic, not the data. Every instrument,
+# price and time is invented (i-aaa, round numbers): no real trade is written here. Every fixture
+# is format sql, every column typed. Each model is incremental, so each test states its branch;
+# for an incremental run the expected rows are what the model hands the MERGE, not the merged table.
+#
+# The late-trade tests share one input: trades 1 to 3 are counted already (this table's watermark
+# is 3), and trade 4 arrives late, numbered 4 but earlier than trade 1 in its minute (a frame the
+# venue held and took back). Each timeframe recomputes the one window holding it over all its
+# trades, so open moves to trade 4; trade 3, a day later, is in no touched window.
+unit_tests:
+  - name: ohlcv_1m_counts_each_trade_once_in_trade_order
+    model: candles__ohlcv_1m
+    description: >-
+      Open is the trade first by trade_ts (offset 11 at 10:00:10), not by offset; two trades at
+      10:00:50 are ordered by the venue row's key, so close is ordinal 2's. Offset 13, the venue's
+      later delivery of offset 11's trade, is not counted. No trade falls in 10:01, so it has no row.
+    overrides:
+      macros:
+        is_incremental: false
+    given:
+      - input: source('canonical_trades', 'trades')  # k2_input renders source() in a unit test
+        format: sql
+        rows: |
+          select cast('kraken' as varchar) as venue, cast('i-aaa' as varchar) as instrument_id, cast(timestamp '2026-01-05 10:00:30 UTC' as timestamp(6) with time zone) as trade_ts, 0 as kafka_partition, cast(10 as bigint) as kafka_offset, 1 as trade_ordinal, cast(10 as decimal(38, 18)) as price, cast(1 as decimal(38, 18)) as quantity, false as is_duplicate, cast(1 as bigint) as load_seq
+          union all select 'kraken', 'i-aaa', timestamp '2026-01-05 10:00:10 UTC', 0, 11, 1, 12, 2, false, 2
+          union all select 'kraken', 'i-aaa', timestamp '2026-01-05 10:00:10 UTC', 0, 13, 1, 12, 2, true, 3
+          union all select 'kraken', 'i-aaa', timestamp '2026-01-05 10:00:50 UTC', 0, 14, 1, 11, 1, false, 4
+          union all select 'kraken', 'i-aaa', timestamp '2026-01-05 10:00:50 UTC', 0, 14, 2, 13, 1, false, 5
+          union all select 'kraken', 'i-aaa', timestamp '2026-01-05 10:02:00 UTC', 0, 15, 1, 20, 1, false, 6
+    expect:
+      rows:
+        - {venue: kraken, instrument_id: i-aaa, window_start: "2026-01-05 10:00:00 UTC", window_end: "2026-01-05 10:01:00 UTC", open: 12, high: 13, low: 10, close: 13, volume: 5, quote_volume: 58, trade_count: 4, first_trade_at: "2026-01-05 10:00:10 UTC", last_trade_at: "2026-01-05 10:00:50 UTC", through_load_seq: 6}
+        - {venue: kraken, instrument_id: i-aaa, window_start: "2026-01-05 10:02:00 UTC", window_end: "2026-01-05 10:03:00 UTC", open: 20, high: 20, low: 20, close: 20, volume: 1, quote_volume: 20, trade_count: 1, first_trade_at: "2026-01-05 10:02:00 UTC", last_trade_at: "2026-01-05 10:02:00 UTC", through_load_seq: 6}
+
+  - name: ohlcv_1m_recomputes_a_late_trades_window
+    model: candles__ohlcv_1m
+    description: >-
+      Trade 4 (10:01:10) is past the watermark 3: its minute, 10:01, is recomputed over trades 1
+      and 4, open moving to trade 4. The minutes of trades 2 and 3 are not touched.
+    overrides:
+      macros:
+        is_incremental: true
+    given:
+      - input: this
+        format: sql
+        rows: |
+          select cast('kraken' as varchar) as venue, cast('i-aaa' as varchar) as instrument_id, cast(timestamp '2026-01-05 10:01:00 UTC' as timestamp(6) with time zone) as window_start, cast(timestamp '2026-01-05 10:02:00 UTC' as timestamp(6) with time zone) as window_end, cast(10 as decimal(38, 18)) as open, cast(10 as decimal(38, 18)) as high, cast(10 as decimal(38, 18)) as low, cast(10 as decimal(38, 18)) as close, cast(1 as decimal(38, 18)) as volume, cast(10 as decimal(38, 18)) as quote_volume, cast(1 as bigint) as trade_count, cast(timestamp '2026-01-05 10:01:30 UTC' as timestamp(6) with time zone) as first_trade_at, cast(timestamp '2026-01-05 10:01:30 UTC' as timestamp(6) with time zone) as last_trade_at, cast(3 as bigint) as through_load_seq
+          union all select 'kraken', 'i-aaa', timestamp '2026-01-05 10:04:00 UTC', timestamp '2026-01-05 10:05:00 UTC', 11, 11, 11, 11, 1, 11, 1, timestamp '2026-01-05 10:04:59 UTC', timestamp '2026-01-05 10:04:59 UTC', 3
+          union all select 'kraken', 'i-aaa', timestamp '2026-01-06 11:06:00 UTC', timestamp '2026-01-06 11:07:00 UTC', 20, 20, 20, 20, 1, 20, 1, timestamp '2026-01-06 11:06:00 UTC', timestamp '2026-01-06 11:06:00 UTC', 3
+      - input: source('canonical_trades', 'trades')
+        format: sql
+        rows: |
+          select cast('kraken' as varchar) as venue, cast('i-aaa' as varchar) as instrument_id, cast(timestamp '2026-01-05 10:01:30 UTC' as timestamp(6) with time zone) as trade_ts, 0 as kafka_partition, cast(10 as bigint) as kafka_offset, 1 as trade_ordinal, cast(10 as decimal(38, 18)) as price, cast(1 as decimal(38, 18)) as quantity, false as is_duplicate, cast(1 as bigint) as load_seq
+          union all select 'kraken', 'i-aaa', timestamp '2026-01-05 10:04:59 UTC', 0, 11, 1, 11, 1, false, 2
+          union all select 'kraken', 'i-aaa', timestamp '2026-01-06 11:06:00 UTC', 0, 12, 1, 20, 1, false, 3
+          union all select 'kraken', 'i-aaa', timestamp '2026-01-05 10:01:10 UTC', 0, 9, 1, 12, 1, false, 4
+    expect:
+      rows:
+        - {window_start: "2026-01-05 10:01:00 UTC", window_end: "2026-01-05 10:02:00 UTC", open: 12, high: 12, low: 10, close: 10, volume: 2, quote_volume: 22, trade_count: 2, first_trade_at: "2026-01-05 10:01:10 UTC", last_trade_at: "2026-01-05 10:01:30 UTC", through_load_seq: 4}
+
+  - name: ohlcv_5m_recomputes_the_window_holding_a_late_trade
+    model: candles__ohlcv_5m
+    description: >-
+      Trade 4 (10:01:10) falls in the five minutes from 10:00, with trades 1 and 2 (10:04:59 is in it, 10:05 would not be): that window is recomputed over the three, open moving to trade 4 and close staying trade 2's. Trade 3's window is not touched.
+    overrides:
+      macros:
+        is_incremental: true
+    given:
+      - input: this
+        format: sql
+        rows: |
+          select cast('kraken' as varchar) as venue, cast('i-aaa' as varchar) as instrument_id, cast(timestamp '2026-01-05 10:00:00 UTC' as timestamp(6) with time zone) as window_start, cast(timestamp '2026-01-05 10:05:00 UTC' as timestamp(6) with time zone) as window_end, cast(10 as decimal(38, 18)) as open, cast(11 as decimal(38, 18)) as high, cast(10 as decimal(38, 18)) as low, cast(11 as decimal(38, 18)) as close, cast(2 as decimal(38, 18)) as volume, cast(21 as decimal(38, 18)) as quote_volume, cast(2 as bigint) as trade_count, cast(timestamp '2026-01-05 10:01:30 UTC' as timestamp(6) with time zone) as first_trade_at, cast(timestamp '2026-01-05 10:04:59 UTC' as timestamp(6) with time zone) as last_trade_at, cast(3 as bigint) as through_load_seq
+          union all select 'kraken', 'i-aaa', timestamp '2026-01-06 11:05:00 UTC', timestamp '2026-01-06 11:10:00 UTC', 20, 20, 20, 20, 1, 20, 1, timestamp '2026-01-06 11:06:00 UTC', timestamp '2026-01-06 11:06:00 UTC', 3
+      - input: source('canonical_trades', 'trades')
+        format: sql
+        rows: |
+          select cast('kraken' as varchar) as venue, cast('i-aaa' as varchar) as instrument_id, cast(timestamp '2026-01-05 10:01:30 UTC' as timestamp(6) with time zone) as trade_ts, 0 as kafka_partition, cast(10 as bigint) as kafka_offset, 1 as trade_ordinal, cast(10 as decimal(38, 18)) as price, cast(1 as decimal(38, 18)) as quantity, false as is_duplicate, cast(1 as bigint) as load_seq
+          union all select 'kraken', 'i-aaa', timestamp '2026-01-05 10:04:59 UTC', 0, 11, 1, 11, 1, false, 2
+          union all select 'kraken', 'i-aaa', timestamp '2026-01-06 11:06:00 UTC', 0, 12, 1, 20, 1, false, 3
+          union all select 'kraken', 'i-aaa', timestamp '2026-01-05 10:01:10 UTC', 0, 9, 1, 12, 1, false, 4
+    expect:
+      rows:
+        - {window_start: "2026-01-05 10:00:00 UTC", window_end: "2026-01-05 10:05:00 UTC", open: 12, high: 12, low: 10, close: 11, volume: 3, quote_volume: 33, trade_count: 3, first_trade_at: "2026-01-05 10:01:10 UTC", last_trade_at: "2026-01-05 10:04:59 UTC", through_load_seq: 4}
+
+  - name: ohlcv_1h_recomputes_the_window_holding_a_late_trade
+    model: candles__ohlcv_1h
+    description: >-
+      Trade 4 falls in the hour from 10:00 with trades 1 and 2: that hour is recomputed over the three. Trade 3's hour is not touched.
+    overrides:
+      macros:
+        is_incremental: true
+    given:
+      - input: this
+        format: sql
+        rows: |
+          select cast('kraken' as varchar) as venue, cast('i-aaa' as varchar) as instrument_id, cast(timestamp '2026-01-05 10:00:00 UTC' as timestamp(6) with time zone) as window_start, cast(timestamp '2026-01-05 11:00:00 UTC' as timestamp(6) with time zone) as window_end, cast(10 as decimal(38, 18)) as open, cast(11 as decimal(38, 18)) as high, cast(10 as decimal(38, 18)) as low, cast(11 as decimal(38, 18)) as close, cast(2 as decimal(38, 18)) as volume, cast(21 as decimal(38, 18)) as quote_volume, cast(2 as bigint) as trade_count, cast(timestamp '2026-01-05 10:01:30 UTC' as timestamp(6) with time zone) as first_trade_at, cast(timestamp '2026-01-05 10:04:59 UTC' as timestamp(6) with time zone) as last_trade_at, cast(3 as bigint) as through_load_seq
+          union all select 'kraken', 'i-aaa', timestamp '2026-01-06 11:00:00 UTC', timestamp '2026-01-06 12:00:00 UTC', 20, 20, 20, 20, 1, 20, 1, timestamp '2026-01-06 11:06:00 UTC', timestamp '2026-01-06 11:06:00 UTC', 3
+      - input: source('canonical_trades', 'trades')
+        format: sql
+        rows: |
+          select cast('kraken' as varchar) as venue, cast('i-aaa' as varchar) as instrument_id, cast(timestamp '2026-01-05 10:01:30 UTC' as timestamp(6) with time zone) as trade_ts, 0 as kafka_partition, cast(10 as bigint) as kafka_offset, 1 as trade_ordinal, cast(10 as decimal(38, 18)) as price, cast(1 as decimal(38, 18)) as quantity, false as is_duplicate, cast(1 as bigint) as load_seq
+          union all select 'kraken', 'i-aaa', timestamp '2026-01-05 10:04:59 UTC', 0, 11, 1, 11, 1, false, 2
+          union all select 'kraken', 'i-aaa', timestamp '2026-01-06 11:06:00 UTC', 0, 12, 1, 20, 1, false, 3
+          union all select 'kraken', 'i-aaa', timestamp '2026-01-05 10:01:10 UTC', 0, 9, 1, 12, 1, false, 4
+    expect:
+      rows:
+        - {window_start: "2026-01-05 10:00:00 UTC", window_end: "2026-01-05 11:00:00 UTC", open: 12, high: 12, low: 10, close: 11, volume: 3, quote_volume: 33, trade_count: 3, first_trade_at: "2026-01-05 10:01:10 UTC", last_trade_at: "2026-01-05 10:04:59 UTC", through_load_seq: 4}
+
+  - name: ohlcv_1d_recomputes_the_window_holding_a_late_trade
+    model: candles__ohlcv_1d
+    description: >-
+      Trade 4 falls in the UTC day of 5 January with trades 1 and 2: that day is recomputed over the three. Trade 3's day, 6 January, is not touched.
+    overrides:
+      macros:
+        is_incremental: true
+    given:
+      - input: this
+        format: sql
+        rows: |
+          select cast('kraken' as varchar) as venue, cast('i-aaa' as varchar) as instrument_id, cast(timestamp '2026-01-05 00:00:00 UTC' as timestamp(6) with time zone) as window_start, cast(timestamp '2026-01-06 00:00:00 UTC' as timestamp(6) with time zone) as window_end, cast(10 as decimal(38, 18)) as open, cast(11 as decimal(38, 18)) as high, cast(10 as decimal(38, 18)) as low, cast(11 as decimal(38, 18)) as close, cast(2 as decimal(38, 18)) as volume, cast(21 as decimal(38, 18)) as quote_volume, cast(2 as bigint) as trade_count, cast(timestamp '2026-01-05 10:01:30 UTC' as timestamp(6) with time zone) as first_trade_at, cast(timestamp '2026-01-05 10:04:59 UTC' as timestamp(6) with time zone) as last_trade_at, cast(3 as bigint) as through_load_seq
+          union all select 'kraken', 'i-aaa', timestamp '2026-01-06 00:00:00 UTC', timestamp '2026-01-07 00:00:00 UTC', 20, 20, 20, 20, 1, 20, 1, timestamp '2026-01-06 11:06:00 UTC', timestamp '2026-01-06 11:06:00 UTC', 3
+      - input: source('canonical_trades', 'trades')
+        format: sql
+        rows: |
+          select cast('kraken' as varchar) as venue, cast('i-aaa' as varchar) as instrument_id, cast(timestamp '2026-01-05 10:01:30 UTC' as timestamp(6) with time zone) as trade_ts, 0 as kafka_partition, cast(10 as bigint) as kafka_offset, 1 as trade_ordinal, cast(10 as decimal(38, 18)) as price, cast(1 as decimal(38, 18)) as quantity, false as is_duplicate, cast(1 as bigint) as load_seq
+          union all select 'kraken', 'i-aaa', timestamp '2026-01-05 10:04:59 UTC', 0, 11, 1, 11, 1, false, 2
+          union all select 'kraken', 'i-aaa', timestamp '2026-01-06 11:06:00 UTC', 0, 12, 1, 20, 1, false, 3
+          union all select 'kraken', 'i-aaa', timestamp '2026-01-05 10:01:10 UTC', 0, 9, 1, 12, 1, false, 4
+    expect:
+      rows:
+        - {window_start: "2026-01-05 00:00:00 UTC", window_end: "2026-01-06 00:00:00 UTC", open: 12, high: 12, low: 10, close: 11, volume: 3, quote_volume: 33, trade_count: 3, first_trade_at: "2026-01-05 10:01:10 UTC", last_trade_at: "2026-01-05 10:04:59 UTC", through_load_seq: 4}
+
+  - name: ohlcv_1d_is_the_utc_day
+    model: candles__ohlcv_1d
+    description: >-
+      A trade at 09:30 on 6 January in +10:00 is 23:30 UTC on 5 January, so it is in 5 January's
+      candle, from midnight to midnight UTC; a trade at 00:30 UTC on 6 January starts the next day.
+      Truncated in the timestamp's own zone, the first would open a day at 14:00 UTC.
+    overrides:
+      macros:
+        is_incremental: false
+    given:
+      - input: source('canonical_trades', 'trades')
+        format: sql
+        rows: |
+          select cast('kraken' as varchar) as venue, cast('i-aaa' as varchar) as instrument_id, cast(timestamp '2026-01-06 09:30:00 +10:00' as timestamp(6) with time zone) as trade_ts, 0 as kafka_partition, cast(10 as bigint) as kafka_offset, 1 as trade_ordinal, cast(10 as decimal(38, 18)) as price, cast(1 as decimal(38, 18)) as quantity, false as is_duplicate, cast(1 as bigint) as load_seq
+          union all select 'kraken', 'i-aaa', timestamp '2026-01-06 00:30:00 UTC', 0, 11, 1, 20, 1, false, 2
+    expect:
+      rows:
+        - {window_start: "2026-01-05 00:00:00 UTC", window_end: "2026-01-06 00:00:00 UTC", open: 10, trade_count: 1}
+        - {window_start: "2026-01-06 00:00:00 UTC", window_end: "2026-01-07 00:00:00 UTC", open: 20, trade_count: 1}

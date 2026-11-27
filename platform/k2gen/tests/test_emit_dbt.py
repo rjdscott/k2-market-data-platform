@@ -308,7 +308,7 @@ def test_the_results_union_has_one_guarded_branch_per_writer_and_is_its_contract
     macro = dbt.emit(m)[f"{dbt.ROOT}/macros/k2_test_results.sql"]
     branches = re.findall(r"k2_test_results_exist\('(\w+)', '(\w+)'\) %\}\nunion all\nselect '([\w.-]+)' as \"product_id\", "
                           r".* from (\S+) where \"writer\" = '(\w+)'\n", macro)
-    assert [b[2] for b in branches] == [p.id for p in model.test_results_writers(m)] and len(branches) == 8
+    assert [b[2] for b in branches] == [p.id for p in model.test_results_writers(m)] and len(branches) == 10
     for catalog, schema, pid, relation, writer in branches:
         p = product(m, pid)
         base = model.base_relation(p.domain, p.name, model.TEST_RESULTS)

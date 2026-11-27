@@ -1,0 +1,179 @@
+{
+  "id": "market-analytics.canonical-trades",
+  "name": "canonical-trades",
+  "domain": "market-analytics",
+  "version": "1.0.0",
+  "status": "active",
+  "type": "consumerAligned",
+  "owner": "analytics-team",
+  "purpose": "One row per trade and delivery from every venue, in one set of columns: the venue, the instrument the security master resolved, the trade's time, id, side, price and quantity, the venue's duplicate flag, and the venue row it came from.",
+  "limitations": "Kraken only. A row is a delivery, not a trade: a reader counting trades filters is_duplicate false, as the venue product's rows say. Each venue is read at the snapshot its own tests passed, never its untested main: a venue build that fails its tests leaves this product as it was. A venue paused, never audited or later than its maxLagMinutes adds nothing and the product shows partial with that venue named. The venues' terms of reuse are not yet recorded: the product stays owner-only until they are.",
+  "usage": "Read market_analytics.canonical_trades.trades with is_duplicate false for each trade once, keyed by (venue, kafka_partition, kafka_offset, trade_ordinal, trade_ts); venue plus the last four is the venue silver row it came from. Candles over these trades are market_analytics.candles.",
+  "issued": "2026-01-01T00:00:00Z",
+  "periodicity": "2-59/5 * * * *",
+  "productFile": "documents/contracts/market-analytics/canonical-trades/product.odps.yaml",
+  "inputs": [
+    {
+      "contractId": "market-capture.kraken-trades.silver_trade",
+      "version": "1.0.0",
+      "relation": "market_capture.kraken_trades.silver_trade",
+      "required": false,
+      "maxLagMinutes": 15
+    }
+  ],
+  "outputs": [
+    {
+      "contractId": "market-analytics.canonical-trades.trades",
+      "relation": "market_analytics.canonical_trades.trades",
+      "build": "dbt",
+      "testedRef": "audited",
+      "contractFile": "documents/contracts/market-analytics/canonical-trades/trades.odcs.yaml",
+      "layer": "gold",
+      "version": "1.0.0",
+      "purpose": "One row per trade and delivery of every venue, in one set of columns: each venue silver row once, its duplicate flag as the venue set it, and the venue row's key as its lineage.",
+      "columns": [
+        {
+          "name": "venue",
+          "type": "varchar",
+          "required": true,
+          "primaryKey": true,
+          "description": "The venue the trade happened on, the security master's venue (kraken); a constant per venue input, derived from no column.",
+          "primaryKeyPosition": 1
+        },
+        {
+          "name": "kafka_partition",
+          "type": "integer",
+          "required": true,
+          "primaryKey": true,
+          "description": "The venue row's topic partition; venue, kafka_partition, kafka_offset, trade_ordinal and trade_ts are the venue silver row's key.",
+          "primaryKeyPosition": 2
+        },
+        {
+          "name": "kafka_offset",
+          "type": "bigint",
+          "required": true,
+          "primaryKey": true,
+          "description": "The venue row's frame offset in its partition.",
+          "primaryKeyPosition": 3
+        },
+        {
+          "name": "trade_ordinal",
+          "type": "integer",
+          "required": true,
+          "primaryKey": true,
+          "description": "The venue row's position in its frame, from 1.",
+          "primaryKeyPosition": 4
+        },
+        {
+          "name": "trade_ts",
+          "type": "timestamp(6) with time zone",
+          "required": true,
+          "primaryKey": true,
+          "description": "The venue's time of the trade, in UTC to the microsecond. The partition source (day), so it is in the key, as an incremental merge's unique key holds every partition source column; the first four key columns alone are already unique.",
+          "time": "event",
+          "primaryKeyPosition": 5
+        },
+        {
+          "name": "instrument_id",
+          "type": "varchar",
+          "required": true,
+          "primaryKey": false,
+          "description": "The security master's instrument the venue's symbol named at trade_ts, as the venue product resolved it."
+        },
+        {
+          "name": "venue_symbol",
+          "type": "varchar",
+          "required": true,
+          "primaryKey": false,
+          "description": "The symbol as the venue spells it."
+        },
+        {
+          "name": "trade_id",
+          "type": "bigint",
+          "required": true,
+          "primaryKey": false,
+          "description": "The venue's trade id; with venue and venue_symbol, the trade a delivery is of."
+        },
+        {
+          "name": "side",
+          "type": "varchar",
+          "required": true,
+          "primaryKey": false,
+          "description": "The taker's side, buy or sell."
+        },
+        {
+          "name": "price",
+          "type": "decimal(38,18)",
+          "required": true,
+          "primaryKey": false,
+          "description": "The price in the quote asset, exactly as the venue product holds it."
+        },
+        {
+          "name": "quantity",
+          "type": "decimal(38,18)",
+          "required": true,
+          "primaryKey": false,
+          "description": "The quantity in the base asset, exactly as the venue product holds it."
+        },
+        {
+          "name": "is_duplicate",
+          "type": "boolean",
+          "required": true,
+          "primaryKey": false,
+          "description": "The venue product's flag: true for a later delivery of a trade already delivered. Kept, never dropped; when the venue flips it (a held frame taken back is older than a delivery already published), the row here follows on the next build."
+        },
+        {
+          "name": "load_seq",
+          "type": "bigint",
+          "required": true,
+          "primaryKey": false,
+          "description": "The build order of the row: each build numbers the rows it writes, new or with a changed flag, after the highest number already here, in key order. A derived product (candles) reads the rows past the highest number it has counted, a number rather than a clock (I-1's rule for a watermark). A full refresh numbers from 1 again, so the products built on this one are rebuilt after it."
+        }
+      ],
+      "partitioning": [
+        "day(trade_ts)"
+      ],
+      "retentionDays": null,
+      "roles": [
+        {
+          "role": "full_reader",
+          "inWords": "every row and column"
+        },
+        {
+          "role": "delayed_reader",
+          "policies": {
+            "delay": {
+              "column": "trade_ts",
+              "minutes": 20
+            }
+          },
+          "inWords": "only rows whose trade_ts is at least 20 minutes old"
+        }
+      ],
+      "readers": [],
+      "dbtDocs": "dbt-docs/#!/model/model.k2.canonical_trades__trades"
+    }
+  ],
+  "joinKeys": [],
+  "lineage": {
+    "nodes": [
+      {
+        "id": "market-capture.kraken-trades.silver_trade",
+        "product": "market-capture.kraken-trades",
+        "relation": "market_capture.kraken_trades.silver_trade"
+      },
+      {
+        "id": "market-analytics.canonical-trades.trades",
+        "product": "market-analytics.canonical-trades",
+        "relation": "market_analytics.canonical_trades.trades"
+      }
+    ],
+    "edges": [
+      {
+        "from": "market-capture.kraken-trades.silver_trade",
+        "to": "market-analytics.canonical-trades.trades"
+      }
+    ]
+  },
+  "tag": "v3.0.0-alpha.3-rc.1"
+}

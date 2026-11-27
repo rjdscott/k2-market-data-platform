@@ -1,0 +1,623 @@
+{
+  "id": "market-analytics.candles",
+  "name": "candles",
+  "domain": "market-analytics",
+  "version": "1.0.0",
+  "status": "active",
+  "type": "consumerAligned",
+  "owner": "analytics-team",
+  "purpose": "Open, high, low, close, volume, quote volume and trade count per venue, instrument and time window, at one minute, five minutes, one hour and one day, windows half-open and in UTC.",
+  "limitations": "Kraken only, as canonical-trades is. A window with no trade has no row, rather than a row carried from the last close. A candle is final only once every trade in its window has reached canonical-trades: a trade published late (a venue frame held and taken back) recomputes its candles on the next build, at every timeframe. A venue's later delivery of a trade (is_duplicate) is not counted. quote_volume rounds each price to 12 and each quantity to 10 fractional digits before multiplying, which loses nothing while the listing's pair_decimals and lot_decimals are at most those. The venues' terms of reuse are not yet recorded: the product stays owner-only until they are.",
+  "usage": "Read market_analytics.candles.ohlcv_1m, ohlcv_5m, ohlcv_1h or ohlcv_1d, keyed by (venue, instrument_id, window_start); a window is [window_start, window_end) in UTC, so a day is a UTC day. A delayed_reader sees a candle once window_end is at least 20 minutes old.",
+  "issued": "2026-01-01T00:00:00Z",
+  "periodicity": "4-59/5 * * * *",
+  "productFile": "documents/contracts/market-analytics/candles/product.odps.yaml",
+  "inputs": [
+    {
+      "contractId": "market-analytics.canonical-trades.trades",
+      "version": "1.0.0",
+      "relation": "market_analytics.canonical_trades.trades",
+      "required": true,
+      "maxLagMinutes": 15
+    }
+  ],
+  "outputs": [
+    {
+      "contractId": "market-analytics.candles.ohlcv_1d",
+      "relation": "market_analytics.candles.ohlcv_1d",
+      "build": "dbt",
+      "testedRef": "audited",
+      "contractFile": "documents/contracts/market-analytics/candles/ohlcv_1d.odcs.yaml",
+      "layer": "gold",
+      "version": "1.0.0",
+      "purpose": "One row per venue, instrument and one-day window holding at least one trade: its open, high, low, close, volume, quote volume and trade count over the window's trades, duplicates excluded, the window half-open [window_start, window_end) in UTC. The day is the UTC day, from 00:00:00 UTC to the next, whatever time zone a reader sets.",
+      "columns": [
+        {
+          "name": "venue",
+          "type": "varchar",
+          "required": true,
+          "primaryKey": true,
+          "description": "The venue the trades happened on.",
+          "primaryKeyPosition": 1
+        },
+        {
+          "name": "instrument_id",
+          "type": "varchar",
+          "required": true,
+          "primaryKey": true,
+          "description": "The security master's instrument the trades are of.",
+          "primaryKeyPosition": 2
+        },
+        {
+          "name": "window_start",
+          "type": "timestamp(6) with time zone",
+          "required": true,
+          "primaryKey": true,
+          "description": "The window's first instant, inclusive, in UTC, at midnight.",
+          "time": "event",
+          "primaryKeyPosition": 3
+        },
+        {
+          "name": "window_end",
+          "type": "timestamp(6) with time zone",
+          "required": true,
+          "primaryKey": false,
+          "description": "The window's end, exclusive, in UTC: window_start plus 1 day. Every trade counted has trade_ts before it, so the delayed_reader's delay on it holds for every trade in the candle.",
+          "time": "event"
+        },
+        {
+          "name": "open",
+          "type": "decimal(38,18)",
+          "required": true,
+          "primaryKey": false,
+          "description": "The first trade's price, first by trade_ts, ties broken by the venue row's key (kafka_partition, kafka_offset, trade_ordinal): the capture's order, as the archived candles broke ties by receive time and position in the frame."
+        },
+        {
+          "name": "high",
+          "type": "decimal(38,18)",
+          "required": true,
+          "primaryKey": false,
+          "description": "The highest price."
+        },
+        {
+          "name": "low",
+          "type": "decimal(38,18)",
+          "required": true,
+          "primaryKey": false,
+          "description": "The lowest price."
+        },
+        {
+          "name": "close",
+          "type": "decimal(38,18)",
+          "required": true,
+          "primaryKey": false,
+          "description": "The last trade's price, in the order open uses."
+        },
+        {
+          "name": "volume",
+          "type": "decimal(38,18)",
+          "required": true,
+          "primaryKey": false,
+          "description": "The sum of the trades' quantities, in the base asset, exact."
+        },
+        {
+          "name": "quote_volume",
+          "type": "decimal(38,18)",
+          "required": true,
+          "primaryKey": false,
+          "description": "The sum of price times quantity, in the quote asset: each price rounded half up to 12 and each quantity to 10 fractional digits first, the sum to 18."
+        },
+        {
+          "name": "trade_count",
+          "type": "bigint",
+          "required": true,
+          "primaryKey": false,
+          "description": "The trades counted, each once (is_duplicate false)."
+        },
+        {
+          "name": "first_trade_at",
+          "type": "timestamp(6) with time zone",
+          "required": true,
+          "primaryKey": false,
+          "description": "The earliest trade_ts counted."
+        },
+        {
+          "name": "last_trade_at",
+          "type": "timestamp(6) with time zone",
+          "required": true,
+          "primaryKey": false,
+          "description": "The latest trade_ts counted."
+        },
+        {
+          "name": "through_load_seq",
+          "type": "bigint",
+          "required": true,
+          "primaryKey": false,
+          "description": "The highest canonical-trades load_seq the build that wrote this row had read: the table's watermark is its highest value, and the next build recomputes the windows of the trades written past it."
+        }
+      ],
+      "partitioning": [
+        "year(window_start)"
+      ],
+      "retentionDays": null,
+      "roles": [
+        {
+          "role": "full_reader",
+          "inWords": "every row and column"
+        },
+        {
+          "role": "delayed_reader",
+          "policies": {
+            "delay": {
+              "column": "window_end",
+              "minutes": 20
+            }
+          },
+          "inWords": "only rows whose window_end is at least 20 minutes old"
+        }
+      ],
+      "readers": [],
+      "dbtDocs": "dbt-docs/#!/model/model.k2.candles__ohlcv_1d"
+    },
+    {
+      "contractId": "market-analytics.candles.ohlcv_1h",
+      "relation": "market_analytics.candles.ohlcv_1h",
+      "build": "dbt",
+      "testedRef": "audited",
+      "contractFile": "documents/contracts/market-analytics/candles/ohlcv_1h.odcs.yaml",
+      "layer": "gold",
+      "version": "1.0.0",
+      "purpose": "One row per venue, instrument and one-hour window holding at least one trade: its open, high, low, close, volume, quote volume and trade count over the window's trades, duplicates excluded, the window half-open [window_start, window_end) in UTC.",
+      "columns": [
+        {
+          "name": "venue",
+          "type": "varchar",
+          "required": true,
+          "primaryKey": true,
+          "description": "The venue the trades happened on.",
+          "primaryKeyPosition": 1
+        },
+        {
+          "name": "instrument_id",
+          "type": "varchar",
+          "required": true,
+          "primaryKey": true,
+          "description": "The security master's instrument the trades are of.",
+          "primaryKeyPosition": 2
+        },
+        {
+          "name": "window_start",
+          "type": "timestamp(6) with time zone",
+          "required": true,
+          "primaryKey": true,
+          "description": "The window's first instant, inclusive, in UTC.",
+          "time": "event",
+          "primaryKeyPosition": 3
+        },
+        {
+          "name": "window_end",
+          "type": "timestamp(6) with time zone",
+          "required": true,
+          "primaryKey": false,
+          "description": "The window's end, exclusive, in UTC: window_start plus 1 hour. Every trade counted has trade_ts before it, so the delayed_reader's delay on it holds for every trade in the candle.",
+          "time": "event"
+        },
+        {
+          "name": "open",
+          "type": "decimal(38,18)",
+          "required": true,
+          "primaryKey": false,
+          "description": "The first trade's price, first by trade_ts, ties broken by the venue row's key (kafka_partition, kafka_offset, trade_ordinal): the capture's order, as the archived candles broke ties by receive time and position in the frame."
+        },
+        {
+          "name": "high",
+          "type": "decimal(38,18)",
+          "required": true,
+          "primaryKey": false,
+          "description": "The highest price."
+        },
+        {
+          "name": "low",
+          "type": "decimal(38,18)",
+          "required": true,
+          "primaryKey": false,
+          "description": "The lowest price."
+        },
+        {
+          "name": "close",
+          "type": "decimal(38,18)",
+          "required": true,
+          "primaryKey": false,
+          "description": "The last trade's price, in the order open uses."
+        },
+        {
+          "name": "volume",
+          "type": "decimal(38,18)",
+          "required": true,
+          "primaryKey": false,
+          "description": "The sum of the trades' quantities, in the base asset, exact."
+        },
+        {
+          "name": "quote_volume",
+          "type": "decimal(38,18)",
+          "required": true,
+          "primaryKey": false,
+          "description": "The sum of price times quantity, in the quote asset: each price rounded half up to 12 and each quantity to 10 fractional digits first, the sum to 18."
+        },
+        {
+          "name": "trade_count",
+          "type": "bigint",
+          "required": true,
+          "primaryKey": false,
+          "description": "The trades counted, each once (is_duplicate false)."
+        },
+        {
+          "name": "first_trade_at",
+          "type": "timestamp(6) with time zone",
+          "required": true,
+          "primaryKey": false,
+          "description": "The earliest trade_ts counted."
+        },
+        {
+          "name": "last_trade_at",
+          "type": "timestamp(6) with time zone",
+          "required": true,
+          "primaryKey": false,
+          "description": "The latest trade_ts counted."
+        },
+        {
+          "name": "through_load_seq",
+          "type": "bigint",
+          "required": true,
+          "primaryKey": false,
+          "description": "The highest canonical-trades load_seq the build that wrote this row had read: the table's watermark is its highest value, and the next build recomputes the windows of the trades written past it."
+        }
+      ],
+      "partitioning": [
+        "year(window_start)"
+      ],
+      "retentionDays": null,
+      "roles": [
+        {
+          "role": "full_reader",
+          "inWords": "every row and column"
+        },
+        {
+          "role": "delayed_reader",
+          "policies": {
+            "delay": {
+              "column": "window_end",
+              "minutes": 20
+            }
+          },
+          "inWords": "only rows whose window_end is at least 20 minutes old"
+        }
+      ],
+      "readers": [],
+      "dbtDocs": "dbt-docs/#!/model/model.k2.candles__ohlcv_1h"
+    },
+    {
+      "contractId": "market-analytics.candles.ohlcv_1m",
+      "relation": "market_analytics.candles.ohlcv_1m",
+      "build": "dbt",
+      "testedRef": "audited",
+      "contractFile": "documents/contracts/market-analytics/candles/ohlcv_1m.odcs.yaml",
+      "layer": "gold",
+      "version": "1.0.0",
+      "purpose": "One row per venue, instrument and one-minute window holding at least one trade: its open, high, low, close, volume, quote volume and trade count over the window's trades, duplicates excluded, the window half-open [window_start, window_end) in UTC.",
+      "columns": [
+        {
+          "name": "venue",
+          "type": "varchar",
+          "required": true,
+          "primaryKey": true,
+          "description": "The venue the trades happened on.",
+          "primaryKeyPosition": 1
+        },
+        {
+          "name": "instrument_id",
+          "type": "varchar",
+          "required": true,
+          "primaryKey": true,
+          "description": "The security master's instrument the trades are of.",
+          "primaryKeyPosition": 2
+        },
+        {
+          "name": "window_start",
+          "type": "timestamp(6) with time zone",
+          "required": true,
+          "primaryKey": true,
+          "description": "The window's first instant, inclusive, in UTC.",
+          "time": "event",
+          "primaryKeyPosition": 3
+        },
+        {
+          "name": "window_end",
+          "type": "timestamp(6) with time zone",
+          "required": true,
+          "primaryKey": false,
+          "description": "The window's end, exclusive, in UTC: window_start plus 1 minute. Every trade counted has trade_ts before it, so the delayed_reader's delay on it holds for every trade in the candle.",
+          "time": "event"
+        },
+        {
+          "name": "open",
+          "type": "decimal(38,18)",
+          "required": true,
+          "primaryKey": false,
+          "description": "The first trade's price, first by trade_ts, ties broken by the venue row's key (kafka_partition, kafka_offset, trade_ordinal): the capture's order, as the archived candles broke ties by receive time and position in the frame."
+        },
+        {
+          "name": "high",
+          "type": "decimal(38,18)",
+          "required": true,
+          "primaryKey": false,
+          "description": "The highest price."
+        },
+        {
+          "name": "low",
+          "type": "decimal(38,18)",
+          "required": true,
+          "primaryKey": false,
+          "description": "The lowest price."
+        },
+        {
+          "name": "close",
+          "type": "decimal(38,18)",
+          "required": true,
+          "primaryKey": false,
+          "description": "The last trade's price, in the order open uses."
+        },
+        {
+          "name": "volume",
+          "type": "decimal(38,18)",
+          "required": true,
+          "primaryKey": false,
+          "description": "The sum of the trades' quantities, in the base asset, exact."
+        },
+        {
+          "name": "quote_volume",
+          "type": "decimal(38,18)",
+          "required": true,
+          "primaryKey": false,
+          "description": "The sum of price times quantity, in the quote asset: each price rounded half up to 12 and each quantity to 10 fractional digits first, the sum to 18."
+        },
+        {
+          "name": "trade_count",
+          "type": "bigint",
+          "required": true,
+          "primaryKey": false,
+          "description": "The trades counted, each once (is_duplicate false)."
+        },
+        {
+          "name": "first_trade_at",
+          "type": "timestamp(6) with time zone",
+          "required": true,
+          "primaryKey": false,
+          "description": "The earliest trade_ts counted."
+        },
+        {
+          "name": "last_trade_at",
+          "type": "timestamp(6) with time zone",
+          "required": true,
+          "primaryKey": false,
+          "description": "The latest trade_ts counted."
+        },
+        {
+          "name": "through_load_seq",
+          "type": "bigint",
+          "required": true,
+          "primaryKey": false,
+          "description": "The highest canonical-trades load_seq the build that wrote this row had read: the table's watermark is its highest value, and the next build recomputes the windows of the trades written past it."
+        }
+      ],
+      "partitioning": [
+        "month(window_start)"
+      ],
+      "retentionDays": null,
+      "roles": [
+        {
+          "role": "full_reader",
+          "inWords": "every row and column"
+        },
+        {
+          "role": "delayed_reader",
+          "policies": {
+            "delay": {
+              "column": "window_end",
+              "minutes": 20
+            }
+          },
+          "inWords": "only rows whose window_end is at least 20 minutes old"
+        }
+      ],
+      "readers": [],
+      "dbtDocs": "dbt-docs/#!/model/model.k2.candles__ohlcv_1m"
+    },
+    {
+      "contractId": "market-analytics.candles.ohlcv_5m",
+      "relation": "market_analytics.candles.ohlcv_5m",
+      "build": "dbt",
+      "testedRef": "audited",
+      "contractFile": "documents/contracts/market-analytics/candles/ohlcv_5m.odcs.yaml",
+      "layer": "gold",
+      "version": "1.0.0",
+      "purpose": "One row per venue, instrument and five-minute window holding at least one trade: its open, high, low, close, volume, quote volume and trade count over the window's trades, duplicates excluded, the window half-open [window_start, window_end) in UTC.",
+      "columns": [
+        {
+          "name": "venue",
+          "type": "varchar",
+          "required": true,
+          "primaryKey": true,
+          "description": "The venue the trades happened on.",
+          "primaryKeyPosition": 1
+        },
+        {
+          "name": "instrument_id",
+          "type": "varchar",
+          "required": true,
+          "primaryKey": true,
+          "description": "The security master's instrument the trades are of.",
+          "primaryKeyPosition": 2
+        },
+        {
+          "name": "window_start",
+          "type": "timestamp(6) with time zone",
+          "required": true,
+          "primaryKey": true,
+          "description": "The window's first instant, inclusive, in UTC.",
+          "time": "event",
+          "primaryKeyPosition": 3
+        },
+        {
+          "name": "window_end",
+          "type": "timestamp(6) with time zone",
+          "required": true,
+          "primaryKey": false,
+          "description": "The window's end, exclusive, in UTC: window_start plus 5 minute. Every trade counted has trade_ts before it, so the delayed_reader's delay on it holds for every trade in the candle.",
+          "time": "event"
+        },
+        {
+          "name": "open",
+          "type": "decimal(38,18)",
+          "required": true,
+          "primaryKey": false,
+          "description": "The first trade's price, first by trade_ts, ties broken by the venue row's key (kafka_partition, kafka_offset, trade_ordinal): the capture's order, as the archived candles broke ties by receive time and position in the frame."
+        },
+        {
+          "name": "high",
+          "type": "decimal(38,18)",
+          "required": true,
+          "primaryKey": false,
+          "description": "The highest price."
+        },
+        {
+          "name": "low",
+          "type": "decimal(38,18)",
+          "required": true,
+          "primaryKey": false,
+          "description": "The lowest price."
+        },
+        {
+          "name": "close",
+          "type": "decimal(38,18)",
+          "required": true,
+          "primaryKey": false,
+          "description": "The last trade's price, in the order open uses."
+        },
+        {
+          "name": "volume",
+          "type": "decimal(38,18)",
+          "required": true,
+          "primaryKey": false,
+          "description": "The sum of the trades' quantities, in the base asset, exact."
+        },
+        {
+          "name": "quote_volume",
+          "type": "decimal(38,18)",
+          "required": true,
+          "primaryKey": false,
+          "description": "The sum of price times quantity, in the quote asset: each price rounded half up to 12 and each quantity to 10 fractional digits first, the sum to 18."
+        },
+        {
+          "name": "trade_count",
+          "type": "bigint",
+          "required": true,
+          "primaryKey": false,
+          "description": "The trades counted, each once (is_duplicate false)."
+        },
+        {
+          "name": "first_trade_at",
+          "type": "timestamp(6) with time zone",
+          "required": true,
+          "primaryKey": false,
+          "description": "The earliest trade_ts counted."
+        },
+        {
+          "name": "last_trade_at",
+          "type": "timestamp(6) with time zone",
+          "required": true,
+          "primaryKey": false,
+          "description": "The latest trade_ts counted."
+        },
+        {
+          "name": "through_load_seq",
+          "type": "bigint",
+          "required": true,
+          "primaryKey": false,
+          "description": "The highest canonical-trades load_seq the build that wrote this row had read: the table's watermark is its highest value, and the next build recomputes the windows of the trades written past it."
+        }
+      ],
+      "partitioning": [
+        "month(window_start)"
+      ],
+      "retentionDays": null,
+      "roles": [
+        {
+          "role": "full_reader",
+          "inWords": "every row and column"
+        },
+        {
+          "role": "delayed_reader",
+          "policies": {
+            "delay": {
+              "column": "window_end",
+              "minutes": 20
+            }
+          },
+          "inWords": "only rows whose window_end is at least 20 minutes old"
+        }
+      ],
+      "readers": [],
+      "dbtDocs": "dbt-docs/#!/model/model.k2.candles__ohlcv_5m"
+    }
+  ],
+  "joinKeys": [],
+  "lineage": {
+    "nodes": [
+      {
+        "id": "market-analytics.canonical-trades.trades",
+        "product": "market-analytics.canonical-trades",
+        "relation": "market_analytics.canonical_trades.trades"
+      },
+      {
+        "id": "market-analytics.candles.ohlcv_1d",
+        "product": "market-analytics.candles",
+        "relation": "market_analytics.candles.ohlcv_1d"
+      },
+      {
+        "id": "market-analytics.candles.ohlcv_1h",
+        "product": "market-analytics.candles",
+        "relation": "market_analytics.candles.ohlcv_1h"
+      },
+      {
+        "id": "market-analytics.candles.ohlcv_1m",
+        "product": "market-analytics.candles",
+        "relation": "market_analytics.candles.ohlcv_1m"
+      },
+      {
+        "id": "market-analytics.candles.ohlcv_5m",
+        "product": "market-analytics.candles",
+        "relation": "market_analytics.candles.ohlcv_5m"
+      }
+    ],
+    "edges": [
+      {
+        "from": "market-analytics.canonical-trades.trades",
+        "to": "market-analytics.candles.ohlcv_1m"
+      },
+      {
+        "from": "market-analytics.canonical-trades.trades",
+        "to": "market-analytics.candles.ohlcv_5m"
+      },
+      {
+        "from": "market-analytics.canonical-trades.trades",
+        "to": "market-analytics.candles.ohlcv_1h"
+      },
+      {
+        "from": "market-analytics.canonical-trades.trades",
+        "to": "market-analytics.candles.ohlcv_1d"
+      }
+    ]
+  },
+  "tag": "v3.0.0-alpha.3-rc.1"
+}
