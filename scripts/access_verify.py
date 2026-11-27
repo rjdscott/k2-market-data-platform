@@ -50,7 +50,9 @@ stage (throwaway lake only) makes the lake the release describes, as its build a
 every namespace of the storage plan by REST; Spark's tables checked present (the lake made them);
 each dbt or code product's seeds and models, built as its builder through `<domain>_build` (only
 ref() and config() are rendered; a model with any other Jinja is dbt's, and its output is made in
-its contract's shape with one placeholder row, refused if a read row reads it); one tag commit per warehouse; each view as its
+its contract's shape with one placeholder row, the shape checked by DESCRIBE, refused if a read row
+asserts its rows: a columns-only read row proves the view's columns and the permission, never the
+model's rows); one tag commit per warehouse; each view as its
 publisher (lake.create_view); then one untested write per output, every row again with its key
 moved (+1000 or a zz-untested- prefix), which no reader may ever see; and the platform's Trino DDL
 as svc.platform.
@@ -589,7 +591,7 @@ def stage(release: Path, env_file: Path) -> int:
     spark = [f.stem.split(".") for f in sorted((release / "compiled/lake/ddl/spark").glob("*.sql"))]
     if missing := [".".join(s) for s in spark if catalog_drift.Catalog(uri, s[0]).table(s[1], s[2]) is None]:
         raise SystemExit(f"stage: the release's Spark tables {missing} are not in the catalog; scripts/lib/throwaway-lake.sh up makes them")
-    reads = {e.table for e in m.expectations if isinstance(e, model.TableExpectation)}
+    reads = {e.table for e in m.expectations if isinstance(e, model.TableExpectation) and asserts_rows(e)}
     for w in json.loads((release / model.STORAGE_PLAN).read_text())["warehouses"]:
         cat = catalog_drift.Catalog(uri, w["name"])
         for ns in w["namespaces"]:
@@ -616,17 +618,26 @@ def stage(release: Path, env_file: Path) -> int:
             sql = _CONFIG.sub("", p.models[f"{t.name}.sql"])
             refs = {name: model.quote_relation(model.build_relation(p.domain, p.name, table)) for name, table in names.items()}
             sql = _REF.sub(lambda r, refs=refs: refs[r.group(1)], sql)
-            if "{{" in sql or "{%" in sql:
+            stand_in = "{{" in sql or "{%" in sql
+            if stand_in:
                 # Jinja beyond ref() and config() (source(), a K2 macro, is_incremental()) is dbt's to render
                 # (make test-dbt builds every model): here the output is its contract's columns with one row,
-                # its key a literal and the rest null, enough for the rows that deny it, the drift check and
-                # the marker. A read row needs the model's own rows, so one is refused.
+                # its key a literal and the rest null, enough for the rows that deny it, the drift check, the
+                # marker and a read row that names columns alone. A read row asserting rows needs the
+                # model's own rows, so one is refused.
                 if {model.reader_relation(t), model.input_relation(t)} & reads:
-                    raise SystemExit(f"stage: {p.id} {t.name}: a read row reads it, and only dbt renders its model")
+                    raise SystemExit(f"stage: {p.id} {t.name}: a read row asserts its rows, and only dbt renders its model")
                 sql = "SELECT " + ", ".join(f"CAST({placeholder(c) if c is key_column(t) else 'NULL'} AS {c.physical_type}) "
                                             f"AS {model.quote_ident(c.name)}" for c in t.columns)
             rel = model.build_relation(p.domain, p.name, t.name)
             trino.ok(dbt, f"CREATE TABLE {model.quote_relation(rel)} AS {sql}")
+            if stand_in:  # its shape is the contract's, as Trino describes the table it made: names, order, types
+                got = [r[:2] for r in trino.ok(dbt, f"DESCRIBE {model.quote_relation(rel)}")]
+                if got != (want := [[c.name, c.physical_type] for c in t.columns]):
+                    raise SystemExit(f"stage: {p.id} {t.name}: the placeholder is {got}, its contract {want}")
+                print(f"stage: {p.id} {t.name}: a placeholder of one row in its contract's columns and types (DESCRIBE); "
+                      "a columns-only read row of it proves the reader view's columns and the reader's permission "
+                      "under the release's rules, never the model's rows (make test-dbt builds the model)")
             meta = cat.table(model.base_namespace(p.name), t.name)
             tested = meta["refs"]["main"]["snapshot-id"]
             commits.setdefault(model.warehouse(p.domain), []).append({
@@ -651,6 +662,12 @@ def stage(release: Path, env_file: Path) -> int:
     print(f"stage: {release.name}: {len(built)} output(s) built, tagged and viewed, each with one untested write after its tag; "
           f"{len(list((release / 'compiled/lake/ddl/trino').glob('*.sql')))} platform table(s)")
     return 0
+
+
+def asserts_rows(e: Any) -> bool:
+    """Whether a read row asserts anything of the rows (a mask, an age, mustNotAppear, mustAppear),
+    not only the column set and the permission to read: what a placeholder output cannot show."""
+    return bool(e.masked or e.min_row_age_minutes is not None or e.must_not_appear or e.must_appear)
 
 
 def key_column(t: Any) -> Any:

@@ -523,3 +523,19 @@ def test_a_missing_key_fails_its_row_naming_the_variable(s3):
     passed, why = av.storage_key(row("trino", "k2-lake/warehouse/governance", "read", "allowed"), env)
     assert not passed and "K2_TRINO_S3_SECRET_KEY" in why and "K2_TRINO_S3_ACCESS_KEY" not in why
     assert s3.seen == []  # nothing was sent without a full pair
+
+
+# ---- stage's placeholders (phase 002, W2-9) ------------------------------------------------------
+
+def read(**asserts) -> SimpleNamespace:
+    return SimpleNamespace(principal="p.a", table="d.f.t", via=("sql",), visible=("id",), masked=(), min_row_age_minutes=None,
+                           must_not_appear=None, must_appear=None) if not asserts else \
+        SimpleNamespace(**{**vars(read()), **asserts})
+
+
+@pytest.mark.parametrize("asserts,rows", [
+    ({}, False), ({"masked": ("note",)}, True), ({"min_row_age_minutes": 0}, True), ({"must_not_appear": "id > 1"}, True),
+    ({"must_appear": SimpleNamespace(where=None, min_rows=1)}, True)])
+def test_a_read_row_asserts_rows_unless_it_names_columns_alone(asserts, rows):
+    """A columns-only read row runs on a placeholder of its contract's shape; any row assertion needs the model's rows."""
+    assert av.asserts_rows(read(**asserts)) is rows

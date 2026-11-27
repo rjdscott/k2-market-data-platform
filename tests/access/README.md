@@ -58,6 +58,21 @@ a denial row as an undeclared principal, but the runner does not run such rows y
 every row naming a principal the release does not declare. `scripts/trino_rules_test.py` proves
 both today (its rows `impersonation` and `strangers`).
 
+## A read row on a placeholder
+
+At release time `access_verify.py stage` builds each dbt output on the throwaway lake from its
+model, rendering only `ref()` and `config()`. A model with any other Jinja (`source()`,
+`k2_input()`, `is_incremental()`) is dbt's to render, so stage makes a placeholder instead: one
+row in the contract's columns and types, its key a literal and the rest null, the shape checked
+with `DESCRIBE`. The reader view over it and the rules are the release's own.
+
+A read row that names only `principal`, `table` and `visible` runs on such a placeholder. It
+proves that the principal may read the reader view under the release's rules and that the view
+shows exactly those columns. It proves nothing about the model's rows, and not that dbt builds
+the model to the contract's shape (`make test-dbt` does). A read row with `masked`,
+`minRowAgeMinutes`, `mustNotAppear` or `mustAppear` needs the model's real rows, so stage refuses
+it on a placeholder.
+
 ## The proof behind the suite
 
 `make test-access RELEASE=<release dir>` runs `prove.sh` on a throwaway lake. It shows that the
