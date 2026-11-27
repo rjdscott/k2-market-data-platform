@@ -23,8 +23,12 @@ COPY services/k2-api/openapi.yaml /opt/k2/api/openapi.yaml
 COPY services/k2-api/k2api /opt/k2/api/k2api
 WORKDIR /opt/k2/api
 # The app imports, and reads the frozen document beside its package, before the image exists.
+# /srv/k2-site: the k2-site volume's mount point, mode 1777 as in the tools image's /site, so the
+# volume's root is the same whichever image mounts it first, empty (docker copies the mount point's
+# mode in): the generators, run as the host user, can write it; this reads it, mounted read-only.
 RUN /opt/k2/api-venv/bin/python -m compileall -q k2api \
-    && /opt/k2/api-venv/bin/python -c "import k2api.app as a; assert a.SPEC['openapi'] == '3.1.0'"
+    && /opt/k2/api-venv/bin/python -c "import k2api.app as a; assert a.SPEC['openapi'] == '3.1.0'" \
+    && mkdir -m 1777 /srv/k2-site
 
 ENV PATH=/opt/k2/api-venv/bin:$PATH \
     PYTHONDONTWRITEBYTECODE=1 \
