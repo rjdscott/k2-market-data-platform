@@ -1,4 +1,5 @@
 """k2runs against a fake connection: no network, no Trino."""
+import json
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -93,3 +94,63 @@ def test_newest_audited_found_and_not_found():
     assert k2runs.newest_audited(Conn(cur), "g_build.x.t") == 42
     assert cur.calls[0][1] == ["g_build.x.t"] and "?" in cur.calls[0][0]
     assert k2runs.newest_audited(Conn(Cur()), "g_build.x.t") is None
+
+
+def test_offset_gap_round_trips_and_an_unknown_event_is_still_refused():
+    cur = Cur()
+    gap = {"partitions": [{"partition": 3, "fromOffset": 10, "toOffset": 19}], "reason": "retention"}
+    k2runs.record(Conn(cur), **(BASE | dict(task="load", event="offset_gap")), detail=json.dumps(gap))
+    p = dict(zip(k2runs.COLUMNS, cur.calls[0][1]))
+    assert p["event"] == "offset_gap" and json.loads(p["detail"]) == gap
+    with pytest.raises(k2runs.RunRecordError):
+        k2runs.record(Conn(Cur()), **(BASE | dict(event="gap")))
+
+
+T0 = datetime(2026, 11, 28, 1, 0, tzinfo=timezone.utc)
+A, B = "market-capture.kraken-trades.silver_trade", "market-capture.kraken-instruments.silver_listing"
+
+
+def inp(cid, state="active", snapshot=5):
+    return {"contractId": cid, "relation": "lake.x.y", "snapshot": snapshot, "state": state, "lagMinutes": 1}
+
+
+def build(run="d/r2", minutes=0, inputs=None, detail=None, event="passed"):
+    return dict(run_id=run, task="build", event=event, recorded_at=T0 + timedelta(minutes=minutes),
+                inputs=None if inputs is None else json.dumps(inputs), detail=detail)
+
+
+def test_state_no_records_and_all_inputs_good_is_complete():
+    assert k2runs.state([]) == "complete"
+    assert k2runs.state([build(inputs=[inp(A), inp(B)])]) == "complete"
+
+
+def test_state_partial_names_paused_and_never_audited_inputs_sorted():
+    assert k2runs.state([build(inputs=[inp(B, "paused"), inp(A, snapshot=None), inp("a.b.c")])]) == f"partial: {B}, {A}"
+
+
+def test_state_degraded_from_the_detail_and_only_for_the_newest_run():
+    bad = '{"degraded":true,"warned":["unresolved rows = 0"]}'
+    assert k2runs.state([build(detail=bad)]) == "degraded"
+    older = build("d/r1", -60, [inp(A, "paused")], detail=bad)
+    assert k2runs.state([older, build(inputs=[inp(A)])]) == "complete"
+    assert k2runs.state([build(detail="plain message"), build(detail='{"degraded":false}')]) == "complete"
+
+
+def test_state_precedence_degraded_over_partial_and_other_tasks_ignored():
+    rows = [build(inputs=[inp(A, "paused")], detail='{"degraded":true}'),
+            dict(run_id="d/r3", task="audit", event="passed", recorded_at=T0 + timedelta(hours=1), inputs=None, detail=None)]
+    assert k2runs.state(rows) == "degraded"
+
+
+def test_state_reads_inputs_given_as_a_list():
+    row = build() | {"inputs": [inp(A, "paused")]}
+    assert k2runs.state([row]) == f"partial: {A}"
+
+
+def test_offset_gaps_newest_first_and_bad_detail_skipped():
+    def d(r):
+        return json.dumps({"partitions": [{"partition": 0, "fromOffset": 1, "toOffset": 2}], "reason": r})
+
+    rows = [dict(event="offset_gap", recorded_at=T0, detail=d("old")), dict(event="offset_gap", recorded_at=T0 + timedelta(hours=1), detail=d("new")),
+            dict(event="offset_gap", recorded_at=T0, detail="not json"), dict(event="passed", recorded_at=T0, detail=d("x"))]
+    assert [g["reason"] for g in k2runs.offset_gaps(rows)] == ["new", "old"]

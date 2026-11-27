@@ -8,6 +8,12 @@
 #   scripts/lib/throwaway-lake.sh down  <prefix>
 #   scripts/lib/throwaway-lake.sh state <prefix>
 #   scripts/lib/throwaway-lake.sh init  <prefix>
+#   scripts/lib/throwaway-lake.sh seed  <prefix> [fixture.jsonl]
+#
+# K2_THROWAWAY_REDPANDA=1 on up adds one Redpanda (redpanda_up below); without it, up is as before.
+# seed: scripts/lib/kafka_seed.py in compose's Spark image on this lake's network, the fixture's
+#   frames (default services/capture-rust/tests/fixtures/synthetic-kraken-20s.jsonl) produced to
+#   Kraken's raw topic as capture frames them; its one count line.
 #
 # up: the release (a sealed <root>/<id> from `k2gen release`) is copied to <state>/releases/<id>
 #   and mounted read-only at /k2/releases, `pointers/trino -> ../<id>`, and Trino runs
@@ -70,7 +76,7 @@ image() {  # image <pattern>: the first image line of docker-compose.yml matchin
 }
 
 cmd=${1:-}; P=${2:-}
-[ -n "$cmd" ] && [ -n "$P" ] || die "usage: $0 up|py|down|state|init <prefix> ..."
+[ -n "$cmd" ] && [ -n "$P" ] || die "usage: $0 up|py|down|state|init|seed <prefix> ..."
 [[ "$P" =~ ^[a-z][a-z0-9-]{1,30}$ ]] || die "prefix $P: lower-case letters, digits and hyphens"
 [[ "$P" == k2 || "$P" == k2-* ]] && die "prefix $P could collide with the running stack's k2-* names"
 STATE=${K2_THROWAWAY_ROOT:-$HOME/.k2-throwaway}/$P
@@ -158,6 +164,40 @@ for f in sorted(Path("/k2/releases/pointers/trino/compiled/lake/ddl/spark").glob
 print(f"spark-ddl: {made} table(s) made")
 spark.stop()
 PY
+}
+
+RAW_TOPIC=market.crypto.v3.raw.kraken  # docker/redpanda/init.sh's name for Kraken's raw frames, which kraken-trades reads
+redpanda_up() {  # K2_THROWAWAY_REDPANDA=1: one broker and its schema registry, Kraken's raw topic, RawMessage's subject
+  [ "${K2_THROWAWAY_REDPANDA:-}" = 1 ] || return 0
+  local rp=$P-redpanda t0=$SECONDS
+  # docker-compose.yml's service redpanda: its image, dev-container mode, one shard, one listener each
+  # (redpanda:9092, :8081, spark_conf.py's defaults) and no host port; 512M for Seastar under a 1g cap.
+  docker run -d --label "$LABEL" --network "$NET" --network-alias redpanda --name "$rp" --memory 1g --cpus 1 \
+    -v "$REPO/schemas/avro:/schemas:ro" "$(image 'docker.redpanda.com/redpandadata/redpanda:')" \
+    redpanda start --kafka-addr internal://0.0.0.0:9092 --advertise-kafka-addr internal://redpanda:9092 \
+    --schema-registry-addr internal://0.0.0.0:8081 --rpc-addr redpanda:33145 --advertise-rpc-addr redpanda:33145 \
+    --mode dev-container --smp 1 --memory 512M >/dev/null
+  until docker exec "$rp" curl -sf http://localhost:8081/subjects >/dev/null 2>&1; do
+    if [ "$(docker inspect -f '{{.State.Running}}' "$rp")" != true ] || [ $((SECONDS - t0)) -gt 60 ]; then
+      docker logs --tail 30 "$rp" >&2 || true
+      die "redpanda's schema registry did not answer"
+    fi
+    sleep 1
+  done
+  docker exec "$rp" rpk topic create "$RAW_TOPIC" --partitions 3 >/dev/null
+  docker exec "$rp" rpk registry schema create "$RAW_TOPIC-value" --schema /schemas/raw-message.avsc >/dev/null
+  say "redpanda: $RAW_TOPIC (3 partitions), subject $RAW_TOPIC-value schema id $(docker exec "$rp" curl -sf \
+    "http://localhost:8081/subjects/$RAW_TOPIC-value/versions/latest" | grep -oE '"id":[0-9]+' | cut -d: -f2), in $((SECONDS - t0)) s"
+}
+
+seed() {  # seed [fixture]: scripts/lib/kafka_seed.py in compose's Spark image, on this lake's network
+  local fx=${1:-$REPO/services/capture-rust/tests/fixtures/synthetic-kraken-20s.jsonl}
+  [ "$(docker inspect -f '{{.State.Running}}' "$P-redpanda" 2>/dev/null)" = true ] || die "seed: no Redpanda for $P (K2_THROWAWAY_REDPANDA=1 on up)"
+  [ -f "$fx" ] || die "seed: no fixture $fx"
+  fx=$(cd "$(dirname "$fx")" && pwd)/$(basename "$fx")
+  docker run --rm -i --label "$LABEL" --network "$NET" --memory 1536m --cpus 1 --name "$P-kafka-seed" \
+    -v "$fx:/seed/frames.jsonl:ro" --entrypoint python3 "$(image 'k2-spark-iceberg:')" - /seed/frames.jsonl "$RAW_TOPIC" \
+    < "$REPO/scripts/lib/kafka_seed.py"
 }
 
 api_up() {  # k2-api, when a REST row needs it (the key step above made api/keys.json)
@@ -358,6 +398,7 @@ PY
     "$trino_image" /usr/lib/trino/bin/launcher run --etc-dir "$POINTER_ETC" >/dev/null
   local t0=$SECONDS
   spark_ddl  # while Trino starts: the two JVMs' starts overlap
+  redpanda_up
   until docker exec "${TOOLS_ENV[@]}" "$TOOLS" python3 -c "
 import json, ssl, urllib.request
 ctx = ssl.create_default_context(cafile='/work/secrets/k2/tls/ca.pem')
@@ -378,5 +419,6 @@ case "$cmd" in
   down) down; say "down: $P" ;;
   state) echo "$STATE" ;;
   init) init ;;
+  seed) shift 2; seed "$@" ;;
   *) die "unknown command $cmd" ;;
 esac
