@@ -1,4 +1,5 @@
 """k2runs against a fake connection: no network, no Trino."""
+import json
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -93,3 +94,13 @@ def test_newest_audited_found_and_not_found():
     assert k2runs.newest_audited(Conn(cur), "g_build.x.t") == 42
     assert cur.calls[0][1] == ["g_build.x.t"] and "?" in cur.calls[0][0]
     assert k2runs.newest_audited(Conn(Cur()), "g_build.x.t") is None
+
+
+def test_offset_gap_round_trips_and_an_unknown_event_is_still_refused():
+    cur = Cur()
+    gap = {"partitions": [{"partition": 3, "fromOffset": 10, "toOffset": 19}], "reason": "retention"}
+    k2runs.record(Conn(cur), **(BASE | dict(task="load", event="offset_gap")), detail=json.dumps(gap))
+    p = dict(zip(k2runs.COLUMNS, cur.calls[0][1]))
+    assert p["event"] == "offset_gap" and json.loads(p["detail"]) == gap
+    with pytest.raises(k2runs.RunRecordError):
+        k2runs.record(Conn(Cur()), **(BASE | dict(event="gap")))
