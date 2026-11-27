@@ -1,0 +1,110 @@
+# Compiled by k2gen (platform/k2gen/k2gen/emit/alerts.py) from the release's contracts: never edit.
+# Per-product alert rules (I-5, docs/development/phase-001-interfaces.md, "Per-product alerts").
+groups:
+  - name: "product:ops-insight.daily-load"
+    interval: 30s
+    rules:
+      - alert: ProductRunFailed_daily_load
+        expr: |
+          max by (dag_id) (
+            increase(airflow_dagrun_duration_failed_count{dag_id="daily_load"}[15m]) > 0
+              or (airflow_dagrun_duration_failed_count{dag_id="daily_load"} unless airflow_dagrun_duration_failed_count{dag_id="daily_load"} offset 15m)
+          )
+        labels:
+          severity: "critical"
+          product: "ops-insight.daily-load"
+          dag_id: "daily_load"
+          domain: "ops-insight"
+        annotations:
+          summary: "ops-insight.daily-load: a run of DAG daily_load failed"
+          description: "A run of daily_load ended failed within the last 15m; its task log says which task failed and why."
+          runbook: docs/runbooks/airflow-scheduling.md
+
+      - alert: ProductStale_daily_load
+        expr: |
+          (
+            (sum by (dag_id) (increase(airflow_dagrun_duration_success_count{dag_id="daily_load"}[3d])) == 0
+              unless on (dag_id) (airflow_dagrun_duration_success_count{dag_id="daily_load"} unless airflow_dagrun_duration_success_count{dag_id="daily_load"} offset 3d))
+            or absent_over_time(airflow_dagrun_duration_success_count{dag_id="daily_load"}[3d])
+          )
+          unless on (dag_id) (airflow_ti_running{dag_id="daily_load",task_id=~"maintain|compact"} > 0)
+        for: 2m
+        labels:
+          severity: "critical"
+          product: "ops-insight.daily-load"
+          dag_id: "daily_load"
+          domain: "ops-insight"
+        annotations:
+          summary: "ops-insight.daily-load: no successful run in 3d"
+          description: "No run of daily_load (30 1 * * *, UTC) has succeeded in 3d and no maintain or compact task is running: the DAG is paused, held, failing or not being scheduled."
+          runbook: docs/runbooks/airflow-scheduling.md
+
+      - alert: ProductRunSlow_daily_load
+        expr: |
+          max by (dag_id) (
+            increase(airflow_dagrun_duration_success_sum{dag_id="daily_load"}[1d]) / increase(airflow_dagrun_duration_success_count{dag_id="daily_load"}[1d])
+              or (airflow_dagrun_duration_success_sum{dag_id="daily_load"} / airflow_dagrun_duration_success_count{dag_id="daily_load"} unless airflow_dagrun_duration_success_count{dag_id="daily_load"} offset 1d)
+          ) > 69120
+        labels:
+          severity: "warning"
+          product: "ops-insight.daily-load"
+          dag_id: "daily_load"
+          domain: "ops-insight"
+        annotations:
+          summary: "ops-insight.daily-load: runs of DAG daily_load near its 1440-minute schedule interval (it has no timeout)"
+          description: "The runs of daily_load that succeeded in the last 1d took on average over 69120 s, 80% of its 1440-minute schedule interval (it has no timeout)."
+          runbook: docs/runbooks/airflow-scheduling.md
+
+  - name: "product:sensor-net.station-readings"
+    interval: 30s
+    rules:
+      - alert: ProductRunFailed_station_readings
+        expr: |
+          max by (dag_id) (
+            increase(airflow_dagrun_duration_failed_count{dag_id="station_readings"}[15m]) > 0
+              or (airflow_dagrun_duration_failed_count{dag_id="station_readings"} unless airflow_dagrun_duration_failed_count{dag_id="station_readings"} offset 15m)
+          )
+        labels:
+          severity: "warning"
+          product: "sensor-net.station-readings"
+          dag_id: "station_readings"
+          domain: "sensor-net"
+        annotations:
+          summary: "sensor-net.station-readings: a run of DAG station_readings failed"
+          description: "A run of station_readings ended failed within the last 15m; its task log says which task failed and why."
+          runbook: docs/runbooks/airflow-scheduling.md
+
+      - alert: ProductStale_station_readings
+        expr: |
+          (
+            (sum by (dag_id) (increase(airflow_dagrun_duration_success_count{dag_id="station_readings"}[3h])) == 0
+              unless on (dag_id) (airflow_dagrun_duration_success_count{dag_id="station_readings"} unless airflow_dagrun_duration_success_count{dag_id="station_readings"} offset 3h))
+            or absent_over_time(airflow_dagrun_duration_success_count{dag_id="station_readings"}[3h])
+          )
+          unless on (dag_id) (airflow_ti_running{dag_id="station_readings",task_id=~"maintain|compact"} > 0)
+        for: 2m
+        labels:
+          severity: "warning"
+          product: "sensor-net.station-readings"
+          dag_id: "station_readings"
+          domain: "sensor-net"
+        annotations:
+          summary: "sensor-net.station-readings: no successful run in 3h"
+          description: "No run of station_readings (15 * * * *, UTC) has succeeded in 3h and no maintain or compact task is running: the DAG is paused, held, failing or not being scheduled."
+          runbook: docs/runbooks/airflow-scheduling.md
+
+      - alert: ProductRunSlow_station_readings
+        expr: |
+          max by (dag_id) (
+            increase(airflow_dagrun_duration_success_sum{dag_id="station_readings"}[1h]) / increase(airflow_dagrun_duration_success_count{dag_id="station_readings"}[1h])
+              or (airflow_dagrun_duration_success_sum{dag_id="station_readings"} / airflow_dagrun_duration_success_count{dag_id="station_readings"} unless airflow_dagrun_duration_success_count{dag_id="station_readings"} offset 1h)
+          ) > 480
+        labels:
+          severity: "warning"
+          product: "sensor-net.station-readings"
+          dag_id: "station_readings"
+          domain: "sensor-net"
+        annotations:
+          summary: "sensor-net.station-readings: runs of DAG station_readings near its 10-minute timeout"
+          description: "The runs of station_readings that succeeded in the last 1h took on average over 480 s, 80% of its 10-minute timeout."
+          runbook: docs/runbooks/airflow-scheduling.md
