@@ -13,8 +13,14 @@
       "table": "lake.kraken_trades.bronze_trade",
       "values": [
         "kafka_timestamp",
-        "record_key",
-        "record_value"
+        "schema_id",
+        "exchange",
+        "stream",
+        "symbol",
+        "recv_ts_ns",
+        "conn_id",
+        "conn_msg_seq",
+        "payload"
       ]
     }
   ],

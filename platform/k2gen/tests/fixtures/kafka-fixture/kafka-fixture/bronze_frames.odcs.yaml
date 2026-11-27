@@ -6,7 +6,7 @@ version: 1.0.0
 domain: market-capture
 description:
   purpose: >-
-    Synthetic: the landing's trade frames, staged by offset, exactly the landing's nine columns
+    Synthetic: the landing's trade frames, staged by offset, their RawMessage envelope decoded
     (docs/development/phase-001-interfaces.md, "Bronze").
 team:
   name: capture-team
@@ -35,13 +35,30 @@ schema:
         customProperties:
           - property: time
             value: event
-      - name: record_key
+      - name: schema_id
+        physicalType: integer
+        description: The frame's Confluent writer schema id, the registry's id for the RawMessage version that wrote it; null for a record that is not Confluent-framed, which the audit's parses fails.
+      - name: exchange
+        physicalType: varchar
+        description: RawMessage.exchange, the venue identifier, decoded by the writer schema.
+      - name: stream
+        physicalType: varchar
+        description: RawMessage.stream, the subscription the frame arrived on; trade for every row the filter kept.
+      - name: symbol
+        physicalType: varchar
+        description: RawMessage.symbol, the instrument as the venue spells it; null for a frame of no single instrument.
+      - name: recv_ts_ns
+        physicalType: bigint
+        description: RawMessage.recv_ts_ns, the capture's receive time, nanoseconds since the Unix epoch.
+      - name: conn_id
+        physicalType: varchar
+        description: RawMessage.conn_id, the WebSocket connection the frame arrived on.
+      - name: conn_msg_seq
+        physicalType: bigint
+        description: RawMessage.conn_msg_seq, the capture's counter of frames on conn_id, from 1.
+      - name: payload
         physicalType: varbinary
-        description: The key's bytes as read.
-      - name: record_value
-        physicalType: varbinary
-        required: true
-        description: The value's bytes as read.
+        description: RawMessage.payload, the venue's frame byte for byte as it came off the socket.
       - name: batch_id
         physicalType: varchar
         required: true

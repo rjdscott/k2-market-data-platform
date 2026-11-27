@@ -4,8 +4,11 @@ phase-001-interfaces.md, "A Kafka product's pipeline" and the public-API spool).
 documents check, so every document here is schema-valid. Each rule a code in CODES:
 
 - kafka-bronze-shape: a kafka product has exactly one connector table, staged from the landing
-  by offset (docker/lake/kafka.py stages into one), whose columns are the landing's nine by name
-  and type (model.PLATFORM_TABLES["landing"]) keyed (kafka_partition, kafka_offset), in that order;
+  by offset (docker/lake/kafka.py stages into one), keyed (kafka_partition, kafka_offset), whose
+  columns are, in order, KAFKA_LEAD, at least one column of the decoded envelope by its field
+  name, and KAFKA_LINEAGE, by name and type (I-1, 2026-11-28: Trino decodes no Avro, so bronze
+  carries the envelope decoded); schema_id and the envelope columns are not required, so a frame
+  that does not decode reaches bronze, null there, for the audit's parses to fail;
 - envelope-unresolved: the connector's envelope.contract is a table contract of the set;
 - host-outside-stack: every broker host and the registry's host is a service of the set's compose
   file on a network of LOADER, the service the load runs in, so a topic is read from the stack's
@@ -43,6 +46,10 @@ CODES = (
     "connectors.url-host-not-allowed",
 )
 KAFKA_KEY = ("kafka_partition", "kafka_offset")
+_LANDING = {col.name: col.type for col in model.PLATFORM_TABLES[model.KAFKA_LANDING].columns}
+# The landing's offset key and timestamp, then the frame's Confluent writer schema id (kafka.py BRONZE_LEAD)
+KAFKA_LEAD = (*((n, _LANDING[n]) for n in ("kafka_partition", "kafka_offset", "kafka_timestamp")), ("schema_id", "integer"))
+KAFKA_LINEAGE = tuple((n, _LANDING[n]) for n in ("batch_id", "landed_at", "run_id", "release_id"))  # the landing batch's
 LOADER = "spark-iceberg"  # the compose service connector.py's load runs in (the factory's SPARK container)
 
 
@@ -77,16 +84,19 @@ def _stack_hosts(compose: bytes | None) -> set[str] | None:
 
 def _kafka(d: Any, c: dict[str, Any], at: str, path: str, contracts: set[str], hosts: set[str] | None) -> Iterator[Finding]:
     tables = [t for t, contract in d.contracts.items() if _build(contract) == "connector"]
-    landing = {col.name: col.type for col in model.PLATFORM_TABLES[model.KAFKA_LANDING].columns}
     if len(tables) != 1:
         yield _finding("connectors.kafka-bronze-shape", path, f"{at}: a kafka product stages one bronze table from its landing, and this one builds {len(tables)} by connector ({', '.join(tables) or 'none'}); keep exactly one")
     for t in tables:
         columns = d.contracts[t]["schema"][0]["properties"]
-        typed = {col["name"]: col["physicalType"] for col in columns}
+        typed = [(col["name"], col["physicalType"]) for col in columns]
         key = [col["name"] for col in sorted((col for col in columns if col.get("primaryKey")), key=lambda col: col.get("primaryKeyPosition") or 0)]
-        if typed != landing or tuple(key) != KAFKA_KEY:
-            want = ", ".join(f"{n} {ty}" for n, ty in landing.items())
-            yield _finding("connectors.kafka-bronze-shape", d.at(f"{t}.odcs.yaml"), f"$.schema[0].properties: a kafka product's bronze table holds exactly the landing's columns ({want}), primaryKey kafka_partition then kafka_offset, as kafka.py stages them; it has {', '.join(f'{n} {ty}' for n, ty in typed.items())} keyed by {', '.join(key) or 'nothing'}")
+        lead, envelope, lineage = typed[:len(KAFKA_LEAD)], typed[len(KAFKA_LEAD):len(typed) - len(KAFKA_LINEAGE)], typed[len(typed) - len(KAFKA_LINEAGE):]
+        reserved = {n for n, _ in (*KAFKA_LEAD, *KAFKA_LINEAGE)} | set(_LANDING)
+        required = [col["name"] for col in columns[len(KAFKA_LEAD) - 1:len(columns) - len(KAFKA_LINEAGE)] if col.get("required")]
+        if (tuple(lead) != KAFKA_LEAD or tuple(lineage) != KAFKA_LINEAGE or not envelope or tuple(key) != KAFKA_KEY
+                or any(n in reserved for n, _ in envelope) or required):
+            want = ", ".join(f"{n} {ty}" for n, ty in KAFKA_LEAD) + ", then each envelope column, then " + ", ".join(f"{n} {ty}" for n, ty in KAFKA_LINEAGE)
+            yield _finding("connectors.kafka-bronze-shape", d.at(f"{t}.odcs.yaml"), f"$.schema[0].properties: a kafka product's bronze table holds {want}: at least one envelope column, named as its field and never a landing or lineage column, schema_id and each envelope column not required (a frame that does not decode is staged with them null and fails parses); primaryKey kafka_partition then kafka_offset; as kafka.py stages them; it has {', '.join(f'{n} {ty}' for n, ty in typed)} keyed by {', '.join(key) or 'nothing'}{', required ' + ', '.join(required) if required else ''}")
     if c["envelope"]["contract"] not in contracts:
         yield _finding("connectors.envelope-unresolved", path, f"{at}.envelope.contract: no contract in the set has id {c['envelope']['contract']}; name the table contract that declares the envelope's fields")
     named = [(f"{at}.brokers", b.rsplit(":", 1)[0]) for b in c["brokers"].split(",")]
