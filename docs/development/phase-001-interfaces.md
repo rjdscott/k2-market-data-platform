@@ -342,6 +342,15 @@ column. `schema_id` and the envelope columns are never `required`: a frame unfra
 is no `RawMessage`, or whose body does not read, is staged with them null and fails `parses`.
 k2gen's `connectors.kafka-bronze-shape` and `pipeline.schema.json` hold this shape.
 
+2026-11-28 (review finding D2): a kill between the stage and the audit leaves no stuck batch either.
+A stage that finds another run's batch unpublished on `audit` resets `audit` to `main` and stages
+the range again from `main`'s through-offsets, with whatever landed since, when that batch has no
+`audit_checks` row at its snapshot (never audited) or its newest audit passed every check (never
+published); it is refused, naming the failed checks and the `REPLACE BRANCH` (no `main`: `DROP
+BRANCH`) that clears it, when its newest audit failed or lacks a check, or no Kafka stage wrote the
+head. A batch that failed its audit is never reset. The file kinds keep their rule: any other
+batch blocks.
+
 **The envelope contract.** The capture's `RawMessage` (`schemas/avro/raw-message.avsc`, subject
 `market.crypto.v3.raw.<exchange>-value`) is declared by `market-capture` as the table contract
 `contracts/market-capture/kraken-trades/raw_message.odcs.yaml`, id

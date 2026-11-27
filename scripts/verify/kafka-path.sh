@@ -35,6 +35,12 @@
 #  10 bronze carries the decoded envelope (I-1, 2026-11-28): its columns the contract's, every row
 #     stream = trade, schema_id the registered id, payload the seeded line's bytes byte for byte,
 #     symbol as the adapter's rule has it; the corrupt frame staged with every envelope column null
+#  11 a run killed between stage and audit (k10: its load alone, as the run's timeout leaves it) is
+#     healed by the next scheduled run (k11) with no operator action: k10's batch never audited,
+#     k11 restages its range with the new one, audits and publishes; every trade once, no hole
+#  12 a batch that failed its audit (k9's) is never reset: the next load (k12) exits 2 naming the
+#     failed check and the statement that clears it, audit and main unmoved
+#  (9 and 10 compare k9 with k11, the run before the corrupt frame)
 # group b
 #   1 a start below the log start (records deleted by `rpk topic trim-prefix` past the committed end
 #     offsets, on every partition that has them) fails loudly naming each partition; nothing lands
@@ -67,7 +73,7 @@ set -uo pipefail
 # shellcheck source=scripts/lib/run-path-lib.sh
 . "$(dirname "$0")/../lib/run-path-lib.sh"
 GROUP=${2:-a}
-case $GROUP in a) N=10 ;; b) N=6 ;; c) N=6 ;; *) echo "kafka-path: no group $GROUP (a, b or c)" >&2; exit 2 ;; esac
+case $GROUP in a) N=12 ;; b) N=6 ;; c) N=6 ;; *) echo "kafka-path: no group $GROUP (a, b or c)" >&2; exit 2 ;; esac
 rp_start kafka-path "${1:-}" "$N"
 FX=platform/k2gen/tests/fixtures/kafka-fixture
 KF=market-capture.kafka-fixture DAG=kafka_fixture
@@ -193,9 +199,12 @@ seed "$FULL"; run k5; facts k5
 seed "$FULL"; kkill before k6; facts k6                        # 5
 run k7; facts k7
 seed "$FULL"; kkill after k8; TRY=2 ktask k8 load; ktask k8 audit; ktask k8 publish; facts k8   # 6, 7
+seed "$FULL"; ktask k10 load; facts k10                        # 11: its run ended after the stage
+seed "$FULL"; run k11; facts k11
 docker exec -i "$SPARK" python3 - corrupt "/k2/releases/$ID" "$KF" < "$PROBE" > "$RP/corrupt.log" 2>&1 \
   || echo "$P: the corrupt frame was not produced: $(tail -2 "$RP/corrupt.log")"
 run k9; facts k9                                               # 9
+ktask k12 load; facts k12                                      # 12
 
-timings; claims land publish idle kill-after kill-before retry key empty corrupt envelope
+timings; claims land publish idle kill-after kill-before retry key empty corrupt envelope heal blocked
 finish

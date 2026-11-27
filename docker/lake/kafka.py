@@ -26,8 +26,10 @@ stage  takes, per partition, every landing row after the offset bronze has stage
        keeps its records for bronze's `audit` branch and counts the rest; kept plus skipped must
        equal the rows read. The bronze commit records the through-offsets (the landing's end
        offsets: trailing skipped records advance them too), the landing snapshot it read and the
-       skipped counts. While `audit` holds another unpublished batch it is refused, after the
-       landing has committed (bronze publishes in order; a blocked bronze never blocks the landing).
+       skipped counts. While `audit` holds another run's unpublished batch that failed its audit it
+       is refused, after the landing has committed (bronze publishes in order; a blocked bronze
+       never blocks the landing); one never audited, or audited and passed but never published, is
+       discarded and its range staged again by this run (restageable).
 
 audit  checks the batch at `audit`'s head over the range it staged (main's through-offsets to its
        own), never the whole branch, one audit_checks row per check of CHECKS:
@@ -269,6 +271,25 @@ def stage_account(topic: str, ranges: dict, found: list) -> dict:
     return {topic: {int(p): int(skipped) for p, _, _, skipped, _, _ in found}}
 
 
+def restageable(found: list, head: dict) -> tuple[bool, str]:
+    """`(restaged, why)` for the unpublished batch of another run on `audit`: `found` its
+    audit_checks rows at `audit`'s head (connector.checks_of), `head` that commit's summary.
+
+    A Kafka batch is its offsets, reproducible from the landing, so one never audited (its run
+    ended between stage and audit: Airflow retries no task, and the run's timeout kills it) or
+    audited, passed and never published is discarded with `audit` and its range staged again by
+    this run, with whatever landed since, under this run's own audit. Restaged, not adopted:
+    publish takes only this run's audit at the head, and adopting another run's would widen what
+    licenses a publish. A batch whose newest audit failed or lacks a check, or a head no Kafka
+    stage wrote, is never reset: it blocks until an operator clears it."""
+    if (head or {}).get(O.JOB) != JOB_CONNECTOR or O.KAFKA_OFFSETS not in head:
+        return False, "no Kafka stage wrote it"
+    if not found:
+        return True, "never audited"
+    why = C.unaudited(found, list(CHECKS))
+    return (True, "audited and passed, never published") if why is None else (False, why)
+
+
 def summary(run: C.Run, **props) -> dict:
     """A connector commit's summary: the run's keys (model.SNAPSHOT_SUMMARY_KEYS but the sha256,
     which a Kafka batch has none of), k2.job and the commit's own properties."""
@@ -426,9 +447,17 @@ def stage(run: C.Run, lake) -> tuple[int, dict]:
         print(f"load: batch {run.run_id} is on {C.AUDIT} already; nothing staged")
         return C.EXIT_OK, result
     if pending is not None:
-        print(f"load refused: {C.AUDIT} of {table} holds batch {pending}, unpublished; this batch waits "
-              "behind it (its records are landed)", file=sys.stderr)
-        return C.EXIT_REFUSED, result
+        at = refs[C.AUDIT]
+        restage, why = restageable(lake.checks_of(bronze["checks"], table, pending, at), lake.summary_of(table, at))
+        if not restage:
+            clear = (f"ALTER TABLE {table} REPLACE BRANCH {C.AUDIT} AS OF VERSION {refs['main']}"
+                     if refs.get("main") is not None else f"ALTER TABLE {table} DROP BRANCH {C.AUDIT}")
+            print(f"load refused: {C.AUDIT} of {table} holds batch {pending} at {at}, unpublished: {why}. This batch "
+                  "waits behind it (its records are landed); once the cause is fixed an operator clears it as the "
+                  f"Spark key (docs/runbooks/file-source-audit-failed.md, step 5): {clear}", file=sys.stderr)
+            return C.EXIT_REFUSED, result
+        print(f"load: {C.AUDIT} of {table} holds batch {pending} at {at}, {why}: a Kafka batch is its offsets, so it "
+              "is discarded and its range staged again by this run, with what landed since")
     head, landed = lake.history(landing)
     last_landed = newest(landed)
     if last_landed is None:
@@ -450,8 +479,8 @@ def stage(run: C.Run, lake) -> tuple[int, dict]:
         return C.EXIT_REFUSED, result
     if C.AUDIT not in refs:
         lake.create_branch(table)
-    elif refs[C.AUDIT] != refs.get("main"):  # behind main, which maintenance moved on
-        lake.reset_branch(table, refs["main"])
+    elif refs[C.AUDIT] != refs.get("main"):  # behind main, which maintenance moved on, or a batch restaged
+        lake.reset_branch(table, refs.get("main"))
     props = {O.SRC_SNAPSHOT_ID: str(head), O.KAFKA_OFFSETS: O.encode(O.merge_committed(through, ends)),
              KAFKA_SKIPPED: O.encode(skipped)}
     rows = lake.stage_rows(table, frames, summary(run, **props))

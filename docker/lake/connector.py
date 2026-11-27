@@ -740,7 +740,12 @@ class SparkLake:
     def create_branch(self, table: str) -> None:
         self.spark.sql(f"ALTER TABLE {rel(table)} CREATE BRANCH IF NOT EXISTS {name(AUDIT)}")
 
-    def reset_branch(self, table: str, snapshot: int) -> None:
+    def reset_branch(self, table: str, snapshot) -> None:
+        """`audit` set to `snapshot`; None, a table with no main (a Kafka product's first batch
+        restaged), drops it and makes it again, empty, as the first stage of the table did."""
+        if snapshot is None:
+            self.spark.sql(f"ALTER TABLE {rel(table)} DROP BRANCH IF EXISTS {name(AUDIT)}")
+            return self.create_branch(table)
         self.spark.sql(f"ALTER TABLE {rel(table)} REPLACE BRANCH {name(AUDIT)} AS OF VERSION {snapshot_id(snapshot)}")
 
     def append_rows(self, table: str, lines: list[str], sha: str, props: dict,

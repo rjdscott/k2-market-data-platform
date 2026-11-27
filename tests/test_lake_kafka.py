@@ -260,6 +260,11 @@ class Lake:
         assert table == PIPELINE["bronze"][0]["checks"] and props["k2.job"] == K.JOB_CONNECTOR
         self.checks.extend(records)
 
+    def checks_of(self, checks, table, batch, snapshot):  # as connector.SparkLake
+        assert checks == PIPELINE["bronze"][0]["checks"]
+        return [(r["check_name"], r["passed"], r["checked_at"]) for r in self.checks
+                if r["table_name"] == table and r["batch_id"] == batch and r["snapshot_id"] == snapshot]
+
 
 def offsets_of(rows):
     return sorted((r["kafka_partition"], r["kafka_offset"]) for r in rows)
@@ -491,8 +496,9 @@ def test_two_landed_ranges_one_staged_the_second_stages_alone():
 
 def test_a_failed_bronze_blocks_bronze_never_the_landing():
     topic, lake = Topic(partitions=1), Lake()
-    topic.produce(0, "trade", "trade")
-    K.load(ctx(1), topic, lake)  # its audit fails: the batch waits on `audit`, unpublished
+    topic.produce(0, "trade", None)
+    K.load(ctx(1), topic, lake)
+    assert K.audit(ctx(1), None, lake)[0] == C.EXIT_FAILED  # the unframed frame: the batch waits on `audit`
     topic.produce(0, "trade", "trade")
     code, result = K.load(ctx(2), topic, lake)
     assert code == C.EXIT_REFUSED and result["landed"] == 2
@@ -503,6 +509,67 @@ def test_a_failed_bronze_blocks_bronze_never_the_landing():
     code, result = K.load(ctx(3), topic, lake)
     assert code == C.EXIT_OK and result["landed"] == 0 and result["rows"] == 4
     assert offsets_of(lake.rows(BRONZE, "audit")) == [(0, 0), (0, 1), (0, 2), (0, 3)]
+
+
+@pytest.mark.parametrize("published_before", [False, True])
+def test_a_run_killed_between_stage_and_audit_is_restaged_by_the_next_run(published_before):
+    """No main yet is the live first run: a backlog past the run's timeout."""
+    topic, lake = Topic(partitions=1), Lake()
+    if published_before:
+        topic.produce(0, "trade")
+        K.load(ctx(1), topic, lake)
+        K.audit(ctx(1), None, lake)
+        lake.publish()
+    topic.produce(0, "trade", "heartbeat")
+    K.load(ctx(2), topic, lake)  # its run killed here: staged, never audited
+    topic.produce(0, "trade")
+    code, result = K.load(ctx(3), topic, lake)
+    assert code == C.EXIT_OK and result["landed"] == 1 and result["rows"] == 2
+    assert lake.batch_of(BRONZE, lake.refs_[BRONZE]["audit"]) == run_id(3)
+    assert audited(lake, 3)[0] == C.EXIT_OK
+    lake.publish()
+    assert offsets_of(lake.rows(BRONZE)) == ([(0, 0), (0, 1), (0, 3)] if published_before else [(0, 0), (0, 2)])
+
+
+def test_a_batch_audited_and_passed_but_never_published_is_restaged_by_the_next_run():
+    topic, lake = Topic(partitions=1), Lake()
+    topic.produce(0, "trade")
+    K.load(ctx(1), topic, lake)
+    assert audited(lake, 1)[0] == C.EXIT_OK  # its publish killed
+    topic.produce(0, "trade")
+    code, result = K.load(ctx(2), topic, lake)
+    assert code == C.EXIT_OK and result["rows"] == 2 and audited(lake, 2)[0] == C.EXIT_OK
+    lake.publish()
+    assert offsets_of(lake.rows(BRONZE)) == [(0, 0), (0, 1)]
+
+
+@pytest.mark.parametrize("published_before", [False, True])
+def test_a_batch_that_failed_its_audit_is_never_reset_and_the_refusal_names_its_checks_and_the_clearing(
+        capsys, published_before):
+    topic, lake = Topic(partitions=1), Lake()
+    if published_before:
+        topic.produce(0, "trade")
+        K.load(ctx(1), topic, lake)
+        K.audit(ctx(1), None, lake)
+        lake.publish()
+    topic.produce(0, None)
+    K.load(ctx(2), topic, lake)
+    K.audit(ctx(2), None, lake)
+    refs = lake.refs(BRONZE)
+    topic.produce(0, "trade")
+    code, result = K.load(ctx(3), topic, lake)
+    assert code == C.EXIT_REFUSED and result["landed"] == 1 and lake.refs(BRONZE) == refs
+    err = capsys.readouterr().err
+    clear = (f"REPLACE BRANCH audit AS OF VERSION {refs['main']}" if published_before else "DROP BRANCH audit")
+    assert f"holds batch {run_id(2)}" in err and "failed ['parses']" in err and f"ALTER TABLE {BRONZE} {clear}" in err
+
+
+def test_a_head_on_audit_no_kafka_stage_wrote_is_never_reset():
+    topic, lake = Topic(partitions=1), Lake()
+    lake.refs_[BRONZE]["audit"] = lake._commit(BRONZE, None, [], {"k2.batch-id": "an operator's"})
+    topic.produce(0, "trade")
+    assert K.load(ctx(1), topic, lake)[0] == C.EXIT_REFUSED and lake.rows(BRONZE, "audit") == []
+    assert K.restageable([], {"k2.job": K.JOB_CONNECTOR}) == (False, "no Kafka stage wrote it")
 
 
 def test_a_retry_of_a_staged_batch_stages_nothing_twice():
