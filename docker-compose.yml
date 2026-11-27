@@ -351,9 +351,9 @@ services:
     networks:
       - k2-net
       - k2-catalog  # Lakekeeper reaches it (storage checks, purges); so do lake-init and drop.sh, from there
-    ports:
-      - "127.0.0.1:9000:9000"     # API
-      - "127.0.0.1:9001:9001"     # Console
+    # No host port (W1-23): the S3 API (9000) and console (9001) are reached from a container on
+    # these networks only, so the host's way to the lake's objects is Trino and its rules.
+    # tests/test_catalog_fence_compose.py pins it.
     volumes:
       - minio-data:/data
     environment:

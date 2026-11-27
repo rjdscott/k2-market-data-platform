@@ -96,7 +96,7 @@ the repo root on the host (Linux; on macOS use `lsof -nP -iTCP -sTCP:LISTEN` and
 ports=$(docker compose --profile '*' config --format json | python3 -c 'import json, sys; print("|".join(sorted({p["published"] for s in json.load(sys.stdin)["services"].values() for p in s.get("ports") or []})))')
 ss -ltnH | awk '{print $4}' | grep -E "^(\*|0\.0\.0\.0|\[::\]):($ports)$" || echo PASS
 
-# 2. MinIO answers on loopback (200) and refuses on the host's LAN address (000).
+# 2. MinIO publishes no port (W1-23): loopback and the host's LAN address both refuse (000).
 LAN_IP=$(ip -4 route get 1.1.1.1 | sed -n 's/.* src \([0-9.]*\).*/\1/p')   # no packet is sent
 curl -s --max-time 3 -o /dev/null -w 'loopback %{http_code}\n' http://127.0.0.1:9000/minio/health/live
 curl -s --max-time 3 -o /dev/null -w 'lan %{http_code}\n' "http://$LAN_IP:9000/minio/health/live"
@@ -113,7 +113,10 @@ UTC), run 2026-11-26 at about 01:30 UTC: check 1 printed `PASS`, check 2 printed
 `loopback 200` and `lan 000`, and the LAN address answered `000` on 9001, 3000, 8080, 8090 and
 18181 as well. Check 3, from another machine, is not yet run. <!-- VERIFY: check 3 from a second machine -->
 Since the compose file of 2026-11-27, 18181 is not published at all (Lakekeeper is fenced
-onto `k2-catalog`) and Trino's 8088 is replaced by HTTPS on 8443.
+onto `k2-catalog`) and Trino's 8088 is replaced by HTTPS on 8443. Since W1-23 neither are
+MinIO's 9000 and 9001: the lake's objects are reached from a container on its networks, and the
+host reaches them through Trino alone, so check 2 prints `loopback 000` too.
+<!-- VERIFY: after the deploy that recreates minio, check 2 prints loopback 000 and lan 000, and make catalog-fence passes its host rows -->
 
 ## Reporting
 
