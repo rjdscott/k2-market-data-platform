@@ -12,8 +12,9 @@ plan   the next range per partition: from the end offsets (`k2.kafka-offsets`) o
        is returned and committed, for the run's `offset_gap` record.
 land   reads the pinned range from the topic once to count and once to write. Every record of the
        range lands byte for byte in lake.<fence>.landing, the count per partition equal to its span
-       or nothing commits, with the end offsets, the batch's starts and any accepted gap in that
-       one commit's summary. A retry plans from that commit, so it lands only what is new.
+       or nothing commits, with the end offsets, the batch's starts and every accepted gap so far
+       (cumulative: the previous connector commit's and any this run accepts) in that one commit's
+       summary. A retry plans from that commit, so it lands only what is new.
 stage  takes, per partition, every landing row after the offset bronze has staged through up to the
        landing's newest end offsets, read from the landing at one snapshot and never from the
        topic, so whatever earlier runs landed and did not stage is picked up exactly once. The
@@ -50,7 +51,8 @@ import offsets as O
 
 JOB_CONNECTOR = "connector"  # k2.job on every landing and bronze commit this module makes
 KAFKA_STARTS = "k2.kafka-starts"  # landing commits: the batch's first offset per partition
-KAFKA_GAPS = "k2.kafka-gaps"  # landing commits: an accepted loss, {topic: {partition: [committed, log start]}}
+# landing commits: every accepted loss so far, {topic: {partition: [[committed, log start], ...]}}
+KAFKA_GAPS = "k2.kafka-gaps"
 KAFKA_SKIPPED = "k2.kafka-skipped"  # bronze commits: landing rows the filter skipped, per partition
 KEPT = "k2_kept"  # the filter's verdict on a landing row (a column of the stage's read, never written)
 # The landing's columns from the Kafka source's, as read: the bytes are never decoded or re-encoded.
@@ -117,13 +119,38 @@ def account(p: Plan, found: list) -> None:
                         + "; ".join(f"{f['scope']} {f['detail']}" for f in failures))
 
 
-def gaps_json(gaps: list) -> str:
-    """KAFKA_GAPS's value: `{topic: {partition: [committed, log start]}}`, the hole being
-    committed..log start - 1, recorded in the very commit that skips it."""
-    out: dict = {}
-    for topic, part, committed, log_start, _ in gaps:
-        out.setdefault(topic, {})[str(part)] = [int(committed), int(log_start)]
-    return json.dumps(out, separators=(",", ":"), sort_keys=True)
+def merged(ranges) -> list:
+    """`[(committed, log start)]` sorted, those that meet or overlap made one."""
+    out: list = []
+    for lo, hi in sorted(ranges):
+        if out and lo <= out[-1][1]:
+            out[-1] = (out[-1][0], max(out[-1][1], hi))
+        else:
+            out.append((lo, hi))
+    return out
+
+
+def gaps_of(summary: dict | None) -> dict:
+    """One landing commit's KAFKA_GAPS as `{topic: {partition: [(committed, log start)]}}`."""
+    return {t: {int(p): [(int(c), int(ls)) for c, ls in v] for p, v in parts.items()}
+            for t, parts in json.loads((summary or {}).get(KAFKA_GAPS, "{}")).items()}
+
+
+def carried_gaps(previous: dict, accepted: list) -> dict:
+    """What a landing commit records as KAFKA_GAPS: `previous` (gaps_of the newest connector
+    commit before it) plus this run's accepted losses `[(topic, partition, committed, log start,
+    lost)]`, per partition merged. Carried on every commit like the end offsets, so expiring the
+    commit that accepted a loss never drops its record (maintain's continuity reads it)."""
+    out = {t: {p: list(v) for p, v in parts.items()} for t, parts in previous.items()}
+    for topic, part, committed, log_start, _ in accepted:
+        out.setdefault(topic, {}).setdefault(int(part), []).append((int(committed), int(log_start)))
+    return {t: {p: merged(v) for p, v in parts.items()} for t, parts in out.items()}
+
+
+def gaps_json(gaps: dict) -> str:
+    """KAFKA_GAPS's value from carried_gaps: each hole is committed..log start - 1."""
+    return json.dumps({t: {str(p): [list(g) for g in v] for p, v in parts.items()} for t, parts in gaps.items()},
+                      separators=(",", ":"), sort_keys=True)
 
 
 def keep_sql(rule: dict | None, envelope: str = "envelope") -> str:
@@ -193,13 +220,14 @@ def summary(run: C.Run, **props) -> dict:
 
 
 def accepted_losses(history: list, topic: str) -> dict:
-    """`{partition: [(first, last)]}`, inclusive: the offsets the landing's commits record as an
-    accepted loss (KAFKA_GAPS), which no landing row holds and no bronze row can."""
-    out: dict = {}
+    """`{partition: [(first, last)]}`, inclusive and merged, so no two overlap: the offsets the
+    landing's commits record as an accepted loss (KAFKA_GAPS), which no landing row holds and no
+    bronze row can. Each commit carries every loss before it; reading them all gives the same set."""
+    ranges: dict = {}
     for _, s in history:
-        for p, (committed, log_start) in json.loads((s or {}).get(KAFKA_GAPS, "{}")).get(topic, {}).items():
-            out.setdefault(int(p), []).append((int(committed), int(log_start) - 1))
-    return out
+        for p, v in gaps_of(s).get(topic, {}).items():
+            ranges.setdefault(p, []).extend(v)
+    return {p: [(lo, hi - 1) for lo, hi in merged(v)] for p, v in ranges.items()}
 
 
 def planned(start: int, end: int, lost: list):
@@ -317,8 +345,9 @@ def land(run: C.Run, source, lake) -> tuple[int, dict]:
         print(f"load refused: {e}", file=sys.stderr)
         return C.EXIT_REFUSED, result
     props = {O.KAFKA_OFFSETS: O.encode(p.offsets), KAFKA_STARTS: O.encode(p.starts)}
-    if p.gaps:
-        props[KAFKA_GAPS] = gaps_json(p.gaps)
+    gaps_so_far = carried_gaps(gaps_of(newest(history)), p.gaps)
+    if gaps_so_far:  # absent when no loss was ever accepted
+        props[KAFKA_GAPS] = gaps_json(gaps_so_far)
     values = dict(zip(LANDING_RUN, (run.run_id, C.now(), run.run_id, run.release)))
     lake.land(table, frames, values, summary(run, **props))
     landed = sum(n for _, n, _, _ in found)

@@ -278,6 +278,11 @@ these. A renamed key orphans every earlier snapshot as a resume point (ADR-022).
 | | `k2.src-snapshot-id` | the landing snapshot the stage read |
 | | `k2.kafka-skipped` | the landing rows the filter skipped, per partition |
 
+2026-11-28 (W0-4b): `k2.kafka-gaps` is cumulative. Every landing commit after the first accepted loss
+carries every loss accepted so far, `{topic: {partition: [[committed, log start], ...]}}`, sorted and
+merged where they meet, so expiring the commit that accepted a loss never drops its record; it is
+absent until a loss is accepted.
+
 The code over the breakdown: `k2.job` is on every Kafka connector commit only; a file connector's
 commits carry `model.SNAPSHOT_SUMMARY_KEYS` and no `k2.job`, and a Kafka commit has no
 `k2.source-sha256`.

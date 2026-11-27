@@ -285,7 +285,7 @@ def test_accept_data_loss_resumes_at_the_log_start_and_returns_the_gap():
     p = K.plan(history, {TOPIC: {0: 10, 1: 0, 2: 8}}, {TOPIC: {0: 60, 1: 60, 2: 60}}, 100, accept_data_loss=True)
     assert p.starts == {TOPIC: {0: 10, 1: 50, 2: 8}}
     assert p.gaps == [(TOPIC, 0, 5, 10, 5), (TOPIC, 2, 3, 8, 5)]
-    assert json.loads(K.gaps_json(p.gaps)) == {TOPIC: {"0": [5, 10], "2": [3, 8]}}
+    assert json.loads(K.gaps_json(K.carried_gaps({}, p.gaps))) == {TOPIC: {"0": [[5, 10]], "2": [[3, 8]]}}
 
 
 # --- land ------------------------------------------------------------------------------------
@@ -350,12 +350,51 @@ def test_below_the_log_start_load_lands_nothing_and_accept_data_loss_commits_the
     assert code == C.EXIT_OK and result["offsetGaps"] == [
         {"topic": TOPIC, "partition": 0, "committed": 2, "logStart": 5, "lost": 3}]
     props = newest_summary(lake, LANDING)  # a commit of no rows: the skip and its record in one
-    assert lake.refs_[LANDING]["main"] != head and json.loads(props[K.KAFKA_GAPS]) == {TOPIC: {"0": [2, 5]}}
+    assert lake.refs_[LANDING]["main"] != head and json.loads(props[K.KAFKA_GAPS]) == {TOPIC: {"0": [[2, 5]]}}
     assert O.decode(props["k2.kafka-offsets"]) == {TOPIC: {0: 5}}
     lake.publish()
     topic.produce(0, "trade")
     assert K.load(ctx(4), topic, lake)[0] == C.EXIT_OK  # no flag needed past a recorded gap
     assert offsets_of(lake.rows(LANDING)) == [(0, 0), (0, 1), (0, 5)]
+
+
+def gaps_now(lake):
+    return json.loads(newest_summary(lake, LANDING).get(K.KAFKA_GAPS, "null"))
+
+
+def test_an_accepted_gap_is_carried_on_every_later_landing_commit_and_none_ever_means_no_key():
+    topic, lake = Topic(partitions=2), Lake()
+    for n in range(1, 4):  # no loss yet: no key on any commit
+        topic.produce(0, "trade")
+        K.load(ctx(n), topic, lake)
+        lake.publish()
+        assert gaps_now(lake) is None
+    topic.produce(0, "trade", "trade", "trade")
+    topic.evict(0, 5)  # offsets 3 and 4 gone
+    K.load(ctx(4, accept=True), topic, lake)  # run N
+    lake.publish()
+    for n in range(5, 8):  # runs N+1 to N+3, clean, the loss's commit no longer the newest
+        topic.produce(1, "trade")
+        assert K.load(ctx(n), topic, lake)[0] == C.EXIT_OK
+        lake.publish()
+        assert gaps_now(lake) == {TOPIC: {"0": [[3, 5]]}}
+    assert K.accepted_losses(lake.history(LANDING)[1], TOPIC) == {0: [(3, 4)]}  # once, though seven commits read
+
+
+def test_two_gaps_in_one_partition_are_both_carried_and_adjacent_ones_merge():
+    topic, lake = Topic(partitions=1), Lake()
+    topic.produce(0, "trade", "trade")
+    K.load(ctx(1), topic, lake)
+    lake.publish()
+    for n, below in ((2, 4), (3, 7)):  # a loss, a clean landing of what survived, then another loss
+        topic.produce(0, "trade", "trade", "trade")
+        topic.evict(0, below)
+        K.load(ctx(n, accept=True), topic, lake)
+        lake.publish()
+    assert gaps_now(lake) == {TOPIC: {"0": [[2, 4], [5, 7]]}}
+    assert K.accepted_losses(lake.history(LANDING)[1], TOPIC) == {0: [(2, 3), (5, 6)]}
+    assert K.carried_gaps({TOPIC: {0: [(2, 4)]}}, [(TOPIC, 0, 4, 7, 3), (TOPIC, 1, 0, 2, 2)]) == {
+        TOPIC: {0: [(2, 7)], 1: [(0, 2)]}}  # one that starts where the last ended is one gap
 
 
 def test_a_paused_product_lands_nothing():
