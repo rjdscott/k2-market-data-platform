@@ -16,7 +16,8 @@
       "contractId": "sensor-net.station-readings.silver_readings",
       "maxLagMinutes": 120,
       "relation": "sensor_net.station_readings__base.silver_readings",
-      "required": true
+      "required": true,
+      "whenAbsent": "fail"
     }
   ],
   "maintain": {
