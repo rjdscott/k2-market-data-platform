@@ -2,13 +2,17 @@ apiVersion: v3.2.0
 kind: DataContract
 id: fx-reference.ecb-fx-rates.gold_eur_rates_daily
 name: gold_eur_rates_daily
-version: 1.0.0
+version: 1.1.0
 domain: fx-reference
 description:
   purpose: >-
     One row per TARGET day and currency, from the currency's first published fixing to the newest
     fixing of any currency: the day's rate, or the last published one carried for at most five
     TARGET days when the day has none, with when the rate could first be known.
+  limitations: >-
+    A carried rate is this product's change to the ECB's data, not an ECB fixing: is_carried and
+    carried_days state it on every row, as the ECB's terms require of modified data (the
+    product's terms). Reuse cites the ECB as the source and keeps those two columns.
 team:
   name: fx-reference-team
 schema:
@@ -55,6 +59,9 @@ schema:
           on rate_date, the ECB's usual publication time. A convention, not the measured
           publication time; a carried rate counts from the day it is carried to, once that day's
           fixing failed to appear. Null when rate is null.
+roles:
+  - role: full_reader  # every row and column, no policy: the first non-owner reader (grants.yaml)
+    access: read
 customProperties:
   - property: layer
     value: gold

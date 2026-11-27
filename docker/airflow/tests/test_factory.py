@@ -464,6 +464,16 @@ class Record(unittest.TestCase):
             task("station_readings", "record").execute(ctx(TI({("resolve", "return_value"): None})))
 
 
+class FetchTimeout(unittest.TestCase):
+    def test_a_hung_fetch_is_killed_at_the_runs_timeout_or_the_modules(self):
+        """F7: the fetch pool holds one slot, so a fetch held open stalls every product's fetch."""
+        with mock.patch.object(factory, "FETCH_TIMEOUT", factory.timedelta(minutes=7)):
+            own = factory.build(GOLDEN)["station_readings"].get_task("fetch")  # timeoutMinutes 10
+            default = factory.build(CANARY)["ecb_fx_rates"].get_task("fetch")  # no timeoutMinutes
+        self.assertEqual((own.execution_timeout.total_seconds(), default.execution_timeout.total_seconds()), (600, 420))
+        self.assertGreater(factory.FETCH_TIMEOUT.total_seconds(), 300)  # fetch.py's own deadline goes first
+
+
 class NoProductCode(unittest.TestCase):
     ALLOWED = {"__future__", "importlib", "json", "os", "re", "subprocess", "datetime", "pathlib", "airflow",
                "croniter", "oneshot"}

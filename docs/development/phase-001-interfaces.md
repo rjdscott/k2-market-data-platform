@@ -136,6 +136,8 @@ Added 2026-11-27: after a successful parse, fetch also writes `audits.json`,
 tables declare (`def <audit>(rows: list[dict]) -> list[str]`, in the parser module, run in fetch);
 the Spark audit task reads it into `audit_checks`, and a declared audit with no entry fails.
 
+Added 2026-11-27: fetch runs on `k2-egress` alone, a compose network no other service joins (its kind in `oneshots.json` names it, and only fetch may), and sees only `/spool/<dagId>` of the spool volume.
+
 Any other exit is a task error. The Spark task recomputes the sha256 from `raw.<ext>`, refuses a
 mismatch, writes the object by conditional PUT to `model.landing_key`, and adds one row to
 `lake.<fence>.landing_files` (`model.PLATFORM_TABLES`).

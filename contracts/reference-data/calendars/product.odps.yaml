@@ -4,7 +4,7 @@ apiVersion: v1.1.0
 kind: DataProduct
 id: reference-data.calendars
 name: calendars
-version: 1.0.0
+version: 1.1.0
 status: active
 domain: reference-data
 type: sourceAligned
@@ -25,7 +25,7 @@ team:
   name: reference-data-team
 outputPorts:
   - name: target_days
-    version: 1.0.0
+    version: 1.1.0
     contractId: reference-data.calendars.target_days
 customProperties:
   - property: schedule

@@ -76,6 +76,7 @@ WRAPPER = 'python3 "$@" & echo $! > "$0"; wait $!; rc=$?; rm -f "$0"; exit $rc'
 # `sh -c KILL <pidfile>`: TERM to the driver, KILL_GRACE_S for it to go, then KILL. PySpark's JVM
 # exits when the driver's pipe closes (measured at 2 s for the retired LakeScript). No file: gone.
 KILL_GRACE_S = 10
+FETCH_TIMEOUT = timedelta(minutes=10)  # a fetch's execution_timeout without the run's timeoutMinutes: over fetch.py's 300 s
 KILL = ('p=$(cat "$0" 2>/dev/null) || exit 0; kill -TERM "$p" 2>/dev/null; i=0; '
         f'while kill -0 "$p" 2>/dev/null && [ $i -lt {KILL_GRACE_S} ]; do sleep 1; i=$((i+1)); done; '
         'kill -KILL "$p" 2>/dev/null; rm -f "$0"; true')
@@ -306,7 +307,9 @@ def make_dag(release: Path, e: dict) -> DAG:
                 # one direct upstream being skipped publish.
                 ops[t] = PinnedOneShot(task_id=t, kind="fetch" if t == "fetch" else "dbt-runner", product=product,
                                        pool=POOLS[t], **({"retries": 0, "trigger_rule": TriggerRule.NONE_FAILED}
-                                                         if t == "build" else {}))
+                                                         if t == "build" else  # a hung fetch is killed (on_kill)
+                                                         {"execution_timeout": timedelta(minutes=timeout) if timeout
+                                                          else FETCH_TIMEOUT}))
             elif t in POOLS:
                 ops[t] = SparkTask(task_id=t, product=product, pool=POOLS[t])
         ops["record"] = Record(task_id="record", product=product)
