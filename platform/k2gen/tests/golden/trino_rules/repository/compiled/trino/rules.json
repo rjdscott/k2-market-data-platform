@@ -1329,7 +1329,7 @@
       ]
     },
     {
-      "user": "dbt_access_canary|dbt_calendars|dbt_candles|dbt_canonical_trades|dbt_currency_master|dbt_ecb_fx_rates|dbt_kraken_instruments|dbt_kraken_trades|dbt_quality_results|dbt_security_master|k2_release_000000000000|p\\.analyst\\-a|p\\.canary\\-delayed|p\\.canary\\-full|p\\.canary\\-scoped|pub_access_canary|pub_calendars|pub_candles|pub_canonical_trades|pub_currency_master|pub_ecb_fx_rates|pub_kraken_instruments|pub_kraken_trades|pub_quality_results|pub_security_master|svc\\.api|svc\\.catalog|svc\\.runs",
+      "user": "dbt_access_canary|dbt_calendars|dbt_candles|dbt_canonical_trades|dbt_currency_master|dbt_ecb_fx_rates|dbt_kraken_instruments|dbt_kraken_trades|dbt_quality_results|dbt_security_master|k2_release_000000000000|p\\.analyst\\-a|p\\.canary\\-delayed|p\\.canary\\-full|p\\.canary\\-scoped|pub_access_canary|pub_calendars|pub_candles|pub_canonical_trades|pub_currency_master|pub_ecb_fx_rates|pub_kraken_instruments|pub_kraken_trades|pub_quality_results|pub_security_master|svc\\.api|svc\\.catalog|svc\\.partner\\-dashboard|svc\\.runs",
       "allow": [
         "execute"
       ]

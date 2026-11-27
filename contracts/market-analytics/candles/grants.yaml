@@ -1,4 +1,6 @@
 # Owner-only until the venues' terms are recorded, as canonical-trades and the venue products are:
 # nobody holds a role. Each table offers full_reader and delayed_reader (window_end delayed 20
-# minutes), the roles a consumer of ohlcv_1d is granted once the terms are recorded (W2-10).
+# minutes), the roles a consumer of ohlcv_1d is granted once the owner records the terms in this
+# product's terms property (docs.terms-missing refuses the grant before). A grant is per product,
+# so it reaches all four tables, and k2gen check then wants a read row of each by the holder.
 grants: []
