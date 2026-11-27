@@ -31,6 +31,12 @@
 #   landing_files and audit_checks in warehouse k2), the Spark image of the compose pin makes those
 #   tables while Trino starts, through docker/lake/spark_conf.py on Spark's own pair, one JVM for
 #   all of them, a table already there left as it is: every caller gets the lake a deploy leaves.
+#   When a row of the release's expectations runs `via: rest`, k2-api joins (step W3-7): each such
+#   row's principal gets a key by scripts/principal-secret.py's own api_key (its sha256 alone in
+#   <secrets>/api/keys.json, mode 600; the key itself in <secrets>/throwaway/<id>.key, mode 600, for
+#   the suite), and the image k2-api:throwaway, built from this tree's services/k2-api/Dockerfile,
+#   runs with compose's flags for service k2-api, on `pointers/k2-api -> ../<id>`, reached by name
+#   from the tools container only.
 # py: runs a Python script with k2gen importable, in the tools container when the lake is up, else
 #   in a one-off container of the same image; <state> is /work. Of the repository, only SRC (the
 #   scripts, k2gen and what it reads, the access suite) is mounted, read-only, at /src/<path>:
@@ -54,6 +60,7 @@ REPO=$(cd "$(dirname "$0")/../.." && pwd)
 UV_IMAGE=ghcr.io/astral-sh/uv:0.9.25-python3.12-bookworm-slim@sha256:e47cbc1a37bc146191f85069663f98dff4644667873a0a3051b8d7effe69ea82
 MIN_GIB=6
 POINTER_ETC=/k2/releases/pointers/trino/compiled/trino/etc
+API_IMAGE=k2-api:throwaway  # built from this tree: never the stack's k2-api:local nor a release's pin
 
 die() { echo "throwaway-lake: $*" >&2; exit 2; }
 say() { echo "throwaway-lake: $*"; }
@@ -152,6 +159,35 @@ spark.stop()
 PY
 }
 
+api_up() {  # k2-api, when a REST row needs it (the key step above made api/keys.json)
+  local k=$STATE/secrets/k2
+  [ -f "$k/api/keys.json" ] || return 0
+  say "k2-api: $API_IMAGE from services/k2-api/Dockerfile (Docker's layer cache: an unchanged tree rebuilds in seconds)"
+  # --load: into the daemon whatever the builder (a CI runner's setup-buildx-action builder keeps images in itself).
+  docker build -q --load -f "$REPO/services/k2-api/Dockerfile" -t "$API_IMAGE" "$REPO" >> "$STATE/k2-api-build.log" 2>&1 \
+    || { tail -n 15 "$STATE/k2-api-build.log" >&2; die "k2-api's image did not build ($STATE/k2-api-build.log)"; }
+  # docker-compose.yml's service k2-api, flag for flag: the host user with group 0, a read-only root, a
+  # 16 MB /tmp, no capability, no new privileges, its two variables and its four read-only mounts; no
+  # host port. The k2-site volume is the image's own empty /srv/k2-site under the read-only root, as a
+  # fresh volume mounted read-only is (Docker refuses an anonymous volume read-only).
+  docker run -d --label "$LABEL" --network "$NET" --network-alias k2-api --name "$P-k2-api" --user "$(id -u):0" \
+    --read-only --tmpfs /tmp:rw,noexec,nosuid,size=16m --cap-drop ALL --security-opt no-new-privileges:true \
+    --cpus 0.5 --memory 512m -e K2_TRINO_HOST=trino -e K2_TRINO_INTERNAL_PORT=8443 \
+    -v "$STATE/releases:/k2/releases:ro" -v "$k/api:/run/k2-secrets/api:ro" \
+    -v "$k/principals/svc.api.password:/run/k2-secrets/api.password:ro" -v "$k/tls/ca.pem:/run/k2-secrets/tls/ca.pem:ro" \
+    "$API_IMAGE" >/dev/null
+  local t0=$SECONDS
+  until docker exec "${TOOLS_ENV[@]}" "$TOOLS" python3 -c "
+import urllib.request; urllib.request.urlopen('http://k2-api:8095/healthz', timeout=3)" 2>/dev/null; do
+    if [ "$(docker inspect -f '{{.State.Running}}' "$P-k2-api")" != true ] || [ $((SECONDS - t0)) -gt 60 ]; then
+      docker logs --tail 30 "$P-k2-api" >&2 || true
+      die "k2-api did not answer /healthz"
+    fi
+    sleep 1
+  done
+  say "k2-api: http://k2-api:8095 inside $NET, as svc.api on Trino"
+}
+
 py() {
   mkdir -p "$STATE"
   if [ "$(docker inspect -f '{{.State.Running}}' "$TOOLS" 2>/dev/null)" = true ]; then
@@ -184,6 +220,7 @@ up() {
   [ -f "$STATE/releases/$id/compiled/trino/etc/password-authenticator.properties" ] \
     || die "$id has no compiled/trino/etc/password-authenticator.properties (emit/trino_identity.py)"
   ln -s "../$id" "$STATE/releases/pointers/trino"
+  ln -s "../$id" "$STATE/releases/pointers/k2-api"  # made with the other, before any container mounts the root
 
   # Secrets for this run only.
   local s=$STATE/secrets
@@ -293,13 +330,22 @@ with contextlib.redirect_stderr(io.StringIO()):
     passwords[canary] = keep(root / model.canary_password_file(m.provenance.set_sha256), line(canary))
     for u in sorted(set(extra) - known):
         passwords[u] = keep(root / "throwaway" / f"{u}.password", line(u))
+    # A key per principal of a `via: rest` row, by principal-secret's api_key: its sha256 to
+    # api/keys.json under its lock (what k2-api reads), the key printed once and kept for the suite.
+    rest = sorted({e.principal for e in m.expectations if "rest" in getattr(e, "via", ())})
+    for u in rest:
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            ps.api_key(root, u, False)
+        keep(root / "throwaway" / f"{u}.key", out.getvalue().strip())
 users = sorted(passwords)
 db_users = [x.split(":", 1)[0] for x in ps.lines_of((root / ps.PASSWORD_DB).read_text()) if x]
 assert sorted(db_users) == users, "one password.db line per user"
 lake_env.write(Path("/work/env.json"), release=f"/work/releases/{release.name}", trino="https://trino:8443",
                lakekeeper=LK, secrets=str(root), ca=str(root / "tls/ca.pem"), passwords=passwords,
                warehouses=sorted(warehouses))
-print(f"throwaway-lake: warehouses {', '.join(sorted(warehouses))}; {len(users)} users, each its own password")
+print(f"throwaway-lake: warehouses {', '.join(sorted(warehouses))}; {len(users)} users, each its own password; "
+      f"{len(rest)} API key(s), for the REST rows")
 PY
 
   say "Trino from $POINTER_ETC ($id)"
@@ -324,6 +370,7 @@ assert not json.load(urllib.request.urlopen('https://trino:8443/v1/info', contex
     fi
     sleep 2
   done
+  api_up
   say "up in $((SECONDS - t0)) s: https://trino:8443 and http://lakekeeper:8181 inside $NET; <state> $STATE"
 }
 

@@ -27,11 +27,33 @@ the run time: a row naming a principal or relation the running release does not 
 | statement | `{principal, sql, session?, expect}` | the statement ends as `expect` says: `denied` is an access denial; `error` is `NOT_SUPPORTED` (a version on a view); `noBounds` is `SHOW STATS` with no low value, high value or row count; `ok` is a statement that completes without error |
 | probe | `{probe: {from, target}, expect}` | the network connection is refused or open; step S22's `scripts/verify/catalog-fence.sh` runs these |
 | drift | `{drift: catalog, expect: clean}` | the catalog holds exactly what the release generates (`scripts/verify/catalog_drift.py`) |
-| storage key | `{storageKey: {engine, target, operation}, expect}` | the engine's own `K2_<ENGINE>_S3_*` key, sent from where the suite runs to `$K2_S3_ENDPOINT`: `allowed` when every request answers 2xx; `refused` when the first answers 403 `AccessDenied` and some key shows the bucket exists (`scripts/access_verify.py`, `storage_key`) |
+| storage key | `{storageKey: {engine, target, operation}, expect}` | the engine's own `K2_<ENGINE>_S3_*` key, sent from where the suite runs to `$K2_S3_ENDPOINT`: `allowed` when every request answers 2xx; `refused` when the first answers 403 `AccessDenied` and some key shows the bucket exists; a refused `read` must also be refused a real object, one another key lists or, under an empty target, a probe another key puts there and removes after, so a key that may get objects but not list them fails (`scripts/access_verify.py`, `storage_key`) |
 
 A row passes only on the outcome it names. A syntax error, a missing table, `NOT_SUPPORTED` or a
 refused login never counts as a denial. Each of those means the row named something wrong, not
 that a rule held.
+
+## Through k2-api: `via: rest`
+
+A read or denial row lists its endpoints in `via` (`[sql]` when absent). With `rest`, the row is
+held again through k2-api, as its principal with that principal's own API key. The relation maps
+to its route, `/v1/data/<domain>/<product>/<table>`, through the release's catalog documents; a
+relation no output has fails the row. A row of two legs prints each leg's verdict, and the row
+fails when either leg fails.
+
+- A denial passes on `403 forbidden` alone. A 404 is no refusal: the relation must exist and be
+  refused. A 401 is the harness's fault and fails the row.
+- A read passes on 200 with exactly the `visible` columns. A row asserting rows reads one page of
+  every row and compares it with the same read over SQL, as the same principal in session time
+  zone UTC, as a multiset (decimals as exact values, times in UTC, bigints as integers). A
+  columns-only row asks one row by the primary key of the row SQL reads first and compares the two.
+  An empty table answers no row, so the response states no column: the leg then proves the 200
+  alone, and its PASS line says so.
+- Keys: on a throwaway lake, the lake makes one per principal of a REST row (only its sha256 goes
+  to k2-api's `api/keys.json`) and starts k2-api from this tree with compose's flags. On the live
+  system each key is the operator's file `${K2_SECRETS}/api/<principal>.key` (`K2_API_KEY_DIR`
+  overrides the directory), read by path and never printed; a missing file skips that leg, naming
+  the command that makes it. k2-api is `$K2_API_URL`, default `http://k2-api:8095`.
 
 ## How to write a row
 
@@ -57,6 +79,21 @@ Two kinds the gate asks for cannot be run from this file yet: an impersonation t
 a denial row as an undeclared principal, but the runner does not run such rows yet: it fails
 every row naming a principal the release does not declare. `scripts/trino_rules_test.py` proves
 both today (its rows `impersonation` and `strangers`).
+
+## A read row on a placeholder
+
+At release time `access_verify.py stage` builds each dbt output on the throwaway lake from its
+model, rendering only `ref()` and `config()`. A model with any other Jinja (`source()`,
+`k2_input()`, `is_incremental()`) is dbt's to render, so stage makes a placeholder instead: one
+row in the contract's columns and types, its key a literal and the rest null, the shape checked
+with `DESCRIBE`. The reader view over it and the rules are the release's own.
+
+A read row that names only `principal`, `table` and `visible` runs on such a placeholder. It
+proves that the principal may read the reader view under the release's rules and that the view
+shows exactly those columns. It proves nothing about the model's rows, and not that dbt builds
+the model to the contract's shape (`make test-dbt` does). A read row with `masked`,
+`minRowAgeMinutes`, `mustNotAppear` or `mustAppear` needs the model's real rows, so stage refuses
+it on a placeholder.
 
 ## The proof behind the suite
 

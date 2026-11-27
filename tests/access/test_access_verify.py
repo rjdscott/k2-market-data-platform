@@ -264,7 +264,16 @@ rows = {
     "a service row naming no product": model.StatementExpectation("svc.api", 'SET SESSION AUTHORIZATION "svc.platform"', "denied", {}),
     "the drift row": model.DriftExpectation("catalog", "clean"),
 }
-print(json.dumps({k: av.live_skip(e, m) for k, e in rows.items()}))
+legs = {
+    "a person's statement": model.StatementExpectation(person, "SELECT 1", "denied", {}),
+    "a service statement": model.StatementExpectation("svc.api", "SELECT 1", "denied", {}),
+    "a probe": model.ProbeExpectation("k2-net", "lakekeeper:8181", "refused"),
+    "the drift row": model.DriftExpectation("catalog", "clean"),
+    "a storage-key row": model.StorageKeyExpectation("tools", "k2-landing", "read", "allowed"),
+    "a service's REST row": model.DeniedExpectation("svc.api", "system.runtime.queries", ("sql", "rest")),
+}
+print(json.dumps({"skips": {k: av.live_skip(e, m) for k, e in rows.items()},
+                  "legs": {k: av.legs(e, m, "live", {"trino": "https://t:8443", "apiKeys": "/nonexistent"}) for k, e in legs.items()}}))
 """
 
 
@@ -272,11 +281,20 @@ def test_the_live_scope_runs_only_platform_held_passwords_on_the_canary():
     out = subprocess.run(["uv", "run", "--project", "platform/k2gen", "--locked", "-q", "python", "-c", LIVE],
                          cwd=ROOT, capture_output=True, text=True, timeout=300)
     assert out.returncode == 0, out.stderr
-    skips = json.loads(out.stdout.strip().splitlines()[-1])
+    got = json.loads(out.stdout.strip().splitlines()[-1])
+    skips, legs = got["skips"], got["legs"]
     assert "owner's, not the platform's" in skips["a consumer of a product that is not the canary"]
     assert "not the canary" in skips["a service row naming another product"]
     assert skips["a service row naming no product"] is None
     assert skips["the drift row"] is None
+    # legs(): the one rule run() skips by and tests/access/prove.py live expects by. A person's
+    # statement row has no table, and is skipped all the same (the blocker of W2-9's three rows).
+    assert "owner's, not the platform's" in legs["a person's statement"][0][1]
+    assert legs["a service statement"] == [["row", None]] and legs["a storage-key row"] == [["row", None]]
+    assert legs["a probe"] == [["row", av.SKIP_PROBE]] and legs["the drift row"] == [["row", av.SKIP_DRIFT]]
+    # A REST leg with no key file on live is a skip of that leg alone, naming the command; its SQL leg runs.
+    (sql, _), (rest, why) = legs["a service's REST row"]
+    assert (sql, rest) == ("sql", "rest") and legs["a service's REST row"][0][1] is None and "make api-key PRINCIPAL=svc.api" in why
 
 
 def test_the_lake_env_json_is_read_as_the_lake_writes_it(tmp_path):
@@ -368,11 +386,11 @@ def test_the_signature_is_aws_signature_v4():
 
 class FakeS3:
     """MinIO's answers, in memory, by the access key a request is signed with: a policy per key
-    (rw, ro, wo: write but no delete, none) and, as MinIO does, the policy checked before the
+    (rw, ro, wo: write but no delete, go: GetObject alone, no list, none) and, as MinIO does, the policy checked before the
     bucket exists, so a refused key gets AccessDenied on a bucket that is not there; `ak-unknown` is a
     key MinIO does not know."""
 
-    POLICY = {"ak-rw": "rw", "ak-ro": "ro", "ak-wo": "wo", "ak-none": "none", "root-ak": "rw"}
+    POLICY = {"ak-rw": "rw", "ak-ro": "ro", "ak-wo": "wo", "ak-none": "none", "ak-go": "go", "root-ak": "rw"}
 
     def __init__(self):
         import http.server
@@ -402,8 +420,8 @@ class FakeS3:
                 if policy is None:
                     return self.answer(403, "InvalidAccessKeyId")
                 write = self.command in ("PUT", "DELETE")
-                if policy == "none" or (write and policy == "ro") or (self.command == "DELETE" and policy == "wo") \
-                        or (self.command == "GET" and policy == "wo"):
+                if policy == "none" or (write and policy in ("ro", "go")) or (self.command == "DELETE" and policy == "wo") \
+                        or (self.command == "GET" and policy == "wo") or (policy == "go" and (not key or query)):
                     return self.answer(403, "AccessDenied")
                 if bucket not in fake.buckets:
                     return self.answer(404, "NoSuchBucket")
@@ -437,7 +455,8 @@ from types import SimpleNamespace  # noqa: E402
 # Every name and secret holds a non-hex letter (k, s, n, u), so none can turn up inside a probe
 # object's hex name: "bad", the unknown key's first name, was all hex and sometimes did.
 SECRETS = {"ak-rw": "sk-rw-0123456789", "ak-ro": "sk-ro-0123456789", "ak-wo": "sk-wo-0123456789",
-           "ak-none": "sk-none-0123456789", "ak-unknown": "sk-unknown-0123456789", "root-ak": "sk-root-0123456789"}
+           "ak-none": "sk-none-0123456789", "ak-unknown": "sk-unknown-0123456789", "root-ak": "sk-root-0123456789",
+           "ak-go": "sk-go-0123456789"}
 PROBE_UUID = "6b3c0e3a-5f1e-4c2d-9a7b-1e2f3a4b5c6d"  # the write probe's name, fixed: no run differs from another
 
 
@@ -475,6 +494,13 @@ def row(engine, target, operation, expect):
     # a key MinIO does not know is a 403 too, but not AccessDenied
     ({"tools": "ak-unknown"}, row("tools", "k2-lake/warehouse/governance", "read", "refused"), False, "InvalidAccessKeyId"),
     ({"spark": "ak-rw"}, row("spark", "k2-typo", "write", "allowed"), False, "NoSuchBucket"),
+    # F11: a refused list is not a refused read: the key reads an object another key lists, or a
+    # probe another key puts there for it; a key with GetObject and no ListBucket fails.
+    ({"tools": "ak-none", "trino": "ak-ro"}, row("tools", "k2-lake/warehouse/governance", "read", "refused"), True, "listed by the trino key"),
+    ({"tools": "ak-go", "trino": "ak-ro"}, row("tools", "k2-lake/warehouse/governance", "read", "refused"), False, "HTTP 206"),
+    ({"tools": "ak-none", "spark": "ak-rw"}, row("tools", "k2-lake/warehouse/fx", "read", "refused"), True, "put by the spark key"),
+    ({"tools": "ak-go", "spark": "ak-rw"}, row("tools", "k2-lake/warehouse/fx", "read", "refused"), False, "put by the spark key"),
+    ({"tools": "ak-none", "trino": "ak-ro"}, row("tools", "k2-lake/warehouse/fx", "read", "refused"), False, "proves nothing"),
 ])
 def test_a_storage_key_row_passes_on_its_outcome_alone(s3, engines, r, passes, says, capsys):
     passed, why = av.storage_key(r, keys(s3, **engines))
@@ -523,3 +549,177 @@ def test_a_missing_key_fails_its_row_naming_the_variable(s3):
     passed, why = av.storage_key(row("trino", "k2-lake/warehouse/governance", "read", "allowed"), env)
     assert not passed and "K2_TRINO_S3_SECRET_KEY" in why and "K2_TRINO_S3_ACCESS_KEY" not in why
     assert s3.seen == []  # nothing was sent without a full pair
+
+
+# ---- stage's placeholders (phase 002, W2-9) ------------------------------------------------------
+
+def read(**asserts) -> SimpleNamespace:
+    return SimpleNamespace(principal="p.a", table="d.f.t", via=("sql",), visible=("id",), masked=(), min_row_age_minutes=None,
+                           must_not_appear=None, must_appear=None) if not asserts else \
+        SimpleNamespace(**{**vars(read()), **asserts})
+
+
+@pytest.mark.parametrize("asserts,rows", [
+    ({}, False), ({"masked": ("note",)}, True), ({"min_row_age_minutes": 0}, True), ({"must_not_appear": "id > 1"}, True),
+    ({"must_appear": SimpleNamespace(where=None, min_rows=1)}, True)])
+def test_a_read_row_asserts_rows_unless_it_names_columns_alone(asserts, rows):
+    """A columns-only read row runs on a placeholder of its contract's shape; any row assertion needs the model's rows."""
+    assert av.asserts_rows(read(**asserts)) is rows
+
+
+# ---- REST rows through k2-api (phase 003, W3-7) --------------------------------------------------
+
+KEY = "k2_secret-key-of-p-a-0123456789"  # holds non-hex letters: it can match no hex in a line
+
+
+class FakeApi:
+    """k2-api's /v1/data answers, in memory: each GET answers `self.answer` (status, body), recording
+    the query and the Authorization header it came with."""
+
+    def __init__(self):
+        import http.server
+        import threading
+        fake = self
+        self.answer: tuple[int, dict] = (200, {"release": "r", "snapshot": "1", "rows": [], "next": None})
+        self.seen: list[tuple[str, dict, str]] = []
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def log_message(self, *a):
+                pass
+
+            def do_GET(self):
+                path, _, query = self.path.partition("?")
+                fake.seen.append((path, dict(urllib.parse.parse_qsl(query)), self.headers.get("Authorization", "")))
+                status, body = fake.answer
+                data = json.dumps(body).encode()
+                self.send_response(status)
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+
+        self.server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+        self.url = f"http://127.0.0.1:{self.server.server_port}"
+
+
+@pytest.fixture
+def api():
+    fake = FakeApi()
+    yield fake
+    fake.server.shutdown()
+
+
+class FakeTrino:
+    """The SQL leg: every statement answers `answer`; records (user, sql, zone)."""
+
+    def __init__(self, answer):
+        self.answer, self.seen = answer, []
+
+    def run(self, user, sql, session=None, as_user=None, zone=None):
+        self.seen.append((user, sql, zone))
+        return self.answer
+
+
+GOLD = [("rate_date", "date"), ("currency", "varchar(3)"), ("rate", "decimal(20,10)"), ("is_carried", "boolean"),
+        ("carried_days", "integer"), ("rate_available_at", "timestamp(6) with time zone"), ("n", "bigint")]
+NAMES = [c for c, _ in GOLD]
+SQL_ROW = ["2026-11-27", "USD", "1.0512000000", False, 0, "2026-11-27 15:00:00.000000 UTC", 9007199254740993]
+# The same row as k2-api writes it: a decimal its exact string, a time ISO 8601 in UTC, a bigint a number.
+REST_ROW = {"rate_date": "2026-11-27", "currency": "USD", "rate": "1.0512000000", "is_carried": False, "carried_days": 0,
+            "rate_available_at": "2026-11-27T15:00:00+00:00", "n": 9007199254740993}
+PATH = "/v1/data/fx-reference/ecb-fx-rates/gold_eur_rates_daily"
+
+
+def leg(api, trino, r, pk=("rate_date", "currency")):
+    passed, why = av.rest_read(trino, r, api.url, PATH, list(pk), KEY) if hasattr(r, "visible") else \
+        av.rest_denied(api.url, PATH, KEY)
+    assert KEY not in why and "Bearer" not in why
+    return passed, why
+
+
+def page(*rows):
+    return 200, {"release": "r", "snapshot": "1", "rows": list(rows), "next": None}
+
+
+def test_a_columns_only_rest_read_asks_one_row_by_key_and_matches_the_sql_row(api):
+    api.answer = page(REST_ROW)
+    trino = FakeTrino(av.Answer(rows=[SQL_ROW], columns=GOLD))
+    passed, why = leg(api, trino, read(visible=tuple(NAMES)))
+    assert passed and "its row equals the SQL leg's" in why, why
+    (path, query, auth), = api.seen
+    assert path == PATH and auth == f"Bearer {KEY}"
+    assert query == {"limit": "1", "filter.rate_date": "2026-11-27", "filter.currency": "USD"}
+    assert trino.seen == [("p.a", 'SELECT * FROM "d"."f"."t" LIMIT 1', "UTC")]
+
+
+@pytest.mark.parametrize("changed,says", [
+    ({"rate": "1.0513000000"}, "differ"), ({"rate_available_at": "2026-11-27T16:00:00+00:00"}, "differ"),
+    ({"n": 9007199254740992}, "differ"), ({"extra": 1}, "columns")])
+def test_a_rest_read_fails_on_any_value_or_column_the_sql_leg_does_not_show(api, changed, says):
+    api.answer = page(REST_ROW | changed)
+    passed, why = leg(api, FakeTrino(av.Answer(rows=[SQL_ROW], columns=GOLD)), read(visible=tuple(NAMES)))
+    assert not passed and says in why, why
+
+
+def test_a_rest_read_of_an_empty_table_proves_the_200_alone_and_says_so(api):
+    passed, why = leg(api, FakeTrino(av.Answer(rows=[], columns=GOLD)), read(visible=tuple(NAMES)))
+    assert passed and "only the 200 is proven" in why, why
+    assert api.seen[0][1] == {"limit": "1"}
+    api.answer = page()
+    passed, why = leg(api, FakeTrino(av.Answer(rows=[SQL_ROW], columns=GOLD)), read(visible=tuple(NAMES)))
+    assert not passed and "no row" in why, why
+
+
+def test_a_rest_read_asserting_rows_compares_every_row_as_a_multiset(api):
+    other = SQL_ROW[:1] + ["GBP"] + SQL_ROW[2:]
+    r = read(visible=tuple(NAMES), must_appear=SimpleNamespace(where=None, min_rows=1))
+    api.answer = page(REST_ROW | {"currency": "GBP"}, REST_ROW)
+    passed, why = leg(api, FakeTrino(av.Answer(rows=[SQL_ROW, other], columns=GOLD)), r)
+    assert passed and "2 row(s) equal the SQL leg's" in why, why
+    assert api.seen[-1][1] == {"limit": str(av.REST_PAGE)}
+    api.answer = page(REST_ROW, REST_ROW)
+    assert not leg(api, FakeTrino(av.Answer(rows=[SQL_ROW, other], columns=GOLD)), r)[0]
+    api.answer = (422, {"error": "result_too_large", "message": "m"})
+    passed, why = leg(api, FakeTrino(av.Answer(rows=[SQL_ROW], columns=GOLD)), r)
+    assert not passed and "result_too_large" in why
+
+
+@pytest.mark.parametrize("status,error,passes,says", [
+    (403, "forbidden", True, "403 forbidden"), (404, "not_found", False, "no refusal"),
+    (404, "not_published", False, "no refusal"), (200, None, False, "expected 403"),
+    (401, "unauthorized", False, "a fault of the harness"), (503, "trino_unavailable", False, "expected 403")])
+def test_a_rest_denial_is_403_forbidden_and_nothing_else(api, status, error, passes, says):
+    api.answer = (status, {"error": error, "message": "m"} if error else page()[1])
+    passed, why = leg(api, None, SimpleNamespace(principal="p.a", table="d.f.t", via=("rest",)))
+    assert passed is passes and says in why, why
+
+
+def test_a_rest_read_refused_its_key_fails_and_an_unreachable_api_fails():
+    import socket
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        closed = f"http://127.0.0.1:{s.getsockname()[1]}"
+    passed, why = av.rest_read(FakeTrino(av.Answer(rows=[], columns=GOLD)), read(), closed, PATH, [], KEY)
+    assert not passed and "did not answer" in why and KEY not in why
+
+
+def test_a_missing_key_skips_a_live_rest_leg_naming_the_command_and_never_a_release_one(tmp_path):
+    env = {"apiKeys": str(tmp_path)}
+    r = SimpleNamespace(principal="p.a")
+    assert "make api-key PRINCIPAL=p.a" in av.rest_skip(r, "live", env)
+    assert av.rest_skip(r, "release", env) is None  # the lake makes every key: a missing one fails the leg
+    (tmp_path / "p.a.key").write_text(KEY + "\n")
+    assert av.rest_skip(r, "live", env) is None and av.api_key(env, "p.a") == KEY
+
+
+def test_the_route_is_the_catalogs_and_a_relation_no_output_has_has_none(tmp_path):
+    (tmp_path / "compiled/catalog/products").mkdir(parents=True)
+    (tmp_path / "compiled/catalog/index.json").write_text(json.dumps({"products": [{"id": "fx-reference.ecb-fx-rates"}]}))
+    cols = [{"name": "currency", "primaryKey": True, "primaryKeyPosition": 2}, {"name": "rate", "primaryKey": False},
+            {"name": "rate_date", "primaryKey": True, "primaryKeyPosition": 1}]
+    (tmp_path / "compiled/catalog/products/fx-reference.ecb-fx-rates.json").write_text(json.dumps({"outputs": [
+        {"contractId": "fx-reference.ecb-fx-rates.gold_eur_rates_daily", "relation": "fx_reference.ecb_fx_rates.gold_eur_rates_daily", "columns": cols},
+        {"contractId": "fx-reference.ecb-fx-rates.bronze_daily", "relation": "lake.ecb_fx_rates.bronze_daily", "columns": []}]}))
+    assert av.route(tmp_path, "fx_reference.ecb_fx_rates.gold_eur_rates_daily") == (PATH, ["rate_date", "currency"])
+    assert av.route(tmp_path, "lake.ecb_fx_rates.bronze_daily") == ("/v1/data/fx-reference/ecb-fx-rates/bronze_daily", [])
+    assert av.route(tmp_path, "fx_reference.ecb_fx_rates__base.gold_eur_rates_daily") is None

@@ -9,7 +9,8 @@
 #   make access-verify LIVE=1                  the running stack: the canary's and the platform's rows
 #                                              (RELEASE defaults to ${K2_RELEASES}/pointers/trino), in a
 #                                              tools one-shot on the stack's networks, each engine's
-#                                              storage pair by -e name from your environment
+#                                              storage pair by -e name from your environment, each REST
+#                                              row's key from ${K2_SECRETS}/api/<principal>.key
 #                                              (scripts/deploy.py access_live); refused while .env is
 #                                              open to anyone but its owner
 #   make test-access RELEASE=<release dir>     the proofs behind the suite on a throwaway lake
