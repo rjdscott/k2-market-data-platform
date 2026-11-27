@@ -198,7 +198,9 @@ ok(r["deleted_manifest_lists_count"] >= r["ids"] and r["left"],
 ok(r["maintenance_write"] == "refused" and r["rows_after"] == 4,
    f"maintenance's key cannot write the table: INSERT {r['maintenance_write']}, still {r['rows_after']} rows")
 PY
+rc=$?  # a crash after some PASS lines must not pass
 tee -a "$W/claims" < "$W/spark.claims"
+[ "$rc" = 0 ] || claim 1 "the Spark claims read Spark's result to the end (exit $rc)"
 grep -q '^RESULT ' "$W/spark.out" || tail -n 5 "$W/spark.err"
 
 # 4 and 5, from the tools container, which holds every key by name.
@@ -256,6 +258,7 @@ a = trino.run(who, f'SELECT sum(id) FROM "{cat}"."{ns}".k2_storage_probe')
 ok(a.error is None and a.rows == [[7]], f"and SELECT reads it back: {a.says()} {a.rows}")
 trino.run(who, f'DROP TABLE IF EXISTS "{cat}"."{ns}".k2_storage_probe')
 PY
+rc=$?  # its exit, not a Traceback in its stderr: a kill leaves none
 tee -a "$W/claims" < "$W/tools.claims"
-[ -s "$W/tools.claims" ] && ! grep -q Traceback "$W/tools.err" || { claim 1 "the tools checks ran"; tail -n 8 "$W/tools.err"; }
+[ "$rc" = 0 ] && [ -s "$W/tools.claims" ] || { claim 1 "the tools checks ran to their end (exit $rc)"; tail -n 8 "$W/tools.err"; }
 finish
