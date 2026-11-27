@@ -31,6 +31,9 @@ through re.escape (Trino matches a rule's regex against the whole name), so `t` 
 - svc.platform, the operator: `all` on every `_build` catalog, SELECT in base namespaces there (table
   maintenance), the run-record table's DDL, every `system` table, viewing and killing any query,
   system information, every session property. It holds no privilege in a reader namespace.
+- The builder of model.QUALITY_RESULTS alone also reads each model.test_results_writers product's
+  `<domain>.<fence>__base.dq_test_results` (model.TEST_RESULTS), its own included, through the
+  reader catalog at main; svc.catalog reads its views by exact name, as it reads the run record.
 - model.REFS_READERS read exactly `<table>$refs` of each lake table, at its model.input_relation;
   a publisher reads its own bases' `$refs` too, through its views' guard.
 - svc.api may impersonate the declared `p.*` principals by exact name and nobody else.
@@ -72,14 +75,17 @@ from k2gen.model import (
     LAKE,
     LAKE_BUILDS,
     PIPELINE_PRINCIPALS,
+    QUALITY_RESULTS,
     REFS_READERS,
     RUN_RECORD_SQL,
     STATISTICS_PROPERTY,
+    TEST_RESULTS,
     Model,
     Product,
     RolePolicy,
     Table,
     base_namespace,
+    base_relation,
     build_catalog,
     builder,
     canary_user,
@@ -92,6 +98,7 @@ from k2gen.model import (
     reader_namespace,
     reader_relation,
     sql_literal,
+    test_results_writers,
 )
 
 RULES = "compiled/trino/rules.json"
@@ -265,9 +272,12 @@ def emit(model: Model) -> dict[str, str]:
             reach(build_catalog(p.domain), dbt, "all")
             schemas.append({"user": exact([dbt]), "catalog": exact([build_catalog(p.domain)]), "schema": exact([base_namespace(p.name)]), "owner": True})
             owned.append({"user": exact([dbt]), "catalog": exact([build_catalog(p.domain)]), "schema": exact([base_namespace(p.name)]), "privileges": WRITE})
-            for t in sorted(reads, key=lambda t: input_relation(t)):
-                reach(input_relation(t).split(".")[0], dbt, "read-only")
-                owned.append({"user": exact([dbt]), **_split(input_relation(t)), "privileges": ["SELECT"]})
+            relations = [input_relation(t) for t in reads]
+            if p.id == QUALITY_RESULTS:  # every builder's test results, its own included, at main (ADR-046)
+                relations += [base_relation(q.domain, q.name, TEST_RESULTS) for q in test_results_writers(model)]
+            for relation in sorted(relations):
+                reach(relation.split(".")[0], dbt, "read-only")
+                owned.append({"user": exact([dbt]), **_split(relation), "privileges": ["SELECT"]})
         schemas.append({"user": exact([pub]), "catalog": exact([build_catalog(p.domain)]), "schema": exact([reader_namespace(p.name)]), "owner": True})
         names = [t.name for t in built]
         owned.append({"user": exact([pub]), "catalog": exact([build_catalog(p.domain)]), "schema": exact([reader_namespace(p.name)]),
@@ -300,6 +310,13 @@ def emit(model: Model) -> dict[str, str]:
             {"user": exact(["svc.runs"]), "catalog": exact([f"{rr_domain}_build"]), **where, "privileges": ["SELECT", "INSERT"]},
             {"user": exact(["svc.catalog"]), "catalog": exact([rr_domain]), **where, "privileges": ["SELECT"]}]
 
+    # svc.catalog reads the quality results' views as it reads the run record: a platform principal
+    # takes no grant (checks.access, access.grant-to-platform), so the rule names it, by exact view.
+    quality = [reader_relation(t) for p in _live(model) if p.id == QUALITY_RESULTS for t in _built(p)]
+    for relation in quality:
+        reach(relation.split(".")[0], "svc.catalog", "read-only")
+    catalog_reads = [{"user": exact(["svc.catalog"]), **_split(r), "privileges": ["SELECT"]} for r in sorted(quality)]
+
     reader_groups = sorted({g for gs in group_catalogs.values() for g in gs})
     system_tables: list[dict[str, Any]] = []
     if builders:
@@ -330,7 +347,7 @@ def emit(model: Model) -> dict[str, str]:
     rules: dict[str, Any] = {
         "catalogs": catalogs,
         "schemas": schemas,
-        "tables": operator_tables + system_tables + owned + run_records + refs + readers,
+        "tables": operator_tables + system_tables + owned + run_records + catalog_reads + refs + readers,
         "system_session_properties": [{"user": exact(pipeline), "allow": True}],
         "catalog_session_properties": [
             {"user": exact([OPERATOR]), "allow": True},

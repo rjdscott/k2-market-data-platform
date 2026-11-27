@@ -132,8 +132,11 @@ def test_each_repository_product_compiles_to_its_golden() -> None:
     golden_entries = shared_entries(kept)
     for key, entry in shared_entries(emitted).items():
         assert golden_entries.get(key) == entry, key
-    # the macros are the repository's, so they are the good set's too
-    assert {p: t for p, t in emitted.items() if "/macros/" in p} == {p: t for p, t in goldens(GOLDEN).items() if "/macros/" in p}
+    # the macros are the repository's, so they are the good set's too, but the union's, which lists the set's writers
+    union = f"{dbt.ROOT}/macros/k2_test_results.sql"
+    assert {p: t for p, t in emitted.items() if "/macros/" in p and p != union} == {
+        p: t for p, t in goldens(GOLDEN).items() if "/macros/" in p and p != union}
+    assert emitted[union] == kept[union]
 
 
 def test_the_canary_seed_is_named_as_a_model_is_and_built_beside_its_table() -> None:
@@ -300,6 +303,26 @@ def test_each_quality_rule_becomes_a_test_or_is_refused() -> None:
             dbt.emit(replaced(m, station.id, tables=tables))
 
 
+def test_the_results_union_has_one_guarded_branch_per_writer_and_is_its_contract() -> None:
+    m = loaded(repository())
+    macro = dbt.emit(m)[f"{dbt.ROOT}/macros/k2_test_results.sql"]
+    branches = re.findall(r"k2_test_results_exist\('(\w+)', '(\w+)'\) %\}\nunion all\nselect '([\w.-]+)' as \"product_id\", "
+                          r".* from (\S+) where \"writer\" = '(\w+)'\n", macro)
+    assert [b[2] for b in branches] == [p.id for p in model.test_results_writers(m)] and len(branches) == 5
+    for catalog, schema, pid, relation, writer in branches:
+        p = product(m, pid)
+        base = model.base_relation(p.domain, p.name, model.TEST_RESULTS)
+        assert (relation, writer, f"{catalog}.{schema}.{model.TEST_RESULTS}") == (model.quote_relation(base), model.builder(p.name), base)
+    first = macro.split("{%- if")[0]
+    assert all(f'cast(null as {c.type}) as "{c.name}"' in first for c in model.TEST_RESULTS_TABLE.columns) and "where false" in first
+    retired = replaced(m, "governance.access-canary", status="retired")
+    assert "governance.access-canary" not in dbt.emit(retired)[f"{dbt.ROOT}/macros/k2_test_results.sql"]
+    (table,) = product(m, model.QUALITY_RESULTS).tables  # the contract is the union's columns, name for name and type for type
+    assert [(c.name, c.physical_type) for c in table.columns] == [
+        ("product_id", "varchar"), *((c.name, c.type) for c in model.TEST_RESULTS_TABLE.columns)]
+    assert "k2_test_results()" in product(m, model.QUALITY_RESULTS).models["test_results.sql"]
+
+
 def test_the_output_is_deterministic() -> None:
     documents = good()
     first = dbt.emit(loaded(documents))
@@ -383,6 +406,9 @@ def test_dbt_parses_compiles_and_selects_the_tree(tmp_path: Path, name: str) -> 
             assert f"{model.quote_relation(model.base_relation(*port.contract_id.split('.')))} FOR VERSION AS OF BIGINT '42'" in sql
         if model.model_config(p.models[f"{t.name}.sql"]).get("materialized") == "incremental":
             assert compiled[True][f"compiled/k2/models/{model.fence(p.domain)}/{model.fence(p.name)}/{model.dbt_model(p.name, t.name)}.sql"] != sql
+        if "k2_test_results()" in str(p.models[f"{t.name}.sql"]):  # compile renders every writer's branch
+            assert all(model.quote_relation(model.base_relation(q.domain, q.name, model.TEST_RESULTS)) in sql
+                       for q in model.test_results_writers(m)), sql
     foreign = [sql for s, sql in compiled[False].items() if "/k2_input_relationships_" in s]
     assert len(foreign) == (1 if name == "good" else 0)  # daily-load's station_id into its input
     assert all("FOR VERSION AS OF BIGINT '42'" in sql for sql in foreign)  # the foreign-key test reads the pinned snapshot too
@@ -405,8 +431,8 @@ def regenerate(root: Path) -> None:
         if out == REPOSITORY and not product_files(tree):
             continue
         for path, text in tree.items():
-            if out == REPOSITORY and "/macros/" in path:
-                continue  # the repository's macros are the good set's, compared there
+            if out == REPOSITORY and "/macros/" in path and not path.endswith("/k2_test_results.sql"):
+                continue  # the repository's macros are the good set's, compared there; the union lists its own writers
             (out / path).parent.mkdir(parents=True, exist_ok=True)
             (out / path).write_text(text)
 

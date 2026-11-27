@@ -30,6 +30,12 @@
     },
     {
       "kind": "table",
+      "mode": "rebuild",
+      "ref": "audited",
+      "table": "governance.quality_results__base.test_results"
+    },
+    {
+      "kind": "table",
       "mode": "restore",
       "ref": "main",
       "table": "governance.run_records.run_record"

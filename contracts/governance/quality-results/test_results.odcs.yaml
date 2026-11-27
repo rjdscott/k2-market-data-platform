@@ -1,0 +1,81 @@
+apiVersion: v3.2.0
+kind: DataContract
+id: governance.quality-results.test_results
+name: test_results
+version: 1.0.0
+domain: governance
+description:
+  purpose: >-
+    One row per dbt data test and unit test a product's builder ran, from the results table that
+    builder writes beside its outputs (dbt/macros/k2_results.sql), with the product it belongs to.
+team:
+  name: platform-team
+schema:
+  - id: test_results
+    name: test_results
+    physicalName: quality_results.test_results
+    physicalType: table
+    properties:
+      - name: product_id
+        physicalType: varchar
+        required: true
+        primaryKey: true
+        primaryKeyPosition: 1
+        description: The product whose builder ran the test, <domain>.<product>.
+      - name: run_id
+        physicalType: varchar
+        description: The Airflow run, <dag_id>/<run_id>; joins the product's run records.
+      - name: dbt_invocation_id
+        physicalType: varchar
+        required: true
+        primaryKey: true
+        primaryKeyPosition: 2
+        description: dbt's invocation id.
+      - name: release_id
+        physicalType: varchar
+        description: The release the run resolved at its start, <tag>-<sha12>.
+      - name: run_started_at
+        physicalType: timestamp(6) with time zone
+        required: true
+        description: When the dbt invocation started, UTC.
+        customProperties:
+          - property: time
+            value: event
+      - name: writer
+        physicalType: varchar
+        required: true
+        description: The builder that ran the test, dbt_<fence>; always the product's own.
+      - name: unique_id
+        physicalType: varchar
+        required: true
+        primaryKey: true
+        primaryKeyPosition: 3
+        description: The test's dbt node id.
+      - name: test_name
+        physicalType: varchar
+        required: true
+        description: The test's dbt name.
+      - name: tested
+        physicalType: varchar
+        description: The relation of the model or seed tested, <catalog>.<namespace>.<table>; null when dbt did not say.
+      - name: status
+        physicalType: varchar
+        required: true
+        description: dbt's status, pass, fail, warn, error or skipped (a test behind a failure in the same invocation).
+      - name: failures
+        physicalType: bigint
+        description: The failing rows dbt counted; null when it counted none.
+      - name: execution_time
+        physicalType: double
+        required: true
+        description: Seconds the test ran.
+      - name: message
+        physicalType: varchar
+        description: dbt's message, at most 1000 characters; a failed unit test's is the diff.
+customProperties:
+  - property: layer
+    value: mart
+  - property: build
+    value: dbt
+  - property: backup
+    value: rebuild  # rebuilt from every writer's own results table

@@ -142,6 +142,8 @@ expectations:
   - {principal: p.canary-full, table: fx_reference.ecb_fx_rates__base.gold_eur_rates_daily, denied: true}  # base (ADR-061)
   - {principal: p.canary-full, table: lake.ecb_fx_rates.bronze_daily, denied: true}  # bronze, which offers no role
   - {principal: p.canary-full, table: lake.ecb_fx_rates.landing_files, denied: true}  # the product's landing
+  - {principal: p.canary-full, table: governance.quality_results.test_results, denied: true}  # reader view, no role offered (svc.catalog's by rule)
+  - {principal: p.canary-full, table: governance.quality_results__base.test_results, denied: true}  # base (ADR-061)
 
   # The catalog fence (ADR-059 part 7): Lakekeeper has no authentication, so nothing reaches it
   # but the catalog's own network. Run on the stack by scripts/verify/catalog-fence.sh.

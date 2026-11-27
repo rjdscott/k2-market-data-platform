@@ -20,6 +20,8 @@
       "namespaces": [
         "access_canary",
         "access_canary__base",
+        "quality_results",
+        "quality_results__base",
         "run_records"
       ],
       "remoteSigningEnabled": false

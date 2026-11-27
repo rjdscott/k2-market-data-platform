@@ -12,6 +12,12 @@ selectors:
   definition:
     method: fqn
     value: k2.governance.access_canary
+- name: quality_results
+  description: 'governance.quality-results: its seeds and models, with their tests and unit tests; built as dbt_quality_results
+    (the wrapper''s dbt build --selector).'
+  definition:
+    method: fqn
+    value: k2.governance.quality_results
 - name: calendars
   description: 'reference-data.calendars: its seeds and models, with their tests and unit tests; built as dbt_calendars (the
     wrapper''s dbt build --selector).'
