@@ -905,6 +905,37 @@
     ],
     "sort": []
   },
+  "market_capture.kraken_trades__base.silver_trade_rejected": {
+    "columns": [
+      {
+        "name": "kafka_partition",
+        "required": true,
+        "type": "integer"
+      },
+      {
+        "name": "kafka_offset",
+        "required": true,
+        "type": "bigint"
+      },
+      {
+        "name": "kafka_timestamp",
+        "required": false,
+        "type": "timestamp(6) with time zone"
+      },
+      {
+        "name": "reason",
+        "required": true,
+        "type": "varchar"
+      },
+      {
+        "name": "payload",
+        "required": false,
+        "type": "varbinary"
+      }
+    ],
+    "partitioning": [],
+    "sort": []
+  },
   "market_capture.kraken_trades__base.silver_trade_unresolved": {
     "columns": [
       {

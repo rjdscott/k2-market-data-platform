@@ -193,6 +193,8 @@ run that hits the bound leaves a `backlog` in load's result, and the next run co
 is degraded), `expire`, `maintain` and `compact` (once a day), `record`. A trade whose symbol the
 security master does not resolve waits in `silver_trade_unresolved`, the `warn` test
 `unresolved_rows_zero` fails, the build publishes degraded and starts one `kraken_instruments` run.
+A frame the model cannot type is kept in `silver_trade_rejected` instead, and `rejected_frames_zero`
+fails the same way (section 5a).
 
 What the first runs must confirm, and where each is read:
 
@@ -210,6 +212,22 @@ below the log start: [accept-data-loss.md](./accept-data-loss.md); `audit` faile
 behind a failed batch: [kafka-batch-blocked.md](./kafka-batch-blocked.md).
 
 **Measured**, not yet run.
+
+## 5a. A rejected frame
+
+**Symptom**, the product `degraded` with `test.k2.rejected_frames_zero.<hash>` in the build's
+`warned`: a trade frame `silver_trade` cannot type (its payload not JSON, no `data` array, a trade
+lacking a field or holding one that does not cast) is in `silver_trade_rejected`, whole, with its
+`reason` and its bytes, and none of its trades is in `silver_trade`. The rest of the venue publishes,
+and the build is degraded on every run while the frame stands.
+
+**Recovery**, read the rows as the owning team (`kafka_partition`, `kafka_offset`, `reason`,
+`payload`) and decide whether the venue changed its format or sent one bad frame. A rejected frame is
+taken in by the first build of a release whose `silver_trade` model types it, with no other step,
+since every build reads again each frame `silver_trade` does not hold; a frame no model can type
+stays, and the product degraded, until that frame leaves `bronze_trade`.
+
+**Last verified:** not yet.
 
 ---
 

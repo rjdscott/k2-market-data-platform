@@ -4,7 +4,8 @@ models:
 - name: kraken_trades__silver_trade
   description: 'One typed row per trade and delivery: each element of a bronze trade frame''s data array, its symbol resolved
     to the security master''s instrument at the trade''s time. A trade the venue sent twice is two rows, the later one flagged
-    is_duplicate. A frame is here only once every trade in it resolves; until then it is held in silver_trade_unresolved.'
+    is_duplicate. A frame is here only once every trade in it resolves; until then it is held in silver_trade_unresolved.
+    A frame the model cannot type is never here, whole: it is in silver_trade_rejected with its reason.'
   config:
     alias: silver_trade
     properties:
@@ -142,10 +143,69 @@ models:
         - kafka_offset
         - trade_ordinal
         - trade_ts
+- name: kraken_trades__silver_trade_rejected
+  description: 'The rejected frames: every bronze trade frame that is not in silver_trade because the model cannot type it,
+    with the reason and the frame''s bytes. One trade that cannot be typed rejects its whole frame, as one unresolved symbol
+    holds it, so a frame is in silver_trade whole or not at all. A rejected frame is neither in silver_trade nor in silver_trade_unresolved,
+    and is never taken in automatically: its bytes do not change, so it stays here until a release whose model types it builds.
+    Rebuilt on every build, so a frame leaves it on the build that takes it in.'
+  config:
+    alias: silver_trade_rejected
+    meta:
+      k2:
+        contract: market-capture.kraken-trades.silver_trade_rejected
+        reader: market_capture.kraken_trades.silver_trade_rejected
+  columns:
+  - name: kafka_partition
+    description: The topic partition of the frame; with kafka_offset, its lineage to bronze_trade, the landing and the topic.
+    data_type: integer
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  - name: kafka_offset
+    description: The frame's offset in its partition.
+    data_type: bigint
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  - name: kafka_timestamp
+    description: The record's Kafka timestamp, as bronze_trade holds it.
+    data_type: timestamp(6) with time zone
+  - name: reason
+    description: 'Why the frame cannot be typed, the first that holds, the frame''s own before its trades'' by ordinal: payload_not_json;
+      no_trade_array (a trade frame whose data is missing or not an array); field_missing:type (the frame''s type); for a
+      trade, field_missing:<field> (timestamp, trade_id, symbol, side, price or qty absent, null or not a scalar), field_not_timestamp:timestamp
+      (not an ISO 8601 time) or field_not_numeric:<field> (trade_id not a bigint, price or qty not a decimal(38,18)). Each
+      is decided under try(), so deciding it never fails the build.'
+    data_type: varchar
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  - name: payload
+    description: The frame byte for byte as bronze_trade holds it, the venue's frame as sent; bronze data, so the table is
+      the owning team's.
+    data_type: varbinary
+  data_tests:
+  - k2_unique_key:
+      arguments:
+        columns:
+        - kafka_partition
+        - kafka_offset
+  - k2_quality:
+      name: rejected_frames_zero
+      arguments:
+        query: select count(*) from ${table}
+        holds: metric_value = 0
+      config:
+        severity: warn
 - name: kraken_trades__silver_trade_unresolved
   description: 'The held trades: every trade of a bronze trade frame that is not in silver_trade, because a trade in it has
     a symbol the security master resolves to nothing at the trade''s time. Rebuilt on every build, so a frame leaves it on
-    the build that moves it into silver_trade.'
+    the build that moves it into silver_trade. A frame the model cannot type is not held but rejected (silver_trade_rejected),
+    even if a symbol in it resolves to nothing too: a held frame is one the master alone can release.'
   config:
     alias: silver_trade_unresolved
     meta:

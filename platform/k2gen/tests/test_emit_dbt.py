@@ -441,6 +441,11 @@ def test_dbt_parses_compiles_and_selects_the_tree(tmp_path: Path, name: str) -> 
         (held,) = [n for n in tests if n["attached_node"] == "model.k2.kraken_trades__silver_trade_unresolved"
                    and n["test_metadata"]["name"] == "k2_quality"]
         assert held["name"] == "unresolved_rows_zero" and held["unique_id"].startswith("test.k2.unresolved_rows_zero."), held["unique_id"]
+        # the rejected frames' rule counts the table's rows and warns, so a rejected frame degrades the build
+        (rejected,) = [n for n in tests if n["attached_node"] == "model.k2.kraken_trades__silver_trade_rejected"
+                       and n["test_metadata"]["name"] == "k2_quality"]
+        assert (rejected["name"], rejected["config"]["severity"], rejected["test_metadata"]["kwargs"]["query"]) == (
+            "rejected_frames_zero", "warn", "select count(*) from ${table}"), rejected
     quality = [n for n in tests if n["test_metadata"]["name"] == "k2_quality"]
     rules = sum(1 for p, t in built for q in t.quality
                 if q.type in ("sql", "library") or (q.type == "custom" and q.engine == "dbt" and "k2_quality" in str(q.implementation)))

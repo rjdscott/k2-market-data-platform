@@ -169,6 +169,12 @@
       "kind": "table",
       "mode": "rebuild",
       "ref": "audited",
+      "table": "market_capture.kraken_trades__base.silver_trade_rejected"
+    },
+    {
+      "kind": "table",
+      "mode": "rebuild",
+      "ref": "audited",
       "table": "market_capture.kraken_trades__base.silver_trade_unresolved"
     },
     {

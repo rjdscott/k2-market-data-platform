@@ -1,0 +1,1 @@
+SELECT "kafka_partition", "kafka_offset", "kafka_timestamp", "reason", "payload" FROM "market_capture"."kraken_trades__base"."silver_trade_rejected" FOR VERSION AS OF 'audited' WHERE EXISTS (SELECT 1 FROM "market_capture"."kraken_trades__base"."silver_trade_rejected$refs" WHERE "name" = 'audited' AND "type" = 'TAG')
