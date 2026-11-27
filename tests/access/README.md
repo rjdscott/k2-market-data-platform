@@ -51,8 +51,11 @@ that a rule held.
   the access canary's readers), and only when they name nothing but the canary. Every other row
   prints a SKIP that names the release-time run where it did run.
 
-Two kinds the gate asks for cannot be written in the frozen schema yet: an impersonation that must
-succeed, and a user no document declares. `scripts/trino_rules_test.py` proves both today.
+Two kinds the gate asks for cannot be run from this file yet: an impersonation that must succeed
+(the frozen schema has no such outcome), and a user no document declares. `k2gen check` accepts
+a denial row as an undeclared principal, but the runner does not run such rows yet: it fails
+every row naming a principal the release does not declare. `scripts/trino_rules_test.py` proves
+both today (its rows `impersonation` and `strangers`).
 
 ## The proof behind the suite
 
