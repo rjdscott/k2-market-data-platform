@@ -51,6 +51,8 @@ def probe_lines(r):
     ("refused", 125, "FAIL", "could not start (docker exit 125)"),
     ("refused", 126, "FAIL", "could not start (docker exit 126)"),
     ("refused", 127, "FAIL", "could not start (docker exit 127)"), ("open", 125, "FAIL", "could not start"),
+    # a host port only another compose project publishes (the live stack beside a rehearsal) is not this stack's
+    ("refused", 6, "PASS", "publishes that port, not"), ("open", 6, "FAIL", "publishes that port, expected open"),
 ])
 def test_a_row_passes_only_when_the_dial_matches_its_expectation(tmp_path, expect, rc, verdict, says):
     r = run(tmp_path, expect, rc)

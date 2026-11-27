@@ -25,7 +25,15 @@ IMAGE='alpine@sha256:f59abe656b692d901e184be3445e084786602108599d2a51d229c0f5a48
 dial() {  # $1 origin (host|k2-net|k2-catalog|fetch|...), $2 host:port
   [ -n "${K2_FENCE_DIAL:-}" ] && { $K2_FENCE_DIAL "$@"; return; }
   local h=${2%:*} p=${2##*:} net out rc
-  if [ "$1" = host ]; then timeout 3 bash -c "exec 3<>/dev/tcp/$h/$p" 2>/dev/null; return; fi
+  if [ "$1" = host ]; then
+    timeout 3 bash -c "exec 3<>/dev/tcp/$h/$p" 2>/dev/null || return 1
+    # The host's loopback is shared by every compose project on it. A listener that only ANOTHER
+    # project's containers publish (the live stack beside a rehearsal) is not this stack's port: 6.
+    local owners
+    owners=$(docker ps --filter "publish=$p" --format '{{.Label "com.docker.compose.project"}}' 2>/dev/null | sort -u | xargs)
+    [ -n "$owners" ] && case " $owners " in *" $PROJECT "*) ;; *) FOREIGN=$owners; return 6 ;; esac
+    return 0
+  fi
   case "$1" in k2-net|k2-catalog) net="${PROJECT}_$1" ;; fetch) net="${PROJECT}_k2-egress" ;; *) return 5 ;; esac
   docker network inspect "$net" >/dev/null 2>&1 || return 4
   out=$(docker run --rm --name "k2-fence-probe-$$-$RANDOM" --network "$net" --memory 32m --cpus 0.1 \
@@ -49,7 +57,7 @@ networks {{range $n, $v := .NetworkSettings.Networks}}{{$n}},{{end}}'
   fi
 }
 
-PROJECT=${K2_COMPOSE_PROJECT:-}
+PROJECT=${K2_COMPOSE_PROJECT:-} FOREIGN=another
 if [ -z "${K2_FENCE_DIAL:-}" ] || [ -z "${K2_FENCE_INSPECT:-}" ]; then
   docker info >/dev/null 2>&1 || { echo "Docker is unreachable" >&2; exit 2; }
   PROJECT=${PROJECT:-$(docker inspect k2-trino --format '{{index .Config.Labels "com.docker.compose.project"}}' 2>/dev/null)}
@@ -100,6 +108,8 @@ while read -r from target expect; do
     3:refused) if [ "$structure" -eq 0 ]; then v=PASS d="refused (name does not resolve on $from)"
                else v=FAIL d="name does not resolve on $from, which proves nothing while the structure fails"; fi ;;
     3:open)    v=FAIL d="target name unresolvable, expected open" ;;
+    6:refused) v=PASS d="connected, but only project $FOREIGN publishes that port, not $PROJECT" ;;
+    6:open)    v=FAIL d="only project $FOREIGN publishes that port, expected open on $PROJECT" ;;
     4:*)       v=FAIL d="network $from absent: nothing was dialled" ;;
     12[567]:*) v=FAIL d="the probe container could not start (docker exit $rc)" ;;
     *)         v=FAIL d="origin $from cannot be dialled (exit $rc)" ;;
