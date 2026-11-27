@@ -465,6 +465,7 @@ CODE = {
     "docker/prometheus/rules/platform-alerts.yml": b"groups: []\n",
     "domains/sensor-net/parsers/station_csv.py": b"def parse(data: bytes) -> list[dict]:\n    return []\n",
     "platform/runs/k2runs.py": b"def record() -> None: ...\n",
+    "platform/catalog-site/k2site.py": b"def generate() -> None: ...\n",
 }
 NOT_CODE = {
     "docker/airflow/dags/.gitkeep": b"",
@@ -478,9 +479,10 @@ NOT_CODE = {
     "domains/sensor-net/parsers/tests/test_station_csv.py": b"",
     "platform/runs/run_record.sql": b"CREATE TABLE x (a int)\n",
     "platform/runs/runs_test.py": b"",
+    "platform/catalog-site/test_k2site.py": b"",
 }
 CODE_NEEDS = {"docker/airflow/dags/": "dagShapeChange", "docker/lake/": None, "docker/prometheus/rules/": None,
-              "domains/": None, "platform/runs/": None}
+              "domains/": None, "platform/runs/": None, "platform/catalog-site/": None}
 
 
 def test_the_run_code_is_copied_under_platform_with_its_needs_and_hashes(tmp_path: Path, emitted: dict[str, str]) -> None:
@@ -518,6 +520,7 @@ def test_every_run_code_root_is_a_document_root_and_classified() -> None:
     ("docker/prometheus/rules/platform-alerts.yml", NONE),  # deploy SIGHUPs Prometheus at every swap
     ("domains/sensor-net/parsers/station_csv.py", NONE),
     ("platform/runs/k2runs.py", NONE),
+    ("platform/catalog-site/k2site.py", NONE),  # read at the generator's next run
     ("docker/lake/README.md", NONE),  # not copied, so it moves only documents/
 ])
 def test_a_change_to_the_run_code_needs_only_what_reads_it(tmp_path: Path, emitted: dict[str, str], path: str, need: Needs) -> None:
