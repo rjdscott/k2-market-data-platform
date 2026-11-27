@@ -53,8 +53,8 @@ Spark tasks (load, audit, publish, expire, maintain, compact) are `docker exec` 
 Spark container, as the retired LakeScript ran them (IMPLEMENTATION-N0-N1 A13), from the pinned
 release's `platform/docker/lake/`. The scheduler holds the Docker socket (ADR-059 Outcome,
 2026-11-27); this module imports only the standard library, Airflow and oneshot.py, and loads one
-platform module, `platform/runs/k2runs.py`, from the pinned release in `record`; never anything
-under `domains/` (docker/airflow/tests/test_factory.py holds it to that).
+platform module, `platform/runs/k2runs.py`, from the pinned release in `record`;
+never anything under `domains/` (docker/airflow/tests/test_factory.py holds it to that).
 """
 
 from __future__ import annotations
