@@ -14,6 +14,7 @@
     "outcome": {"description": "How the step ended; a failed step after the swap is followed by a rollback record.", "enum": ["ok", "failed"]},
     "operator": {"description": "Who ran the deploy, as the host user name.", "type": "string", "minLength": 1},
     "reason": {"description": "Optional, on a failed step: why it failed, as deploy printed it, at most 2000 characters; never a secret (added by step S19b, additively).", "type": "string", "maxLength": 2000},
+    "backups": {"description": "Optional, on the backup step: each database dumped before a one-shot migrated it, by database name, the dump's path and its sha256 (a dump, not a secret file; added at review R1 H1, additively).", "type": "object", "additionalProperties": {"type": "object", "additionalProperties": false, "required": ["path", "sha256"], "properties": {"path": {"type": "string", "minLength": 1}, "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}}}},
     "secrets": {
       "description": "Each secret file the release's services mount, and the release canaries' passwords, as deploy found them at the step: its path under ${K2_SECRETS} to its mode and size. Never the content, nor a digest of it (a sha256 until step S19b, at the review of identity). A missing file is absent from the map.",
       "type": "object",

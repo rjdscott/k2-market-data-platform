@@ -16,6 +16,7 @@ scripts/verify/deploy_rehearsal.py (`make deploy-rehearsal`).
 
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import json
 import os
@@ -166,6 +167,10 @@ sys.exit(f"fake docker: no answer for {A}")
             monkeypatch.setattr(deploy, "release_suite", lambda ctx, rel: self.suite.append(rel.id) or ["suite passed"])
             monkeypatch.setattr(deploy, "s20_checks", lambda ctx, rel: self.s20(rel))
             monkeypatch.setattr(deploy, "secrets_health", lambda ctx: None)  # its own test below
+            self.fence_rc = 0  # scripts/verify/catalog-fence.sh, as verify runs it
+            monkeypatch.setattr(deploy, "catalog_fence", lambda ctx: subprocess.CompletedProcess(
+                [], self.fence_rc, f"catalog-fence: 3 PASS, {self.fence_rc} FAIL\n", ""))
+            self.down = False  # Trino gives no answer until a compose up recreates it
             # each release's own emitter runs in its tools image; here, k2gen's in process
             self.shaped: list[str] = []
             monkeypatch.setattr(deploy, "statements", lambda ctx, rel, v, old, new: self.shaped.append(rel.id) or view_update(v, old, new))
@@ -219,6 +224,8 @@ sys.exit(f"fake docker: no answer for {A}")
             return user == model.canary_user(live.manifest.set_sha256)
 
         def sql(self, ctx: Any, user: str, statement: str) -> dict[str, Any]:
+            if self.down and "trino" not in self.ups():
+                raise deploy.k2tools.Unreachable("Connection refused")
             if statement.startswith("SELECT column_name"):
                 return {"columns": [["column_name", "varchar"]], "rows": [[c] for c in self.views.get(VIEW, [])]}
             if statement.startswith("SELECT * FROM"):
@@ -613,3 +620,134 @@ sys.exit(f"fake docker: no answer for {A}")
         dockerfile = (ROOT / "docker/tools/Dockerfile").read_text()
         assert all("@sha256:" in line for line in dockerfile.splitlines() if line.startswith(("FROM", "COPY --from")))
         assert "\nUSER " in dockerfile and "USER root" not in dockerfile
+
+    # --- review R1 of PR #250 ---------------------------------------------------------
+
+    MIGRATE = {"prefect-db": TRINO}
+
+    def migrate_doc(image: str) -> dict[str, Any]:
+        d = compose_doc()
+        d["services"] |= {"airflow-migrate": {"image": image, "restart": "no"},
+                          "prefect-db": {"image": "postgres:16", "restart": "unless-stopped"}}
+        return d
+
+    def test_a_migrating_one_shot_runs_only_after_its_database_is_dumped_and_a_failed_dump_refuses(world: World) -> None:
+        world.write(world.read() | {"oneshots": ["lake-init", "airflow-migrate"], "mc_out": "-- PostgreSQL database dump complete"})
+        r1 = world.release(compose=migrate_doc("alpine:3.20"), images=MIGRATE | {"airflow-migrate": A})
+        world.live(r1)
+        r2 = world.release(compose=migrate_doc("alpine:3"), images=MIGRATE | {"airflow-migrate": B})
+        assert deploy.make_plan(world.ctx, r2, [r1]).oneshots == ["airflow-migrate"]
+        world.write(world.read() | {"mc_rc": 1})  # pg_dump fails: through the real scripts/backup-lake.sh --dump
+        with pytest.raises(deploy.Refused, match="dump of database airflow"):
+            world.deploy(r2)
+        assert world.ups() == [] and records(world)[-1]["step"] == "backup"
+        world.write(world.read() | {"mc_rc": 0})
+        assert world.deploy(r2) == 0 and world.ups() == ["airflow-migrate"]
+        steps = [r["step"] for r in records(world)]
+        assert len(steps) - steps[::-1].index("backup") < len(steps) - steps[::-1].index("ddl")  # the dump first
+        dump = next(r for r in reversed(records(world)) if r["step"] == "backup")["backups"]["airflow"]
+        assert Path(dump["path"]).parent == world.root / "backups" / r2.id
+        assert hashlib.sha256(Path(dump["path"]).read_bytes()).hexdigest() == dump["sha256"]
+        p = deploy.make_plan(world.ctx, r2, [r2])
+        p.oneshots, found = ["airflow-migrate"], {}
+        assert deploy.migration_dumps(world.ctx, p, found)[0].startswith("SKIP dump of database airflow") and found == {}
+        p.sources = [None]  # no previous release: the dump is taken
+        deploy.migration_dumps(world.ctx, p, found)
+        assert set(found["backups"]) == {"airflow"}
+
+    @pytest.mark.parametrize("down", [False, True])
+    def test_a_rollback_narrows_before_the_swap_or_with_trino_down_right_after_it_comes_back(world: World, down: bool) -> None:
+        t = world.release()  # operator_note, masked by t's rules alone
+        g = world.release(over=dropped_note())  # compiled second: a version never goes backwards
+        world.live(g)
+        assert world.deploy(t) == 0 and "operator_note" in world.views[VIEW]
+        world.log.unlink()
+        world.down = down
+        with deploy.lock(world.root):
+            assert deploy.rollback(world.ctx) == 0
+        tl = world.timeline()
+        swapped = next(i for i, e in enumerate(tl) if e[:2] == ["tools", "swap"])
+        narrowed = next(i for i, e in enumerate(tl) if e[0] == "view" and "operator_note" not in e[1])
+        if down:
+            assert swapped < next(i for i, e in enumerate(tl) if e[:2] == ["up", "trino"]) < narrowed, tl
+        else:
+            assert narrowed < swapped and ["up", "trino"] not in [e[:2] for e in tl], tl
+        assert world.views[VIEW] == ["station_id", "read_at", "value", "region"]
+
+    def test_a_view_not_synced_after_a_rollback_swap_fails_the_rollback_naming_it(world: World) -> None:
+        t = world.release()
+        g = world.release(over=dropped_note())
+        world.live(g)
+        assert world.deploy(t) == 0
+        real, said = world.sql, []
+
+        def refusing(ctx: Any, user: str, statement: str) -> dict[str, Any]:
+            if statement.startswith("CREATE OR REPLACE VIEW"):
+                raise deploy.k2tools.TrinoError("GENERIC_INTERNAL_ERROR", "the catalog refused the commit")
+            return real(ctx, user, statement)
+
+        deploy.sql, world.down, world.ctx.say = refusing, True, said.append
+        world.log.unlink()
+        with deploy.lock(world.root):
+            assert deploy.rollback(world.ctx) == deploy.EXIT_ROLLBACK_FAILED
+        assert any("ROLLBACK FAILED" in x and f"view {VIEW} not synced" in x for x in said), said
+
+    def test_a_deploy_is_refused_when_its_rollback_target_lost_an_image_and_status_says_so(world: World) -> None:
+        r1 = world.release(compose=compose_doc(standin="alpine:3"), images={"standin": B})
+        world.live(r1)
+        r2 = world.release()
+        s = world.read()
+        del s["images"][B]  # docker image prune -a
+        world.write(s)
+        with pytest.raises(deploy.Refused, match=f"rollback target {r1.id} names images .*standin {B}.*docker pull"):
+            world.deploy(r2)
+        assert world.ups() == [] and [e for e in world.timeline() if e[:2] == ["tools", "swap"]] == []
+        said: list[str] = []
+        world.ctx.say = said.append
+        deploy.status(world.ctx)
+        assert any(x.strip().startswith(f"rollback images of {r1.id}: MISSING standin {B}") for x in said), said
+
+    def test_verify_fails_on_no_container_a_missing_service_or_a_failed_fence(world: World) -> None:
+        r1 = world.release()
+        world.live(r1)
+        assert any(x.startswith("catalog-fence: 3 PASS") for x in deploy.verify(world.ctx, r1, None))
+        world.fence_rc = 1
+        with pytest.raises(deploy.Failed, match="catalog fence exit 1"):
+            deploy.verify(world.ctx, r1, None)
+        world.fence_rc = 0
+        s = world.read()
+        world.write(s | {"containers": [c for c in s["containers"] if c["service"] != "standin"]})
+        with pytest.raises(deploy.Failed, match="not running: standin"):
+            deploy.verify(world.ctx, r1, None)
+        world.write(s | {"containers": []})  # a project name that matches nothing
+        with pytest.raises(deploy.Failed, match="no container of compose project"):
+            deploy.verify(world.ctx, r1, None)
+
+    def test_an_empty_project_is_refused_and_an_unset_one_is_the_checkout_directory(monkeypatch: pytest.MonkeyPatch,
+                                                                                    tmp_path: Path) -> None:
+        monkeypatch.setenv("K2_RELEASES", str(tmp_path / "releases"))
+        monkeypatch.setenv("K2_COMPOSE_PROJECT", "")
+        assert deploy.main(["status"]) == deploy.EXIT_REFUSED
+        monkeypatch.delenv("K2_COMPOSE_PROJECT")
+        monkeypatch.setenv("K2_HOME", str(tmp_path / "K2.Market-data_x"))
+        assert deploy.ctx_from_env(tmp_path).project == "k2market-data_x"
+
+    def test_rollback_takes_allow_stateful_from_make_to_the_plan(world: World, monkeypatch: pytest.MonkeyPatch) -> None:
+        r1 = world.release()
+        world.live(r1)
+        r5 = world.release(compose=compose_doc(lakekeeper="quay.io/lakekeeper/catalog:v0.14.0"), images={"lakekeeper": LK2})
+        assert world.deploy(r5, allow={"lakekeeper"}) == 0
+        world.ctx.allow_stateful = set()
+        with deploy.lock(world.root):
+            assert deploy.rollback(world.ctx) == deploy.EXIT_ROLLBACK_FAILED  # the plan refuses lakekeeper
+        world.ctx.allow_stateful = {"lakekeeper"}
+        with deploy.lock(world.root):
+            assert deploy.rollback(world.ctx) == 0 and world.image_of("lakekeeper") == "sha256:" + "d" * 64
+        seen: list[set[str]] = []
+        monkeypatch.setenv("K2_RELEASES", str(world.root))
+        monkeypatch.setenv("K2_COMPOSE_PROJECT", "k2")
+        monkeypatch.setattr(deploy, "rollback", lambda ctx: seen.append(ctx.allow_stateful) or 0)
+        assert deploy.main(["rollback", "--allow-stateful", "lakekeeper"]) == 0 and seen == [{"lakekeeper"}]
+        made = subprocess.run(["make", "-s", "-f", "mk/release.mk", "rollback", "DEPLOY=echo", "ALLOW_STATEFUL=lakekeeper"],
+                              cwd=ROOT, capture_output=True, text=True)
+        assert made.stdout.strip() == "rollback --allow-stateful lakekeeper", made.stdout + made.stderr

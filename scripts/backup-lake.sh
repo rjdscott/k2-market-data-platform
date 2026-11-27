@@ -7,6 +7,8 @@
 #
 #   scripts/backup-lake.sh             # `make backup`; the k2-backup.timer user unit runs it daily
 #   scripts/backup-lake.sh --dry-run   # list what it would copy; writes only empty directories
+#   scripts/backup-lake.sh --dump <postgres container> <database> <file>
+#                                      # that one database's dump alone (deploy, before a migration)
 #
 # Read-only against the stack: GETs to the catalog and reads from MinIO, each
 # through a throwaway container on the catalog's network, and
@@ -39,11 +41,28 @@ FLOOR_GIB=${K2_BACKUP_MIN_FREE_GIB:-20}       # refuse to start below this much 
 die() { ERR=$*; echo "backup-lake: FAIL: $*" >&2; exit 1; }
 ERR=""
 
+# A database's dump, gzipped, to .partial and kept only when pg_dump finished.
+PG=k2-prefect-db  # the Postgres container; --dump names another (a deploy's own project)
+dump() {  # dump <database> <file>
+  docker exec "$PG" sh -c 'pg_dump -U "$POSTGRES_USER" -d "$1"' sh "$1" | gzip > "$2.partial" ||
+    die "pg_dump of database $1 failed"
+  [[ $(gzip -dc "$2.partial" | tail -n 5) == *"PostgreSQL database dump complete"* ]] ||
+    die "the dump of database $1 is incomplete"
+  mv "$2.partial" "$2"
+}
+
 DRY=0
 case "${1:-}" in
   --dry-run) DRY=1 ;;
+  --dump)
+    [ $# -eq 4 ] || { echo "usage: $0 --dump <postgres container> <database> <file>" >&2; exit 2; }
+    PG=$2
+    mkdir -p "$(dirname "$4")"
+    dump "$3" "$4"
+    echo "backup-lake: database $3 dumped to $4"
+    exit 0 ;;
   "") ;;
-  *) echo "usage: $0 [--dry-run]" >&2; exit 2 ;;
+  *) echo "usage: $0 [--dry-run | --dump <postgres container> <database> <file>]" >&2; exit 2 ;;
 esac
 [[ $KEEP =~ ^[1-9][0-9]*$ ]] || die "K2_BACKUP_KEEP must be a whole number of 1 or more"
 [[ $FLOOR_GIB =~ ^[0-9]+$ ]] || die "K2_BACKUP_MIN_FREE_GIB must be a whole number"
@@ -199,16 +218,8 @@ if [ "$DRY" = 1 ]; then
 fi
 
 # (2) The catalog database, then Airflow's, before the copy: every metadata file a
-# dumped pointer names exists already, so the copy below holds it. Written to
-# .partial and kept only when pg_dump finished.
+# dumped pointer names exists already, so the copy below holds it (dump(), above).
 ts=$(date -u +%Y%m%dT%H%M%SZ)
-dump() {  # dump <database> <file>
-  docker exec k2-prefect-db sh -c 'pg_dump -U "$POSTGRES_USER" -d "$1"' sh "$1" | gzip > "$2.partial" ||
-    die "pg_dump of database $1 failed"
-  [[ $(gzip -dc "$2.partial" | tail -n 5) == *"PostgreSQL database dump complete"* ]] ||
-    die "the dump of database $1 is incomplete"
-  mv "$2.partial" "$2"
-}
 prune() {  # prune <dir> <glob>: keep the newest $KEEP; the UTC names sort by time
   local files=()
   shopt -s nullglob

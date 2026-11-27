@@ -23,7 +23,7 @@ The chain checks: a first deploy that fails verification (exit 3), then succeeds
 as phase 002's wrapper will (access_verify.py stage) and release-verify with S20's two entry points and
 S13's identity.sh; a planted view the drift check names; a rules-only release that restarts nothing; a
 stand-in's new image recreating only it; a forced mismatch restoring R-1, images included, exit 1;
-`make rollback`; a release dropping a masked column, a reader polling every 50 ms throughout; a SIGKILL
+`make rollback`, also with Trino stopped; a release dropping a masked column, a reader polling every 50 ms throughout; a SIGKILL
 after each step, then a rerun; two deploys at once; the backup-set refusal (review M4) on a real table.
 The cutover run starts from TODAY's shape (Trino on HTTP from the checkout's etc, Lakekeeper on the
 shared network with a host port, a stand-in capture), follows docs/runbooks/first-cutover-to-releases.md,
@@ -77,7 +77,7 @@ RUN_RECORD = "governance_build.run_records.run_record"
 RESULTS: list[tuple[str, bool, str]] = []
 CODE = ("platform/k2gen/k2gen", "platform/k2gen/pyproject.toml", "platform/k2gen/uv.lock", "platform/runs",
         "contracts", "dbt", "docker/tools", "scripts/deploy.py", "scripts/principal-secret.py",
-        "scripts/tls.sh", "scripts/check-env.py", "scripts/lib", "scripts/access_verify.py", "scripts/verify", "tests/access", "mk")
+        "scripts/tls.sh", "scripts/check-env.py", "scripts/backup-lake.sh", "scripts/lib", "scripts/access_verify.py", "scripts/verify", "tests/access", "mk")
 
 COMPOSE = """\
 # The rehearsal's compose file, release-shaped (scripts/verify/deploy_rehearsal.py): what S22 makes live.
@@ -573,6 +573,12 @@ def rehearse() -> int:
     out = make("rollback", check=False)
     check("make rollback returns to R2, the stand-in on R2's image", code(out) == 0 and live_release() == r2
           and started()["standin"].split()[1] != img3)
+    make("deploy", f"RELEASE={r3}")
+    compose("stop", "trino")  # Trino down under the live release (review R1 H2): the rollback swaps first
+    out = make("rollback", check=False)
+    check("with Trino stopped, make rollback moves the pointers and recreates first, exit 0",
+          code(out) == 0 and live_release() == r2 and "Trino does not answer" in out.stderr,
+          next((x.strip()[:160] for x in out.stderr.splitlines() if "FAILED" in x), ""))
     make("deploy", f"RELEASE={r3}")
 
     # 6. the masked column dropped, read every 50 ms throughout
