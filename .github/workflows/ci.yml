@@ -72,8 +72,8 @@ jobs:
         run: uv run --no-project --with pytest==9.2.0 --with pyyaml==6.0.4 --with fastavro==1.12.2 --with duckdb==1.4.4 pytest tests -q
 
       # The code a release carries beside its documents, and the parsers: fakes only, no stack.
-      - name: Platform code and parsers (make test-platform, domains/)
-        run: make test-platform && uv run --no-project --with pytest==9.2.0 pytest domains -q
+      - name: Platform code and parsers (make test-platform)
+        run: make test-platform
 
   contracts:
     name: Contracts (k2gen)

@@ -5,7 +5,7 @@
 lakekeeper          # the catalog itself, on this network alone
 lakekeeper-migrate  # migrates the catalog's schema in prefect-db before lakekeeper starts
 prefect-db          # Postgres, holding the catalog's database
-minio               # the lake's storage: Lakekeeper checks and purges it, and signs requests for it
+minio               # the lake's storage: Lakekeeper checks and purges it (it signs nothing: remote signing is off, ADR-054)
 trino               # the engine every reader and builder goes through: reads and commits via the catalog
 spark-iceberg       # the lake's maintenance writer: commits through the catalog, writes to MinIO
 lake-init           # one-shot: the bucket, the catalog bootstrap and the domain warehouses
