@@ -1117,9 +1117,12 @@ services:
     container_name: k2-lake-init
     networks:
       - k2-catalog  # it calls Lakekeeper and MinIO, both there
+    # The releases root alone, never the checkout (review R6): the script and the MinIO policies it
+    # grants are the release's own platform/docker/lake/, and so is the warehouse list
+    # (compiled/lake/storage-plan.json). Deploy sets K2_LAKE_INIT_RELEASE to the release it deploys;
+    # unset (`docker compose up lake-init` by hand), the release the trino pointer names.
     volumes:
-      - ./docker/lake:/init:ro
-      - *k2-releases-ro  # the warehouse list: the release's compiled/lake/storage-plan.json
+      - *k2-releases-ro
     # The one service besides minio holding the root pair: it makes the buckets, the warehouses
     # (whose storage credential Lakekeeper keeps) and one MinIO user per engine from the ten names
     # below, refusing a pair unset, equal to the root's or shared (init-lake.sh).
@@ -1139,7 +1142,7 @@ services:
       # Empty: the script reads the plan through the trino pointer. Deploy sets it to the
       # release being deployed, so a first deploy and a new warehouse read that release.
       K2_STORAGE_PLAN: ${K2_STORAGE_PLAN:-}
-    entrypoint: ["/bin/bash", "/init/init-lake.sh"]
+    entrypoint: ["/bin/bash", "/k2/releases/${K2_LAKE_INIT_RELEASE:-pointers/trino}/platform/docker/lake/init-lake.sh"]
     depends_on:
       minio:
         condition: service_healthy

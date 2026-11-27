@@ -6,6 +6,7 @@
     make release-verify                                        ask every part which release it runs
     make rollback                                              back to the previous good release
     make release-status                                        pointers, the good release, the log
+    make site                                                  the catalog site and dbt docs of the live release
     make release-diff RELEASE=<id> [FROM=<id>]                 k2gen diff, from the good release
 
 Procedures: docs/runbooks/deploy-a-release.md and docs/runbooks/roll-back-a-release.md.
@@ -57,6 +58,9 @@ first failure:
                  drift check in tools, the live access suite (S20) and the catalog fence's probes
                  (scripts/verify/catalog-fence.sh); `make release-verify` adds S13's identity.sh
 10 done          the other canaries' lines removed; the release is the good one
+   site          the release's catalog site and dbt docs into the k2-site volume k2-api serves; a failure is
+                 recorded (step site, failed) and said, and never fails or rolls back the deploy; after a
+                 rollback too, so the site describes what is live
 
 A failure at step 5 or later rolls back on its own: the same steps toward the previous release from
 this one (recorded as rollback-<step>), then exit 1; exit 3 if that fails too. Exit 2 is a refusal
@@ -86,6 +90,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import urllib.request
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -120,10 +125,15 @@ POINTERS = ("trino", "airflow", "spark", "prometheus", "k2-api")  # A1
 REFRESH_S = 5  # Trino rereads rules, groups and the password file this often (compiled etc, S11 and S13)
 RULES_WAIT_S = 4 * REFRESH_S  # how long a swap may take to reach Trino: 0.1 to 4.7 s measured (spike c)
 HEALTH_WAIT_S = 300  # a recreated service's start, Trino's included
+API_TRIES, API_WAIT_S = 5, 2.0  # k2-api reads its pointer at every request; the tries cover a slow first answer
 DISK_FLOOR_GIB = 2.0  # free at the releases root; a release is a few MiB, a pulled image is not
 MEM_FLOOR_GIB = 2.0  # MemAvailable on the host: a recreate starts a container before the old one's memory returns
 DONE = ("done", "rollback-done")
-UNCHANGING = ("preflight", "images", "plan", "backup", "drain", "allow-running")  # steps that move no release
+UNCHANGING = ("preflight", "images", "plan", "backup", "drain", "allow-running",  # steps that move no release
+              "site", "rollback-site")  # the sites, after done: never an unfinished attempt
+SITE_VOLUME = "k2-site"  # compose's volume the sites go into and k2-api serves (<project>_k2-site)
+CATALOG_SITE = f"{model.PLATFORM_DIR}/platform/catalog-site/k2site.py"  # the release's own generator (W3-9)
+DBT_PROJECT = "compiled/dbt/dbt_project.yml"  # what `k2-dbt docs` renders
 # The drain (ADR-058). The ADR names no bound; its revisit trigger is a deploy over 10 minutes, so the
 # drain may take half of that.
 DRAIN_WAIT_S = 300
@@ -133,6 +143,7 @@ SCHEDULER = "airflow-scheduler"  # the compose service deploy asks Airflow throu
 BUSY = ("queued", "running", "restarting")  # a task instance's states a pause does not stop
 PASSWORD_DB = "trino/password.db"
 CA = "tls/ca.pem"
+LAKE_INIT = f"{model.PLATFORM_DIR}/docker/lake/init-lake.sh"  # lake-init runs the deployed release's own (review R6)
 CANARY_SQL = "SELECT 1"  # the canary's one statement (S12's rules)
 # Spark's `lake` catalog, as k2gen's Trino catalogs and docker/lake/spark_conf.py name it; the keys come
 # from the container's AWS_* environment, S3FileIO's default chain (A4), never from this file.
@@ -254,13 +265,18 @@ def history(root: Path) -> list[dict[str, Any]]:
     return [json.loads(line) for line in path.read_text().splitlines() if line.strip()] if path.exists() else []
 
 
+def after_good(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The records after the newest good release's done."""
+    last = max((i for i, r in enumerate(records) if r["step"] in DONE and r["outcome"] == "ok"), default=-1)
+    return records[last + 1:]
+
+
 def standing(records: list[dict[str, Any]]) -> tuple[list[str], list[str]]:
     """(the good releases, oldest first: each deploy or rollback that reached done; every release an
     attempt since the newest good one named, which may have changed the live state)."""
     goods = [r["release"] for r in records if r["step"] in DONE and r["outcome"] == "ok"]
-    last = max((i for i, r in enumerate(records) if r["step"] in DONE and r["outcome"] == "ok"), default=-1)
     since: list[str] = []
-    for r in records[last + 1:]:
+    for r in after_good(records):
         if r["step"] in UNCHANGING:  # a refusal or PLAN=1 moved nothing
             continue
         for rid in (r["release"], r["from"]):
@@ -301,6 +317,14 @@ def compose(ctx: Ctx, rel: Release, *args: str) -> list[str]:
         override.write_text(json.dumps({"services": pinned}, indent=2))
     return ["docker", "compose", "-p", ctx.project, "--project-directory", str(ctx.home),
             "-f", str(rel.root / model.RELEASE_COMPOSE), "-f", str(override), *args]
+
+
+def rendered(ctx: Ctx, rel: Release) -> dict[str, Any]:
+    """The release's compose as compose renders it, interpolated from this environment and the checkout's
+    .env, every declared network and volume included (--all-resources), the default set's services."""
+    doc: dict[str, Any] = json.loads(run(*compose(ctx, rel, "--all-resources", "config", "--format", "json"),
+                                         env=compose_env(ctx)).stdout or "{}")
+    return doc
 
 
 def compose_env(ctx: Ctx) -> dict[str, str]:
@@ -402,6 +426,7 @@ class Plan:
     views: list[View]
     skipped: list[str]
     create: list[tuple[str, str, str]] = field(default_factory=list)  # (table, engine, DDL) still to create
+    remove: list[str] = field(default_factory=list)  # running, and moved out of the default set by the target
 
 
 def files_of(rel: Release) -> dict[str, bytes]:
@@ -448,7 +473,12 @@ def make_plan(ctx: Ctx, target: Release, sources: list[Release | None]) -> Plan:
         views |= {r: v for r, v in target_views.items() if r not in before or before[r].columns != v.columns
                   or s.manifest.files.get(model.view_sql_path(r)) != target.manifest.files.get(model.view_sql_path(r))}
     running = {c["Config"]["Labels"].get("com.docker.compose.service") for c in containers(ctx) if c["State"]["Running"]}
-    order, oneshots, skipped = [], [], []
+    # In a source's default set, behind a profile in the target (k2-api, rolling back to a release where it
+    # was a profiled stub): the running container is the source's, which the target never starts, so it
+    # is removed at recreate. A service profiled in both that runs was started on purpose (hot-gold):
+    # recreated in place, as before.
+    defaults = {s for src in sources if src for s, spec in services(src).items() if not spec.get("profiles")}
+    order, oneshots, skipped, remove = [], [], [], []
     retired = {model.fence(x.id.split(".")[1]) for x in target.manifest.products if x.status == "retired"}
     for r in sorted(r for r in views if r.split(".")[1] in retired):
         skipped.append(f"view {r}: its product is retired, so its rules are gone and no reader reaches it; "
@@ -460,8 +490,16 @@ def make_plan(ctx: Ctx, target: Release, sources: list[Release | None]) -> Plan:
             skipped.append(f"{name}: not in the release's compose")
         elif name == "tools":
             skipped.append("tools: a one-shot this deploy runs itself, from the release")
+        elif spec.get("profiles") and name in running and name in defaults:
+            remove.append(name)
         elif spec.get("profiles") and name not in running:
             skipped.append(f"{name}: profile {','.join(spec['profiles'])}, not running; its next start uses the release")
+        elif name == "lake-init" and LAKE_INIT not in target.manifest.files:
+            # Its compose runs the checkout's script, which a newer checkout's lake-init demands ten more names
+            # for than that compose passes. Its warehouses exist (each deploy since alpha.3 made them) and it
+            # never had scoped users, whose grants a newer release made and an older one never reads.
+            skipped.append(f"lake-init: {target.id} carries no {LAKE_INIT} (a release before review R6), and its "
+                           "compose would run this checkout's script; not run, its warehouses already exist")
         elif str(spec.get("restart", "no")) == "no":
             oneshots.append(name)
         else:
@@ -472,7 +510,7 @@ def make_plan(ctx: Ctx, target: Release, sources: list[Release | None]) -> Plan:
     # at a cutover), then the rules' reader, which verify waits on, then the rest.
     order.sort(key=lambda s: (s not in ctx.allow_stateful, s != "trino"))
     return Plan(target, sources, order, oneshots, trino_restart, sorted(ddl),
-                [views[r] for r in sorted(views)], skipped)
+                [views[r] for r in sorted(views)], skipped, remove=remove)
 
 
 def show(ctx: Ctx, p: Plan, frm: str | None) -> None:
@@ -481,6 +519,8 @@ def show(ctx: Ctx, p: Plan, frm: str | None) -> None:
         + (f" (also undoing attempts {', '.join(s.id for s in p.sources[1:] if s)})" if len(p.sources) > 1 else ""))
     say(f"  recreate, one at a time: {', '.join(p.recreate) or 'nothing'}")
     say(f"  one-shots run: {', '.join(p.oneshots) or 'none'}")
+    if p.remove:
+        say(f"  stopped and removed, out of the release's default set: {', '.join(p.remove)}")
     say(f"  Trino restart: {'yes' if p.trino_restart else 'no'}; DDL: {', '.join(p.ddl) or 'none'}")
     say(f"  views to re-sync: {', '.join(v.relation for v in p.views) or 'none'}")
     for line in p.skipped:
@@ -613,13 +653,73 @@ def drain(ctx: Ctx, p: Plan, frm: str | None) -> list[str]:
 # --- step 1, preflight -------------------------------------------------------------------
 
 
+# A bind source under the secrets directory, as compose files spell it: ${K2_SECRETS} or with a default.
+SECRET_SOURCE = re.compile(r"\$\{K2_SECRETS(?::?-(?:\$\{[^}]*\}|[^}])*)?\}/([^:]+)")
+
+
+def secret_binds(rel: Release) -> set[str]:
+    """Each path under ${K2_SECRETS} a bind of the release's compose mounts, for its default set and
+    tools (deploy runs it), as compose reads the file; a source naming another variable is per run."""
+    out = set()
+    for name, spec in services(rel).items():
+        if spec.get("profiles") and name != "tools":
+            continue
+        for v in spec.get("volumes") or []:
+            m = SECRET_SOURCE.match(str(v.get("source", "") if isinstance(v, dict) else v))
+            if m and "$" not in m[1]:
+                out.add(m[1])
+    return out
+
+
+def run_principals(rel: Release) -> set[str]:
+    """The principals whose password files the one-shot operator mounts at a build: each live
+    product's builder and publisher, as its pipeline.json names them (factory.PinnedOneShot), and svc.runs."""
+    retired = {x.id for x in rel.manifest.products if x.status == "retired"}
+    out = set()
+    for path in rel.manifest.files:
+        product = path.removeprefix("compiled/products/").removesuffix("/pipeline.json")
+        if path == model.pipeline_path(product) and product not in retired:
+            if build := json.loads((rel.root / path).read_bytes()).get("build"):
+                out |= {build["writer"], build["publisher"], "svc.runs"}
+    return out
+
+
+def make_for(path: str) -> str:
+    """The command that writes a secret file, from model.SECRET_FILES' writer."""
+    if path.startswith("principals/"):
+        return f"make password PRINCIPAL={path.removeprefix('principals/').removesuffix('.password')} TO_FILE=1"
+    f = next((f for f in model.SECRET_FILES if re.fullmatch(re.sub(r"<[a-z]+>", "[^/]+", f.path), path)), None)
+    m = re.search(r"`(make [^`]+)`", f.writer) if f else None
+    return m[1] if m else "docs/runbooks/create-or-rotate-a-principal.md"
+
+
 def required_secrets(ctx: Ctx, p: Plan) -> list[str]:
-    svc = {s for s, spec in services(p.target).items() if not spec.get("profiles")}
-    need = {CA} | {f.path for f in model.SECRET_FILES if f.mount and "<" not in f.path and set(f.services) & svc}
+    """Every secret file the target's services mount, each directory bind by the files
+    model.SECRET_FILES puts in it, the build principals' password files, and those this deploy's
+    own SQL logs in with: the missing ones, before anything changes."""
+    need, dirs = {CA}, set()
+    for b in secret_binds(p.target):
+        inside = {f.path for f in model.SECRET_FILES if f.path.startswith(f"{b}/") and "<" not in f.path}
+        if inside:  # a directory bind (trino/, api/, alertmanager/): the files read through it
+            need |= inside
+        elif b.startswith("principals/") or b in {f.path for f in model.SECRET_FILES}:
+            need.add(b)
+        else:  # a bind model.SECRET_FILES does not describe: it must at least exist
+            dirs.add(b)
+    need |= {model.password_file(x) for x in run_principals(p.target)}
     if any(model.ddl_path("trino", *t.split(".")) in p.target.manifest.files for t in p.ddl):
         need.add(model.password_file("svc.platform"))
     need |= {model.password_file(v.owner) for v in p.views}
-    return sorted(n for n in need if not (ctx.secrets / n).is_file())
+    return sorted([n for n in need if not (ctx.secrets / n).is_file()] + [d for d in dirs if not (ctx.secrets / d).exists()])
+
+
+def live_key_names(rel: Release) -> list[str]:
+    """The K2_<ENGINE>_S3_* names the release's storage-key rows sign with on the live stack
+    (access_verify.key_pair): access_live passes them to the suite by name from this environment."""
+    path = rel.root / model.DOCUMENTS_DIR / model.EXPECTATIONS
+    rows = ((yaml.safe_load(path.read_bytes()) or {}).get("expectations") or []) if path.is_file() else []
+    engines = sorted({r["storageKey"]["engine"] for r in rows if isinstance(r, dict) and "storageKey" in r})
+    return [f"K2_{e.upper()}_S3_{k}" for e in engines for k in ("ACCESS_KEY", "SECRET_KEY")]
 
 
 def floors(ctx: Ctx) -> None:
@@ -689,7 +789,11 @@ def preflight(ctx: Ctx, p: Plan) -> None:
                       f"{', '.join(f'{s} {r}' for s, r in gone)}; {IMAGE_FIX}")
     secrets_health(ctx)
     if missing := required_secrets(ctx, p):
-        raise Refused(f"secret files missing under {ctx.secrets}: {', '.join(missing)}")
+        raise Refused(f"secret files missing under {ctx.secrets}: "
+                      + "; ".join(f"{n} ({make_for(n)})" for n in missing) + "; nothing changed")
+    if unset := [n for n in live_key_names(p.target) if not os.environ.get(n)]:  # else 21 rows fail at verify, after the swap
+        raise Refused(f"the live access suite's storage-key rows sign with {', '.join(unset)}, not in deploy's environment: "
+                      "load the env file first (set -a; . ./.env; set +a), where make engine-keys writes them; nothing changed")
     if held := dropped_storage(ctx, p.sources[0], p.target):
         raise Refused(f"the release's backup set drops {'; '.join(held)}, which storage still holds; "
                       "copy and drop it first with `make drop TARGET=...` (docs/runbooks/drop-and-rebuild.md)")
@@ -1068,6 +1172,13 @@ def verify(ctx: Ctx, target: Release, previous_canary: str | None) -> list[str]:
         wrong.append(f"no container of compose project {ctx.project!r}: K2_COMPOSE_PROJECT names another project")
     elif missing := sorted(expected - running):
         wrong.append(f"{len(running & expected)} of the release's {len(expected)} long-running services run; not running: {', '.join(missing)}")
+    api = svc.get("k2-api")
+    if api and not api.get("profiles") and str(api.get("restart", "no")) != "no":  # W3-6: k2-api is a part too
+        said, where = api_release(ctx, target)
+        if said != target.id:
+            wrong.append(f"k2-api serves {said}, not {target.id} ({where})" if said else f"k2-api did not answer: {where}")
+        else:
+            lines.append(f"k2-api: GET {where} names {said}")
     fence = catalog_fence(ctx)
     if fence.returncode:
         wrong.append(f"catalog fence exit {fence.returncode}: {tail(fence, 6)}")
@@ -1078,7 +1189,10 @@ def verify(ctx: Ctx, target: Release, previous_canary: str | None) -> list[str]:
         ref = target.manifest.images.get(name)
         if not ref or name not in svc or (svc[name].get("profiles") and not c["State"]["Running"]):
             continue
-        if c["Image"] != image_id(ref):
+        # An exited one-shot keeps the image of its last run: a rollback never reruns one (a migration
+        # never runs backwards), so after a rollback across airflow-migrate's image it is the newer one.
+        done_oneshot = str(svc[name].get("restart", "no")) == "no" and not c["State"]["Running"]
+        if c["Image"] != image_id(ref) and not done_oneshot:
             wrong.append(f"{name} runs {c['Image'][:19]}, the release names {ref}")
         health = (c["State"].get("Health") or {}).get("Status")
         if c["State"]["Running"] and health not in (None, "healthy"):
@@ -1089,6 +1203,51 @@ def verify(ctx: Ctx, target: Release, previous_canary: str | None) -> list[str]:
     if wrong:
         raise Failed("verify: " + "; ".join(wrong))
     return lines
+
+
+def ensure_networks(ctx: Ctx, rel: Release) -> list[str]:
+    """Every network the release's compose declares, created when missing, with the labels compose gives
+    its own, so a later `up` adopts it: compose makes a network only for a service it starts, and fetch's
+    k2-egress has no other member (the operator `docker run`s fetch on it). Never --all-resources on
+    `up`, which would also make the paused hot-gold volumes. The version label is copied from a network
+    compose made for this project: `docker compose version --short` says 5.0.0-desktop.1 on this host
+    where compose labels 5.0.0. With none to copy it is left off, as on the hand-made live k2-catalog,
+    which compose adopts (it compares the project and network labels)."""
+    out = []
+    version = next((v for v in run("docker", "network", "ls", "--filter", f"label=com.docker.compose.project={ctx.project}",
+                                   "--format", '{{.Label "com.docker.compose.version"}}').stdout.split() if v), "")
+    for key, spec in sorted((rendered(ctx, rel).get("networks") or {}).items()):
+        name = spec.get("name") or f"{ctx.project}_{key}"
+        if spec.get("external") or run("docker", "network", "inspect", "--format", "{{.Name}}", name, check=False).returncode == 0:
+            continue
+        if set(spec) - {"name", "driver", "ipam"} or spec.get("ipam"):
+            raise Failed(f"network {key} declares {sorted(set(spec) - {'name'})}: deploy creates only a plain one; "
+                         f"create {name} by hand as compose would")
+        run("docker", "network", "create", "--driver", spec.get("driver") or "bridge",
+            "--label", f"com.docker.compose.project={ctx.project}", "--label", f"com.docker.compose.network={key}",
+            *(["--label", f"com.docker.compose.version={version}"] if version else []), name)
+        out.append(f"network {name} created: no service compose starts uses it yet")
+    return out
+
+
+def api_release(ctx: Ctx, rel: Release) -> tuple[str | None, str]:
+    """(the release k2-api says it serves, or None; where it asked or why not): GET /v1/release on the
+    port the release's rendered compose publishes, a few tries while a recreated k2-api starts."""
+    port = (rendered(ctx, rel).get("services", {}).get("k2-api", {}).get("ports") or [{}])[0]
+    if not port.get("published"):
+        return None, "the release's compose publishes no port for k2-api"
+    host = port.get("host_ip") or "127.0.0.1"
+    url = f"http://{'127.0.0.1' if host == '0.0.0.0' else host}:{port['published']}/v1/release"
+    why = ""
+    for i in range(API_TRIES):
+        try:
+            with urllib.request.urlopen(url, timeout=3) as answer:
+                return str(json.load(answer)["release"]), url
+        except (OSError, ValueError, KeyError, TypeError) as e:  # no answer, an error status, not the document
+            why = f"{url}: {type(e).__name__}: {str(e)[:160]}"
+        if i + 1 < API_TRIES:
+            time.sleep(API_WAIT_S)
+    return None, why
 
 
 def catalog_fence(ctx: Ctx) -> subprocess.CompletedProcess[str]:
@@ -1231,6 +1390,52 @@ def identity(ctx: Ctx) -> list[str]:
     return [f"identity.sh: {sum(1 for x in done.stdout.splitlines() if x.startswith('PASS'))} PASS, exit 0"]
 
 
+# --- the sites (W3-11, W3-12) --------------------------------------------------------------
+
+
+def sites(ctx: Ctx, rel: Release, strict: bool = False) -> list[str]:
+    """The release's catalog site (its own k2site.py in a tools one-shot, as svc.catalog) and its dbt docs
+    (`k2-dbt docs` in its dbt-runner image, no network, no secret), each into the k2-site volume k2-api
+    serves read-only. A release without one, or without the volume (before phase 003), skips it. Raises
+    Failed naming each that failed; the caller never lets that fail a deploy."""
+    if SITE_VOLUME not in ((yaml.safe_load((rel.root / model.RELEASE_COMPOSE).read_bytes()) or {}).get("volumes") or {}):
+        return [f"SKIP sites: {rel.id}'s compose has no {SITE_VOLUME} volume (a release before phase 003)"]
+    out, failed, where = [], [], f"{model.RELEASES_MOUNT}/{rel.id}"
+    if CATALOG_SITE in rel.manifest.files:
+        try:
+            said = tools(ctx, rel, f"{where}/{CATALOG_SITE}", "--release", where, "--out", "/site/catalog",
+                         *(["--strict"] if strict else []), entry="python3").strip()
+            out.append(f"catalog site: {said.splitlines()[-1] if said else 'written'}")
+        except Failed as e:
+            failed.append(f"catalog site: {e}")
+    else:
+        out.append(f"SKIP catalog site: {rel.id} carries no {CATALOG_SITE}")
+    if DBT_PROJECT in rel.manifest.files and "dbt-runner" in rel.manifest.images:
+        try:
+            said = run("docker", "run", "--rm", "--network", "none", "--read-only", "--tmpfs", "/tmp:rw,noexec,nosuid,size=64m",
+                       "--cap-drop", "ALL", "--security-opt", "no-new-privileges:true", "--pids-limit", "256", "--cpus", "0.5",
+                       "--memory", "768m", "--user", f"{os.getuid()}:{os.getgid()}", "-v", f"{ctx.root}:{model.RELEASES_MOUNT}:ro",
+                       "-v", f"{ctx.project}_{SITE_VOLUME}:/site", rel.manifest.images["dbt-runner"],
+                       "k2-dbt", "docs", "--release", rel.id, "--out", "/site/dbt-docs").stdout.strip()
+            out.append(f"dbt docs: {said.splitlines()[-1] if said else 'written'}")
+        except Failed as e:
+            failed.append(f"dbt docs: {e}")
+    else:
+        out.append(f"SKIP dbt docs: {rel.id} has no {DBT_PROJECT} or no dbt-runner image")
+    if failed:
+        raise Failed("; ".join(failed + out))
+    return out
+
+
+def site_step(ctx: Ctx, t: Release, frm: str | None, prefix: str) -> None:
+    """After done: the sites describe what is live. A failure is recorded (step site, failed, its reason)
+    and said, never raised: the release stays live and verified."""
+    try:
+        step(ctx, t, frm, prefix + "site", set(services(t)), lambda: sites(ctx, t))
+    except Exception as e:
+        ctx.say(f"deploy: site: failed {e}. {t.id} stays live and verified; the site is the one before: `make site` reruns it")
+
+
 # --- the sequence ------------------------------------------------------------------------
 
 
@@ -1287,9 +1492,15 @@ def converge(ctx: Ctx, p: Plan, frm: str | None, prefix: str = "", trino_down: b
         return out
 
     step(ctx, t, frm, prefix + "swap", svc, swap)
+    target_svc = services(t)
+    for s in p.remove:  # one record per service, its name in the step's: verify then expects none of it
+        profiles = [a for x in target_svc[s]["profiles"] for a in ("--profile", x)]  # so compose resolves it
+        step(ctx, t, frm, prefix + f"remove-{s}", svc, lambda s=s, profiles=profiles: run(
+            *compose(ctx, t, *profiles, "rm", "--stop", "--force", s), env=compose_env(ctx)) and
+            [f"{s} stopped and removed: behind profile {','.join(target_svc[s]['profiles'])} in {t.id}"])
 
     def recreate() -> list[str]:
-        out = []
+        out = ensure_networks(ctx, t)  # before verify: the fence's fetch rows dial from k2-egress
         for s in p.recreate:
             run(*compose(ctx, t, "up", "-d", "--no-deps", "--no-build", "--pull", "never",
                          *(["--force-recreate"] if s == "trino" else []), s), env=compose_env(ctx))
@@ -1312,6 +1523,7 @@ def converge(ctx: Ctx, p: Plan, frm: str | None, prefix: str = "", trino_down: b
     step(ctx, t, frm, prefix + "views-widen", svc, lambda: sync_views(ctx, p, "widen"))
     step(ctx, t, frm, prefix + "verify", svc, lambda: verify(ctx, t, old))
     step(ctx, t, frm, prefix + "done", svc, lambda: [f"removed canary {g}" for g in canary_prune(ctx, canary)] or ["no other canary"])
+    site_step(ctx, t, frm, prefix)
 
 
 def resolve(ctx: Ctx) -> tuple[Release | None, list[str]]:
@@ -1368,11 +1580,12 @@ def ddl(ctx: Ctx, p: Plan) -> list[str]:
     """Step 4: the one-shots, the storage plan's namespaces, then the tables (all additive)."""
     plan = f"{model.RELEASES_MOUNT}/{p.target.id}/{model.STORAGE_PLAN}"
     out = []
-    # The one-shots first: lake-init makes the warehouses the namespaces go into. It reads the TARGET's
-    # plan (K2_STORAGE_PLAN), not the pointer, which still names the previous release, or nothing yet.
+    # The one-shots first: lake-init makes the warehouses the namespaces go into. It runs the TARGET's
+    # script and policies (K2_LAKE_INIT_RELEASE) and reads its plan (K2_STORAGE_PLAN), not the pointer's,
+    # which still names the previous release, or nothing yet.
     for s in p.oneshots:  # a fresh container each time, so an old exit is never read as this run's
         run(*compose(ctx, p.target, "up", "-d", "--no-deps", "--no-build", "--pull", "never", "--force-recreate", s),
-            env={**compose_env(ctx), "K2_STORAGE_PLAN": plan})
+            env={**compose_env(ctx), "K2_STORAGE_PLAN": plan, "K2_LAKE_INIT_RELEASE": p.target.id})
         out.append(f"one-shot {s} exited 0 in {wait_service(ctx, s, True):.1f} s")
     out += tools(ctx, p.target, "namespaces", CATALOG_URI, plan).splitlines() or ["every namespace exists"]
     return out + compare_ddl(ctx, p) + create_tables(ctx, p, late=False)
@@ -1385,6 +1598,9 @@ def deploy(ctx: Ctx, rid: str, plan_only: bool) -> int:
     sources: list[Release | None] = [good] + [open_release(ctx, r) for r in since if r not in (rid, frm)]
     if rid in since and good is not None:  # an attempt of this very release was interrupted
         ctx.say(f"deploy: an earlier attempt at {rid} did not finish; converging from {frm}")
+    # Some attempt since the good release went past the one-shots: views, the canary, maybe the swap (a
+    # kill after a step's work leaves no record of it, so any later step counts, not only swap).
+    past_ddl = any(r["step"] not in (*UNCHANGING, "ddl") for r in after_good(history(ctx.root)))
     svc = set(services(target))
     plans: list[Plan] = []
 
@@ -1405,7 +1621,12 @@ def deploy(ctx: Ctx, rid: str, plan_only: bool) -> int:
     try:
         step(ctx, target, frm, "ddl", svc, lambda: ddl(ctx, p))
     except Exception:  # nothing past the one-shots moved: the DAGs run again (a kill or an interrupt: the rerun's job)
-        say_all(ctx, resume(ctx))
+        if past_ddl:  # review R8: the pointers may name the target already, so its DAG code would run on the old Trino
+            ctx.say("deploy: the DAGs deploy paused stay paused: an earlier attempt went past the one-shots, so the "
+                    f"pointers may already name a newer release ({ctx.root / DRAIN_STATE}); a deploy or rollback "
+                    "that reaches done unpauses them")
+        else:
+            say_all(ctx, resume(ctx))
         raise
     try:
         converge(ctx, p, frm)
@@ -1474,6 +1695,17 @@ def verify_live(ctx: Ctx) -> int:
     for line in [*verify(ctx, good, previous), *identity(ctx)]:  # identity.sh only here: it writes a probe line
         ctx.say(f"  {line}")
     ctx.say(f"release-verify: {good.id} everywhere")
+    return EXIT_OK
+
+
+def site(ctx: Ctx) -> int:
+    """`make site`: both sites for the live release, the catalog's facts required (--strict)."""
+    good, _ = resolve(ctx)
+    if good is None:
+        raise Refused("no release is deployed under this root")
+    for line in sites(ctx, good, strict=True):
+        ctx.say(f"  {line}")
+    ctx.say(f"site: {good.id}")
     return EXIT_OK
 
 
@@ -1651,6 +1883,7 @@ def _main(argv: list[str] | None) -> int:
     d.add_argument("--plan", action="store_true")
     d.add_argument("--allow-stateful", default="")
     sub.add_parser("verify")
+    sub.add_parser("site")
     rb = sub.add_parser("rollback")
     rb.add_argument("--allow-stateful", default="")
     sub.add_parser("status")
@@ -1686,6 +1919,8 @@ def _main(argv: list[str] | None) -> int:
                     return EXIT_OK
                 if args.cmd == "verify":
                     return verify_live(ctx)
+                if args.cmd == "site":
+                    return site(ctx)
                 if args.cmd in ("deploy", "rollback"):
                     ctx.allow_stateful = {s for s in args.allow_stateful.split(",") if s}
                 if args.cmd == "rollback":

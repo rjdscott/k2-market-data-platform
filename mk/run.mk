@@ -22,3 +22,18 @@ test-api:  ## k2-api's tests and ruff from its own lock (services/k2-api/), with
 test-platform:  ## The run-records client, the catalog site generator and the dbt wrapper (platform/runs, platform/catalog-site, docker/dbt-runner): fakes only, no stack
 	uv run --no-project --with pytest==9.2.0 --with trino==0.340.0 pytest platform/runs platform/catalog-site -q
 	uv run --project platform/k2gen --locked -q --with pytest==9.2.0 --with trino==0.340.0 pytest docker/dbt-runner -q
+
+.PHONY: site
+site:  ## The live release's catalog site (its k2site.py --strict, in tools as svc.catalog) and dbt docs (k2-dbt docs, in its dbt-runner image) into the k2-site volume k2-api serves; deploy runs both after each deploy and rollback (scripts/deploy.py)
+	@$(DEPLOY) site
+
+# The owner runs this, once, from the main checkout: the unit runs `make site` in the directory it
+# was installed from, with that checkout's .env loaded as for make deploy (W3-12).
+.PHONY: site-install
+site-install:  ## Schedule `make site` daily at 05:15 UTC: a systemd user timer in ~/.config/systemd/user, enabled
+	mkdir -p $(HOME)/.config/systemd/user
+	sed 's|@K2_ROOT@|$(CURDIR)|g' scripts/systemd/k2-site.service > $(HOME)/.config/systemd/user/k2-site.service
+	cp scripts/systemd/k2-site.timer $(HOME)/.config/systemd/user/k2-site.timer
+	systemctl --user daemon-reload
+	systemctl --user enable --now k2-site.timer
+	@echo "Scheduled daily at 05:15 UTC. Deploy regenerates the site too; 'make site' runs it now."

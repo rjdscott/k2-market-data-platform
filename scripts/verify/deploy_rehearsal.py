@@ -89,6 +89,7 @@ COMPOSE = """\
 networks:
   k2-net: {}
   k2-catalog: {}
+  k2-egress: {}  # fetch's alone (no service here joins it): deploy creates it, and the fetch probe rows dial from it
 volumes:
   pg: {}
   s3: {}
