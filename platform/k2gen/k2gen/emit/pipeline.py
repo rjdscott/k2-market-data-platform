@@ -114,7 +114,8 @@ def product_pipeline(model: Model, p: Product) -> dict[str, Any]:
         if port.contract_id not in tables:
             raise ValueError(f"{p.id}: input {port.contract_id} is no table of the set (k2gen check: docs.reference-unresolved)")
         inputs.append({"contractId": port.contract_id, "relation": input_relation(tables[port.contract_id]),
-                       "required": port.required, "maxLagMinutes": port.max_lag_minutes})
+                       "required": port.required, "maxLagMinutes": port.max_lag_minutes,
+                       "whenAbsent": port.when_absent})
     doc: dict[str, Any] = {
         "product": p.id, "fence": fence(p.name), "domain": p.domain, "status": p.status, "dagId": dag_id(p.name),
         "schedule": schedule, "inputs": inputs, "maintain": {"cron": maintain_cron(p.id)},

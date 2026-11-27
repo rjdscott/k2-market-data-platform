@@ -17,7 +17,9 @@ docs/research/2026-11-26-release-spine-spikes.md. In order:
    with the run-record comparison, must find nothing in this product's namespaces (Live.drift).
 2. resolve each input's tested snapshot from `t$refs` as svc.runs, the whole set read twice and
    compared (a publish between two reads restarts it, RESOLVE_ATTEMPTS times); a required input
-   never tested exits 4.
+   never tested exits 4. An optional input whose port says whenAbsent empty (or emptyIntoTable)
+   is absent while it is paused in the release or was never tested: no snapshot, and k2_input
+   reads it as zero rows of its columns (W0-7).
 3. `started` per output, with `snapshot_before`, its main.
 4. one `dbt build --selector <fence> --vars <k2_inputs, k2_run_id, k2_release>` as the builder,
    unit tests inside it (spike d). Any non-zero exit is a failed build.
@@ -87,6 +89,7 @@ ENV = ("K2_TRINO_HOST", "K2_TRINO_INTERNAL_PORT", "K2_TRINO_USER", "K2_PUB_USER"
 RUNS_USER = "svc.runs"
 RESOLVE_ATTEMPTS = 3
 TERMINAL = ("rolled_back", "audited", "reconciled")
+WHEN_ABSENT = ("fail", "empty", "emptyIntoTable")  # k2-v2.schema.json inputPortProperty whenAbsent
 RELEASE_ID = re.compile(r"v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?-[0-9a-f]{12}")  # run-record.schema.json
 PRODUCT_ID = re.compile(r"[a-z][a-z0-9]*(-[a-z0-9]+)*\.[a-z][a-z0-9]*(-[a-z0-9]+)*")
 RUN_ID = re.compile(r"([a-z][a-z0-9_]*)/([A-Za-z0-9][A-Za-z0-9_.:+-]{0,200})")
@@ -176,6 +179,7 @@ class Input:
     ref: str  # model.tested_ref: audited (a tag) or main (a branch)
     key: str  # "<product fence>/<table>", k2_input's key
     state: str  # the input product's status in this release
+    when_absent: str = "fail"  # the port's whenAbsent (WHEN_ABSENT); empty and emptyIntoTable read an absent input as zero rows
 
 
 @dataclass(frozen=True)
@@ -233,9 +237,12 @@ def ctx_from(release: str, release_path: Path, product: str, run_id: str, pipeli
         if cid not in tables or tables[cid][0] != i["relation"]:
             raise Refused(f"{product}: input {cid} is not the release's table at {i['relation']!r}")
         relation(i["relation"])
+        when_absent = i.get("whenAbsent", "fail")  # a release compiled before W0-7 has none: fail, as it was
+        if when_absent not in WHEN_ABSENT:
+            raise Refused(f"{product}: input {cid} has whenAbsent {when_absent!r}, not one of {', '.join(WHEN_ABSENT)}")
         _, producer, table = cid.split(".")
         inputs.append(Input(cid, i["relation"], bool(i["required"]), tables[cid][1], f"{k2.fence(producer)}/{table}",
-                            tables[cid][2]))
+                            tables[cid][2], when_absent))
     return Ctx(release, release_path, product, run_id, k2.warehouse(domain), build["selector"], writer, publisher,
                tuple(outputs), tuple(inputs), datetime.now(timezone.utc))
 
@@ -386,10 +393,17 @@ def reconcile(ctx: Ctx, io: Any) -> None:
         raise Refused(f"the catalog drift check found {len(found['differences'])} difference(s)")
 
 
+def absent(i: Input, snapshot: int | None) -> bool:
+    """Whether k2_input reads the input as zero rows: its port says so, and it is paused in this
+    release (its state, the release's product status) or was never tested."""
+    return i.when_absent != "fail" and (i.state == "paused" or snapshot is None)
+
+
 def resolve(ctx: Ctx, io: Any) -> dict[str, int | None]:
-    """Step 2: every input's tested snapshot, as svc.runs. One full read can straddle a publish,
-    so the set is read twice and must agree; tags only move forward, so two equal reads hold one
-    instant between them."""
+    """Step 2: every input's tested snapshot, as svc.runs; None for one never tested or absent(),
+    so the run record says no snapshot was read. One full read can straddle a publish, so the set
+    is read twice and must agree; tags only move forward, so two equal reads hold one instant
+    between them."""
     def read() -> dict[str, int | None]:
         return {i.contract: ref_id(io.refs("runs", i.relation), i.ref, "TAG" if i.ref == k2.AUDITED_TAG else "BRANCH")
                 for i in ctx.inputs}
@@ -402,13 +416,19 @@ def resolve(ctx: Ctx, io: Any) -> dict[str, int | None]:
         raise Refused(f"inputs still moving after {RESOLVE_ATTEMPTS} double reads")
     if never := [i.contract for i in ctx.inputs if i.required and first[i.contract] is None]:
         raise Untested(f"required input(s) never tested: {', '.join(never)}")
+    for i in ctx.inputs:
+        if absent(i, first[i.contract]):
+            log(f"input {i.contract} is {'paused' if i.state == 'paused' else 'never tested'}: read as zero rows (whenAbsent {i.when_absent})")
+            first[i.contract] = None
     return first
 
 
 def dbt_argv(ctx: Ctx, inputs: dict[str, int | None]) -> list[str]:
-    """Step 4's one invocation. An optional input never tested is left out of k2_inputs, so a model
-    that reads it fails at parse (k2_input), never reads it unpinned."""
+    """Step 4's one invocation. An absent() input is {"absent": true}, zero rows of its columns
+    (k2_input); any other input with no snapshot (an optional one, whenAbsent fail) is left out of
+    k2_inputs, so a model that reads it fails at compile (k2_input), never reads it unpinned."""
     pinned = {i.key: {"snapshot": snap(inputs[i.contract])} for i in ctx.inputs if inputs[i.contract] is not None}
+    pinned |= {i.key: {"absent": True} for i in ctx.inputs if absent(i, inputs[i.contract])}
     variables = {"k2_inputs": pinned, "k2_run_id": ctx.run_id, "k2_release": ctx.release}
     return ["dbt", "build", "--selector", ctx.selector, "--vars", json.dumps(variables, sort_keys=True),
             "--project-dir", str(ctx.release_path / "compiled" / "dbt"), "--profiles-dir", str(PROFILES_DIR),

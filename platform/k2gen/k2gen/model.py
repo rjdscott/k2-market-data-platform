@@ -777,6 +777,7 @@ class InputPort:
     contract_id: str
     required: bool  # the port's `required` property; true when absent
     max_lag_minutes: int | None
+    when_absent: Literal["fail", "empty", "emptyIntoTable"] = "fail"  # the port's `whenAbsent` property; k2_input reads it
 
 
 @dataclass(frozen=True)
@@ -1379,7 +1380,8 @@ def _product(pdir: str, parsed: Mapping[str, Any], documents: Mapping[str, bytes
     inputs = []
     for i, port in enumerate(doc.get("inputPorts", ())):
         pp = _props(port.get("customProperties"), f"{path}#/inputPorts/{i}/customProperties", errors)
-        inputs.append(InputPort(port["name"], port["version"], port["contractId"], pp.get("required", True), pp.get("maxLagMinutes")))
+        inputs.append(InputPort(port["name"], port["version"], port["contractId"], pp.get("required", True), pp.get("maxLagMinutes"),
+                                pp.get("whenAbsent", "fail")))
     outputs = []
     for i, port in enumerate(doc["outputPorts"]):
         serves = _props(port.get("customProperties"), f"{path}#/outputPorts/{i}/customProperties", errors).get("serves")

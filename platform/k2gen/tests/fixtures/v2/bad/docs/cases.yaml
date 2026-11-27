@@ -258,6 +258,14 @@ cases:
     changes:  # the model's own unique_key, which dbt prefers to the compiled one, drops read_at
       - file: contracts/sensor-net/station-readings/models/silver_readings.sql
         text: "{{ config(materialized='incremental', incremental_strategy='merge', unique_key=['station_id']) }}\nselect station_id, read_at from {{ source('station_readings', 'bronze_readings') }}\n"
+  # whenAbsent: daily-load's one model is a table, so zero rows of its input would publish it empty
+  - code: docs.empty-input-into-table
+    changes:
+      - {file: contracts/ops-insight/daily-load/product.odps.yaml, set: inputPorts/0/customProperties/0/value, value: false}
+      - {file: contracts/ops-insight/daily-load/product.odps.yaml, set: inputPorts/0/customProperties/2, value: {property: whenAbsent, value: empty}}
+  - code: docs.schema-invalid
+    changes:  # an input read empty when absent is optional
+      - {file: contracts/ops-insight/daily-load/product.odps.yaml, set: inputPorts/0/customProperties/2, value: {property: whenAbsent, value: empty}}
 valid:
   - why: every ODCS threshold form, with numbers, on a sql rule and on each library metric K2 runs
     changes:
@@ -287,3 +295,13 @@ valid:
       - file: contracts/sensor-net/station-readings/models/silver_readings.sql
         text: "{{ config(materialized='incremental', incremental_strategy='merge', unique_key=['station_id', 'read_at']) }}\nselect station_id, read_at from {{ source('station_readings', 'bronze_readings') }}\n"
       - {file: contracts/sensor-net/station-readings/silver_readings.odcs.yaml, set: customProperties/4/value, value: ["day(read_at)", "bucket(station_id, 4)"]}
+  - why: an optional input read empty when absent by a product whose every model is incremental
+    changes:
+      - {file: contracts/ops-insight/daily-load/product.odps.yaml, set: inputPorts/0/customProperties/0/value, value: false}
+      - {file: contracts/ops-insight/daily-load/product.odps.yaml, set: inputPorts/0/customProperties/2, value: {property: whenAbsent, value: empty}}
+      - file: contracts/ops-insight/daily-load/models/gold_daily_load.sql
+        text: "{{ config(materialized='incremental') }}\nselect station_id from {{ k2_input('station_readings', 'silver_readings') }}\n"
+  - why: whenAbsent emptyIntoTable accepts zero rows into a table model, stated on the port
+    changes:
+      - {file: contracts/ops-insight/daily-load/product.odps.yaml, set: inputPorts/0/customProperties/0/value, value: false}
+      - {file: contracts/ops-insight/daily-load/product.odps.yaml, set: inputPorts/0/customProperties/2, value: {property: whenAbsent, value: emptyIntoTable}}
