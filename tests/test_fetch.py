@@ -168,14 +168,15 @@ def streamed(chunks):
     return itertools.chain([b"HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n"], chunks)
 
 
-def release(tmp_path, parser=PARSER, **connector):
+def release(tmp_path, parser=PARSER, audits=(), **connector):
     root = tmp_path / "releases" / "r1"
     pipeline = root / "compiled" / "products" / "fx-test.rates" / "pipeline.json"
     pipeline.parent.mkdir(parents=True, exist_ok=True)
     spec = {"kind": "https-file", "url": URL, "allowHosts": [HOST, MIRROR], "format": "xml", "parser": "rates",
             **connector}
     pipeline.write_text(json.dumps({"product": "fx-test.rates", "fence": "rates", "domain": "fx-test",
-                                    "dagId": "rates", "connector": spec}))
+                                    "dagId": "rates", "connector": spec,
+                                    "bronze": [{"table": "lake.rates.bronze_rates", "audits": list(audits)}]}))
     module = root / "platform" / "domains" / "fx-test" / "parsers" / "rates.py"
     module.parent.mkdir(parents=True, exist_ok=True)
     module.write_text(parser)
@@ -228,7 +229,8 @@ def test_a_fetch_spools_raw_and_record_then_rows(web, tmp_path, capsys):
     assert datetime.fromisoformat(record["fetchedAt"]).utcoffset().total_seconds() == 0
     assert [json.loads(line) for line in (entry / "rows.jsonl").read_text().splitlines()] == \
         [{"bytes": len(BODY), "head": "<rates>"}]
-    assert sorted(p.name for p in entry.iterdir()) == ["fetch.json", "raw.xml", "rows.jsonl"]
+    assert sorted(p.name for p in entry.iterdir()) == ["audits.json", "fetch.json", "raw.xml", "rows.jsonl"]
+    assert json.loads((entry / "audits.json").read_text()) == {"audits": []}  # none declared
     assert entry.stat().st_mode & 0o777 == 0o755  # the Spark task reads it as another user
     out = capsys.readouterr()
     assert "files.example.invalid/rates-2026-11-27.xml" in out.out
@@ -469,3 +471,45 @@ def test_an_existing_spool_entry_is_never_overwritten(web, tmp_path):
 def test_a_run_id_outside_the_dags_spool_is_a_task_error(web, tmp_path, run_id):
     assert F.main(["--release", "r1", "--product", "fx-test.rates", "--run-id", run_id, "--ds", "2026-11-27"]) == 1
     assert web.connects == []
+
+
+# ── the parser's audits: run here, on the rows as they land ───────────────
+
+AUDITED = (PARSER + "def has_rows(rows):\n    return [] if rows else ['no rows']\n"
+           "def small(rows):\n    return [f\"row {i}: {r['bytes']} bytes\" for i, r in enumerate(rows) if r['bytes'] > 1]\n"
+           "def boom(rows):\n    raise ValueError('audit broke')\n"
+           "def counted(rows):\n    return 0\n"
+           "def mutates(rows):\n    rows.clear()\n    return []\n")
+
+
+def test_each_declared_audit_is_run_and_recorded(web, tmp_path):
+    release(tmp_path, parser=AUDITED, audits=["mutates", "has_rows", "small", "boom", "counted", "missing"])
+    assert run() == 0  # a failing audit fails the batch at bronze, not the fetch
+    got = {a["name"]: a for a in json.loads((spool(tmp_path) / "audits.json").read_text())["audits"]}
+    assert list(got) == ["mutates", "has_rows", "small", "boom", "counted", "missing"]
+    assert got["mutates"]["passed"] and got["has_rows"] == {"name": "has_rows", "passed": True, "failures": 0, "detail": ""}
+    assert got["small"] == {"name": "small", "passed": False, "failures": 1, "detail": f"row 0: {len(BODY)} bytes"}
+    assert not got["boom"]["passed"] and "ValueError: audit broke" in got["boom"]["detail"]
+    assert not got["counted"]["passed"] and "list of str" in got["counted"]["detail"]
+    assert not got["missing"]["passed"] and "no function missing" in got["missing"]["detail"]
+
+
+def test_an_audits_detail_is_short(web, tmp_path):
+    release(tmp_path, parser=PARSER + "def noisy(rows):\n    return ['x' * 900] * 40\n", audits=["noisy"])
+    assert run() == 0
+    [a] = json.loads((spool(tmp_path) / "audits.json").read_text())["audits"]
+    assert a["failures"] == 40 and len(a["detail"]) <= F.MAX_DETAIL and a["detail"].endswith("and 35 more")
+
+
+def test_a_parse_failure_writes_no_audits(web, tmp_path):
+    release(tmp_path, parser="def parse(data):\n    raise ValueError('x')\ndef has_rows(rows):\n    return []\n",
+            audits=["has_rows"])
+    assert run() == 30
+    assert not (spool(tmp_path) / "audits.json").exists()
+
+
+def test_a_spool_file_is_never_overwritten(tmp_path):
+    F.write_new(tmp_path / "audits.json", "first")
+    with pytest.raises(FileExistsError):
+        F.write_new(tmp_path / "audits.json", "second")
+    assert (tmp_path / "audits.json").read_text() == "first" and sorted(p.name for p in tmp_path.iterdir()) == ["audits.json"]

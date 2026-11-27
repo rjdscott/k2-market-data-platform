@@ -97,6 +97,9 @@ def main(argv: list[str] | None = None) -> int:
 
     # The session holds a catalog per relation's catalog (lake over k2, <domain>_build over the
     # domain's warehouse) and signs with the maintenance key, not Spark's (spark_conf.py, W1-3).
+    # ponytail: the maintenance pair and Spark's both sit in the Spark container's environment, so
+    # any process there sees both; the scheduler never holds a storage key. Ceiling: a product that
+    # runs code in Spark; then expire moves to its own maintenance container.
     spark = lake_session(f"k2-expire-{pipeline['fence']}", key=KEY_ENV,
                          catalogs=sorted({r.split(".")[0] for r, _ in work}))
     code, done = EXIT_ERROR, []

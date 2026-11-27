@@ -10,6 +10,7 @@ scripts/verify/connector-wap.sh (W1-12). Values are synthetic.
 import ast
 import copy
 import hashlib
+import importlib.util
 import json
 import re
 import types
@@ -22,6 +23,9 @@ import expire as E
 import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
+_spec = importlib.util.spec_from_file_location("fetch", ROOT / "docker" / "fetch" / "fetch.py")
+FETCH = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(FETCH)  # its audit(), so the two sides of audits.json agree
 
 
 def _k2gen_model():
@@ -158,7 +162,7 @@ def spool(tmp_path, monkeypatch):
     """A run's spool entry as fetch.py leaves it after exit 0: raw, fetch.json, rows.jsonl."""
     monkeypatch.setattr(C, "SPOOL", tmp_path)
 
-    def make(raw=RAW, rows=ROWS, run=RUN, sha=None):
+    def make(raw=RAW, rows=ROWS, run=RUN, sha=None, audits=None):
         entry = tmp_path / run
         entry.mkdir(parents=True)
         (entry / "raw.csv").write_bytes(raw)
@@ -170,6 +174,8 @@ def spool(tmp_path, monkeypatch):
         (entry / "fetch.json").write_text(json.dumps(record))
         if rows is not None:
             (entry / "rows.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows))
+        if audits is not None:
+            (entry / "audits.json").write_text(json.dumps({"audits": audits}))
         return entry
     return make
 
@@ -365,13 +371,57 @@ def test_a_row_whose_columns_are_not_the_tables_fails_parses(pipeline, spool):
     assert lake.tables[CHECKS][0]["check_name"] == "parses" and not lake.tables[CHECKS][0]["passed"]
 
 
-def test_a_parser_audit_the_spark_task_cannot_run_fails_closed(pipeline, spool):
-    spool()
+def audited(pipeline, spool, audits):
+    spool(audits=audits)
     store, lake = Store(), FakeLake()
     C.load(ctx(pipeline), store, lake)
-    assert C.audit(ctx(pipeline), store, lake)[0] == C.EXIT_FAILED
-    [failed] = [r for r in lake.tables[CHECKS] if not r["passed"]]
-    assert failed["check_name"] == "value_parses"
+    code, _ = C.audit(ctx(pipeline), store, lake)
+    return code, {r["check_name"]: r for r in lake.tables[CHECKS]}
+
+
+def test_the_golden_products_parser_audit_passes_when_fetch_ran_it_clean(pipeline, spool):
+    module = types.SimpleNamespace(value_parses=lambda rows: [f"row {i}" for i, r in enumerate(rows)
+                                                               if not r["value_text"].replace(".", "").isdigit()])
+    entry = FETCH.audit(module, "value_parses", "".join(json.dumps(r) + "\n" for r in ROWS))
+    code, rows = audited(pipeline, spool, [entry])
+    assert code == C.EXIT_OK and rows["value_parses"]["passed"]
+    assert list(rows) == C.check_names(pipeline["bronze"][0])
+
+
+@pytest.mark.parametrize("audits", [None, []])  # no audits.json; one without the declared audit
+def test_a_parser_audit_with_no_result_fails_closed(pipeline, spool, audits):
+    code, rows = audited(pipeline, spool, audits)
+    assert code == C.EXIT_FAILED and not rows["value_parses"]["passed"]
+    assert "no result" in rows["value_parses"]["detail"]
+
+
+def test_a_failed_parser_audit_fails_the_batch_with_its_detail(pipeline, spool):
+    code, rows = audited(pipeline, spool, [{"name": "value_parses", "passed": False, "failures": 2,
+                                            "detail": "row 0: x; row 3: y"}])
+    assert code == C.EXIT_FAILED and not rows["value_parses"]["passed"]
+    assert rows["value_parses"]["detail"] == "2 failing rows: row 0: x; row 3: y"
+
+
+@pytest.mark.parametrize("entry", [
+    {"name": "value_parses", "passed": True, "failures": 1, "detail": ""},  # passed, yet a failure
+    {"name": "value_parses", "passed": "yes", "failures": 0, "detail": ""},
+    {"name": "value_parses", "passed": True, "failures": "0", "detail": ""},
+])
+def test_a_malformed_parser_audit_entry_fails_closed(pipeline, spool, entry):
+    code, rows = audited(pipeline, spool, [entry])
+    assert code == C.EXIT_FAILED and not rows["value_parses"]["passed"]
+
+
+def test_an_undeclared_parser_audit_is_ignored_and_logged(pipeline, spool, capsys):
+    clean = {"name": "value_parses", "passed": True, "failures": 0, "detail": ""}
+    code, rows = audited(pipeline, spool, [clean, {**clean, "name": "extra_check", "passed": False}])
+    assert code == C.EXIT_OK and "extra_check" not in rows
+    assert "extra_check" in capsys.readouterr().out
+
+
+def test_the_connector_imports_no_product_code():
+    text = (ROOT / "docker/lake/connector.py").read_text()
+    assert "importlib" not in text and "domains/" not in text and "exec_module" not in text
 
 
 def test_each_declared_check_renders_batch_scoped_sql(pipeline):
