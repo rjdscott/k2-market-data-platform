@@ -1,0 +1,42 @@
+# A fixture, never deployed: scripts/verify/kafka-path.sh copies this directory into a scratch
+# clone's contracts/market-capture/ and runs the Kafka connector's load, audit and publish on a
+# throwaway lake whose Redpanda carries synthetic frames only
+# (services/capture-rust/tests/fixtures/synthetic-kraken-20s.jsonl, scripts/lib/kafka_seed.py).
+apiVersion: v1.1.0
+kind: DataProduct
+id: market-capture.kafka-fixture
+name: kafka-fixture
+version: 1.0.0
+status: active
+domain: market-capture
+type: sourceAligned
+description:
+  purpose: >-
+    Synthetic: a made-up venue's raw frames, landed as read and the trade frames staged to bronze.
+  limitations: Synthetic; no real venue, instrument or trade.
+  usage: A fixture of scripts/verify/kafka-path.sh only.
+team:
+  name: capture-team
+outputPorts:
+  - name: bronze_frames
+    version: 1.0.0
+    contractId: market-capture.kafka-fixture.bronze_frames
+customProperties:
+  - property: connector
+    value:
+      kind: kafka
+      brokers: "redpanda:9092"
+      registry: "http://redpanda:8081"
+      topic: market.crypto.v3.raw.kraken
+      envelope:
+        format: avro-confluent
+        contract: market-capture.kafka-fixture.bronze_frames  # stands in for raw_message (W2-1); nothing resolves it
+      filter:
+        field: stream
+        in: [trade]
+      payload: json
+      startFrom: earliest-retained
+      maxOffsetsPerPartition: 100000
+  - property: schedule
+    value:
+      cron: "*/5 * * * *"
