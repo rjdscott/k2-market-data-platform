@@ -1,0 +1,1 @@
+SELECT "asset_code", "kind", "first_seen_at" FROM "reference_data"."security_master__base"."asset" FOR VERSION AS OF 'audited' WHERE EXISTS (SELECT 1 FROM "reference_data"."security_master__base"."asset$refs" WHERE "name" = 'audited' AND "type" = 'TAG')

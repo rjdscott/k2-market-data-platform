@@ -32,6 +32,10 @@ select 'reference-data.calendars' as "product_id", "run_id", "dbt_invocation_id"
 union all
 select 'reference-data.currency-master' as "product_id", "run_id", "dbt_invocation_id", "release_id", "run_started_at", "writer", "unique_id", "test_name", "tested", "status", "failures", "execution_time", "message" from "reference_data"."currency_master__base"."dq_test_results" where "writer" = 'dbt_currency_master'
 {%- endif %}
+{%- if k2_test_results_exist('reference_data', 'security_master__base') %}
+union all
+select 'reference-data.security-master' as "product_id", "run_id", "dbt_invocation_id", "release_id", "run_started_at", "writer", "unique_id", "test_name", "tested", "status", "failures", "execution_time", "message" from "reference_data"."security_master__base"."dq_test_results" where "writer" = 'dbt_security_master'
+{%- endif %}
 {%- endmacro %}
 
 {% macro k2_test_results_exist(catalog, schema) -%}

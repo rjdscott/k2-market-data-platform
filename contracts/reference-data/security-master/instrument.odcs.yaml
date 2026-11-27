@@ -1,0 +1,126 @@
+apiVersion: v3.2.0
+kind: DataContract
+id: reference-data.security-master.instrument
+name: instrument
+version: 1.0.0
+domain: reference-data
+description:
+  purpose: >-
+    Type-2: one row per instrument of a venue and version of its listing, valid from valid_from
+    up to but not including valid_to. A version is a change in the pair that lists it, its tick
+    size, decimals, minimum order or status, or whether it is listed at all: a delisting closes
+    the listed version and opens one with is_listed false, a relisting opens another.
+  limitations: >-
+    The first version of an instrument opens at 1970-01-01 00:00:00 UTC, though it was first
+    seen at recorded_at: the listing states what an instrument is, which was true before the
+    platform first fetched it (ADR-030, Outcome). A later version opens at the fetch that first
+    saw it, up to an hour after the venue made the change.
+team:
+  name: reference-data-team
+schema:
+  - id: instrument
+    name: instrument
+    physicalName: security_master.instrument
+    physicalType: table
+    properties:
+      - name: venue
+        physicalType: varchar
+        required: true
+        primaryKey: true
+        primaryKeyPosition: 1
+        description: The venue that lists the instrument (kraken).
+      - name: instrument_id
+        physicalType: varchar
+        required: true
+        primaryKey: true
+        primaryKeyPosition: 2
+        description: <base_asset>-<quote_asset> of canonical codes (BTC-USD); the same on every venue.
+      - name: valid_from
+        physicalType: timestamp(6) with time zone
+        required: true
+        primaryKey: true
+        primaryKeyPosition: 3
+        description: The fetch that first saw this version, in UTC; the instrument's first version opens at 1970-01-01 00:00:00 UTC.
+        customProperties:
+          - property: time
+            value: valid
+      - name: valid_to
+        physicalType: timestamp(6) with time zone
+        required: true
+        description: The next version's valid_from; 9999-12-31 23:59:59 UTC on the open row, never null.
+        customProperties:
+          - property: time
+            value: valid
+      - name: recorded_at
+        physicalType: timestamp(6) with time zone
+        required: true
+        description: When the fetch that first saw this version ran, in UTC (knowledge time).
+        customProperties:
+          - property: time
+            value: known
+      - name: base_asset
+        physicalType: varchar
+        required: true
+        description: The canonical code of the asset bought (asset.asset_code).
+      - name: quote_asset
+        physicalType: varchar
+        required: true
+        description: The canonical code of the asset it is priced in, an asset.asset_code.
+      - name: is_listed
+        physicalType: boolean
+        required: true
+        description: False while no pair of the venue lists the instrument; every listing attribute below is then null.
+      - name: pair_code
+        physicalType: varchar
+        description: The venue's REST code of the pair that lists it.
+      - name: tick_size
+        physicalType: decimal(38,18)
+        description: The smallest price step.
+      - name: pair_decimals
+        physicalType: integer
+        description: Digits after the decimal point of a price.
+      - name: lot_decimals
+        physicalType: integer
+        description: Digits after the decimal point of a volume.
+      - name: order_min
+        physicalType: decimal(38,18)
+        description: The smallest order volume in the base asset.
+      - name: status
+        physicalType: varchar
+        description: The pair's trading status as the venue states it (online, cancel_only and the like).
+    quality:
+      - name: versions_do_not_overlap
+        type: sql
+        query: "select count(*) from (select valid_to, lead(valid_from) over (partition by venue, instrument_id order by valid_from) as next_from from ${table}) as v where next_from < valid_to"
+        mustBe: 0
+        description: Each version ends no later than the next one of its key starts.
+      - name: versions_leave_no_gap
+        type: sql
+        query: "select count(*) from (select valid_to, lead(valid_from) over (partition by venue, instrument_id order by valid_from) as next_from from ${table}) as v where valid_to < next_from"
+        mustBe: 0
+        description: Each version ends exactly where the next one of its key starts.
+      - name: one_open_row_per_key
+        type: sql
+        query: "select count(*) from (select venue, instrument_id from ${table} group by venue, instrument_id having count_if(valid_to = timestamp '9999-12-31 23:59:59 UTC') <> 1) as k"
+        mustBe: 0
+        description: Every instrument of a venue has exactly one open row.
+      - name: first_version_opens_1970
+        type: sql
+        query: "select count(*) from (select venue, instrument_id from ${table} group by venue, instrument_id having min(valid_from) <> timestamp '1970-01-01 00:00:00 UTC') as k"
+        mustBe: 0
+        description: Every instrument's first version opens at 1970-01-01 00:00:00 UTC.
+      - name: intervals_not_empty
+        type: sql
+        query: "select count(*) from ${table} where valid_from >= valid_to"
+        mustBe: 0
+        description: Every version is valid for some time.
+roles:
+  - role: full_reader  # offered, held by nobody yet (grants.yaml)
+    access: read
+customProperties:
+  - property: layer
+    value: gold
+  - property: build
+    value: dbt
+  - property: backup
+    value: rebuild  # rebuilt whole from the listing on every run

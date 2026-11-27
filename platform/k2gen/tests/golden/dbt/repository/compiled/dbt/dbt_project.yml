@@ -62,6 +62,9 @@ models:
       currency_master:
         +database: reference_data_build
         +schema: currency_master__base
+      security_master:
+        +database: reference_data_build
+        +schema: security_master__base
 seeds:
   k2:
     governance:
@@ -72,3 +75,6 @@ seeds:
       calendars:
         +database: reference_data_build
         +schema: calendars__base
+      security_master:
+        +database: reference_data_build
+        +schema: security_master__base

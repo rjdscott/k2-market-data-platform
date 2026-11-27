@@ -95,6 +95,87 @@
       ],
       "owner": "pub_currency_master",
       "relation": "reference_data.currency_master.currency"
+    },
+    {
+      "base": "reference_data.security_master__base.asset",
+      "columns": [
+        "asset_code",
+        "kind",
+        "first_seen_at"
+      ],
+      "owner": "pub_security_master",
+      "relation": "reference_data.security_master.asset"
+    },
+    {
+      "base": "reference_data.security_master__base.instrument",
+      "columns": [
+        "venue",
+        "instrument_id",
+        "valid_from",
+        "valid_to",
+        "recorded_at",
+        "base_asset",
+        "quote_asset",
+        "is_listed",
+        "pair_code",
+        "tick_size",
+        "pair_decimals",
+        "lot_decimals",
+        "order_min",
+        "status"
+      ],
+      "owner": "pub_security_master",
+      "relation": "reference_data.security_master.instrument"
+    },
+    {
+      "base": "reference_data.security_master__base.venue_symbol",
+      "columns": [
+        "venue",
+        "venue_symbol",
+        "valid_from",
+        "valid_to",
+        "instrument_id",
+        "pair_code",
+        "recorded_at"
+      ],
+      "owner": "pub_security_master",
+      "relation": "reference_data.security_master.venue_symbol"
+    },
+    {
+      "base": "reference_data.security_master__base.venue_symbol_claim",
+      "columns": [
+        "venue",
+        "pair_code",
+        "claimed_from",
+        "claimed_to",
+        "ws_name",
+        "base_asset",
+        "quote_asset",
+        "venue_symbol",
+        "instrument_id",
+        "tick_size",
+        "pair_decimals",
+        "lot_decimals",
+        "order_min",
+        "status",
+        "held_reason"
+      ],
+      "owner": "pub_security_master",
+      "relation": "reference_data.security_master.venue_symbol_claim"
+    },
+    {
+      "base": "reference_data.security_master__base.venue_symbol_held",
+      "columns": [
+        "venue",
+        "pair_code",
+        "claimed_from",
+        "claimed_to",
+        "ws_name",
+        "venue_symbol",
+        "held_reason"
+      ],
+      "owner": "pub_security_master",
+      "relation": "reference_data.security_master.venue_symbol_held"
     }
   ]
 }

@@ -21,5 +21,12 @@
   "market_capture.kraken_instruments__base.silver_listing": 7,
   "reference_data.calendars__base.target_closing_days": 7,
   "reference_data.calendars__base.target_days": 7,
-  "reference_data.currency_master__base.currency": 7
+  "reference_data.currency_master__base.currency": 7,
+  "reference_data.security_master__base.asset": 7,
+  "reference_data.security_master__base.code_exceptions": 7,
+  "reference_data.security_master__base.instrument": 7,
+  "reference_data.security_master__base.stablecoins": 7,
+  "reference_data.security_master__base.venue_symbol": 7,
+  "reference_data.security_master__base.venue_symbol_claim": 7,
+  "reference_data.security_master__base.venue_symbol_held": 7
 }
