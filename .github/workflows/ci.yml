@@ -197,6 +197,16 @@ jobs:
             # Only this image declares the ARG; passing it to the others would
             # just print an unconsumed-build-arg warning on three legs.
             build_args: K2_GIT_SHA=${{ github.sha }}
+          # The two run one-shots (phase 002), checked below as the Airflow
+          # one-shot operator runs them: read-only root, no capability, no network.
+          - name: fetch
+            dockerfile: docker/fetch/Dockerfile
+            load: true
+            tag: fetch:local
+          - name: dbt-runner
+            dockerfile: docker/dbt-runner/Dockerfile
+            load: true
+            tag: dbt-runner:local
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -242,6 +252,20 @@ jobs:
           docker run --rm --network none k2-spark-iceberg:3.5.9_1.8.1
           python3 -c "import sys, ssl; print(sys.version, ssl.OPENSSL_VERSION);
           assert sys.version_info[:2] == (3, 10) and ssl.OPENSSL_VERSION_INFO[0] == 3"
+
+      - name: The fetch command, in the image just built
+        if: matrix.name == 'fetch'
+        run: >-
+          docker run --rm --read-only --tmpfs /tmp:rw,noexec,nosuid,size=64m --cap-drop ALL
+          --security-opt no-new-privileges --network none fetch:local k2-fetch --help
+
+      # As an arbitrary uid, the way the operator runs it (--user, the host user).
+      - name: dbt and the wrapper's command, in the image just built
+        if: matrix.name == 'dbt-runner'
+        run: >-
+          docker run --rm --read-only --tmpfs /tmp:rw,noexec,nosuid,size=64m --cap-drop ALL
+          --security-opt no-new-privileges --network none --user 12345:12345 dbt-runner:local
+          sh -c 'dbt --version && command -v k2-dbt'
 
   compose:
     name: Compose (config validation)
