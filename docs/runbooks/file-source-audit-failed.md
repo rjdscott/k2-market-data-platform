@@ -88,7 +88,10 @@ an audit yet**: the per-product alerts are the
 - the same bytes again are not retried: fetch compares with its newest earlier fetch and exits 10,
   unchanged, so load, audit and publish are skipped and build runs on the published data;
 - the daily maintenance keeps the failed batch's landed file (counted `unpublished`,
-  [`maintain.py`](../../docker/lake/maintain.py)) until an operator clears the batch.
+  [`maintain.py`](../../docker/lake/maintain.py)) until an operator clears the batch; when the
+  failed file is the product's first, its dbt outputs were never built, and `maintain` prints
+  `maintain: <table>: not built yet` for each and names them in its result's `notBuilt`, not a
+  failure.
 
 **Recovery**
 

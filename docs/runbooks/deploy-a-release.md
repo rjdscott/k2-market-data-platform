@@ -24,38 +24,45 @@ each engine has its own MinIO key pair (`K2_SPARK_S3_*`, `K2_TRINO_S3_*`, `K2_MA
 sign with them, and deploy passes them to it by name from its own environment, so preflight refuses a
 deploy whose environment lacks any of the ten (section 5) rather than fail 21 rows after the swap.
 
-> **Where these commands ran.** The live stack runs a release: its first deploy ran on 2026-11-27 at
-> 00:28 to 00:31 UTC, release `v3.0.0-alpha.3-rc.1-490b0533ff56`, recorded in
-> [first-cutover-to-releases.md](./first-cutover-to-releases.md). Nothing else has run live: a second,
-> ordinary deploy, a rules-only deploy, a failed deploy rolled back and an interrupted one were run on the
-> rehearsal (`make deploy-rehearsal KEEP=1`, [`scripts/verify/deploy_rehearsal.py`](../../scripts/verify/deploy_rehearsal.py)),
-> not yet live: compose project `k2-rehearsal` with its own networks and volumes under a scratch directory
-> in `$HOME`, Trino 484 started from the release's compiled etc, a throwaway Lakekeeper, Postgres and MinIO,
-> Spark, Prometheus, the tools one-shot and a stand-in, releases cut from the k2gen good fixture set at
-> scratch tags. The outputs below are the rehearsal's, its release ids and scratch paths included, and the
-> `SKIP access-verify` and `SKIP catalog drift check` lines in them are the rehearsal's: on the live stack
-> the access suite and the drift check run, and the live suite is a visible SKIP until phase 002 publishes
-> the access canary. Live, `make release-status` and `make release-verify` answer for the release above.
-> The tag `v3.0.0-alpha.3.2` names itself the release the live stack runs; the deploys that moved it
-> there are not recorded here.
+> **Where these commands ran.** The live stack's first deploy ran on 2026-11-27 at 00:28 to 00:31 UTC,
+> release `v3.0.0-alpha.3-rc.1-490b0533ff56`, recorded in
+> [first-cutover-to-releases.md](./first-cutover-to-releases.md); the tag `v3.0.0-alpha.3.2` then named the
+> release it ran. Later the same day it ran three deploys of this phase's releases, their output quoted in
+> sections 3, 5 and 8 (host paths as `~`):
 >
-> **What phase 002 and 003 added has not run live.** The `drain`, `remove-<service>` and `site` steps, the
-> refusals for the env file's mode, `password.db`, the storage-key names and a drain still running, the
-> networks created at recreate, lake-init running the target release's own script, k2-api in verify and the
-> live access suite in a tools one-shot are written from `scripts/deploy.py` on this branch. Their lines
-> below are that script's own messages, quoted, not a transcript; the first deploy of a release of this
-> phase is their first live run.
+> - 08:33 UTC, `make deploy RELEASE=v3.0.0-alpha.4-rc.1-7d00791fc1fe ALLOW_STATEFUL=minio`: failed at
+>   `views-narrow` and rolled itself back, exit 3
+>   ([roll-back-a-release.md](./roll-back-a-release.md) section 3 quotes it);
+> - 09:58 to 10:01 UTC, `make deploy RELEASE=v3.0.0-alpha.4-rc.2-e2dcf759de67 ALLOW_STATEFUL=minio`: exit 0
+>   in 166 s, MinIO recreated without its host ports, lake-init from the release, `k2-egress` created,
+>   k2-api in verify, the site step;
+> - 10:50 to 10:51 UTC, `make deploy RELEASE=v3.0.0-alpha.4-rc.3-48ad71fba732`: exit 0 in 56 s, the first
+>   drain that met real DAGs.
+>
+> After rc.3, `make release-verify` (section 4) exited 0 with the live access suite run, and `make site`
+> (section 8) wrote both sites. The refusal for missing secret files (section 5) ran live before the
+> password files existed. Run only on the rehearsal (`make deploy-rehearsal KEEP=1`,
+> [`scripts/verify/deploy_rehearsal.py`](../../scripts/verify/deploy_rehearsal.py): compose project
+> `k2-rehearsal` with its own networks and volumes under a scratch directory in `$HOME`, Trino 484 started
+> from the release's compiled etc, a throwaway Lakekeeper, Postgres and MinIO, Spark, Prometheus, the tools
+> one-shot and a stand-in, releases cut from the k2gen good fixture set at scratch tags), and quoted from it
+> with its release ids: compiling a release (section 1), the plan and the diff (section 2), a rules-only
+> deploy, a deploy that rolls itself back with exit 1 (section 6) and an interrupted one (section 7). Not
+> yet run live: `remove-<service>`, the refusals for the env file's mode, `password.db`, the storage-key
+> names and a drain still running, `ALLOW_RUNNING=1`, `make site-install`.
 
 | # | Task | MTTR target | Measured |
 |---|------|-------------|----------|
 | 1 | Compile a release from a tag | <2 min | 2.7 to 4.7 s a scratch tag, its two local builds cached (2026-11-27) |
 | 2 | See what a deploy will do | <1 min | 0.8 s for `PLAN=1`, 0.1 s for the diff (2026-11-27) |
-| 3 | Deploy, rules only | <1 min | 9.1 to 13.4 s; no container restarted; the new rules loaded 0.19 to 4.25 s after the swap (2026-11-27) |
-| 3 | Deploy, one service's image | <2 min | 10.8 s, the stand-in alone recreated (2026-11-27) |
-| 4 | Check what runs | <1 min | 1.4 to 1.7 s (2026-11-27) |
+| 3 | Deploy, rules only | <1 min | 9.1 to 13.4 s; no container restarted; the new rules loaded 0.19 to 4.25 s after the swap (2026-11-27, rehearsal) |
+| 3 | Deploy, one service's image | <2 min | 10.8 s, the stand-in alone recreated (2026-11-27, rehearsal) |
+| 3 | Deploy, live, recreating MinIO and seven services | <5 min | 166 s, recreate 80.3 s of it (2026-11-27, live, rc.2) |
+| 3 | Deploy, live, DAG code moved, nothing recreated | <2 min | 56 s, the drain 12.8 s of it (2026-11-27, live, rc.3) |
+| 4 | Check what runs | <1 min | 1.4 to 1.7 s (2026-11-27, rehearsal); live, with the access suite and identity.sh: exit 0, not timed (2026-11-27) |
 | 6 | A deploy that failed verification | <2 min | 16.1 to 19.0 s from the command to the previous release verified (2026-11-27) |
 | 7 | A deploy that was interrupted | <2 min | 9.4 s for the rerun; killed after each of the 13 steps in turn, every rerun converged (2026-11-27) |
-| 8 | The sites failed or are stale | <2 min | not yet measured: the first deploy of a release of this phase times its `site` step |
+| 8 | The sites failed or are stale | <2 min | the `site` step 16.0 s and 18.6 s (2026-11-27, live, rc.2 and rc.3); a failed site not yet seen |
 
 ---
 
@@ -195,6 +202,14 @@ it prints `SKIP dump` when every release the deploy moves from pins the same ima
 migration backwards: restoring the dump is section 5 of [roll-back-a-release.md](./roll-back-a-release.md).
 Verify also fails when no container of the project, or not every default-profile long-running service of
 the release, is running, and when the catalog fence's probes fail (`scripts/verify/catalog-fence.sh`).
+The fence's structure line passes only when every member of `k2-catalog` is a service of
+`tests/access/catalog-fence-allow.txt` or one of the platform's own one-shots that Airflow starts with
+`docker run` (a dbt build mid-run, for instance): no compose labels, labels `com.k2.project=<project>` and
+`com.k2.oneshot=<kind>` with a kind on that list (set by `docker/airflow/dags/oneshot.py`), the name
+`k2-<kind>-<dagId>-<try>`, and the image the live release's `compiled/oneshots.json` gives the kind. When
+no live release can be read the image goes unchecked, and the PASS line says so (`<n> one-shots admitted,
+images unchecked: no live release readable`, else `images as the live release gives them`); any other
+member fails the line by name.
 It asks k2-api which release it serves, `GET http://127.0.0.1:8095/v1/release` (the port the release's
 compose publishes, `K2_API_PORT`, default 8095), up to five tries 2 s apart, and fails unless the answer is
 the target's id; and it runs the live access suite in a tools one-shot (section 4).
@@ -210,77 +225,140 @@ restarts. Later deploys leave MinIO's definition alone and need no flag.
 **Recovery**
 
 ```bash
-make deploy RELEASE=<release id>
+make deploy RELEASE=<release id>                          # an ordinary deploy
+make deploy RELEASE=<release id> ALLOW_STATEFUL=minio     # once: the first release of phase 002 or later
 ```
 
+The live stack's first deploy of this phase's releases to go through, 2026-11-27, 09:58 to 10:01 UTC
+(trimmed: `...` stands for lines left out, never for part of a line):
+
 ```text
-deploy: preflight ok (0.2 s)
-deploy: images ok (0.5 s)
-deploy: plan v0.0.1-rehearsal.5-2a37b3160f57 -> v0.0.1-rehearsal.6-4d9b7b32a3a4
-  recreate, one at a time: nothing
-...
-deploy: ddl ok (0.8 s)
-deploy: views-narrow ok (0.0 s)
-  k2_release_7160b886ca37: line written in place
+  access-verify and the tested-data marker passed earlier for v3.0.0-alpha.4-rc.2-e2dcf759de67 (v3.0.0-alpha.4-rc.2-e2dcf759de67.access-release.json, v3.0.0-alpha.4-rc.2-e2dcf759de67.marker.json)
+deploy: preflight ok (3.1 s)
+deploy: images ok (1.5 s)
+deploy: plan v3.0.0-alpha.3.2-bae18019daef -> v3.0.0-alpha.4-rc.2-e2dcf759de67 (also undoing attempts v3.0.0-alpha.4-rc.1-7d00791fc1fe)
+  recreate, one at a time: minio, trino, airflow-api-server, airflow-dag-processor, airflow-scheduler, k2-api, prometheus, spark-iceberg
+  one-shots run: airflow-migrate, lake-init
+  Trino restart: no; DDL: k2.currency_master.audit_checks, k2.currency_master.bronze_currencies, k2.currency_master.landing_files, k2.ecb_fx_rates.audit_checks, k2.ecb_fx_rates.bronze_daily, k2.ecb_fx_rates.landing_files
+  views to re-sync: fx_reference.ecb_fx_rates.gold_eur_rates_daily, fx_reference.ecb_fx_rates.silver_rates, governance.quality_results.test_results, reference_data.calendars.target_days, reference_data.currency_master.currency
+  not recreated: dbt-runner: profile build, not running; its next start uses the release
+  not recreated: fetch: profile fetch, not running; its next start uses the release
+  not recreated: tools: a one-shot this deploy runs itself, from the release
+  drain: Trino restarts
+deploy: plan ok (0.0 s)
+  database airflow dumped before airflow-migrate: ~/k2-backup/deploy/v3.0.0-alpha.4-rc.2-e2dcf759de67/airflow-2026-11-27T095847.120305Z.sql.gz sha256 7e85688c74ce9edf41b849acfd36aafdabbc0556df6ffb0b5a92c38b46f23085
+deploy: backup ok (0.2 s)
+  no DAGs: Airflow has none to drain (Trino restarts)
+deploy: drain ok (1.5 s)
+  one-shot airflow-migrate exited 0 in 20.2 s
+  one-shot lake-init exited 0 in 7.3 s
+  every namespace exists
+  k2.currency_master.audit_checks: created after the recreate, by spark
+  ...
+deploy: ddl ok (36.0 s)
+  fx_reference.ecb_fx_rates.gold_eur_rates_daily: the rules loaded now refuse its publisher pub_ecb_fx_rates (PERMISSION_DENIED: Access Denied: Cannot execute query), so they are a release without it and name no reader of it: nothing to narrow; views-widen syncs it
+  ...
+deploy: views-narrow ok (0.2 s)
+  k2_release_5ccfa4e8747b: line written in place
 deploy: canary ok (0.0 s)
-  as the VM sees them: {"airflow": "../v0.0.1-rehearsal.6-4d9b7b32a3a4", ... "trino": "../v0.0.1-rehearsal.6-4d9b7b32a3a4"}
+  as the VM sees them: {"airflow": "../v3.0.0-alpha.4-rc.2-e2dcf759de67", "k2-api": "../v3.0.0-alpha.4-rc.2-e2dcf759de67", "prometheus": "../v3.0.0-alpha.4-rc.2-e2dcf759de67", "spark": "../v3.0.0-alpha.4-rc.2-e2dcf759de67", "trino": "../v3.0.0-alpha.4-rc.2-e2dcf759de67"}
   prometheus: SIGHUP, its rules reread through the pointer
-deploy: swap ok (0.9 s)
-  nothing to recreate
-deploy: recreate ok (0.0 s)
-  k2_release_7160b886ca37 admitted and k2_release_af0a1b537aff refused 0.22 s after the swap
-deploy: rules-loaded ok (5.1 s)
-deploy: ddl-late ok (0.0 s)
-deploy: views-widen ok (0.0 s)
-  standin: pointer trino is ../v0.0.1-rehearsal.6-4d9b7b32a3a4
-  prometheus: pointer prometheus is ../v0.0.1-rehearsal.6-4d9b7b32a3a4
-  trino: pointer trino is ../v0.0.1-rehearsal.6-4d9b7b32a3a4
-  canary k2_release_7160b886ca37 admitted, k2_release_af0a1b537aff refused
-  SKIP access-verify: built by phase 001 step S20
-  SKIP catalog drift check: scripts/verify/catalog_drift.py is built by phase 001 step S20
-  images and health checked for 8 container(s)
-deploy: verify ok (1.8 s)
-  removed canary k2_release_af0a1b537aff
+deploy: swap ok (1.1 s)
+  network k2-market-data-platform_k2-egress created: no service compose starts uses it yet
+  minio recreated, healthy in 6.3 s
+  trino recreated, healthy in 10.4 s
+  ...
+  k2-api recreated, healthy in 6.2 s
+  prometheus recreated, healthy in 6.1 s
+  spark-iceberg recreated, healthy in 0.1 s
+deploy: recreate ok (80.3 s)
+  k2_release_5ccfa4e8747b admitted and k2_release_2a341686bfd4 refused 81.17 s after the swap
+deploy: rules-loaded ok (5.7 s)
+  created k2.currency_master.audit_checks (spark)
+  ...
+deploy: ddl-late ok (9.8 s)
+  fx_reference.ecb_fx_rates.gold_eur_rates_daily: not published yet; the wrapper creates it at its first tag
+  ...
+deploy: views-widen ok (1.4 s)
+  spark-iceberg: pointer spark is ../v3.0.0-alpha.4-rc.2-e2dcf759de67
+  ...
+  canary k2_release_5ccfa4e8747b admitted, k2_release_2a341686bfd4 refused
+  catalog drift check clean (0 differences, pending ['PENDING view fx_reference.ecb_fx_rates.gold_eur_rates_daily: its product has not published yet', ...], 0 skipped, 0 left by a release since)
+  SKIP access-verify LIVE=1: not yet published, so no live row can read it: PENDING view fx_reference.ecb_fx_rates.gold_eur_rates_daily: its product has not published yet, ...; every row ran on a throwaway lake at release time (preflight); phase 002 publishes them
+  k2-api: GET http://127.0.0.1:8095/v1/release names v3.0.0-alpha.4-rc.2-e2dcf759de67
+  catalog-fence: 10 PASS, 0 FAIL
+  images and health checked for 23 container(s)
+deploy: verify ok (8.6 s)
+  removed canary k2_release_2a341686bfd4
 deploy: done ok (0.0 s)
-deploy: v0.0.1-rehearsal.6-4d9b7b32a3a4 is live and verified
+  catalog site: k2site: wrote /site/catalog/current; facts read
+  dbt docs: k2-dbt: wrote /site/dbt-docs/tree-fcg23xn0
+deploy: site ok (16.0 s)
+deploy: v3.0.0-alpha.4-rc.2-e2dcf759de67 is live and verified
 deploy: exit 0: done
 ```
 
-`rules-loaded` holds one more refresh period (5 s) after the canary is admitted, for the groups' own timer.
+`(also undoing attempts ...)` in the plan is the rc.1 attempt of 08:33 UTC, which failed and whose rollback
+exited 3: the plan of this deploy covers what that attempt moved. The `views-narrow` lines are the fix of
+that failure: a view the release being moved from does not declare is left for `views-widen`. Every
+product was still unpublished, so the live suite was a visible SKIP and the drift check listed them as
+`PENDING`; `rules-loaded` holds one more refresh period (5 s) after the canary is admitted, for the groups'
+own timer.
 
-The output above is the rehearsal's from before phase 002. The steps added since print these lines, quoted
-from `scripts/deploy.py` with its placeholders, in the order they run (which ones appear depends on the plan):
+A deploy whose DAG code moved, with the five product DAGs present, 2026-11-27, 10:50 to 10:51 UTC: the
+drain pauses the DAGs that were not paused, waits for their running tasks, and unpauses exactly those at
+the end (the other two had been paused by the operator and stayed paused):
 
 ```text
-  drain: <why>                            # e.g. "no Trino restart and no DAG's task list changes"
-deploy: plan ok (...)
-  no drain: <why>                         # or: drained <dags> (<why>) in <n> s; paused <dags or none>
-deploy: drain ok (...)
-  one-shot lake-init exited 0 in <n> s
-deploy: ddl ok (...)
+deploy: plan v3.0.0-alpha.4-rc.2-e2dcf759de67 -> v3.0.0-alpha.4-rc.3-48ad71fba732
+  recreate, one at a time: nothing
+  one-shots run: none
+  Trino restart: no; DDL: none
+  views to re-sync: none
+  not recreated: dbt-runner: profile build, not running; its next start uses the release
+  not recreated: fetch: profile fetch, not running; its next start uses the release
+  drain: the DAG code moved since v3.0.0-alpha.4-rc.2-e2dcf759de67
+deploy: plan ok (0.0 s)
+  no one-shot migrates a database
+deploy: backup ok (0.0 s)
+  drained access_canary, calendars, currency_master, ecb_fx_rates, quality_results (the DAG code moved since v3.0.0-alpha.4-rc.2-e2dcf759de67) in 11 s; paused access_canary, calendars, ecb_fx_rates
+deploy: drain ok (12.8 s)
+...
+deploy: swap ok (1.1 s)
+  nothing to recreate
+deploy: recreate ok (0.1 s)
+  k2_release_498401369b41 admitted and k2_release_5ccfa4e8747b refused 0.41 s after the swap
+deploy: rules-loaded ok (5.1 s)
+...
+  catalog drift check clean (0 differences, pending ['PENDING view governance.quality_results.test_results: its product has not published yet', ...], 4 skipped, 0 left by a release since)
+  ...
+  catalog-fence: 10 PASS, 0 FAIL
+  images and health checked for 23 container(s)
+deploy: verify ok (8.6 s)
+  removed canary k2_release_5ccfa4e8747b
+deploy: done ok (0.0 s)
+  catalog site: k2site: wrote /site/catalog/current; facts read
+  dbt docs: k2-dbt: wrote /site/dbt-docs/tree-6q37it9h
+deploy: site ok (18.6 s)
+deploy: v3.0.0-alpha.4-rc.3-48ad71fba732 is live and verified
+  unpaused access_canary, calendars, ecb_fx_rates: the DAGs deploy paused
+deploy: exit 0: done
+```
+
+Lines not yet seen live, quoted from `scripts/deploy.py` with its placeholders:
+
+```text
   <service> stopped and removed: behind profile <p> in <release id>
 deploy: remove-<service> ok (...)
-  network <project>_k2-egress created: no service compose starts uses it yet
-  <service> recreated, healthy in <n> s
-deploy: recreate ok (...)
-  catalog drift check clean (<n> differences, pending none, <n> skipped, <n> left by a release since)
   LEFT <kind> <name>: declared by <release id>, a release deployed or attempted since the one that is live; ...
-  access-verify LIVE=1 passed: {'PASS': <n>, 'FAIL': 0, 'SKIP': <n>}
-  k2-api: GET http://127.0.0.1:8095/v1/release names <release id>
-deploy: verify ok (...)
-deploy: done ok (...)
-  catalog site: <the generator's last line>
-  dbt docs: <k2-dbt docs' last line>
-deploy: site ok (...)
-deploy: <release id> is live and verified
-  unpaused <dags>: the DAGs deploy paused
-deploy: exit 0: done
 ```
 
-While a product the drift check finds unpublished remains (a DAG not yet run), the live suite prints
-`SKIP access-verify LIVE=1: not yet published, so no live row can read it: <products>; ...` instead.
+Once every product the drift check names has published, verify runs the live suite instead of the SKIP,
+as `make release-verify` did after rc.3 (section 4).
 
-**Measured**, 2026-11-27, on the rehearsal, from the first to the last record of `deploy-log.jsonl`: a first deploy 33.2 s (Trino started from the compiled etc in 10.9 s, three Spark tables created after it); a rules-only release 9.1 to 13.4 s with no container restarted (every `State.StartedAt` unchanged), its rules loaded 0.19 to 4.25 s after the swap and a 60-minute delay seen by a reader polling every 50 ms 3.84 s after the swap; a release changing one service's image 10.8 s, that service alone recreated.
+**Measured**, live, 2026-11-27: 166 s from the command to `exit 0` for rc.2 (eight services recreated
+one at a time, 80.3 s; DDL 36.0 s; verify 8.6 s; site 16.0 s), and 56 s for rc.3 (nothing recreated; the
+drain 12.8 s; site 18.6 s). On the rehearsal, the same day, from the first to the last record of `deploy-log.jsonl`: a first deploy 33.2 s (Trino started from the compiled etc in 10.9 s, three Spark tables created after it); a rules-only release 9.1 to 13.4 s with no container restarted (every `State.StartedAt` unchanged), its rules loaded 0.19 to 4.25 s after the swap and a 60-minute delay seen by a reader polling every 50 ms 3.84 s after the swap; a release changing one service's image 10.8 s, that service alone recreated.
 
 ---
 
@@ -310,16 +388,26 @@ make release-verify
 make release-status
 ```
 
+`make release-verify` on the live stack after the rc.3 deploy, 2026-11-27 (exit 0; the lines that name
+each check, `...` for those left out):
+
 ```text
-  standin: pointer trino is ../v0.0.1-rehearsal.6-4d9b7b32a3a4
-  prometheus: pointer prometheus is ../v0.0.1-rehearsal.6-4d9b7b32a3a4
-  trino: pointer trino is ../v0.0.1-rehearsal.6-4d9b7b32a3a4
-  canary k2_release_7160b886ca37 admitted, k2_release_af0a1b537aff refused
-  SKIP access-verify: built by phase 001 step S20
-  SKIP catalog drift check: scripts/verify/catalog_drift.py is built by phase 001 step S20
-  images and health checked for 8 container(s)
-release-verify: v0.0.1-rehearsal.6-4d9b7b32a3a4 everywhere
-deploy: exit 0: done
+  ...
+  k2-api: pointer k2-api is ../v3.0.0-alpha.4-rc.3-48ad71fba732
+  ...
+  catalog drift check clean (0 differences, pending none, 6 skipped, 0 left by a release since)
+  access-verify LIVE=1 passed: {'PASS': 82, 'FAIL': 0, 'SKIP': 30}
+  k2-api: GET http://127.0.0.1:8095/v1/release names v3.0.0-alpha.4-rc.3-48ad71fba732
+  catalog-fence: 10 PASS, 0 FAIL
+  identity.sh: 18 PASS, exit 0
+  ...
+```
+
+Every product had published by then, so no `PENDING` remained and the live suite ran rather than SKIP
+([verify-access-after-a-release.md](./verify-access-after-a-release.md) section 2). `make release-status`
+was not run live that day; its output below is the rehearsal's:
+
+```text
 releases root <home>/s19-rehearsal-3452690/releases; good release v0.0.1-rehearsal.6-4d9b7b32a3a4
   pointer trino -> ../v0.0.1-rehearsal.6-4d9b7b32a3a4 (as the host sees it)
   ...
@@ -331,7 +419,8 @@ releases root <home>/s19-rehearsal-3452690/releases; good release v0.0.1-rehears
 `release-status` also prints `DAGs a deploy paused and has not yet unpaused: <dags or none>`.
 
 **Measured**, 1.4 to 1.7 s for `release-verify`, 0.1 s for `release-status`, 2026-11-27, on the rehearsal,
-before the live access suite and k2-api joined verify; with them, not yet measured.
+before the live access suite and k2-api joined verify. Live, with them and identity.sh, 2026-11-27: exit 0,
+not timed.
 
 ---
 
@@ -344,6 +433,18 @@ reports any failed recipe as `Error 2`; the script's own code is its last line.
 
 **Expected behaviour**, nothing has moved: no pointer, no service, no view, no canary line. Read the
 message, fix the cause, run the same command again.
+
+A plan-only deploy on the live stack, 2026-11-27, before the password files and the API key file of the
+release's products existed (trimmed at `...`):
+
+```text
+deploy: preflight FAILED after 1.7 s: secret files missing under ~/k2-secrets: api/keys.json (make api-key); principals/dbt_calendars.password (make password PRINCIPAL=dbt_calendars TO_FILE=1); ...
+deploy: REFUSED: ...
+deploy: exit 2: refused before any change
+```
+
+The commands it names, run once each (`make password PRINCIPAL=<id> TO_FILE=1` for every `dbt_<fence>`
+and `pub_<fence>` it listed, `make api-key PRINCIPAL=p.analyst-a TO_FILE=1`), cleared it.
 
 | Message names | Cause | Fix |
 |---|---|---|
@@ -407,6 +508,9 @@ make: *** [mk/release.mk:18: deploy] Error 1
 ```
 
 **Measured**, 16.1 s for the command above (nothing to recreate either way), and 19.0 s for the rehearsal's release whose stand-in changed image: the stand-in was recreated on the new image, then again on the previous one, and its running image id was the previous release's afterwards (2026-11-27). Exit 1 is the script's; `make` adds its own `Error 1` and exits 2.
+On the live stack no deploy has yet rolled back with exit 1: the one that failed there (rc.1, 2026-11-27,
+08:33 UTC) rolled back but its rollback's verify failed, exit 3, quoted in
+[roll-back-a-release.md](./roll-back-a-release.md) section 3.
 
 ---
 
@@ -478,11 +582,20 @@ systemctl --user list-timers k2-site.timer  # NEXT is the next 05:15 UTC
 journalctl --user -u k2-site --since yesterday
 ```
 
-`make site` prints one line per site, then `site: <release id>`, per `scripts/deploy.py`; `make
-site-install` ends `Scheduled daily at 05:15 UTC. Deploy regenerates the site too; 'make site' runs it
-now.` (`mk/run.mk`). The unit runs the checkout it was installed from, so install it from the main checkout.
+`make site` on the live stack, 2026-11-27, after the rc.3 deploy:
 
-**Measured**, not yet measured: the first deploy of a release of this phase times its `site` step.
+```text
+catalog site: k2site: wrote /site/catalog/current; facts read
+dbt docs: k2-dbt: wrote /site/dbt-docs/tree-<id>
+site: <release id>
+```
+
+`make site-install` ends `Scheduled daily at 05:15 UTC. Deploy regenerates the site too; 'make site' runs
+it now.` (`mk/run.mk`); it has not been run yet. The unit runs the checkout it was installed from, so
+install it from the main checkout.
+
+**Measured**, the deploy's `site` step: 16.0 s (rc.2) and 18.6 s (rc.3), live, 2026-11-27. `make site` not
+timed; a failed site not yet seen.
 
 ---
 
@@ -493,7 +606,15 @@ now.` (`mk/run.mk`). The unit runs the checkout it was installed from, so instal
   now seals on the host too); every release rebuilt its local images with new ids (each tag's `git archive`
   file times, and BuildKit's provenance); Python 3.13 refused a CA certificate without keyUsage; a first
   deploy cannot create Spark or Trino tables before it has started them (now `ddl-late`).
+- **2026-11-27, live, 08:33 UTC**, the first deploy of a release that added products
+  (`v3.0.0-alpha.4-rc.1-7d00791fc1fe`) failed at `views-narrow`: it read a new product's view as its
+  publisher under the old rules, which name neither (`PERMISSION_DENIED`). Its rollback exited 3
+  ([roll-back-a-release.md](./roll-back-a-release.md) section 3). `views-narrow` now leaves such a view to
+  `views-widen` (`9d7f6dd`); the next release, rc.2, deployed with exit 0.
+- **2026-11-27, live**, `release-verify` failed the fence's structure line on a dbt build one-shot
+  Airflow had started (`k2-dbt-runner-ecb_fx_rates-1=/`, no compose labels); the fence now admits the
+  platform's own labelled one-shots and nothing else (`806e3ed`, section 3).
 
 ---
 
-**Last verified:** 2026-11-27 against the rehearsal, branch `step/s19-deploy`; on the live stack only the first deploy (the cutover, [first-cutover-to-releases.md](./first-cutover-to-releases.md), 00:28 to 00:31 UTC, release `v3.0.0-alpha.3-rc.1-490b0533ff56`); a second ordinary deploy, a rules-only deploy and a deploy that rolls itself back are not yet live. The steps and refusals phases 002 and 003 added (drain and `ALLOW_RUNNING`, `remove-<service>`, the networks, lake-init from the target, the env-mode, `password.db`, secret-file and storage-key refusals, `ALLOW_STATEFUL=minio`, k2-api and the live suite in verify, the site step, `make site`, `make site-install`): not yet: first run after the deploy of this release.
+**Last verified:** 2026-11-27. On the live stack: section 3 (rc.2 with `ALLOW_STATEFUL=minio`, rc.3 with a real drain), section 4's `make release-verify`, section 5's missing-secret refusal, section 8's `make site` and the `site` step. On the rehearsal only, branch `step/s19-deploy`: sections 1, 2, 6 and 7, and `make release-status`. Not yet run anywhere live: `remove-<service>`, `ALLOW_RUNNING=1`, the refusals for the env file's mode, `password.db`, the storage-key names and a drain still running, a deploy that rolls itself back with exit 1, an interrupted deploy, `make site-install`.

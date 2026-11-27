@@ -47,8 +47,8 @@ names must sit under the table's location, or the run fails.
 
 | # | Task | Target | Measured |
 |---|------|--------|----------|
-| 1 | A copy of the live backup set | < 5 min | not yet measured: the first `make backup` after the deploy of this release measures it (`STATUS.json` `duration_s`) |
-| 2 | Check the newest copy | < 1 min | not yet measured, same trigger (`make backup-verify`) |
+| 1 | A copy of the live backup set | < 5 min | 1 s, the copy's own line (`backup-lake: OK in 1 s`), live, 2026-11-27, run `runs/20261127T100533Z`: 60 files |
+| 2 | Check the newest copy | < 1 min | `backup-verify: OK: 0 problem(s)` on that run, live, 2026-11-27; its time not recorded |
 | 3 | A failed or stale copy | next run | not induced; the error paths are exercised by `tests/test_backup_lake.py` |
 | 4 | Restore | none yet | **not yet drilled: the restore drill is phase 004's** ([plan 004](../plans/2026-11-26-unified-product-platform/004-kraken-trades-instruments-security-master.md), "The first restore drill") |
 
@@ -128,14 +128,16 @@ journalctl --user -u k2-backup --since yesterday  # a timer run's output
 ```
 
 What `make backup` prints, from `scripts/backup_lake.py` `run_copy` and the script's status writer,
-one line per entry of the set (values here are placeholders):
+one line per entry of the set: `backup-lake: <table> at <ref>: snapshot <id>, <n> files` per
+`restore` table, `backup-lake: landing s3://<bucket>/<prefix>: <n> objects` per landing,
+`backup-lake: <table>: rebuild, not copied` per `rebuild` table, then the run's totals. On the live
+stack on 2026-11-27, after the gzip fix (Failure modes, below), its last lines:
 
 ```text
-backup-lake: k2.ecb_fx_rates.bronze_daily at main: snapshot <id>, <n> files
-backup-lake: landing s3://k2-landing/fx-reference/ecb-fx-rates/: <n> objects
-backup-lake: fx_reference.ecb_fx_rates__base.silver_rates: rebuild, not copied
-backup-lake: run runs/<stamp>: <n> objects, <bytes> bytes fetched
-backup-lake: OK in <s> s: <n> files, <bytes> bytes fetched this run; <n> files, <bytes> bytes in runs/<stamp>; <dir>/STATUS.json
+backup-lake: <table>: rebuild, not copied
+...
+backup-lake: run runs/20261127T100533Z: 60 objects, 426190 bytes fetched
+backup-lake: OK in 1 s: 60 files, 426190 bytes fetched this run; ...
 ```
 
 `--dry-run` prints the same entry lines and `backup-lake: DRY RUN: nothing copied`. `make
@@ -144,10 +146,24 @@ and needs no container) prints `backup-verify: run <stamp>: release <id> (tag <t
 `backup-verify: table <table> at <ref>: snapshot <id>, <n> files, <bytes> bytes` per table,
 `backup-verify: landing s3://<bucket>/<prefix>: <n> objects, <bytes> bytes` per landing, `backup-verify:
 <name>: <file>, <bytes> bytes, sha256 matches` per dump and for the releases tar, and last
-`backup-verify: OK: 0 problem(s)`. It fails (exit 1) on a missing file, a size that differs, a
-sha256 that differs, and a `restore` table, `releases` or `lakekeeper-db` entry of the **live** set
-that the run does not hold. With no complete run yet, as run on an empty scratch directory on
-2026-11-27 (`python3 scripts/backup_lake.py verify --dir <empty dir> --backup-set <a trial release's backup-set.json>`):
+`backup-verify: OK: 0 problem(s)`. On that live run, 2026-11-27, one table line for each of
+`governance.run_records.run_record`, `k2.currency_master.audit_checks`,
+`k2.currency_master.landing_files`, `k2.ecb_fx_rates.audit_checks`, `k2.ecb_fx_rates.bronze_daily`
+and `k2.ecb_fx_rates.landing_files`, then:
+
+```text
+backup-verify: table <table> at main: snapshot <id>, <n> files, <bytes> bytes
+...
+backup-verify: landing s3://k2-landing/fx-reference/ecb-fx-rates/: 1 objects, 69492 bytes
+...
+backup-verify: releases: releases.tar, 5365760 bytes, sha256 matches
+backup-verify: OK: 0 problem(s)
+```
+
+The first `...` stands for the other five tables' lines, the second for the two database dumps' lines. It fails (exit 1) on a missing
+file, a size that differs, a sha256 that differs, and a `restore` table, `releases` or
+`lakekeeper-db` entry of the **live** set that the run does not hold. With no complete run yet, as
+run on an empty scratch directory on 2026-11-27 (`python3 scripts/backup_lake.py verify --dir <empty dir> --backup-set <a trial release's backup-set.json>`):
 
 ```text
 backup-verify: FAIL: no complete backup run under <empty dir>/runs
@@ -340,12 +356,18 @@ extract.
 - **2026-11-26**, the script before phase 002 copied four fixed tables, by hand-written list; its
   first copy took 1 min 41 s from a worktree with the stack live. Those tables retired with the v3
   lake; their copies stay under `lake/`.
+- **2026-11-27, live**, the first `make backup` of real tables failed in `json.loads`: the stack's
+  engines write Iceberg metadata gzip-compressed (`<v>.gz.metadata.json`), and the copy read every
+  metadata file as plain JSON. Fixed in `092ba53` (`scripts/backup_lake.py`: the gzip magic bytes
+  decide, not the name; a test in `tests/test_backup_lake.py`). The next run, `runs/20261127T100533Z`,
+  copied and verified (section 1).
 
 ---
 
-**Last verified:** not yet: first run after the deploy of this release. Run on 2026-11-27 without
-touching the stack: `bash scripts/verify/ci-validate.sh` (the backup set above, from its trial
+**Last verified:** 2026-11-27 on the live stack, run `runs/20261127T100533Z`, for section 1's
+`make backup` and `make backup-verify` (the lines above). Also on 2026-11-27, without touching the
+stack: `bash scripts/verify/ci-validate.sh` (the backup set above, from its trial
 release), `python3 scripts/backup_lake.py verify` on an empty scratch directory (the two lines in
-section 1), `bash scripts/backup-lake.sh` with a bad flag (its usage line). Not run: `make backup`,
-`--dry-run`, `make backup-verify` on a real run, `make backup-install`, every fix in section 2 and
-every step of section 3.
+section 1), `bash scripts/backup-lake.sh` with a bad flag (its usage line). Not yet: `--dry-run`,
+`make backup-install` and the timer, every fix in section 2 but the gzip one, and section 3: the
+restore is phase 004's drill.

@@ -11,9 +11,10 @@ three products this platform runs: `fx-reference/ecb-fx-rates` (a file, bronze, 
 [ADR-036](../adr/ADR-036-connectors-land-verbatim-then-publish-bronze-after-audit.md).
 
 > **Plan 003 says this runbook is written last, from a run of the whole path on the live stack.**
-> Sections 1 to 3 ran on 2026-11-27 on the working tree, no container started; sections 4 to 7
-> are written from the scripts that print their output and have not run on the live stack yet.
-> Each such step says so.
+> Sections 1 to 3 ran on 2026-11-27 on the working tree, no container started. Sections 4 to 7 ran
+> on the live stack on 2026-11-27, for the ECB and currency-master products, through the deploys of
+> `v3.0.0-alpha.4-rc.2-e2dcf759de67` (which added them) and `v3.0.0-alpha.4-rc.3-48ad71fba732`;
+> the output below is theirs. A command that did not run there is marked not yet.
 
 **Run every command from the repo root with `set -a && . ./.env && set +a` loaded** (sections 4 to
 7, in the live checkout); sections 1 to 3 need no `.env`.
@@ -23,10 +24,10 @@ three products this platform runs: `fx-reference/ecb-fx-rates` (a file, bronze, 
 | 1 | Write the documents and the parser | a day | not measured: a person's work |
 | 2 | Check them, no container | < 5 min | `ci-validate.sh` 1.6 s, `k2gen check --previous` 0.3 s, `make test-k2gen` 37 s, the dbt tree proof 75 s (2026-11-27, below) |
 | 3 | The pull request | review | not measured |
-| 4 | Release and secrets | < 10 min | not yet measured: the first product onboarded after the deploy of this release |
-| 5 | Deploy | < 10 min | not yet measured, same trigger |
-| 6 | First run | the product's own | not yet measured, same trigger |
-| 7 | Its catalog page | < 1 min | not yet measured, same trigger |
+| 4 | Release and secrets | < 10 min | not measured: each `make password` and `make api-key` exited 0 (2026-11-27) |
+| 5 | Deploy | < 10 min | 166 s, the deploy that added the products; 56 s for the next, with a drain (2026-11-27, below) |
+| 6 | First run | the product's own | `ecb_fx_rates` 121.7 s, `currency_master` 48 s (2026-11-27) |
+| 7 | Its catalog page | < 1 min | the site step, 16.0 s inside the deploy that added the products (2026-11-27) |
 
 ---
 
@@ -171,23 +172,37 @@ the job summary: the new DAG, tables, landing and backup entries should be all i
 **Expected behaviour**, `make release` compiles the tag into a sealed release
 ([deploy-a-release.md](./deploy-a-release.md) section 1). A dbt product needs two password files
 before its deploy, its builder's and its publisher's: deploy's preflight refuses without them,
-naming each with the command that writes it (`scripts/deploy.py` `required_secrets`): `deploy:
-REFUSED: secret files missing under <K2_SECRETS>: principals/dbt_<fence>.password (make password
-PRINCIPAL=dbt_<fence> TO_FILE=1); ...; nothing changed`. `make password` knows a builder or
-publisher only from the product's documents in the checkout it runs in (`scripts/principal-secret.py`),
-so run it from the live checkout at the tag. A reader the grant names needs its own password, and
-a k2-api key to read over REST ([create-or-rotate-a-principal.md](./create-or-rotate-a-principal.md)).
+naming each with the command that writes it (`scripts/deploy.py` `required_secrets`). A plan-only
+deploy on the live stack on 2026-11-27, before the files existed, printed (trimmed):
 
-**Recovery**, not yet run on the live stack:
+```text
+deploy: preflight FAILED after 1.7 s: secret files missing under ~/k2-secrets: api/keys.json (make api-key); principals/dbt_calendars.password (make password PRINCIPAL=dbt_calendars TO_FILE=1); ...
+deploy: REFUSED: ...
+deploy: exit 2: refused before any change
+```
+
+`make password` knows a builder or publisher only from the product's documents in the checkout it
+runs in (`scripts/principal-secret.py`), so run it from the live checkout at the tag. A reader the
+grant names needs its own password, and a k2-api key to read over REST
+([create-or-rotate-a-principal.md](./create-or-rotate-a-principal.md)).
+
+**Recovery**, run on the live stack on 2026-11-27 for `dbt_` and `pub_` of `calendars`,
+`currency_master`, `ecb_fx_rates` and `quality_results`, each exit 0 with its file mode 600, and the
+reader key of `p.analyst-a`:
 
 ```bash
 make release TAG=<tag>
 make password PRINCIPAL=dbt_<fence> TO_FILE=1
 make password PRINCIPAL=pub_<fence> TO_FILE=1
-make principals-status                 # the two show a password line and a password file
+make api-key PRINCIPAL=p.analyst-a TO_FILE=1
+make principals-status                 # not yet run: the two show a password line and a password file
 ```
 
-**Measured**, not yet measured.
+```text
+principal-secret: p.analyst-a: sha256 in ~/k2-secrets/api/keys.json, key in ~/k2-secrets/api-keys/p.analyst-a.key (mode 600)
+```
+
+**Measured**, not measured.
 
 ---
 
@@ -196,25 +211,53 @@ make principals-status                 # the two show a password line and a pass
 **When**, the release is compiled and its secrets written.
 
 **Expected behaviour**, the plan names the DDL the product needs (its Spark tables, bronze,
-`landing_files` and `audit_checks`, created in the `ddl` step) and the namespaces of its storage
-plan; the release-time access suite runs its rows on a throwaway lake in
-preflight; after the swap the factory builds the new DAG within 30 s of the pointer moving
-([airflow-scheduling.md](./airflow-scheduling.md)); the site step regenerates the catalog site and
-the dbt docs, and never fails the deploy.
+`landing_files` and `audit_checks`) and the namespaces of its storage plan. A Spark table is made in
+the `ddl` step, or in `ddl-late` when the deploy recreates `spark-iceberg`, as it did here. The
+release-time access suite runs its rows on a throwaway lake in preflight; after the swap the factory
+builds the new DAG within 30 s of the pointer moving ([airflow-scheduling.md](./airflow-scheduling.md));
+a dbt output's reader view waits for the wrapper's first tag; the site step regenerates the catalog
+site and the dbt docs, and never fails the deploy.
 
-**Recovery**, not yet run on the live stack:
+**Recovery**, run on the live stack on 2026-11-27 but `make release-diff` (not yet):
 
 ```bash
 make release-diff RELEASE=<release id>
 make deploy RELEASE=<release id> PLAN=1
-make deploy RELEASE=<release id>
+make deploy RELEASE=<release id>        # the release that added the products also changed MinIO: ALLOW_STATEFUL=minio (deploy-a-release.md section 3)
 make release-verify
 docker exec k2-airflow-scheduler airflow dags list            # the new DAG id is listed
+docker exec k2-airflow-scheduler airflow dags list-import-errors
 ```
+
+The deploy that added the products, `v3.0.0-alpha.4-rc.2-e2dcf759de67`, printed (trimmed):
+
+```text
+deploy: plan v3.0.0-alpha.3.2-bae18019daef -> v3.0.0-alpha.4-rc.2-e2dcf759de67 (also undoing attempts v3.0.0-alpha.4-rc.1-7d00791fc1fe)
+  Trino restart: no; DDL: k2.currency_master.audit_checks, k2.currency_master.bronze_currencies, k2.currency_master.landing_files, k2.ecb_fx_rates.audit_checks, k2.ecb_fx_rates.bronze_daily, k2.ecb_fx_rates.landing_files
+  views to re-sync: fx_reference.ecb_fx_rates.gold_eur_rates_daily, fx_reference.ecb_fx_rates.silver_rates, governance.quality_results.test_results, reference_data.calendars.target_days, reference_data.currency_master.currency
+  k2.ecb_fx_rates.bronze_daily: created after the recreate, by spark
+deploy: ddl ok (36.0 s)
+deploy: recreate ok (80.3 s)
+  created k2.ecb_fx_rates.bronze_daily (spark)
+deploy: ddl-late ok (9.8 s)
+  fx_reference.ecb_fx_rates.gold_eur_rates_daily: not published yet; the wrapper creates it at its first tag
+deploy: views-widen ok (1.4 s)
+  catalog-fence: 10 PASS, 0 FAIL
+deploy: verify ok (8.6 s)
+deploy: site ok (16.0 s)
+deploy: v3.0.0-alpha.4-rc.2-e2dcf759de67 is live and verified
+deploy: exit 0: done
+```
+
+`airflow dags list` then listed five DAGs (`access_canary`, `calendars`, `currency_master`,
+`ecb_fx_rates`, `quality_results`), and `airflow dags list-import-errors` printed `No data found`.
+After the next release, `make release-verify` exited 0 with, among its lines, `catalog-fence: 10
+PASS, 0 FAIL` and `access-verify LIVE=1 passed: {'PASS': 82, 'FAIL': 0, 'SKIP': 30}`.
 
 A refusal or a rollback: [deploy-a-release.md](./deploy-a-release.md) sections 5 and 6.
 
-**Measured**, not yet measured.
+**Measured**, 2026-11-27: 166 s for the deploy that added the products (`ALLOW_STATEFUL=minio`), 56 s
+for the next (`v3.0.0-alpha.4-rc.3-48ad71fba732`, a drain of 12.8 s, nothing recreated).
 
 ---
 
@@ -228,7 +271,8 @@ runs it now. Its inputs must be tested first: `ecb-fx-rates` requires `calendars
 and audits its rows on bronze's `audit` branch, publishes `main`, builds and tests the dbt outputs,
 moves their `audited` tags, and writes one run-record row per step.
 
-**Recovery**, not yet run on the live stack:
+**Recovery**, the runs below happened on the live stack on 2026-11-27; the run-record query has not
+yet run there:
 
 ```bash
 docker exec k2-airflow-scheduler airflow dags trigger <fence>
@@ -241,12 +285,23 @@ trino_cli svc.catalog "SELECT task, event, table_name, rows_written, release_id,
 ```
 
 Every task `success` (`maintain` and `expire` may be `skipped`); run-record rows `fetch`, `load`,
-`audit`, `publish` `passed`, and the build's `started` then `audited` per output. A red task:
+`audit`, `publish` `passed`, and the build's `started` then `audited` per output. The first runs on
+the live stack:
+
+| DAG | Result | Tasks |
+|-----|--------|-------|
+| `calendars` | success | `resolve`, `build`, `maintain`, `record` success; `expire` skipped |
+| `ecb_fx_rates` | success in 121.7 s | every task success; `expire` skipped |
+| `currency_master` | success in 48 s, after `v3.0.0-alpha.4-rc.3-48ad71fba732` | fetch's log: `fetch: spooled <n> bytes, sha256 <sha256>`, then `fetch: <n> rows` |
+
+The one-shots ran as `k2-fetch-currency_master-1` and `k2-dbt-runner-ecb_fx_rates-1`
+(`k2-<kind>-<dagId>-<try>`). `currency_master`'s first run, under the release before, failed twice
+over; both were defects, fixed in the release that followed (Failure modes below). A red task:
 [airflow-scheduling.md](./airflow-scheduling.md) section 2, then
 [connector-failure.md](./connector-failure.md) or
 [file-source-audit-failed.md](./file-source-audit-failed.md).
 
-**Measured**, not yet measured.
+**Measured**, 2026-11-27: `ecb_fx_rates` 121.7 s, `currency_master` 48 s, one run each.
 
 ---
 
@@ -262,14 +317,29 @@ run records and the quality results. A page shows the run only once the site is 
 does it after each deploy and rollback, `make site` now, and the daily timer of `make
 site-install` at 05:15 UTC. A reader the grant names reads the gold view over SQL or REST.
 
-**Recovery**, not yet run on the live stack:
+**Recovery**, run on the live stack on 2026-11-27 but the two lines marked not yet:
 
 ```bash
 make site
-curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:${K2_API_PORT:-8095}/catalog/fx-reference/ecb-fx-rates/index.html   # 200
-curl -s http://127.0.0.1:${K2_API_PORT:-8095}/v1/products/fx-reference/ecb-fx-rates | python3 -m json.tool | head -20
-make access-verify LIVE=1              # the canary's, the platform's and the storage-key rows; this product's SKIP
+API=http://127.0.0.1:${K2_API_PORT:-8095}
+curl -s -o /dev/null -w '%{http_code}\n' $API/catalog/                                  # 200
+curl -s -o /dev/null -w '%{http_code}\n' $API/catalog/fx-reference/ecb-fx-rates/index.html   # not yet run
+curl -s $API/v1/products | python3 -m json.tool                                          # six products
+curl -s $API/v1/products/fx-reference/ecb-fx-rates | python3 -m json.tool | head -20     # not yet run
+make access-verify LIVE=1              # ran inside make release-verify: the canary's, the platform's and the storage-key rows; this product's SKIP
 ```
+
+`make site` printed:
+
+```text
+catalog site: k2site: wrote /site/catalog/current; facts read
+dbt docs: k2-dbt: wrote /site/dbt-docs/tree-<id>
+site: <release id>
+```
+
+`/catalog/` answered 200 with `cache-control: no-cache` and `x-content-type-options: nosniff`, and
+the content-security-policy `services/k2-api` sets. The live suite, run by `make release-verify`,
+printed `access-verify LIVE=1 passed: {'PASS': 82, 'FAIL': 0, 'SKIP': 30}`.
 
 Live, the suite runs the storage-key rows and the rows of principals whose password the platform holds
 that name nothing but the access canary (`scripts/access_verify.py`, `live_skip`), so this product's own
@@ -278,17 +348,44 @@ time on a throwaway lake started from the release, in deploy's preflight;
 `make access-verify RELEASE=<release dir>` runs them again.
 
 The REST data route is `GET /v1/data/<domain>/<product>/<table>` with `Authorization: Bearer
-<key>` (`services/k2-api/openapi.yaml`); the key's principal must hold a role on the table.
+<key>` (`services/k2-api/openapi.yaml`); the key's principal must hold a role on the table. Filters
+are query parameters `filter.<column>=<value>`, one equality per declared column; when more rows
+match than `limit`, the answer is 422 `result_too_large` (cursors arrive in phase 007), so a small
+`limit` needs filters. As `p.analyst-a`, the key read from its mode-600 file, on 2026-11-27:
 
-**Measured**, not yet measured.
+```bash
+KEY=$(cat "${K2_SECRETS:-$HOME/k2-secrets}/api-keys/p.analyst-a.key")
+D=$API/v1/data/fx-reference/ecb-fx-rates
+curl -s -o /dev/null -w '%{http_code}\n' -H "Authorization: Bearer $KEY" "$D/gold_eur_rates_daily?limit=10000"   # 200
+curl -s -o /dev/null -w '%{http_code}\n' "$D/gold_eur_rates_daily?limit=10000"                                   # 401, no key
+curl -s -o /dev/null -w '%{http_code}\n' -H "Authorization: Bearer $KEY" "$D/bronze_daily"                       # 403
+curl -s -H "Authorization: Bearer $KEY" "$D/gold_eur_rates_daily?limit=5"                                        # 422
+curl -s -o /dev/null -w '%{http_code}\n' -H "Authorization: Bearer $KEY" \
+  "$D/gold_eur_rates_daily?filter.<column>=<value>&filter.<column>=<value>&limit=5"                             # 200, two declared columns
+bash scripts/verify/api-schema.sh                                                                                # 8 PASS, 0 FAIL
+```
+
+The 422 answer's `error` was `result_too_large` and its `message` `more than 5 rows match; narrow
+the filters (cursors arrive in phase 007)`.
+
+**Measured**, 2026-11-27: the site step 16.0 s, inside the deploy that added the products.
 
 ---
 
 ## Failure modes / incidents
 
-- None yet.
+- **2026-11-27, `currency_master`'s first run on the live stack.** Its `fetch` exited 1 with
+  `OSError: [Errno 9] Bad file descriptor`: a defect of the fetch on a host that closes the
+  connection after the body, not of the source ([connector-failure.md](./connector-failure.md)
+  section 4). With no build, its `maintain` then exited 1 reading a dbt output not built yet
+  (`TABLE_OR_VIEW_NOT_FOUND`); it now skips such an output as `not built yet` and names it in
+  `notBuilt` ([`docker/lake/maintain.py`](../../docker/lake/maintain.py)). Both fixes shipped in
+  `v3.0.0-alpha.4-rc.3-48ad71fba732`, after which the run passed in 48 s.
 
 ---
 
 **Last verified:** sections 1 to 3 on 2026-11-27 against the working tree of the phase 002 and 003
-branch, no container started; sections 4 to 7: not yet: first run after the deploy of this release.
+branch, no container started. Sections 4 to 7 on 2026-11-27 on the live stack (releases
+`v3.0.0-alpha.4-rc.2-e2dcf759de67` and `v3.0.0-alpha.4-rc.3-48ad71fba732`), but `make
+principals-status`, `make release-diff`, the run-record query, the product's own catalog page and
+`/v1/products/<domain>/<product>`: not yet.
