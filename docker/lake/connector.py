@@ -6,6 +6,9 @@ docs/development/phase-001-interfaces.md, "The fetch container" and the bronze n
     connector.py audit   --release <id> --product <domain>.<product> --run-id <dagId>/<runId>
     connector.py publish --release <id> --product <domain>.<product> --run-id <dagId>/<runId>
 
+A pipeline whose connector kind is kafka runs kafka.py's flows instead (task_of; its docstring):
+no spool, the topic in place of the landing bucket. Everything below is the file kind's.
+
 --release defaults to $K2_RELEASE. Each reads the product's compiled/products/<product>/pipeline.json
 from /k2/releases/<id>/ and the run's spool entry /spool/<dagId>/<runId>/ that fetch.py left
 (raw.<format>, fetch.json, and rows.jsonl unless the parse failed). The batch id is the run id.
@@ -111,6 +114,7 @@ class Run:
     product: str
     run_id: str  # <dagId>/<runId>: the batch id too
     pipeline: dict
+    accept_data_loss: bool = False  # kafka load only: resume below the log start, the gap recorded
 
     @property
     def entry(self) -> Path:
@@ -612,18 +616,43 @@ def parse_args(argv: list[str] | None, read_pipeline) -> tuple[str, Run]:
     ap.add_argument("--release", default=os.environ.get("K2_RELEASE"))
     ap.add_argument("--product", required=True)
     ap.add_argument("--run-id", required=True, help="<dagId>/<runId>")
+    ap.add_argument("--accept-data-loss", action="store_true",
+                    help="kafka load: partitions below the log start resume there, the gap recorded")
     a = ap.parse_args(argv)
     dag_id, _, run_name = a.run_id.partition("/")
     if not (a.release and RELEASE_ID.fullmatch(a.release) and PRODUCT_ID.fullmatch(a.product)
             and RUN_NAME.fullmatch(run_name)):
         ap.error("--release, --product or --run-id is not a plain name")
     pipeline = read_pipeline(RELEASES / a.release / "compiled" / "products" / a.product / "pipeline.json")
-    if (pipeline.get("connector") or {}).get("kind") != "https-file" or dag_id != pipeline["dagId"]:
-        ap.error(f"{a.product} has no https-file connector, or the run is not of DAG {pipeline['dagId']}")
-    return a.task, Run(release=a.release, product=a.product, run_id=a.run_id, pipeline=pipeline)
+    kind = (pipeline.get("connector") or {}).get("kind")
+    if kind not in KINDS or dag_id != pipeline["dagId"]:
+        ap.error(f"{a.product} has no {' or '.join(KINDS)} connector, or the run is not of DAG {pipeline['dagId']}")
+    if a.accept_data_loss and (kind != "kafka" or a.task != "load"):
+        ap.error("--accept-data-loss is for a kafka product's load only")
+    return a.task, Run(release=a.release, product=a.product, run_id=a.run_id, pipeline=pipeline,
+                       accept_data_loss=a.accept_data_loss)
 
 
 TASKS = {"load": load, "audit": audit, "publish": publish}
+KINDS = ("https-file", "kafka")
+
+
+def task_of(task: str, kind: str):
+    """The task's flow for the connector kind: the file kind's here, the Kafka kind's in kafka.py."""
+    if kind == "kafka":
+        import kafka  # not at the top: kafka.py imports this module
+
+        return kafka.TASKS[task]
+    return TASKS[task]
+
+
+def shells(spark, pipeline: dict) -> tuple:
+    """The flows' two arguments over the real systems: the landing bucket or the topic, and the lake."""
+    if pipeline["connector"]["kind"] == "kafka":
+        import kafka
+
+        return kafka.SparkKafka(spark, pipeline["connector"]), kafka.SparkLanding(spark, pipeline["connector"]["registry"])
+    return Landing(), SparkLake(spark)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -633,7 +662,7 @@ def main(argv: list[str] | None = None) -> int:
     spark = lake_session(f"k2-connector-{task}-{run.pipeline['fence']}")
     code, result = EXIT_ERROR, {}
     try:
-        code, result = TASKS[task](run, Landing(), SparkLake(spark))
+        code, result = task_of(task, run.pipeline["connector"]["kind"])(run, *shells(spark, run.pipeline))
     except Refused as e:
         print(f"{task} refused: {e}", file=sys.stderr)
         code = EXIT_REFUSED
