@@ -38,10 +38,10 @@ INPUT = w.Input("fx.ecb-fx.rates", "fx.ecb_fx__base.rates", True, "audited", "ec
 UUID = "0123abcd-0000-4000-8000-000000000000"
 
 
-def ctx(run="access_canary/r1", inputs=(INPUT,), outputs=((OUT, VIEW),)):
+def ctx(run="access_canary/r1", inputs=(INPUT,), outputs=((OUT, VIEW),), incremental=False):
     return w.Ctx(RELEASE, Path(f"/k2/releases/{RELEASE}"), "governance.access-canary", run, "governance", "access_canary",
-                 "dbt_access_canary", "pub_access_canary", tuple(w.Output(r, v, ("region",)) for r, v in outputs), tuple(inputs),
-                 datetime.now(timezone.utc))
+                 "dbt_access_canary", "pub_access_canary", tuple(w.Output(r, v, ("region",), (), incremental) for r, v in outputs),
+                 tuple(inputs), datetime.now(timezone.utc))
 
 
 class Crash(BaseException):
@@ -84,6 +84,12 @@ class Fake:
         self.input_at = datetime.now(timezone.utc) - timedelta(minutes=30)  # every input's audited commit
         self.commit_reads: list[tuple[str, int]] = []
         self.extra_results: list[dict] = []  # more of dbt's run_results, a warn among them
+        self.file_counts: dict[str, dict] = {}  # each table's `$files` counts at main, as Live.files gives them
+        self.optimized: list[tuple[str, str]] = []  # (table, client tag) of each optimize
+        self.optimize_error: str | None = None  # Trino refuses the optimize
+        self.optimize_commits = True  # an optimize with nothing to rewrite commits nothing
+        self.compaction: dict = {}  # overrides of the optimize's snapshot: a forged one
+        self.after_optimize = None
 
     # -- set-up
     def seed(self, rel=OUT, cols=V1, tagged=True, record=True):
@@ -97,10 +103,12 @@ class Fake:
             self.views[v.relation] = {c: cols[c] for c in v.columns if c in cols}
         return sid
 
-    def _snap(self, rel, cols, passed, query_id=None):
+    def _snap(self, rel, cols, passed, query_id=None, **summary):
         sid = next(self.ids)
-        self.meta[sid] = {"committed_at": datetime.now(timezone.utc), "query_id": query_id}
         t = self.tables.setdefault(rel, {"snaps": {}, "schema": None, "main": None, "tag": None})
+        self.meta[sid] = {"committed_at": datetime.now(timezone.utc), "query_id": query_id, "parent": t["main"],
+                          "operation": "append", "records": "12", "position_deletes": "2", "equality_deletes": "0",
+                          "data_files": "3", "delete_files": "2", **summary}
         t["snaps"][sid] = (dict(cols), passed)
         t["schema"], t["main"] = dict(cols), sid
         return sid
@@ -148,6 +156,30 @@ class Fake:
 
     def running(self):
         return sorted(self.orphans)
+
+    def files(self, rel, partitioned):
+        assert partitioned  # every output of ctx() is partitioned by region
+        return dict(self.file_counts.get(rel, {"data": 1, "small": 1, "partitions": 1, "deletes": 0}))
+
+    def optimize(self, rel, tag):
+        """Trino's optimize: one `replace` of main under the statement's client tag, the rows a
+        position delete hid dropped, every delete file gone; `compaction` forges its snapshot."""
+        self.optimized.append((rel, tag))
+        if self.optimize_error:
+            raise RuntimeError(self.optimize_error)
+        qid = self.query(tag)
+        if self.optimize_commits:
+            t = self.tables[rel]
+            cols, passed = t["snaps"][t["main"]]
+            m = self.meta[t["main"]]
+            rows = str(int(m["records"]) - int(m["position_deletes"]))
+            self._snap(rel, cols, passed, **{"query_id": qid, "operation": "replace", "records": rows, "position_deletes": "0",
+                                             "data_files": "1", "delete_files": "0", **self.compaction})
+            self.file_counts[rel] = {"data": 1, "small": 1, "partitions": 1, "deletes": 0}
+            self.check()
+        if self.after_optimize:
+            self.after_optimize(self)
+        return qid
 
     def committed(self, rel, sid):
         self.commit_reads.append((rel, sid))
@@ -953,6 +985,187 @@ def test_the_live_commit_time_reads_the_inputs_own_warehouse(monkeypatch):
     assert opened == ["k2", "fx"] and read == [("kraken_trades", "bronze"), ("ecb_fx__base", "rates"), ("ecb_fx__base", "rates")]
     with pytest.raises(w.Refused):
         live.committed('fx.a"b.c', 7)
+
+
+# ---- W0-9: compaction after the tests, the one write accepted on top of the tested snapshot -------
+
+DUE = {"data": 13, "small": 13, "partitions": 1, "deletes": w.COMPACT_DELETE_FILES}
+
+
+def compacting():
+    """A tagged output whose files make the next build compact it; `tested` collects main after dbt."""
+    fake = Fake()
+    fake.seed()
+    fake.file_counts[OUT] = dict(DUE)
+    fake.tested = []
+    fake.after_dbt = lambda f: f.tested.append(f.tables[OUT]["main"])
+    return fake
+
+
+def audited_row(fake, run="access_canary/r1"):
+    (row,) = [r for r in fake.records if r["run_id"] == run and r["event"] == "audited"]
+    return row
+
+
+def test_this_runs_compaction_of_the_tested_snapshot_is_what_the_tag_moves_to_and_reconcile_keeps_it():
+    fake = compacting()
+    s0, xcom = fake.tables[OUT]["tag"], {}
+    assert w.run(ctx(incremental=True), fake, xcom) == (0, [])
+    t, (tested,) = fake.tables[OUT], fake.tested
+    main = t["main"]
+    assert t["tag"] == main != tested and fake.meta[main]["operation"] == "replace" and fake.meta[main]["parent"] == tested
+    assert fake.optimized == [(OUT, fake.tags[-1])] and fake.meta[main]["query_id"] in fake.tagged(fake.tags[-1])
+    (changes,) = fake.commits  # the existing compare-and-set, on the compaction
+    assert changes[0]["requirements"] == [{"type": "assert-ref-snapshot-id", "ref": "main", "snapshot-id": main},
+                                          {"type": "assert-ref-snapshot-id", "ref": "audited", "snapshot-id": s0}]
+    report = {"files": [3, 1], "deleteFiles": [2, 0]}
+    assert xcom == {"compacted": [{"table": OUT, **report}]}
+    row = audited_row(fake)
+    assert row["snapshot_after"] == main and json.loads(row["detail"]) == {"compacted": report}
+    assert state(fake) == "complete" and fake.violations == []
+    n, m = len(fake.statements), len(fake.records)
+    w.reconcile(ctx(run="access_canary/r2", incremental=True), fake)  # the next build's reconcile changes nothing
+    assert (len(fake.statements), len(fake.records), fake.tables[OUT]["main"]) == (n, m, main)
+
+
+@pytest.mark.parametrize("forged", [
+    {"parent": 999}, {"parent": None},  # on another snapshot than the tested one
+    {"operation": "append"}, {"operation": "overwrite"}, {"operation": "delete"},  # rows written, not files rewritten
+    {"records": "9"}, {"position_deletes": "1"},  # a row lost or gained
+    {"equality_deletes": "1"}, {"records": None},  # rows no summary counts
+    {"query_id": ORPHAN}, {"query_id": None}])  # another statement's commit
+def test_any_other_snapshot_on_top_of_the_tested_one_is_refused_rolled_back_and_never_tagged(forged):
+    fake = compacting()
+    s0, xcom = fake.tables[OUT]["tag"], {}
+    fake.compaction = forged
+    assert w.run(ctx(incremental=True), fake, xcom)[0] == 3 and xcom == {}
+    (tested,) = fake.tested
+    assert ("builder", f"ALTER TABLE {k2.quote_relation(OUT)} EXECUTE rollback_to_snapshot({tested})") in fake.statements
+    assert fake.tables[OUT]["main"] == tested and fake.tables[OUT]["tag"] == s0 and fake.commits == []
+    assert "audited" not in [e for e, _ in events(fake, "access_canary/r1")] and fake.leaks() == []
+    fake.compaction, fake.after_dbt = {}, None
+    assert w.run(ctx(run="access_canary/r2", incremental=True), fake) == (0, [])  # reconciled, then published
+    assert fake.drift()["differences"] == [] and fake.violations == []
+
+
+def test_a_write_under_the_runs_own_client_tag_after_the_compaction_is_refused_and_rolled_back():
+    # finding 5: built_here passes any commit by a statement carrying the run's client tag; after the
+    # tests only the run's own compaction is, and an append on top of it under the same tag is not
+    fake = compacting()
+    s0 = fake.tables[OUT]["tag"]
+    fake.after_optimize = lambda f: f._snap(OUT, V1, False, f.query(f.tags[-1]))
+    assert w.run(ctx(incremental=True), fake)[0] == 3
+    assert fake.tables[OUT]["main"] == fake.tested[0] and fake.tables[OUT]["tag"] == s0 and fake.commits == [] and fake.leaks() == []
+
+
+def refuse_files(rel, partitioned):
+    raise RuntimeError("Column 'partition' cannot be resolved")
+
+
+@pytest.mark.parametrize("how,why", [("refused", "RuntimeError: Access Denied: Cannot execute table procedure OPTIMIZE"),
+                                     ("nothing", "optimize rewrote nothing"),
+                                     ("files", "RuntimeError: Column 'partition' cannot be resolved")])
+def test_an_optimize_that_fails_or_commits_nothing_publishes_the_tested_snapshot_and_says_why(how, why):
+    fake = compacting()
+    if how == "refused":
+        fake.optimize_error = why.removeprefix("RuntimeError: ")
+    elif how == "nothing":
+        fake.optimize_commits = False
+    else:
+        fake.files = refuse_files
+    xcom = {}
+    assert w.run(ctx(incremental=True), fake, xcom) == (0, [])
+    assert fake.tables[OUT]["tag"] == fake.tables[OUT]["main"] == fake.tested[0]
+    assert xcom == {"compactionSkipped": [{"table": OUT, "why": why[:w.COMPACTION_WHY_CHARS]}]}
+    assert json.loads(audited_row(fake)["detail"]) == {"compactionSkipped": why[:w.COMPACTION_WHY_CHARS]}
+    assert fake.violations == []
+
+
+def test_a_table_model_is_never_compacted_whatever_its_files():
+    fake = compacting()
+    fake.file_counts[OUT] = {"data": 500, "small": 500, "partitions": 1, "deletes": 500}
+    xcom = {}
+    assert w.run(ctx(), fake, xcom) == (0, []) and xcom == {} and fake.optimized == []
+    assert "detail" not in audited_row(fake)
+
+
+S, D = w.COMPACT_SMALL_FILES, w.COMPACT_DELETE_FILES
+
+
+@pytest.mark.parametrize("files,due", [
+    ({"data": 1, "small": 1, "partitions": 1, "deletes": 0}, False),
+    ({"data": S, "small": S, "partitions": 1, "deletes": D - 1}, False),  # one under each
+    ({"data": S + 1, "small": S + 1, "partitions": 1, "deletes": 0}, True),
+    ({"data": 2, "small": 2, "partitions": 1, "deletes": D}, True),
+    ({"data": 400, "small": 20 + S - 1, "partitions": 20, "deletes": 0}, False),  # a file a day, a day's builds short
+    ({"data": 400, "small": 20 + S, "partitions": 20, "deletes": 0}, True)])
+def test_compaction_is_due_only_at_its_thresholds_and_a_skip_records_nothing(files, due):
+    assert (w.needs_compaction(files) is not None) == due
+    fake = Fake()
+    fake.seed()
+    fake.file_counts[OUT] = files
+    xcom = {}
+    assert w.run(ctx(incremental=True), fake, xcom) == (0, [])
+    assert bool(fake.optimized) == due and set(xcom) == ({"compacted"} if due else set())
+    assert ("detail" in audited_row(fake)) == due
+
+
+def test_a_degraded_publish_beside_a_skipped_compaction_keeps_its_detail_whole():
+    fake = compacting()
+    fake.optimize_error = "Access Denied: " + "x" * 500
+    fake.extra_results = [warn(f"test.k2.held_rows_zero_{n}." + "x" * 300) for n in range(7)]
+    assert w.run(ctx(incremental=True), fake)[0] == 0
+    detail = audited_row(fake)["detail"]
+    assert len(detail) <= 1000 and json.loads(detail)["degraded"] is True  # k2runs.record keeps 1000
+    assert len(json.loads(detail)["compactionSkipped"]) == w.COMPACTION_WHY_CHARS and state(fake) == "degraded"
+
+
+def test_a_crash_between_the_compaction_and_the_tag_commit_leaves_the_tag_and_the_next_run_publishes():
+    fake = compacting()
+    s0 = fake.tables[OUT]["tag"]
+    fake.crash = "narrow"
+    with pytest.raises(Crash):
+        w.run(ctx(incremental=True), fake)
+    assert fake.tables[OUT]["tag"] == s0 and fake.violations == []
+    fake.crash = None
+    assert w.run(ctx(run="access_canary/r2", incremental=True), fake) == (0, [])
+    t = fake.tables[OUT]
+    assert t["tag"] == t["main"] and fake.drift()["differences"] == [] and fake.violations == []
+
+
+def test_only_an_output_whose_model_is_incremental_is_compacted():
+    marked = w.ctx_from(RELEASE, Path("/r"), "governance.access-canary", "access_canary/r1", PIPELINE, VIEWS, {}, SCHEMAS,
+                        frozenset({"events"}))
+    assert marked.outputs[0].incremental and not ctx_from().outputs[0].incremental
+
+
+def test_the_live_compaction_reads_files_and_snapshots_and_optimizes_under_the_runs_tag():
+    live = object.__new__(w.Live)
+    live.ctx, asked = ctx(), []
+    rows = {"$files": [(5, 4, 2, 3)], "$snapshots": [("t", "q", 7, "replace", "10", "0", "0", "1", "0")]}
+    live.query = lambda role, sql, params=None: (asked.append((role, sql)), ([r for k, r in rows.items() if k in sql][0], []))[1]
+    assert live.files(OUT, True) == {"data": 5, "small": 4, "partitions": 2, "deletes": 3}
+    assert live.files(OUT, False)["partitions"] == 2
+    assert '"partition"' in asked[0][1] and "THEN 1 END" in asked[1][1] and k2.quote_relation(OUT + "$files") in asked[0][1]
+    assert live.snapshot(OUT, 8) == {"committed_at": "t", "query_id": "q", "parent": 7, "operation": "replace", "records": "10",
+                                     "position_deletes": "0", "equality_deletes": "0", "data_files": "1", "delete_files": "0"}
+    assert {r for r, _ in asked} == {"builder"}
+    sent = []
+
+    class Cursor:
+        query_id = "20261128_000000_00001_optim"
+
+        def execute(self, sql):
+            sent.append(sql)
+
+        def fetchall(self):
+            return [[1]]
+    live.connect = lambda role, client_tags=None: (sent.append((role, client_tags)), types.SimpleNamespace(cursor=Cursor))[1]
+    tag = "k2-dbt-" + "c" * 32
+    assert live.optimize(OUT, tag) == Cursor.query_id
+    assert sent == [("builder", [tag]), f"ALTER TABLE {k2.quote_relation(OUT)} EXECUTE optimize(file_size_threshold => '64MB')"]
+    Cursor.query_id = "x' OR 1=1"
+    assert live.optimize(OUT, tag) is None  # an id no commit can be held to
 
 
 # ---- trust boundaries --------------------------------------------------------------------------
