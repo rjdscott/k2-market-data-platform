@@ -4,7 +4,7 @@ against what one release generates. Run from inside the catalog's network, the o
 answers once the fence is up (ADR-059 part 7): the `tools` one-shot, or a throwaway lake's tools
 container (scripts/lib/throwaway-lake.sh py).
 
-    catalog_drift.py --release <release dir> [--catalog <uri>] [--out <result.json>]
+    catalog_drift.py --release <release dir> [--left-by <release dir>]... [--catalog <uri>] [--out <result.json>]
 
 <uri> defaults to $K2_CATALOG_URI, else http://lakekeeper:8181/catalog. What the release generates:
 
@@ -37,10 +37,22 @@ container (scripts/lib/throwaway-lake.sh py).
   mid-change for a moment); run without one, as the CLI is, each tag prints a SKIP line saying so,
   never a pass, and every namespace of the release is checked.
 
-Exits 0 when the catalog equals the release (PENDING and SKIP lines allowed), 1 naming every
-difference on a DRIFT line, 2 when the catalog cannot be reached or the release cannot be read.
+--left-by names a release deployed or attempted since the one that is live (scripts/deploy.py's
+left_by(), from the deploy log; $K2_DRIFT_LEFT_BY, comma-separated, when none is given, so the
+live access suite's drift row sees the same). Its ddl step is additive and nothing undoes it
+(ADR-058 drops nothing), so after a rollback the namespaces it made are still there. A namespace
+--release does not declare and a --left-by release does (same warehouse and name) is a LEFT line,
+not drift, and so is each table and view in it that the same release declares (a table as a table,
+a view as a view with the same owner, read from its compiled files alone: this image's k2gen may
+not read a newer release's documents); anything else in it, and anything undeclared in a namespace
+of --release (a table planted beside a live base), is still DRIFT. Safe because the live rules
+name relations by exact name (emit/trino_rules.exact) and default deny: no rule of a release names
+a namespace it does not declare, so under it no principal reads what is LEFT.
+
+Exits 0 when the catalog equals the release (PENDING, SKIP and LEFT lines allowed), 1 naming every
+difference on a DRIFT line, 2 when the catalog cannot be reached or a release cannot be read.
 The JSON result, for the deploy record, is {release, catalog, at, exit, differences, pending,
-skipped}. Stdlib and k2gen only; no secret is involved, since the catalog has no authentication.
+skipped, left}. Stdlib and k2gen only; no secret is involved, since the catalog has no authentication.
 """
 
 from __future__ import annotations
@@ -63,6 +75,9 @@ from typing import Any
 OWNER_PROPERTY = "trino.run-as-owner"  # where Trino's Iceberg REST views keep a definer view's owner
 CATALOG_URI = "http://lakekeeper:8181/catalog"  # emit/trino_etc.CATALOG_URI, Lakekeeper's name on k2-catalog
 RESULTS_TABLE = "dq_test_results"  # dbt/macros/k2_results.sql: the builder's test results, beside its outputs
+LEFT_ENV = "K2_DRIFT_LEFT_BY"  # --left-by's default, comma-separated release directories
+NOTHING_READS = ("nothing reads it under the live rules: they name relations by exact name and deny the rest, "
+                 "and no rule of the live release names a namespace it does not declare")
 _TOKEN = re.compile(r"'(?:[^']|'')*'|\"(?:[^\"]|\"\")*\"|[A-Za-z0-9_$]+|\S")
 
 
@@ -265,19 +280,67 @@ def expected(release: Path) -> dict[str, Any]:
             "results": results, "sql": generated_sql, "release": release.name}
 
 
+def left_by(release: Path) -> dict[str, Any]:
+    """What a release declares, from its compiled files alone: its namespaces, its tables (each
+    retention location, seeds' and bases' included, each view's base, RESULTS_TABLE in each base
+    namespace) and its views with their owners, each keyed (warehouse, namespace[, name])."""
+    from k2gen import model
+
+    def read(path: str, none: Any) -> Any:  # a release from before the file declares none of what it lists
+        return json.loads((release / path).read_text()) if (release / path).is_file() else none
+
+    if not (release / "manifest.json").is_file():
+        raise ValueError(f"--left-by {release}: not a release directory")
+    views = read(model.VIEWS, {"views": []})["views"]
+    namespaces = {(w["name"], ns) for w in read(model.STORAGE_PLAN, {"warehouses": []})["warehouses"] for ns in w["namespaces"]}
+    tables = {tuple(x.split(".")) for x in read(model.RETENTION, {})} | {tuple(v["base"].split(".")) for v in views}
+    tables |= {(w, ns, RESULTS_TABLE) for w, ns in namespaces if ns.endswith(model.BASE_SUFFIX)}
+    return {"id": release.name, "namespaces": namespaces, "tables": tables,
+            "views": {tuple(v["relation"].split(".")): v["owner"] for v in views}}
+
+
 def drift(uri: str, want: dict[str, Any], newest_audited: Callable[[str], int | None] | None = None,
-          only: Collection[tuple[str, str]] | None = None) -> dict[str, list[str]]:
+          only: Collection[tuple[str, str]] | None = None, left: list[dict[str, Any]] | None = None) -> dict[str, list[str]]:
     """Every difference between the catalog and `want` (expected()), as named lines. With
     newest_audited (a table's newest audited run record, k2runs.newest_audited), each tag is held
     to it; without, each tag is a SKIP line. `only` limits the check to those (warehouse,
     namespace) pairs: the dbt wrapper's own product's reader and base namespaces, since another
     product's run, concurrent with it, plants dbt's transient tables in its base namespace, moves
     its tags before their audited rows and holds its views narrowed between the tag commit and the
-    widen, each a difference here for that moment. None checks the whole release (release-verify)."""
-    found: dict[str, list[str]] = {"differences": [], "pending": [], "skipped": []}
+    widen, each a difference here for that moment. None checks the whole release (release-verify). `left`: left_by() of each release deployed
+    or attempted since the live one; None reads them from $K2_DRIFT_LEFT_BY."""
+    found: dict[str, list[str]] = {"differences": [], "pending": [], "skipped": [], "left": []}
+    if left is None:
+        left = [left_by(Path(p)) for p in os.environ.get(LEFT_ENV, "").split(",") if p]
 
     def diff(line: str) -> None:
         found["differences"].append(line)
+
+    def leave(kind: str, name: str, by: str, why: str = NOTHING_READS) -> None:
+        found["left"].append(f"LEFT {kind} {name}: declared by {by}, a release deployed or attempted since the one "
+                             f"that is live; {why}")
+
+    def left_namespace(cat: Catalog, w: str, ns: str) -> None:
+        """A namespace only a --left-by release declares: each table and view in it LEFT when one of
+        those releases declares it as that kind (a view with the same owner), else DRIFT."""
+        by = [x for x in left if (w, ns) in x["namespaces"]]
+        if not by:
+            diff(f"DRIFT namespace {w}.{ns}: the release declares no such namespace")
+            return
+        leave("namespace", f"{w}.{ns}", by[0]["id"])
+        for t in sorted(cat.tables(ns)):
+            if who := next((x["id"] for x in by if (w, ns, t) in x["tables"]), None):
+                leave("table", f"{w}.{ns}.{t}", who)
+            else:
+                diff(f"DRIFT table {w}.{ns}.{t}: in {w}.{ns}, which {by[0]['id']} left, and no release declares such a table")
+        for v in sorted(cat.views(ns)):
+            owner = ((cat.view(ns, v) or {}).get("properties") or {}).get(OWNER_PROPERTY)
+            if who := next((x["id"] for x in by if (w, ns, v) in x["views"] and x["views"][w, ns, v] == owner), None):
+                leave("view", f"{w}.{ns}.{v}", who, f"its owner {owner} and its readers' groups are in no rule of the live "
+                      f"release, so no reader can select from it ({NOTHING_READS})")
+            else:
+                diff(f"DRIFT view {w}.{ns}.{v}: in {w}.{ns}, which {by[0]['id']} left, and no release declares such a view "
+                     f"(it claims owner {owner!r})")
 
     def mine(w: str, ns: str) -> bool:
         return only is None or (w, ns) in only
@@ -288,7 +351,7 @@ def drift(uri: str, want: dict[str, Any], newest_audited: Callable[[str], int | 
         cat = Catalog(uri, w)
         present = set(cat.namespaces())
         for ns in sorted(present - want["namespaces"][w]) if only is None else ():
-            diff(f"DRIFT namespace {w}.{ns}: the release declares no such namespace")
+            left_namespace(cat, w, ns)
         for ns in sorted(ns for ns in want["namespaces"][w] - present if mine(w, ns)):
             diff(f"DRIFT namespace {w}.{ns}: missing; the release's storage plan declares it")
         # A product has published once any of its outputs carries a tag or a view.
@@ -378,27 +441,29 @@ def drift(uri: str, want: dict[str, Any], newest_audited: Callable[[str], int | 
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--release", required=True, type=Path, help="a compiled release directory (a pointer resolves once)")
+    ap.add_argument("--left-by", action="append", type=Path, help="a release deployed or attempted since the live one "
+                    f"(repeatable; default ${LEFT_ENV}, comma-separated)")
     ap.add_argument("--catalog", default=os.environ.get("K2_CATALOG_URI", CATALOG_URI), help="the catalog's REST root, .../catalog")
     ap.add_argument("--out", type=Path, help="write the JSON result here")
     a = ap.parse_args(argv)
     release = a.release.resolve()
     result: dict[str, Any] = {"release": release.name, "catalog": a.catalog, "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
     try:
-        found = drift(a.catalog, expected(release))
+        found = drift(a.catalog, expected(release), left=None if a.left_by is None else [left_by(p.resolve()) for p in a.left_by])
     except Unreachable as e:
         print(f"catalog_drift: the catalog is unreachable at {a.catalog}: {e}", file=sys.stderr)
-        found, result["error"] = {"differences": [], "pending": [], "skipped": []}, f"unreachable: {e}"
+        found, result["error"] = {"differences": [], "pending": [], "skipped": [], "left": []}, f"unreachable: {e}"
         code = 2
     except (OSError, ValueError, KeyError) as e:
         print(f"catalog_drift: cannot read release {release}: {e}", file=sys.stderr)
-        found, result["error"] = {"differences": [], "pending": [], "skipped": []}, f"release: {e}"
+        found, result["error"] = {"differences": [], "pending": [], "skipped": [], "left": []}, f"release: {e}"
         code = 2
     else:
-        for line in found["differences"] + found["pending"] + found["skipped"]:
+        for line in found["differences"] + found["pending"] + found["skipped"] + found["left"]:
             print(line)
         n = len(found["differences"])
         print(f"catalog_drift: {release.name}: " + (f"{n} difference(s)" if n else "clean, the catalog equals the release")
-              + f"; {len(found['pending'])} pending, {len(found['skipped'])} skipped")
+              + f"; {len(found['pending'])} pending, {len(found['skipped'])} skipped, {len(found['left'])} left")
         code = 1 if n else 0
     if a.out:
         a.out.parent.mkdir(parents=True, exist_ok=True)

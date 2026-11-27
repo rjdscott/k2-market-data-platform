@@ -25,7 +25,9 @@ as phase 002's wrapper will (access_verify.py stage) and release-verify with S20
 S13's identity.sh; a planted view the drift check names; a rules-only release that restarts nothing; a
 stand-in's new image recreating only it; a forced mismatch restoring R-1, images included, exit 1;
 `make rollback`, also with Trino stopped; a release dropping a masked column, a reader polling every 50 ms throughout; a SIGKILL
-after each step, then a rerun; two deploys at once; the backup-set refusal (review M4) on a real table.
+after each step, then a rerun; a release adding a product R1 was cut without (quality-results), first
+with a forced mismatch (exit 1, its namespaces LEFT, a plant beside them still DRIFT), then for real
+(FAST too); two deploys at once; the backup-set refusal (review M4) on a real table.
 The cutover run starts from TODAY's shape (Trino on HTTP from the checkout's etc, Lakekeeper on the
 shared network with a host port, a stand-in capture), follows docs/runbooks/first-cutover-to-releases.md,
 measures each service's downtime, proves the capture untouched, then rolls the whole cutover back.
@@ -78,6 +80,11 @@ EVENTS, PRODUCT = f"{CANARY}/events.odcs.yaml", f"{CANARY}/product.odps.yaml"
 MODEL_SQL, EXPECT = f"{CANARY}/models/events.sql", "tests/access/expectations.yaml"
 VIEW = "governance.access_canary.events"
 RUN_RECORD = "governance_build.run_records.run_record"
+# A dbt-only product nothing reads: R1 is cut without it and section 7b brings it back, so one release
+# of the chain ADDS a product (its builder and publisher unknown to the live rules until the swap).
+ADDED, ADDED_VIEW = "contracts/governance/quality-results", "governance.quality_results.test_results"
+ADDED_PRINCIPALS = ("dbt_quality_results", "pub_quality_results")
+ADDED_NAMESPACES = ("governance.quality_results", "governance.quality_results__base")
 RESULTS: list[tuple[str, bool, str]] = []
 CODE = ("platform/k2gen/k2gen", "platform/k2gen/pyproject.toml", "platform/k2gen/uv.lock", "platform/runs",
         "contracts", "dbt", "docker/tools", "scripts/deploy.py", "scripts/principal-secret.py",
@@ -318,11 +325,12 @@ def scratch_repo(compose_text: str) -> None:
     sh("git", "-C", str(CLONE), "config", "user.email", "rehearsal@example.org")
 
 
-def real_secrets() -> None:
+def real_secrets(skip: tuple[str, ...] = ()) -> None:
     """The CA and Trino's certificate by scripts/tls.sh; each service principal's password by
-    `make password TO_FILE=1`; the canary's people by principal-secret.py's own locked write."""
+    `make password TO_FILE=1`; the canary's people by principal-secret.py's own locked write.
+    `skip`: principals of a product the scratch tree does not hold yet (its password comes with it)."""
     sh("bash", str(CLONE / "scripts/tls.sh"), "init", env=env())
-    ids = sorted(ps.known()[0])  # principal-secret.py's own: the declared ones, and each dbt product's builder and publisher
+    ids = sorted(set(ps.known()[0]) - set(skip))  # principal-secret.py's own: the declared ones, and each dbt product's builder and publisher
     for pid in ids:
         if pid.startswith("p."):
             secret = secrets.token_urlsafe(32)
@@ -458,10 +466,11 @@ def emitters(old: bool) -> None:
 def rehearse() -> int:
     scratch_repo(COMPOSE.replace("STANDIN_IMAGE", ALPINE_A).replace("SPARK_IMAGE", SPARK))
     emitters(old=True)
+    added(False)
     dotenv()
-    real_secrets()
+    real_secrets(skip=ADDED_PRINCIPALS)
     t0 = time.monotonic()
-    r1 = cut("v0.0.1-rehearsal.1", "R1: the repository's own documents, the reader view in its old shape")
+    r1 = cut("v0.0.1-rehearsal.1", "R1: the repository's own documents but quality-results, the reader view in its old shape")
     check("make release compiles R1 at a scratch tag", (ROOT / r1 / "manifest.json").is_file(), f"{r1} in {time.monotonic() - t0:.0f} s")
     compose("up", "-d", "--wait", "prefect-db", "minio", "lakekeeper", "spark-iceberg", "capture-binance")  # running already, as live
     lake_setup(r1, f"{PROJECT}_k2-catalog")
@@ -629,6 +638,32 @@ def rehearse() -> int:
     check("through every kill and rerun the delayed reader never saw a note", not poller.leaks,
           f"{poller.polls} polls, {poller.errors} errors, shapes {poller.shapes}")
 
+    # 7b. a release that adds a product: its builder and publisher are unknown to the live rules until the
+    # swap, and its ddl (namespaces) stays behind a rollback, which drops nothing (the live failure of alpha.4-rc.1)
+    added(True)
+    for pid in ADDED_PRINCIPALS:  # the operator's step before deploying a new product (preflight requires them)
+        make("password", f"PRINCIPAL={pid}", "TO_FILE=1")
+    r8 = cut("v0.0.1-rehearsal.8", "R8: the quality-results product back")
+    was = live_release()
+    out = make("deploy", f"RELEASE={r8}", fault="verify-mismatch", check=False)
+    check("a release adding a product, verify forced to fail, rolls back with exit 1 (not 3)",
+          code(out) == 1 and live_release() == was,
+          next((x.strip()[:220] for x in out.stderr.splitlines() if "FAILED" in x and "verify-mismatch" not in x), ""))
+    out = make("release-verify", check=False)
+    left = [x.strip() for x in out.stderr.splitlines() if x.strip().startswith("LEFT namespace")]
+    check("release-verify on the rolled-back stack exits 0, the product's namespaces LEFT, not DRIFT",
+          code(out) == 0 and all(any(f"LEFT namespace {n}:" in x for x in left) for n in ADDED_NAMESPACES),
+          " | ".join(left)[:300] or next((x.strip()[:220] for x in out.stderr.splitlines() if "DRIFT" in x), ""))
+    q("dbt_access_canary", "CREATE TABLE governance_build.access_canary__base.planted (x integer)")
+    out = make("release-verify", check=False)
+    check("beside them, a table planted in a live namespace is still DRIFT",
+          code(out) == 1 and "DRIFT table governance.access_canary__base.planted" in out.stderr)
+    q("dbt_access_canary", "DROP TABLE governance_build.access_canary__base.planted")
+    out = make("deploy", f"RELEASE={r8}", check=False)
+    check("then R8 deploys: its view new in the plan, never read as its publisher before the swap, drift clean",
+          code(out) == 0 and f"new in this release: {ADDED_VIEW}" in out.stderr and "catalog drift check clean" in out.stderr,
+          next((x.strip()[:220] for x in out.stderr.splitlines() if "FAILED" in x or "new in this release" in x), ""))
+
     if not FAST:
         # 8. two deploys at once
         first = subprocess.Popen(["make", "-s", "-C", str(CLONE), "deploy", f"RELEASE={other}"], env=env(),
@@ -653,6 +688,24 @@ def rehearse() -> int:
               next((x.strip()[:220] for x in out7.stderr.splitlines() if "REFUSED" in x), ""))
     check("the stand-in capture was never restarted by any of it", started()["capture-binance"] == capture)
     return summary()
+
+
+ADDED_ROWS: list[str] = []  # (the line after them, then its access rows), while the product is out
+
+
+def added(present: bool) -> None:
+    """quality-results out of the scratch tree, its access rows with it, or back as the repository has
+    it, the rows where they were (the file has moved since: sections 3 and 6 edit it)."""
+    if present:
+        shutil.copytree(REPO / ADDED, CLONE / ADDED)
+        edit(EXPECT, ADDED_ROWS[0], "".join(ADDED_ROWS[1:]) + ADDED_ROWS[0], 1)
+        return
+    shutil.rmtree(CLONE / ADDED)
+    lines = (CLONE / EXPECT).read_text().splitlines(keepends=True)
+    rows = [i for i, x in enumerate(lines) if "quality_results" in x]
+    assert rows and rows == list(range(rows[0], rows[-1] + 1)), f"{EXPECT}: the product's rows are not one block"
+    ADDED_ROWS[:] = [lines[rows[-1] + 1], *(lines[i] for i in rows)]
+    (CLONE / EXPECT).write_text("".join(x for i, x in enumerate(lines) if i not in rows))
 
 
 def drop_note() -> None:

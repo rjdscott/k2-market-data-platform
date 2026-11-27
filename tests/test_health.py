@@ -24,6 +24,7 @@ case "$*" in
   "compose ps --format"*) echo "k2-redpanda healthy" ;;
   "compose ps --services --status running"*) echo "$RUNNING" ;;
   "compose config --format json"*) echo "$CONFIG" ;;
+  "compose --project-directory . -f $K2_RELEASES/pointers/trino/compose/docker-compose.yml config --format json") echo "$RELEASE_CONFIG" ;;
   "compose ps -q capture-"*) case " ${CAPTURES:-} " in *" ${4#capture-} "*) echo "cid-${4#capture-}" ;; esac ;;
   "inspect -f {{.State.Running}}"*) echo true ;;
   "inspect -f {{range"*) echo k2net ;;
@@ -85,6 +86,19 @@ def test_long_running_service_not_running(tmp_path, running, config, verdict):
     assert rc == (1 if verdict.startswith("FAIL") else 0), line
 
 
+# After a rollback the checkout's compose can name a service the live release lacks (k2-api, back on
+# alpha.3.2): with a live pointer the services expected are the live release's own compose's.
+@pytest.mark.parametrize("pointer, verdict", [(True, "PASS"), (False, "FAIL (not running: prometheus;")])
+def test_long_running_services_are_the_live_releases(tmp_path, pointer, verdict):
+    if pointer:
+        (tmp_path / "k2-releases/v1-0123456789ab").mkdir(parents=True)
+        (tmp_path / "k2-releases/pointers").mkdir()
+        (tmp_path / "k2-releases/pointers/trino").symlink_to("../v1-0123456789ab")
+    release = json.dumps({"name": "repo", "services": {"redpanda": {"restart": "unless-stopped"}}})
+    line, rc = run_health(tmp_path, prefix="(1) long-running services: ", RUNNING="redpanda", RELEASE_CONFIG=release)
+    assert line.split(": ", 1)[1].startswith(verdict) and rc == (verdict != "PASS"), line
+
+
 # Step (5): SKIP where `make backup-install` never ran; once the timer is there,
 # the age of the last success in STATUS.json (scripts/backup-lake.sh) decides.
 @pytest.mark.parametrize("timer, status, verdict", [
@@ -129,7 +143,7 @@ def run_health(tmp_path, prefix="(3) lake: ", host_registry=None, **env):
         # HOME too: the backup check reads ~/.config/systemd/user, and this host's own must not leak in.
         env={**os.environ, "PATH": f"{bin_}:{os.environ['PATH']}", "TOP": str(top), "HOME": str(tmp_path),
              "K2_BACKUP_DIR": str(tmp_path / "k2-backup"), "DOCKER_LOG": str(tmp_path / "docker.log"),
-             "CURL_LOG": str(tmp_path / "curl.log"),
+             "CURL_LOG": str(tmp_path / "curl.log"), "K2_RELEASES": str(tmp_path / "k2-releases"),
              "K2_HEALTH_WAIT": "0", "RUNNING": "redpanda prometheus", "CONFIG": CONFIG,
              # Every venue live unless a test says otherwise: step (2) fails a stopped one.
              "CAPTURES": " ".join(VENUES), "DELIVERED": delivered(), **env},

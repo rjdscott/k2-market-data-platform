@@ -21,6 +21,8 @@ import http.server
 import importlib.util
 import json
 import os
+import re
+import shutil
 import subprocess
 import sys
 import threading
@@ -53,6 +55,7 @@ else:
     from k2gen.emit.lake import create_view, view_update
 
     sys.path.insert(0, str(ROOT / "platform/k2gen/tests"))
+    import test_release
     from test_release import write_set  # the good fixture set as `k2gen docset` writes it
 
     def load(name: str, path: Path) -> Any:
@@ -74,6 +77,15 @@ else:
     VIEW = "sensor_net.station_readings.silver_readings"
     SILVER = "contracts/sensor-net/station-readings/silver_readings.odcs.yaml"
     GOOD = ROOT / "platform/k2gen/tests/fixtures/v2/good"
+    # The good set without ops-insight's daily-load (nothing reads it): the release after it ADDS a product,
+    # whose builder and publisher the rules loaded before the swap do not know.
+    DAILY_LOAD, NEW_VIEW = "contracts/ops-insight/daily-load", "ops_insight.daily_load.gold_daily_load"
+    WITHOUT_DAILY_LOAD = {
+        "tests/access/expectations.yaml": ["  - principal: svc.load-dashboard\n    table: ops_insight.daily_load.gold_daily_load\n"
+                                           "    via: [sql]\n    visible: [load_date, station_id, readings, mean_value]\n"
+                                           "    mustAppear: {minRows: 1}\n",
+                                           "  - {principal: svc.load-dashboard, table: ops_insight.daily_load__base.gold_daily_load, denied: true}\n"],
+        "contracts/access/principals.yaml": [f"  - id: {p}_daily_load\n    kind: service\n    owner: insight-team\n" for p in ("dbt", "pub")]}
 
     def compose_doc(standin: str = "alpine:3.20", lakekeeper: str = "quay.io/lakekeeper/catalog:v0.13.9") -> dict[str, Any]:
         return {"services": {
@@ -238,6 +250,7 @@ sys.exit(f"fake docker: no answer for {A}")
             self.suite: list[str] = []
             self.s20: Any = lambda rel: (["drift clean"], [])
             monkeypatch.setattr(deploy, "release_suite", lambda ctx, rel: self.suite.append(rel.id) or ["suite passed"])
+            self.real_s20 = deploy.s20_checks
             monkeypatch.setattr(deploy, "s20_checks", lambda ctx, rel: self.s20(rel))
             monkeypatch.setattr(deploy, "secrets_health", lambda ctx: None)  # its own test below
             self.fence_rc = 0  # scripts/verify/catalog-fence.sh, as verify runs it
@@ -267,12 +280,24 @@ sys.exit(f"fake docker: no answer for {A}")
             return [json.loads(x)[1:] for x in self.log.read_text().splitlines()] if self.log.exists() else []
 
         def release(self, compose: dict[str, Any] | None = None, over: dict[str, bytes] | None = None,
-                    images: dict[str, str] | None = None, lake_init: bool = True) -> Any:
+                    images: dict[str, str] | None = None, lake_init: bool = True, without_daily_load: bool = False) -> Any:
             """A sealed release of the good set with `over` laid on it, compiled against the newest one;
-            lake_init: it carries docker/lake/init-lake.sh, as every release since review R6 does."""
+            lake_init: it carries docker/lake/init-lake.sh, as every release since review R6 does;
+            without_daily_load: the set without that product, its two access rows and its principals."""
             self.n += 1
             over = ({"docker/lake/init-lake.sh": b"#!/bin/bash\n"} if lake_init else {}) | (over or {})
-            set_dir = write_set(self.tmp / f"set{self.n}", compose or compose_doc(), over)
+            if without_daily_load:
+                test_release.GOOD = self.tmp / f"good{self.n}"
+                shutil.copytree(GOOD, test_release.GOOD)
+                shutil.rmtree(test_release.GOOD / DAILY_LOAD)
+                for path, cut in WITHOUT_DAILY_LOAD.items():
+                    text = (test_release.GOOD / path).read_text()
+                    assert all(c in text for c in cut), path
+                    (test_release.GOOD / path).write_text(re.sub("|".join(map(re.escape, cut)), "", text))
+            try:
+                set_dir = write_set(self.tmp / f"set{self.n}", compose or compose_doc(), over)
+            finally:
+                test_release.GOOD = GOOD
             refs = {"trino": TRINO, "standin": A, "lakekeeper": LK, "lake-init": A, "tools": TOOLS} | (images or {})
             (self.tmp / f"images{self.n}.json").write_text(json.dumps(refs))
             kept = sorted((p for p in self.root.glob("v*")), key=lambda p: p.stat().st_mtime) if self.root.exists() else []
@@ -299,15 +324,28 @@ sys.exit(f"fake docker: no answer for {A}")
             live = deploy.k2release.read(self.root / "pointers" / "trino")
             return user == model.canary_user(live.manifest.set_sha256)
 
+        def knows(self, user: str) -> bool:
+            """Trino's `queries` rules: a principal no rule of the loaded release lets execute is refused
+            every statement, as the real one refuses a product's publisher under a release without it."""
+            try:
+                loaded = deploy.k2release.read(self.root / "pointers" / "trino")
+            except (ValueError, OSError):
+                return True  # no release loaded yet
+            rules = json.loads((loaded.root / "compiled/trino/rules.json").read_text())
+            return any(re.fullmatch(r["user"], user) for r in rules["queries"] if "execute" in r["allow"])
+
         def sql(self, ctx: Any, user: str, statement: str) -> dict[str, Any]:
             if self.down and "trino" not in self.ups():
                 raise deploy.k2tools.Unreachable("Connection refused")
+            if not self.knows(user):
+                raise deploy.k2tools.TrinoError("PERMISSION_DENIED", "Access Denied: Cannot execute query")
+            mine = "'silver_readings'" in statement  # VIEW's: no other view is published here
             if statement.startswith("SELECT column_name"):
-                return {"columns": [["column_name", "varchar"]], "rows": [[c] for c in self.views.get(VIEW, [])]}
+                return {"columns": [["column_name", "varchar"]], "rows": [[c] for c in self.views.get(VIEW, [])] if mine else []}
             if statement.startswith("SELECT * FROM"):
                 return {"columns": [[c, t] for c, t in self.tag.items()], "rows": []}
             if statement.startswith("SELECT view_definition"):
-                return {"columns": [["view_definition", "varchar"]], "rows": [[self.stored]] if VIEW in self.views else []}
+                return {"columns": [["view_definition", "varchar"]], "rows": [[self.stored]] if VIEW in self.views and mine else []}
             if statement.startswith("CREATE OR REPLACE VIEW"):
                 self.stored = statement.split(" SECURITY DEFINER AS ", 1)[1].replace(", ", "\n, ")  # Trino reformats
                 cols = self.stored.split("SELECT ", 1)[1].split(" FROM ")[0]
@@ -1243,3 +1281,104 @@ sys.exit(f"fake docker: no answer for {A}")
         assert any(x.startswith("  no drain: no Trino restart and no DAG's task list changes") for x in said)
         assert len(world.airflow_calls()) == 1  # no change that drains: Airflow not asked
         assert all(r["outcome"] == "ok" for r in records(world) if r["step"] == "drain")
+
+    # --- a release that adds a product (the first live deploy of alpha.4-rc.1, 2026-11-27) ----------
+
+    def test_a_view_new_in_the_target_is_never_read_as_its_publisher_before_its_rules_load(world: World) -> None:
+        r1 = world.release(without_daily_load=True)
+        world.live(r1)
+        r2 = world.release()
+        said: list[str] = []
+        world.ctx.say = said.append
+        assert NEW_VIEW in [v.relation for v in deploy.make_plan(world.ctx, r2, [r1]).views]
+        real, asked = world.sql, []
+        deploy.sql = lambda ctx, user, statement: asked.append((user, os.readlink(world.root / "pointers/trino"))) or real(ctx, user, statement)
+        assert world.deploy(r2) == 0, [x for x in said if "FAILED" in x]  # was views-narrow FAILED: PERMISSION_DENIED
+        assert ("pub_daily_load", f"../{r1.id}") not in asked, asked  # never as its publisher under r1's rules
+        assert ("pub_daily_load", f"../{r2.id}") in asked  # views-widen asks, once r2's rules are loaded
+        assert any(x.startswith(f"  {NEW_VIEW}: not in {r1.id}, so the rules loaded now do not know its publisher") for x in said)
+        assert f"  views new in this release: {NEW_VIEW} (created after its rules load, at its first tested publish)" in said
+        assert not any(NEW_VIEW in x for x in said if x.startswith("  views to re-sync"))
+
+    def test_a_view_only_an_interrupted_attempt_declares_is_narrowed_only_if_the_loaded_rules_know_its_owner(world: World) -> None:
+        r1 = world.release(without_daily_load=True)
+        world.live(r1)
+        r2, r3 = world.release(), world.release(over=policy(60))
+        p = deploy.make_plan(world.ctx, r3, [r1, r2])  # an attempt at r2 died before its swap: r1's rules hold
+        p.views = [deploy.views_of(r3)[NEW_VIEW]]
+        lines = deploy.sync_views(world.ctx, p, "narrow")
+        assert lines[0].startswith(f"{NEW_VIEW}: the rules loaded now refuse its publisher pub_daily_load"), lines
+        p.sources = [r2]  # every release it moves from declares the view: a refusal is a real failure, never explained away
+        with pytest.raises(deploy.Failed, match="PERMISSION_DENIED"):
+            deploy.sync_views(world.ctx, p, "narrow")
+
+    def test_a_rollback_across_a_new_products_ddl_verifies_with_its_leftovers_left_and_exits_1(
+            world: World, monkeypatch: pytest.MonkeyPatch) -> None:
+        r1 = world.release(without_daily_load=True)
+        world.live(r1)
+        r2 = world.release()
+
+        def drift(ctx: Any, rel: Any) -> dict[str, Any]:  # catalog_drift.py over a catalog holding r2's namespaces
+            if f"{model.RELEASES_MOUNT}/{r2.id}" in deploy.left_dirs(ctx, rel):
+                return {"exit": 0, "doc": {"left": [f"LEFT namespace ops_insight.daily_load: declared by {r2.id}"]}, "text": ""}
+            return {"exit": 1, "doc": {}, "text": "DRIFT namespace ops_insight.daily_load: the release declares no such namespace"}
+
+        monkeypatch.setattr(deploy, "drift", drift)
+        monkeypatch.setattr(deploy, "access_live", lambda ctx, rel, out: subprocess.CompletedProcess([], 0, "", ""))
+        monkeypatch.setattr(deploy, "identity", lambda ctx: ["identity.sh: stood in"])
+        world.s20 = lambda rel: world.real_s20(world.ctx, rel)
+        said: list[str] = []
+        world.ctx.say = said.append
+        assert world.deploy(r2, "verify-mismatch") == deploy.EXIT_FAILED, [x for x in said if "FAILED" in x]  # was 3
+        assert os.readlink(world.root / "pointers/trino") == f"../{r1.id}"
+        said.clear()
+        with deploy.lock(world.root):
+            assert deploy.verify_live(world.ctx) == 0  # make release-verify after the rollback: the same set, from the log
+        assert any(x.strip().startswith(f"LEFT namespace ops_insight.daily_load: declared by {r2.id}") for x in said), said
+
+    def test_the_drift_check_and_the_live_suites_drift_row_are_given_what_the_log_says_was_left(
+            world: World, monkeypatch: pytest.MonkeyPatch) -> None:
+        r1 = world.release(without_daily_load=True)
+        world.live(r1)
+        r2 = world.release()
+        deploy.record(world.ctx, r2, r1.id, "ddl", "ok", set())  # an attempt at r2 got past its ddl
+        calls: list[list[str]] = []
+        monkeypatch.setattr(deploy, "run", lambda *a, **k: calls.append(list(a)) or subprocess.CompletedProcess(a, 0, "", ""))
+        deploy.drift(world.ctx, r1)
+        deploy.access_live(world.ctx, r1, world.tmp / "live.json")
+        drift_cmd, live_cmd = calls
+        i = drift_cmd.index("--left-by")
+        assert drift_cmd[i:i + 2] == ["--left-by", f"{model.RELEASES_MOUNT}/{r2.id}"] and drift_cmd.count("--left-by") == 1
+        assert f"{deploy.drift_lib.LEFT_ENV}={model.RELEASES_MOUNT}/{r2.id}" in live_cmd
+
+    def test_left_by_is_each_release_past_its_drain_since_the_live_one_first_appears() -> None:
+        def r(rel: str, step: str, outcome: str = "ok", frm: str | None = None) -> dict[str, Any]:
+            return {"release": rel, "from": frm, "step": step, "outcome": outcome}
+
+        log = [r("a", "done"), r("old", "ddl"),  # before b first appears: a forward deploy over it is drift again
+               r("b", "preflight"), r("b", "done"),
+               r("c", "preflight"), r("c", "plan"),  # PLAN=1 moved nothing
+               r("d", "preflight"), r("d", "drain", "failed"),  # refused at its drain: no ddl ran
+               r("e", "drain"),  # killed inside its ddl: its drain is recorded, its ddl not
+               r("a", "swap"), r("a", "recreate"),  # older than b, deployed again: its own leftovers are b's to drop
+               r("f", "ddl"), r("f", "views-narrow", "failed"), r("b", "rollback-verify", frm="f"), r("b", "rollback-done", frm="f")]
+        assert deploy.left_by(log, "b") == ["e", "f"]  # every release-verify after the rollback
+        assert deploy.left_by(log[:-1], "b") == ["e", "f"]  # the rollback's own verify
+        assert deploy.left_by(log, "f") == []  # a forward deploy of f: b and a are older, and drift is drift
+        assert deploy.left_by(log, "never-deployed") == []
+
+    def test_under_a_release_without_a_product_no_rule_reaches_its_relations(world: World) -> None:
+        """What makes a LEFT line safe (catalog_drift.NOTHING_READS): the old release's rules name no
+        relation, schema or query of the product, so every principal is denied it by default."""
+        r1, r2 = world.release(without_daily_load=True), world.release()
+        rules = json.loads((r1.root / "compiled/trino/rules.json").read_text())
+        names = [(c, s, "gold_daily_load") for c in ("ops_insight", "ops_insight_build") for s in ("daily_load", "daily_load__base")]
+        assert [(n, x) for n in names for x in rules["tables"] if x.get("privileges")
+                and all(re.fullmatch(x.get(k, ".*"), v) for k, v in zip(("catalog", "schema", "table"), n))] == []
+        assert [x for x in rules["schemas"] for c, s, _ in names
+                if all(re.fullmatch(x.get(k, ".*"), v) for k, v in (("catalog", c), ("schema", s)))] == []
+        assert not any(re.fullmatch(q["user"], u) for q in rules["queries"] for u in ("pub_daily_load", "dbt_daily_load"))
+        left = deploy.drift_lib.left_by(r2.root)  # and what --left-by reads of the release that added it
+        assert {("ops_insight", "daily_load"), ("ops_insight", "daily_load__base")} <= left["namespaces"]
+        assert ("ops_insight", "daily_load__base", "gold_daily_load") in left["tables"]
+        assert left["views"][("ops_insight", "daily_load", "gold_daily_load")] == "pub_daily_load"

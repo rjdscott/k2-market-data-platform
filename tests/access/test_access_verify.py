@@ -140,16 +140,18 @@ def catalog(**change) -> dict:
 def drift(monkeypatch):
     monkeypatch.setattr(cd, "Catalog", FakeCatalog)
 
-    def run(state: dict, newest_audited=None, want=WANT, only=None) -> dict:
+    monkeypatch.delenv(cd.LEFT_ENV, raising=False)
+
+    def run(state: dict, newest_audited=None, want=WANT, only=None, left=None) -> dict:
         FakeCatalog.state = state
-        return cd.drift("http://fake/catalog", want, newest_audited, only)
+        return cd.drift("http://fake/catalog", want, newest_audited, only, left)
 
     return run
 
 
 def test_a_catalog_equal_to_the_release_is_clean(drift):
     found = drift(catalog(), newest_audited={"governance_build.c__base.t": 2}.get)
-    assert found == {"differences": [], "pending": [], "skipped": []}
+    assert found == {"differences": [], "pending": [], "skipped": [], "left": []}
 
 
 def test_without_a_run_records_reader_each_tag_is_a_skip_never_a_pass(drift):
@@ -222,7 +224,7 @@ def d_mid_run(**change) -> dict:
 
 
 def test_the_wrappers_drift_check_is_its_own_products_alone(drift):
-    assert drift(d_mid_run(), RECORDS, WANT2, MINE) == {"differences": [], "pending": [], "skipped": []}
+    assert drift(d_mid_run(), RECORDS, WANT2, MINE) == {"differences": [], "pending": [], "skipped": [], "left": []}
 
 
 def test_release_verify_still_checks_every_product(drift):
@@ -733,3 +735,64 @@ def test_the_route_is_the_catalogs_and_a_relation_no_output_has_has_none(tmp_pat
     assert av.route(tmp_path, "fx_reference.ecb_fx_rates.gold_eur_rates_daily") == (PATH, ["rate_date", "currency"])
     assert av.route(tmp_path, "lake.ecb_fx_rates.bronze_daily") == ("/v1/data/fx-reference/ecb-fx-rates/bronze_daily", [])
     assert av.route(tmp_path, "fx_reference.ecb_fx_rates__base.gold_eur_rates_daily") is None
+
+
+# --left-by (scripts/deploy.py's left_by): a release attempted since the live one made namespaces q and
+# q__base (its ddl step), a rollback dropped nothing, and the live release's rules name neither.
+LEFT8 = {"id": "v8-000000000008", "namespaces": {("governance", "q"), ("governance", "q__base")},
+         "tables": {("governance", "q__base", "t"), ("governance", "q__base", "dq_test_results")},
+         "views": {("governance", "q", "t"): "pub_q"}}
+
+
+def left_behind(**change) -> dict:
+    state = catalog()
+    state["governance"]["q"] = {"tables": {}, "views": {"t": view_meta(owner="pub_q")}}
+    state["governance"]["q__base"] = {"tables": {"t": table()}, "views": {}}
+    for path, value in change.items():
+        ns, kind, name = path.split("__", 2)
+        ns = {"q": "q", "qbase": "q__base"}[ns]
+        if value is None:
+            state["governance"][ns][kind].pop(name)
+        else:
+            state["governance"][ns][kind][name] = value
+    return state
+
+
+def test_what_a_release_since_the_live_one_left_is_left_not_drift(drift):
+    found = drift(left_behind(), left=[LEFT8])
+    assert found["differences"] == [], found
+    assert [x.split(":")[0] for x in found["left"]] == [
+        "LEFT namespace governance.q", "LEFT view governance.q.t", "LEFT namespace governance.q__base", "LEFT table governance.q__base.t"]
+    assert all("declared by v8-000000000008" in x and "nothing reads it under the live rules" in x for x in found["left"])
+    assert "its owner pub_q and its readers' groups are in no rule" in found["left"][1]
+
+
+def test_without_left_by_the_same_namespaces_are_drift(drift):
+    named = drift(left_behind())["differences"]
+    assert named == ["DRIFT namespace governance.q: the release declares no such namespace",
+                     "DRIFT namespace governance.q__base: the release declares no such namespace"]
+
+
+@pytest.mark.parametrize("state, named", [
+    (catalog(base__tables__planted=table(tag=None)), "DRIFT table governance.c__base.planted"),  # beside a live base: never loosened
+    (left_behind(qbase__tables__planted=table(tag=None)), "DRIFT table governance.q__base.planted: in governance.q__base, which v8"),
+    (left_behind(qbase__tables__t=None, qbase__views__t=view_meta(owner="pub_q")), "DRIFT view governance.q__base.t"),  # its TABLE's name, a view
+    (left_behind(q__views__t=None, q__tables__t=table()), "DRIFT table governance.q.t"),  # its VIEW's name, a table
+    (left_behind(q__views__t=view_meta(owner="pub_x")), "DRIFT view governance.q.t: in governance.q, which v8-000000000008 left, and no release declares such a view (it claims owner 'pub_x')"),
+    (left_behind(q__views__t=view_meta(owner=None)), "(it claims owner None)"),  # an invoker view at its name
+])
+def test_anything_else_a_left_release_did_not_declare_is_still_drift(drift, state, named):
+    found = drift(state, left=[LEFT8])
+    assert any(named in x for x in found["differences"]), found
+
+
+def test_a_namespace_no_release_declares_is_drift_with_left_by_given(drift):
+    state = left_behind()
+    state["governance"]["z"] = {"tables": {}, "views": {}}
+    assert drift(state, left=[LEFT8])["differences"] == ["DRIFT namespace governance.z: the release declares no such namespace"]
+
+
+def test_left_by_defaults_to_the_environment_for_the_live_suites_drift_row(drift, monkeypatch):
+    monkeypatch.setattr(cd, "left_by", lambda path: LEFT8 if str(path) == "/k2/releases/v8-000000000008" else pytest.fail(path))
+    monkeypatch.setenv(cd.LEFT_ENV, "/k2/releases/v8-000000000008")
+    assert drift(left_behind())["differences"] == []  # what access_verify's `{drift: catalog}` row calls
