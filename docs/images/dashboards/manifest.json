@@ -25,12 +25,6 @@
       "captured_at": "2026-11-26T15:55:26Z"
     },
     {
-      "file": "07-minio-lake-bucket.png",
-      "url": "http://localhost:9001/browser/k2-lake",
-      "git_sha": "v3.0.0-alpha.1-58-g3d8495b-dirty",
-      "captured_at": "2026-11-26T15:56:36Z"
-    },
-    {
       "file": "13-airflow-dashboard.png",
       "url": "http://localhost:3000/d/k2-airflow",
       "git_sha": "v3.0.0-alpha.1-58-g3d8495b",

@@ -64,16 +64,6 @@ The Spark container's finished jobs, newest first, each a local-mode driver star
 
 Open: <http://localhost:18080>. Leads to: [upgrade-a-pinned-component.md](../runbooks/upgrade-a-pinned-component.md).
 
-### MinIO: the k2-lake bucket
-
-![MinIO: the k2-lake bucket](../images/dashboards/07-minio-lake-bucket.png)
-
-*Captured 2026-11-26 at `v3.0.0-alpha.1-58-g3d8495b-dirty`.*
-
-The object store under the lake: bucket k2-lake, its size and object count. Every Iceberg data and metadata file of every warehouse sits in it. The old pipeline's tables were dropped after a verified copy (`make drop`): no live crypto data lands here until phase 004.
-
-Open: <http://localhost:9001/browser/k2-lake>. Leads to: [lake-backup-and-restore.md](../runbooks/lake-backup-and-restore.md).
-
 ## Scheduling
 
 ### K2 Airflow
