@@ -1343,6 +1343,8 @@ def access_live(ctx: Ctx, rel: Release, out: Path) -> subprocess.CompletedProces
                   "-v", f"{ctx.home / 'scripts'}:/opt/k2/scripts:ro",
                   "-v", f"{ctx.secrets / 'principals'}:/run/k2-secrets/principals:ro",
                   "-v", f"{ctx.secrets / CA}:/run/k2-secrets/{CA}:ro",
+                  # each reader's API key file the operator holds, for the rows that also run through k2-api
+                  *(a for f in sorted((ctx.secrets / "api").glob("*.key")) for a in ("-v", f"{f}:/run/k2-secrets/api/{f.name}:ro")),
                   "tools", "python3", "/opt/k2/scripts/access_verify.py", "run", "--scope", "live",
                   "--release", f"{model.RELEASES_MOUNT}/{rel.id}", "--out", f"{model.RELEASES_MOUNT}/verify/{rel.id}.access-live.json")
     done = run(*cmd, env=compose_env(ctx), check=False)

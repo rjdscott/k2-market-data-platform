@@ -334,6 +334,7 @@ def build(release: Path) -> dict[str, DAG]:
     return {e["dagId"]: make_dag(release, e) for e in checked}
 
 
-_release = Path(__file__).resolve().parents[4]
-if (_release / "manifest.json").is_file():
+_parents = Path(__file__).resolve().parents  # a checkout mount (a release from before the run code) is shallower: no DAG
+_release = _parents[4] if len(_parents) > 4 else None
+if _release is not None and (_release / "manifest.json").is_file():
     globals().update(build(_release))

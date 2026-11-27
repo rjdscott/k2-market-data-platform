@@ -170,7 +170,7 @@ api_up() {  # k2-api, when a REST row needs it (the key step above made api/keys
   # 16 MB /tmp, no capability, no new privileges, its two variables and its four read-only mounts; no
   # host port. The k2-site volume is the image's own empty /srv/k2-site under the read-only root, as a
   # fresh volume mounted read-only is (Docker refuses an anonymous volume read-only).
-  docker run -d --label "$LABEL" --network "$NET" --network-alias k2-api --name "$P-k2-api" --user "$(id -u):0" \
+  docker run -d --label "$LABEL" --network "$NET" --network-alias=k2-api --name "$P-k2-api" --user "$(id -u):0" \
     --read-only --tmpfs /tmp:rw,noexec,nosuid,size=16m --cap-drop ALL --security-opt no-new-privileges:true \
     --cpus 0.5 --memory 512m -e K2_TRINO_HOST=trino -e K2_TRINO_INTERNAL_PORT=8443 \
     -v "$STATE/releases:/k2/releases:ro" -v "$k/api:/run/k2-secrets/api:ro" \
