@@ -13,8 +13,11 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException
 
+from k2api import keys
+
 RELEASES = Path("/k2/releases")  # k2gen.model.RELEASES_MOUNT, mounted read-only
 POINTER = "pointers/k2-api"  # scripts/deploy.py POINTERS: deploy moves it inside `tools`
+PRINCIPALS = "compiled/api/principals.json"  # k2gen.model.API_PRINCIPALS: whom k2-api may act as
 SPEC = yaml.safe_load((Path(__file__).parent.parent / "openapi.yaml").read_text())
 
 # The frozen document is the one served; FastAPI's generated one and its doc pages are off.
@@ -30,7 +33,8 @@ class Refused(Exception):
 
 @app.exception_handler(Refused)
 def _refused(request: Request, e: Refused) -> JSONResponse:
-    return JSONResponse({"error": e.error, "message": e.message}, e.status)
+    headers = {"WWW-Authenticate": "Bearer"} if e.status == 401 else None  # RFC 6750
+    return JSONResponse({"error": e.error, "message": e.message}, e.status, headers)
 
 
 @app.exception_handler(HTTPException)
@@ -70,10 +74,36 @@ def get_release() -> dict[str, str]:
     return {k: manifest[k] for k in ("release", "tag", "commit", "builtAt")}
 
 
+def caller(request: Request, rel: Path, required: bool) -> str | None:
+    """The principal of the request's key, or None without one where a key is optional. A key
+    the map does not know, or whose principal the release does not list, is 401: k2-api acts
+    only as a principal the release's rules let svc.api become (k2gen.emit.api)."""
+    header = request.headers.get("authorization")
+    if header is None:
+        if required:
+            raise Refused(401, "unauthorized", "this route needs Authorization: Bearer <key>")
+        return None
+    principal = keys.principal(header)
+    if principal is None or principal not in read(rel, PRINCIPALS)["principals"]:
+        raise Refused(401, "unauthorized", "the key is not one this release serves")
+    return principal
+
+
 def _later(*args: Any, **kwargs: Any) -> None:
     raise Refused(501, "not_implemented", "built in a later step of phase 003")
 
 
-for _path in ("/v1/products", "/v1/products/{domain}/{product}",
-              "/v1/products/{domain}/{product}/contracts/{table}.odcs.yaml", "/v1/data/{domain}/{product}/{table}"):
+for _path in ("/v1/products", "/v1/products/{domain}/{product}/contracts/{table}.odcs.yaml"):
     app.get(_path)(_later)
+
+
+@app.get("/v1/products/{domain}/{product}")
+def get_product(domain: str, product: str, request: Request) -> None:
+    caller(request, release(), required=False)
+    _later()
+
+
+@app.get("/v1/data/{domain}/{product}/{table}")
+def get_data(domain: str, product: str, table: str, request: Request) -> None:
+    caller(request, release(), required=True)
+    _later()
