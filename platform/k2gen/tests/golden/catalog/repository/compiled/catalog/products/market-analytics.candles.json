@@ -151,9 +151,12 @@
             "delay": {
               "column": "window_end",
               "minutes": 20
-            }
+            },
+            "mask": [
+              "through_load_seq"
+            ]
           },
-          "inWords": "only rows whose window_end is at least 20 minutes old"
+          "inWords": "only rows whose window_end is at least 20 minutes old; through_load_seq read as null"
         }
       ],
       "readers": [],
@@ -288,9 +291,12 @@
             "delay": {
               "column": "window_end",
               "minutes": 20
-            }
+            },
+            "mask": [
+              "through_load_seq"
+            ]
           },
-          "inWords": "only rows whose window_end is at least 20 minutes old"
+          "inWords": "only rows whose window_end is at least 20 minutes old; through_load_seq read as null"
         }
       ],
       "readers": [],
@@ -425,9 +431,12 @@
             "delay": {
               "column": "window_end",
               "minutes": 20
-            }
+            },
+            "mask": [
+              "through_load_seq"
+            ]
           },
-          "inWords": "only rows whose window_end is at least 20 minutes old"
+          "inWords": "only rows whose window_end is at least 20 minutes old; through_load_seq read as null"
         }
       ],
       "readers": [],
@@ -562,9 +571,12 @@
             "delay": {
               "column": "window_end",
               "minutes": 20
-            }
+            },
+            "mask": [
+              "through_load_seq"
+            ]
           },
-          "inWords": "only rows whose window_end is at least 20 minutes old"
+          "inWords": "only rows whose window_end is at least 20 minutes old; through_load_seq read as null"
         }
       ],
       "readers": [],

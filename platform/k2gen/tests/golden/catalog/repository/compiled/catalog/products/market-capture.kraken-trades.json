@@ -291,10 +291,12 @@
             },
             "mask": [
               "conn_id",
-              "conn_msg_seq"
+              "conn_msg_seq",
+              "kafka_offset",
+              "received_at"
             ]
           },
-          "inWords": "only rows whose trade_ts is at least 20 minutes old; conn_id and conn_msg_seq read as null"
+          "inWords": "only rows whose trade_ts is at least 20 minutes old; conn_id, conn_msg_seq, kafka_offset and received_at read as null"
         }
       ],
       "readers": [],

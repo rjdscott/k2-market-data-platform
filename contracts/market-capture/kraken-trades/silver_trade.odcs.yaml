@@ -125,4 +125,13 @@ customProperties:
         # one (canonical-trades, candles) carry and delay on (access.inherit-delay); a venue clock
         # ahead of the platform's only delays a row longer.
         delay: {column: trade_ts, minutes: 20}
-        mask: [conn_id, conn_msg_seq]
+        # The delay hides a row by its trade time, not by when it was delivered: a frame delivered
+        # late with an old trade_ts (a snapshot on reconnect, a held frame taken back) is visible at
+        # once. So every column set at delivery that counts or dates deliveries is masked, or a
+        # delayed reader reads the last 20 minutes' activity off old rows: kafka_offset (a running
+        # count of the partition's frames), conn_msg_seq (of the connection's), received_at (when),
+        # conn_id (which connection). kafka_partition is not: a partition is fixed per symbol, not a
+        # count. kafka_offset is a key column: the masked key leaves kafka_partition, trade_ordinal
+        # and trade_ts, which do not identify a row for this role (k2-api orders by the whole key, so
+        # ties come in Trino's order; a key cursor must not rely on a masked column).
+        mask: [conn_id, conn_msg_seq, kafka_offset, received_at]

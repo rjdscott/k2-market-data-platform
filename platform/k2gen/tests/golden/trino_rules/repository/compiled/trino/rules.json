@@ -1148,7 +1148,13 @@
       "privileges": [
         "SELECT"
       ],
-      "filter": "(\"window_end\" < current_timestamp - INTERVAL '20' MINUTE)"
+      "filter": "(\"window_end\" < current_timestamp - INTERVAL '20' MINUTE)",
+      "columns": [
+        {
+          "name": "through_load_seq",
+          "mask": "CAST(NULL AS bigint)"
+        }
+      ]
     },
     {
       "group": "candles__full_reader",
@@ -1167,7 +1173,13 @@
       "privileges": [
         "SELECT"
       ],
-      "filter": "(\"window_end\" < current_timestamp - INTERVAL '20' MINUTE)"
+      "filter": "(\"window_end\" < current_timestamp - INTERVAL '20' MINUTE)",
+      "columns": [
+        {
+          "name": "through_load_seq",
+          "mask": "CAST(NULL AS bigint)"
+        }
+      ]
     },
     {
       "group": "candles__full_reader",
@@ -1186,7 +1198,13 @@
       "privileges": [
         "SELECT"
       ],
-      "filter": "(\"window_end\" < current_timestamp - INTERVAL '20' MINUTE)"
+      "filter": "(\"window_end\" < current_timestamp - INTERVAL '20' MINUTE)",
+      "columns": [
+        {
+          "name": "through_load_seq",
+          "mask": "CAST(NULL AS bigint)"
+        }
+      ]
     },
     {
       "group": "candles__full_reader",
@@ -1205,7 +1223,13 @@
       "privileges": [
         "SELECT"
       ],
-      "filter": "(\"window_end\" < current_timestamp - INTERVAL '20' MINUTE)"
+      "filter": "(\"window_end\" < current_timestamp - INTERVAL '20' MINUTE)",
+      "columns": [
+        {
+          "name": "through_load_seq",
+          "mask": "CAST(NULL AS bigint)"
+        }
+      ]
     },
     {
       "group": "candles__full_reader",
@@ -1224,7 +1248,17 @@
       "privileges": [
         "SELECT"
       ],
-      "filter": "(\"trade_ts\" < current_timestamp - INTERVAL '20' MINUTE)"
+      "filter": "(\"trade_ts\" < current_timestamp - INTERVAL '20' MINUTE)",
+      "columns": [
+        {
+          "name": "kafka_offset",
+          "mask": "CAST(NULL AS bigint)"
+        },
+        {
+          "name": "load_seq",
+          "mask": "CAST(NULL AS bigint)"
+        }
+      ]
     },
     {
       "group": "canonical_trades__full_reader",
@@ -1261,6 +1295,14 @@
         {
           "name": "conn_msg_seq",
           "mask": "CAST(NULL AS bigint)"
+        },
+        {
+          "name": "kafka_offset",
+          "mask": "CAST(NULL AS bigint)"
+        },
+        {
+          "name": "received_at",
+          "mask": "CAST(NULL AS timestamp(6) with time zone)"
         }
       ]
     },

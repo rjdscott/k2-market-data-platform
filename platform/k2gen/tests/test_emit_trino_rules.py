@@ -209,6 +209,23 @@ def test_the_holds_are_svc_operators_alone_to_append_and_read_only_elsewhere() -
     assert not [r for r in gone["tables"] if r.get("table") in ("holds", "run_record")]
 
 
+def test_a_delayed_reader_never_sees_a_delivery_or_build_counter() -> None:
+    # Review A5: the delay hides a row by its trade time, but a late delivery of an old trade is
+    # visible at once, and a column set at delivery or build counts or dates what the delay hides:
+    # each is masked for delayed_reader wherever it is carried, and full_reader sees every column.
+    rules, _ = emitted(loaded("repository"))
+    want = {"market_capture.kraken_trades.silver_trade": {"conn_id", "conn_msg_seq", "kafka_offset", "received_at"},
+            "market_analytics.canonical_trades.trades": {"kafka_offset", "load_seq"},
+            **{f"market_analytics.candles.ohlcv_{i}": {"through_load_seq"} for i in ("1m", "5m", "1h", "1d")}}
+    for relation, masked in want.items():
+        names = dict(zip(("catalog", "schema", "table"), relation.split("."), strict=True))
+        for role, expect in (("delayed_reader", masked), ("full_reader", set())):
+            (rule,) = [r for r in rules["tables"] if "group" in r and r["group"].endswith(f"__{role}")
+                       and all(re.fullmatch(r[k], v) for k, v in names.items())]
+            assert {c["name"] for c in rule.get("columns", [])} == expect, (relation, role)
+            assert all(c["mask"].startswith("CAST(NULL AS ") for c in rule.get("columns", []))
+
+
 def _relations(rules: list[dict[str, Any]]) -> set[str]:
     return {f"{r['catalog']}.{r['schema']}.{r['table']}" for r in rules}
 
