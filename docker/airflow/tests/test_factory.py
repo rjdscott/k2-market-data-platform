@@ -826,7 +826,12 @@ class Refresh(unittest.TestCase):
     def test_no_refresh_target_no_refresh_task(self):
         for root in (GOLDEN, CANARY, KINDS):
             for d in factory.build(root).values():
-                self.assertNotIn("refresh", d.task_dict, d.dag_id)
+                if (root, d.dag_id) != (CANARY, "kraken_trades"):  # the repository's one refresh target
+                    self.assertNotIn("refresh", d.task_dict, d.dag_id)
+
+    def test_the_repository_kraken_trades_refreshes_kraken_instruments(self):
+        op = factory.build(CANARY)["kraken_trades"].get_task("refresh")
+        self.assertEqual((op.trigger_dag_id, op.upstream_task_ids), ("kraken_instruments", {"build"}))
 
     def test_a_target_adds_refresh_after_build_and_changes_nothing_else(self):
         dags = factory.build(self.release({KAFKA: API}))

@@ -2,7 +2,8 @@
 container (/work the lake's state, /work/rp the run's files). Reads only.
 
     dbt_patterns_probe.py state <run>    each output's rows at `audited`, refs and snapshots, the
-                                         builder's statements (Trino's query list), to dp-<run>.json
+                                         builder's statements (Trino's query list), silver_trade's
+                                         files and trade ids at main, to dp-<run>.json
     dbt_patterns_probe.py claims <run> ...   one numbered PASS or FAIL line per claim; exit 1 on a FAIL
 """
 import base64
@@ -56,10 +57,15 @@ if cmd == "state":
         meta = cd.Catalog(LK, "reference_data").table("pattern_lab__base", t) or {}
         refs = {n: r["snapshot-id"] for n, r in (meta.get("refs") or {}).items()}
         snaps = [{"id": x["snapshot-id"], "query": (x.get("summary") or {}).get("trino_query_id"),
-                  "op": (x.get("summary") or {}).get("operation"), "records": (x.get("summary") or {}).get("total-records")}
-                 for x in meta.get("snapshots") or []]
+                  "op": (x.get("summary") or {}).get("operation"), "records": (x.get("summary") or {}).get("total-records"),
+                  "parent": x.get("parent-snapshot-id")} for x in meta.get("snapshots") or []]
         a = trino.run(BUILDER, f"SELECT {COLS[t]} FROM {BASE}.{t} FOR VERSION AS OF 'audited' ORDER BY 1, 2")
         s[t] = {"refs": refs, "snapshots": snaps, "rows": None if a.error else a.rows, "error": a.error and a.says()}
+    # claim 12: silver_trade's files at main (content 0 data, else delete), and its trade ids there
+    f = trino.run(BUILDER, f'SELECT count_if(content <> 0), count_if(content = 0) FROM {BASE}."{SILVER}$files"')
+    s[SILVER]["files"] = None if f.error else {"deletes": f.rows[0][0], "data": f.rows[0][1]}
+    m = trino.run(BUILDER, f"SELECT trade_id FROM {BASE}.{SILVER} ORDER BY 1")
+    s[SILVER]["main_ids"] = None if m.error else [r[0] for r in m.rows]
     s["queries"] = queries(BUILDER)
     s["tests"] = trino.ok(BUILDER, "SELECT test_name, tested, status, failures, dbt_invocation_id FROM "
                                    f"{BASE}.dq_test_results WHERE run_id = {sql_literal('pattern_lab/' + run)} ORDER BY 1")
@@ -69,8 +75,8 @@ if cmd == "state":
     sys.exit(0)
 
 # ---- claims <run> ...: the builds in order, each with its state, XCom, exit and dbt log --------
-runs = args
-st = {r: json.loads((RP / f"dp-{r}.json").read_text()) for r in runs if (RP / f"dp-{r}.json").exists()}
+runs, later = args[:3], args[3:]  # claims 1 to 11 read the first three builds, claim 12 the four on R3
+st = {r: json.loads((RP / f"dp-{r}.json").read_text()) for r in args if (RP / f"dp-{r}.json").exists()}
 n, failed = 0, 0
 
 
@@ -249,4 +255,52 @@ print(f"INFO {runs[0]} dbt's own summary on stderr: {done}; the wrapper's own st
 for r in runs:  # build times: dbt's own per-node lines
     times = re.findall(r"OK (?:created|loaded) \S+ (?:\S+ )?(?:model|seed file) (\S+) .*?in ([0-9.]+)s\]", text(r, "err"))
     print(f"INFO {r} dbt node times (s): {', '.join(f'{a.split(chr(46))[-1]} {b}' for a, b in times)}")
+
+
+# 12 (W0-9): compaction after the tests, inside the wrapper; dp-4 to dp-7 on R3, whose merge updates every row
+def silver(run, key):
+    return st.get(run, {}).get(SILVER, {}).get(key) or {}
+
+
+def snapshot(run, sid):
+    return next((x for x in silver(run, "snapshots") if x["id"] == sid), {})
+
+
+def records(run):
+    return st.get(run, {}).get("records", [])
+
+
+bad = []
+if len(later) != 4 or any(r not in st for r in later):
+    bad.append(f"no state for every one of {later}")
+else:
+    d4, d5, d6, d7 = later
+    ok, why = published(d4)
+    deletes4 = (silver(d4, "files") or {}).get("deletes")
+    if not ok or not deletes4 or "compacted" in xcom(d4):
+        bad.append(f"{d4}: {why}; delete files {deletes4}, XCom {xcom(d4)} (merges leave deletes, under the threshold no compaction)")
+    ok, why = published(d5)
+    main5 = silver(d5, "refs").get("main")
+    s5 = snapshot(d5, main5)
+    want = [c for c in xcom(d5).get("compacted", []) if c.get("table", "").endswith(f".{SILVER}")]
+    if not ok or (silver(d5, "files") or {}).get("deletes") != 0 or s5.get("op") != "replace" \
+            or snapshot(d5, s5.get("parent")).get("op") in (None, "replace") or len(want) != 1 \
+            or want[0].get("deleteFiles", [0, 1])[1] != 0 or not want[0]["deleteFiles"][0]:
+        bad.append(f"{d5}: {why}; files {silver(d5, 'files')}, main {s5}, its parent {snapshot(d5, s5.get('parent'))}, XCom {xcom(d5)}")
+    if sorted(rows(d5, SILVER)) != sorted(rows(d4, SILVER)) or not rows(d5, SILVER):
+        bad.append(f"{d5}: rows at audited {rows(d5, SILVER)}, {d4}'s {rows(d4, SILVER)}")
+    ok, why = published(d6)
+    started = [x for x in records(d6) if x[0] == "started" and x[1].endswith(f".{SILVER}")]
+    touched = [x for x in text(d6, "err").splitlines() if x.startswith("k2-dbt: reconcile")]
+    if not ok or [x[2] for x in started] != [main5] or any(x[0] == "reconciled" for x in records(d6)) or touched:
+        bad.append(f"{d6}: {why}; started {started} (want snapshot_before {main5}), reconcile lines {touched}")
+    refused = [x for x in text(d7, "err").splitlines() if "a write after its tests" in x]
+    if text(d7, "rc").strip() != "3" or xcom(d7).get("exit") != 3 or not refused \
+            or silver(d7, "refs").get("audited") != silver(d6, "refs").get("audited") \
+            or any(x[0] == "audited" for x in records(d7)) or 1001 in (silver(d7, "main_ids") or [1001]):
+        bad.append(f"{d7}: exit {text(d7, 'rc').strip()}, XCom {xcom(d7)}, refusal {refused[-1:]}, audited "
+                   f"{silver(d7, 'refs').get('audited')} (was {silver(d6, 'refs').get('audited')}), main ids {silver(d7, 'main_ids')}")
+say(not bad, "(W0-9) a build compacts the merged incremental output after its tests: delete files to 0, rows unchanged, audited "
+    "on the replace of the tested snapshot, the next reconcile changes nothing, a tagged write after the optimize refused",
+    bad[0] if bad else f"{d5} compacted {want[0]}; {d7} refused and rolled back")
 sys.exit(1 if failed else 0)

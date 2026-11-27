@@ -838,3 +838,20 @@ def test_left_by_defaults_to_the_environment_for_the_live_suites_drift_row(drift
     monkeypatch.setattr(cd, "left_by", lambda path: LEFT8 if str(path) == "/k2/releases/v8-000000000008" else pytest.fail(path))
     monkeypatch.setenv(cd.LEFT_ENV, "/k2/releases/v8-000000000008")
     assert drift(left_behind())["differences"] == []  # what access_verify's `{drift: catalog}` row calls
+
+
+def test_staging_makes_a_model_after_the_siblings_its_sql_refs():
+    """CI, 2026-11-28: security-master's instrument reads venue_symbol_claim by ref() and was staged
+    first, in contract order, so its CREATE TABLE AS found no table."""
+    from types import SimpleNamespace as T
+    tables = [T(name="instrument"), T(name="venue_symbol"), T(name="venue_symbol_claim"), T(name="asset")]
+    names = {f"p__{t.name}": t.name for t in tables} | {"p__seed": "seed"}
+    sql = {"instrument": "select * from {{ ref('p__venue_symbol_claim') }}",
+           "venue_symbol": "select * from {{ ref('p__venue_symbol_claim') }} join {{ ref('p__instrument') }} using (k)",
+           "venue_symbol_claim": "select * from {{ ref('p__seed') }}", "asset": "select 1"}
+    got = [t.name for t in av.ref_order(tables, sql, names)]
+    assert got == ["venue_symbol_claim", "asset", "instrument", "venue_symbol"]
+    # no refs: contract order kept; a cycle: contract order, never a hang
+    assert [t.name for t in av.ref_order(tables, {t.name: "select 1" for t in tables}, names)] == [t.name for t in tables]
+    loop = {"instrument": "{{ ref('p__venue_symbol') }}", "venue_symbol": "{{ ref('p__instrument') }}", "venue_symbol_claim": "", "asset": ""}
+    assert sorted(t.name for t in av.ref_order(tables, loop, names)) == sorted(t.name for t in tables)

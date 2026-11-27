@@ -83,6 +83,7 @@
         }
       }
     },
+    "refresh": {"description": "The product property refresh: the product whose DAG the factory's refresh task starts, once per run id and never waited on, when build's result says degraded: true (W1-6, docs/development/phase-001-interfaces.md, Holds). Absent: no refresh task. An upstream product of this one through its input ports, with a schedule and no refresh of its own (k2gen check refresh.*).", "type": "string", "pattern": "^[a-z][a-z0-9]*(-[a-z0-9]+)*\\.[a-z][a-z0-9]*(-[a-z0-9]+)*$"},
     "maintain": {
       "description": "The product's daily maintenance task, staggered by the compiler; it expires each table's snapshots by compiled/lake/retention.json.",
       "type": "object",

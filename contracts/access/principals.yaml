@@ -30,6 +30,21 @@ principals:
     kind: service
     owner: platform-team
     description: Owns the canary's reader view and moves its audited tag.
+  # Builders a row of tests/access/expectations.yaml expects to succeed as (a row as an undeclared
+  # principal may only expect a denial): each reads its own bronze or input port there. Declaring
+  # a dbt_<fence> changes no rule; its product's build gives it its rights (emit/trino_rules.py).
+  - id: dbt_kraken_trades
+    kind: service
+    owner: capture-team
+    description: Builds market-capture.kraken-trades' silver tables from its bronze and the security master's venue_symbol.
+  - id: dbt_canonical_trades
+    kind: service
+    owner: analytics-team
+    description: Builds market-analytics.canonical-trades from kraken-trades' tested silver_trade.
+  - id: dbt_candles
+    kind: service
+    owner: analytics-team
+    description: Builds market-analytics.candles from canonical-trades' tested trades.
   # The access canary's readers, one per role (contracts/governance/access-canary/grants.yaml).
   - id: p.canary-full
     kind: person
@@ -48,3 +63,12 @@ principals:
     kind: person
     owner: platform-team
     description: A named analyst reader used by the phase 003 REST checks; holds full_reader on ECB gold.
+  # A partner's reader (plan 004), a service logging in to Trino over SQL; svc.api impersonates
+  # p.* alone, so it has no REST path. It holds no role until the owner records Kraken's terms
+  # (contracts/market-capture/kraken-trades/grants.yaml), so it reaches nothing. Deploy's preflight
+  # needs no password for it (scripts/deploy.py required_secrets); the operator makes one with
+  # make password PRINCIPAL=svc.partner-dashboard when the grant lands.
+  - id: svc.partner-dashboard
+    kind: service
+    owner: platform-team
+    description: A partner dashboard's Trino login, to hold delayed_reader on kraken-trades' silver_trade once the venue's terms are recorded.

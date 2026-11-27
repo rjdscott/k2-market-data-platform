@@ -181,6 +181,61 @@ expectations:
   - {principal: p.canary-full, table: market_analytics.candles__base.ohlcv_1h, denied: true}  # no grant yet: nobody holds a role on it
   - {principal: p.canary-full, table: market_analytics.candles.ohlcv_1d, denied: true}  # no grant yet: nobody holds a role on it
   - {principal: p.canary-full, table: market_analytics.candles__base.ohlcv_1d, denied: true}  # no grant yet: nobody holds a role on it
+  # svc.partner-dashboard (plan 004) holds no role until the owner records Kraken's terms, so it is
+  # refused everything. These denials stay true once it holds delayed_reader on silver_trade, and
+  # are the ones k2gen check then asks of a holder: the base, the held table, bronze, the landing;
+  # and the base's $files, whose column bounds would show the trade times the delay hides.
+  - {principal: svc.partner-dashboard, table: market_capture.kraken_trades__base.silver_trade, denied: true}  # base (ADR-061)
+  - {principal: svc.partner-dashboard, table: "market_capture.kraken_trades__base.silver_trade$files", denied: true}  # bounds of rows under 20 minutes old
+  - {principal: svc.partner-dashboard, table: market_capture.kraken_trades.silver_trade_unresolved, denied: true}  # the held table offers no role
+  - {principal: svc.partner-dashboard, table: market_capture.kraken_trades__base.silver_trade_unresolved, denied: true}  # nor its base
+  - {principal: svc.partner-dashboard, table: lake.kraken_trades.bronze_trade, denied: true}  # bronze, which offers no role
+  - {principal: svc.partner-dashboard, table: lake.kraken_trades.landing, denied: true}  # the product's landing
+
+  # Builders and publishers of the new products reach their own product and declared inputs only:
+  # one Kafka product (kraken-trades) and one derived (canonical-trades), the canary's rows on their
+  # names, and candles' reach to its input's input. Every write is WHERE false or a planted name.
+  - {principal: dbt_kraken_trades, sql: "SELECT count(*) FROM lake.kraken_trades.bronze_trade", expect: ok}  # its own bronze
+  - {principal: dbt_kraken_trades, table: lake.kraken_trades.landing, denied: true}  # never the landing: Spark stages bronze from it
+  - {principal: dbt_kraken_trades, table: lake.kraken_instruments.bronze_pairs, denied: true}  # another product's bronze, in the catalog it reads
+  - {principal: dbt_kraken_trades, sql: "CREATE TABLE market_capture_build.kraken_instruments__base.planted AS SELECT 1 x", expect: denied}  # another product's base, in its own build catalog
+  - {principal: dbt_kraken_trades, sql: "CREATE OR REPLACE VIEW market_capture_build.kraken_trades.silver_trade AS SELECT 1 x", expect: denied}  # its publisher's view
+  - {principal: dbt_kraken_trades, table: market_capture.kraken_trades.silver_trade, denied: true}  # nor the reader view
+  - {principal: pub_kraken_trades, sql: "INSERT INTO market_capture.kraken_trades__base.silver_trade SELECT * FROM market_capture.kraken_trades__base.silver_trade WHERE false", expect: denied}
+  - {principal: pub_kraken_trades, sql: "CREATE VIEW market_capture_build.kraken_trades.planted SECURITY DEFINER AS SELECT trade_ts FROM market_capture.kraken_trades__base.silver_trade", expect: denied}
+  - {principal: pub_kraken_trades, sql: "CREATE OR REPLACE VIEW market_capture_build.kraken_instruments.silver_listing AS SELECT 1 x", expect: denied}  # another product's view, in its own build catalog
+  - {principal: dbt_canonical_trades, sql: "SELECT count(*) FROM market_capture.kraken_trades__base.silver_trade", expect: ok}  # its input port
+  - {principal: dbt_canonical_trades, table: market_capture.kraken_trades__base.silver_trade_unresolved, denied: true}  # never the held table
+  - {principal: dbt_canonical_trades, table: lake.kraken_trades.bronze_trade, denied: true}  # nor its input's bronze
+  - {principal: dbt_canonical_trades, table: lake.kraken_trades.landing, denied: true}  # nor its landing
+  - {principal: dbt_canonical_trades, sql: "CREATE TABLE market_analytics_build.candles__base.planted AS SELECT 1 x", expect: denied}  # another product's base, in the build catalog they share
+  - {principal: dbt_canonical_trades, sql: "CREATE OR REPLACE VIEW market_analytics_build.canonical_trades.trades AS SELECT 1 x", expect: denied}  # its publisher's view
+  - {principal: dbt_canonical_trades, table: market_analytics.canonical_trades.trades, denied: true}  # nor the reader view
+  - {principal: pub_canonical_trades, sql: "INSERT INTO market_analytics.canonical_trades__base.trades SELECT * FROM market_analytics.canonical_trades__base.trades WHERE false", expect: denied}
+  - {principal: pub_canonical_trades, sql: "CREATE VIEW market_analytics_build.canonical_trades.planted SECURITY DEFINER AS SELECT trade_ts FROM market_analytics.canonical_trades__base.trades", expect: denied}
+  - {principal: pub_canonical_trades, sql: "CREATE OR REPLACE VIEW market_analytics_build.candles.ohlcv_1d AS SELECT 1 x", expect: denied}  # another product's view, in the build catalog they share
+  - {principal: dbt_candles, sql: "SELECT count(*) FROM market_analytics.canonical_trades__base.trades", expect: ok}  # its input port
+  - {principal: dbt_candles, table: market_capture.kraken_trades__base.silver_trade, denied: true}  # not its input's input
+  - {principal: dbt_candles, table: market_capture.kraken_trades.silver_trade, denied: true}  # by no name
+  - {principal: dbt_candles, sql: "INSERT INTO market_analytics_build.canonical_trades__base.trades SELECT * FROM market_analytics.canonical_trades__base.trades WHERE false", expect: denied}  # nor writes its input
+
+  # The holds table (I-7, I-8), append-only as the run record: svc.runs reads and adds rows through
+  # governance_build and never changes or removes one, svc.catalog reads it through governance,
+  # svc.platform creates and reads it and writes no row, and a reader or a builder reaches nothing.
+  # These name no product, so they run on live too: every write is WHERE false, so a loosened rule
+  # adds, changes or removes no hold.
+  - {principal: svc.runs, sql: "SELECT count(*) FROM governance_build.run_records.holds", expect: ok}
+  - {principal: svc.runs, sql: "INSERT INTO governance_build.run_records.holds (product_id) SELECT 'x' WHERE false", expect: ok}
+  - {principal: svc.runs, sql: "UPDATE governance_build.run_records.holds SET reason = 'x' WHERE false", expect: denied}
+  - {principal: svc.runs, sql: "DELETE FROM governance_build.run_records.holds WHERE false", expect: denied}
+  - {principal: svc.catalog, sql: "SELECT count(*) FROM governance.run_records.holds", expect: ok}
+  - {principal: svc.catalog, sql: "INSERT INTO governance_build.run_records.holds (product_id) SELECT 'x' WHERE false", expect: denied}
+  - {principal: svc.platform, sql: "SELECT count(*) FROM governance_build.run_records.holds", expect: ok}
+  - {principal: svc.platform, sql: "INSERT INTO governance_build.run_records.holds (product_id) SELECT 'x' WHERE false", expect: denied}
+  - {principal: p.canary-full, sql: "SELECT count(*) FROM governance.run_records.holds", expect: denied}  # a reader
+  - {principal: dbt_ecb_fx_rates, sql: "SELECT count(*) FROM governance.run_records.holds", expect: denied}  # a builder of another domain
+  - {principal: dbt_access_canary, sql: "SELECT count(*) FROM governance_build.run_records.holds", expect: denied}  # a builder in the holds' own build catalog
+  - {principal: dbt_access_canary, sql: "INSERT INTO governance_build.run_records.holds (product_id) SELECT 'x' WHERE false", expect: denied}
   # No compaction by a consumer (plan 002's optimize line). The reader name is a view, which Trino
   # refuses as NOT_SUPPORTED before any access check, so the denials name the table under it.
   - {principal: p.analyst-a, sql: "ALTER TABLE fx_reference.ecb_fx_rates.silver_rates EXECUTE optimize", expect: error}  # a view: not supported

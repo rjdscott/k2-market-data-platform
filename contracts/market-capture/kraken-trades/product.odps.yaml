@@ -102,3 +102,7 @@ customProperties:
       # next plans from the newest connector snapshot (ADR-022).
       cron: "*/5 * * * *"
       timeoutMinutes: 10
+  # A degraded build (unresolved_rows_zero warned: a trade's symbol resolved to nothing) starts one
+  # instruments run, so the master can learn a new pair (W1-6; k2gen check refresh.*).
+  - property: refresh
+    value: market-capture.kraken-instruments
