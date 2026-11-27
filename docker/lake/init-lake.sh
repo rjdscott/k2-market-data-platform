@@ -199,6 +199,10 @@ plan=$(<"$STORAGE_PLAN") domains=()
 re='"landing"[[:space:]]*:[[:space:]]*\{[^}]*"bucket"[[:space:]]*:[[:space:]]*"([^"]+)"'
 [[ $plan =~ $re ]] || die "$STORAGE_PLAN names no landing bucket"
 LANDING=${BASH_REMATCH[1]}
+# A plain bucket: no object lock, no versioning. A landing is immutable because the
+# connector writes it by conditional PUT, and maintenance expires landings after 14
+# days, which a lock would block.
+mc mb --ignore-existing "k2/$LANDING"
 re='"name"[[:space:]]*:[[:space:]]*"([^"]+)"'
 while [[ $plan =~ $re ]]; do
   [[ ${BASH_REMATCH[1]} == "$WAREHOUSE" ]] || domains+=("${BASH_REMATCH[1]}")
@@ -227,8 +231,7 @@ render() {
 # One user per engine holding exactly its policy. `policy create` and `user add`
 # overwrite, so a rerun converges on the files and the environment; attach runs only
 # for a user with no policy yet, and a user holding anything else is refused, not
-# trimmed (someone widened it by hand). The landing bucket is not made here: how it is
-# made (versioning, object lock) belongs to its writer's step.
+# trimmed (someone widened it by hand).
 echo "[5/5] Engine users (${engines[*]}; fetch none)"
 for e in "${engines[@]}"; do
   ak=K2_${e^^}_S3_ACCESS_KEY sk=K2_${e^^}_S3_SECRET_KEY policy=k2-$e

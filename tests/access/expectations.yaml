@@ -131,5 +131,30 @@ expectations:
   - {probe: {from: host, target: "127.0.0.1:18181"}, expect: refused}
   - {probe: {from: k2-catalog, target: "lakekeeper:8181"}, expect: open}
 
+  # Storage keys (phase 002): each engine's own MinIO key, signed by scripts/access_verify.py, does
+  # what its policy (docker/lake/minio/policies/) allows and nothing else. They mean something only
+  # because every warehouse has remote signing off (docker/lake/init-lake.sh). Warehouse k2 holds the
+  # landings' tables and bronze; governance stands for every domain warehouse.
+  - {storageKey: {engine: spark, target: k2-lake/warehouse/k2, operation: write}, expect: allowed}            # Spark writes bronze
+  - {storageKey: {engine: spark, target: k2-lake/warehouse/governance, operation: write}, expect: refused}    # never a domain warehouse
+  - {storageKey: {engine: spark, target: k2-landing, operation: write}, expect: allowed}                       # it lands files (it cannot delete one: the root pair removes the probe)
+  - {storageKey: {engine: trino, target: k2-lake/warehouse/governance, operation: write}, expect: allowed}    # Trino builds the domain warehouses
+  - {storageKey: {engine: trino, target: k2-lake/warehouse/k2, operation: read}, expect: allowed}             # the lake catalog reads bronze
+  - {storageKey: {engine: trino, target: k2-lake/warehouse/k2, operation: write}, expect: refused}            # but never writes it
+  - {storageKey: {engine: trino, target: k2-landing, operation: read}, expect: refused}                        # and never sees a landing
+  - {storageKey: {engine: maintenance, target: k2-lake/warehouse/governance, operation: read}, expect: allowed}  # reads what it expires
+  - {storageKey: {engine: maintenance, target: k2-lake/warehouse/governance, operation: write}, expect: refused} # deletes, never puts
+  - {storageKey: {engine: maintenance, target: k2-lake/warehouse/k2, operation: write}, expect: refused}         # in no warehouse
+  - {storageKey: {engine: backup, target: k2-lake/warehouse/k2, operation: read}, expect: allowed}             # backup reads the lake
+  - {storageKey: {engine: backup, target: k2-landing, operation: read}, expect: allowed}                       # and the landings
+  - {storageKey: {engine: backup, target: k2-lake/warehouse/k2, operation: write}, expect: refused}            # and writes nowhere: k2,
+  - {storageKey: {engine: backup, target: k2-lake/warehouse/governance, operation: write}, expect: refused}    # a domain warehouse,
+  - {storageKey: {engine: backup, target: k2-landing, operation: write}, expect: refused}                      # the landing bucket
+  - {storageKey: {engine: tools, target: k2-lake/warehouse/governance, operation: read}, expect: allowed}     # tools reads the lake
+  - {storageKey: {engine: tools, target: k2-landing, operation: read}, expect: allowed}                        # and the landings
+  - {storageKey: {engine: tools, target: k2-lake/warehouse/k2, operation: write}, expect: refused}             # and writes nowhere: k2,
+  - {storageKey: {engine: tools, target: k2-lake/warehouse/governance, operation: write}, expect: refused}     # a domain warehouse,
+  - {storageKey: {engine: tools, target: k2-landing, operation: write}, expect: refused}                       # the landing bucket
+
   # The catalog equals the release: no planted view, table or tag (ADR-061 part 6).
   - {drift: catalog, expect: clean}
