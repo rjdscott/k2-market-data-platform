@@ -1221,7 +1221,8 @@ sys.exit(f"fake docker: no answer for {A}")
         assert world.deploy(r2) == 0
         runs = [[*p, "--state", "running", "-o", "json"] for p in (["dags", "list-runs", DL], ["dags", "list-runs", SR])]
         poll = [*runs, ["tasks", "states-for-dag-run", SR, "scheduled__1", "-o", "json"]]
-        assert world.airflow_calls() == [["dags", "list", "-o", "json"], ["dags", "pause", SR], *poll, *poll,
+        listing = ["dags", "list", "-o", "json"]  # the drain's, then verify's (idle_dags), read-only
+        assert world.airflow_calls() == [listing, ["dags", "pause", SR], *poll, *poll, listing,
                                          ["dags", "unpause", SR]]  # daily_load's run is asked, its pause kept
         assert world.paused() == {SR: False, DL: True} and not (world.root / deploy.DRAIN_STATE).exists()
         t = [e[:3] for e in world.timeline()]
@@ -1383,11 +1384,35 @@ sys.exit(f"fake docker: no answer for {A}")
         assert any(x.startswith("  no scheduler: airflow-scheduler is not running") for x in said), said
         world.scheduler({})
         assert world.deploy(world.release(over={CODE: b"# three\n"})) == 0
-        assert any(x.startswith("  no DAGs: Airflow has none to drain") for x in said) and world.airflow_calls() == [["dags", "list", "-o", "json"]]
+        listing = ["dags", "list", "-o", "json"]
+        assert any(x.startswith("  no DAGs: Airflow has none to drain") for x in said) and world.airflow_calls() == [listing] * 2  # drain, verify
         assert world.deploy(world.release(over={CODE: b"# three\n", **policy(60)})) == 0
         assert any(x.startswith("  no drain: no Trino restart and no DAG's task list changes") for x in said)
-        assert len(world.airflow_calls()) == 1  # no change that drains: Airflow not asked
+        assert world.airflow_calls() == [listing] * 3  # no change that drains: only verify's read-only listing
         assert all(r["outcome"] == "ok" for r in records(world) if r["step"] == "drain")
+
+    def test_verify_names_the_releases_dags_paused_in_airflow_that_no_hold_explains(world: World, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Review D6: every DAG is created paused, so a fresh install, or a release adding a product, sits idle
+        unless someone unpauses it. Deploy's verify and make release-verify name them with the command, read-only;
+        never a DAG deploy paused itself (resume unpauses it next) or one a hold keeps paused."""
+        r1 = world.release(over={CODE: b"# one\n"})
+        world.live(r1)
+        world.scheduler({SR: True, DL: True, "not_this_release": True})
+        said: list[str] = []
+        world.ctx.say = said.append
+        assert world.deploy(world.release(over={CODE: b"# one\n", **policy(60)})) == 0  # no drain: both stay as Airflow has them
+        line = f"  paused in Airflow and not held, so idle: daily_load, station_readings; unpause each once ready: {deploy.UNPAUSE}"
+        assert line in said and deploy.UNPAUSE == "docker exec k2-airflow-scheduler airflow dags unpause <dag> -y"
+        assert all(c == ["dags", "list", "-o", "json"] for c in world.airflow_calls()) and world.paused()[SR] is True
+        live = deploy.open_release(world.ctx, deploy.resolve(world.ctx)[0].id)
+        deploy.write_paused(world.ctx, {DL})  # a deploy's own pause: resume's to lift, not idle
+        monkeypatch.setattr(deploy, "holds", lambda ctx, rel, dags: {SR: {"kind": "operator"}} if SR in dags else {})
+        assert deploy.idle_dags(world.ctx, live) == []  # station_readings held, daily_load deploy's own
+        monkeypatch.setattr(deploy, "holds", lambda ctx, rel, dags: {})
+        only = f"paused in Airflow and not held, so idle: station_readings; unpause each once ready: {deploy.UNPAUSE}"
+        assert only in deploy.verify(world.ctx, live, None)  # the lines make release-verify prints too
+        world.write(world.read() | {"airflow": {"paused": {SR: False, DL: False}, "busy": {}}})
+        assert deploy.idle_dags(world.ctx, live) == []
 
     # --- a release that adds a product (the first live deploy of alpha.4-rc.1, 2026-11-27) ----------
 

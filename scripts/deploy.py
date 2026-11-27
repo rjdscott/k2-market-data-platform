@@ -65,7 +65,8 @@ first failure:
                  it, each image digest and health check, every default-profile service running, the
                  drift check in tools (what a release attempted since the live one created, its ddl being
                  additive and never undone, is LEFT, not drift: left_by), the live access suite (S20) and
-                 the catalog fence's probes
+                 the catalog fence's probes; the release's DAGs Airflow has paused, not held and not paused
+                 by deploy, named on one line with the unpause command, never a failure (idle_dags)
                  (scripts/verify/catalog-fence.sh); `make release-verify` adds S13's identity.sh
 10 done          the other canaries' lines removed; the release is the good one
    site          the release's catalog site and dbt docs into the k2-site volume k2-api serves; a failure is
@@ -723,6 +724,26 @@ def resume(ctx: Ctx, rel: Release | None) -> list[str]:
     return lines
 
 
+def idle_dags(ctx: Ctx, rel: Release) -> list[str]:
+    """Review D6: every DAG is created paused, so a fresh install or a release adding a product can sit idle.
+    One line naming the release's DAGs Airflow has paused that no hold explains and deploy did not pause
+    (resume unpauses those), with the command; nothing when there are none. Read-only (`dags list`, as the
+    drain asks it), and it never fails verify: a listing that fails is said instead."""
+    ours = {e["dagId"] for e in json.loads(dags_json(rel) or b'{"dags": []}')["dags"]}
+    cid = scheduler(ctx)
+    if not ours or cid is None:
+        return []
+    try:
+        listed = {d["dag_id"] for d in airflow(ctx, cid, "dags", "list", "-o", "json") if str(d["is_paused"]) == "True"}
+        idle = sorted((ours & listed) - paused_by_deploy(ctx))
+        held = holds(ctx, rel, idle) if idle else {}
+    except Exception as e:
+        return [f"could not tell which of the release's DAGs sit paused ({type(e).__name__}: {str(e)[:160]})"]
+    if idle := [d for d in idle if d not in held]:
+        return [f"paused in Airflow and not held, so idle: {', '.join(idle)}; unpause each once ready: {UNPAUSE}"]
+    return []
+
+
 def left_paused(ctx: Ctx, rid: str) -> int:
     """After a release reached done and resume ran: EXIT_PAUSED, saying which DAGs deploy left paused and
     why, while DRAIN_STATE still names any; else EXIT_OK. Never a rollback: the release is verified."""
@@ -1311,7 +1332,7 @@ def verify(ctx: Ctx, target: Release, previous_canary: str | None) -> list[str]:
         wrong.append(f"Trino still admits {previous_canary}: the previous release's rules are loaded")
     lines.append(f"canary {canary} admitted" + (f", {previous_canary} refused" if previous_canary and previous_canary != canary else ""))
     more, bad = s20_checks(ctx, target)
-    lines, wrong = lines + more, wrong + bad
+    lines, wrong = lines + more + idle_dags(ctx, target), wrong + bad
     svc = services(target)
     found = containers(ctx)
     # Nothing found is never a pass (review R1 M1): a project name that matches no container would
