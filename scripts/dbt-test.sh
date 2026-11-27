@@ -26,7 +26,10 @@
 #      unit test with the var set (the fixture's CTE, no clause), a var without the
 #      key (it parses, as another product's model must, and fails to compile), and a
 #      snapshot that is null, a string, a float or a boolean (each a compiler error at
-#      parse, never a guessed id). No warehouse: a unit test's SQL is only
+#      parse, never a guessed id); an absent input, {"absent": true} (zero rows of every
+#      column the source declares, each cast to its own type), the same in a unit test (the
+#      fixture's CTE), and an absent entry in any other form (a compiler error at parse).
+#      No warehouse: a unit test's SQL is only
 #      rendered when dbt sends it, so it is read from dbt's log of the one statement
 #      it tried before the refused connection; the step refuses to run at all if
 #      anything listens on the profile's port.
@@ -89,7 +92,23 @@ for entry in '{"snapshot": null}' '{}' '{"snapshot": "42"}' '{"snapshot": 4.2}' 
   fi
   grep -qF 'k2_input: k2_inputs entry up/events has no integer snapshot' <<< "$out" || fail "snapshot $entry: $out"
 done
-echo "ok k2_input: pinned, unpinned, a unit test with the var set, a var without the key, and $n snapshots that are not integers (dbt/tests/k2_input/)"
+absent='{"k2_inputs": {"up/events": {"absent": true}}}'
+k2i absent compile -q --vars "$absent"
+grep -qxF 'from (select cast(null as bigint) as "id", cast(null as bigint) as "amount", cast(null as decimal(18,8)) as "price", cast(null as timestamp(6) with time zone) as "seen_at" where false)' \
+  "$tmp/absent/$model" || fail "absent: $(tail -1 "$tmp/absent/$model")"
+k2i absent-unit test -q --select test_type:unit --vars "$absent" >/dev/null 2>&1 || true  # refused connection: exits 1
+grep -q 'Connection refused' "$tmp/absent-unit/dbt.log" || fail "absent unit test: did not stop at the refused connection"
+grep -qx 'from __dbt__cte__up__events' "$tmp/absent-unit/dbt.log" \
+  || fail "absent unit test: $(grep -m1 'from ' "$tmp/absent-unit/dbt.log")"
+m=0
+for entry in '{"absent": false}' '{"absent": "true"}' '{"absent": true, "snapshot": 42}'; do
+  m=$((m + 1))
+  if out=$(k2i "absent-bad$m" parse --vars "{\"k2_inputs\": {\"up/events\": $entry}}" 2>&1); then
+    fail "absent $entry: parse passed"
+  fi
+  grep -qF 'k2_input: k2_inputs entry up/events is absent only as {"absent": true}' <<< "$out" || fail "absent $entry: $out"
+done
+echo "ok k2_input: pinned, unpinned, a unit test with the var set, a var without the key, $n snapshots that are not integers, absent (zero typed rows; a unit test's CTE) and $m absent entries of another form (dbt/tests/k2_input/)"
 
 rel=$(bash ../scripts/verify/ci-validate.sh "$tmp/ci" 2>"$tmp/ci.log" | tail -1) || { cat "$tmp/ci.log"; exit 1; }
 bash ../scripts/lib/throwaway-lake.sh up "$P" "$rel"

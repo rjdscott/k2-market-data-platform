@@ -293,6 +293,66 @@ def test_an_optional_input_never_tested_is_left_out_of_k2_inputs():
     assert json.loads(fake.dbt_calls[0][fake.dbt_calls[0].index("--vars") + 1])["k2_inputs"] == {}
 
 
+def k2_inputs(fake):
+    return json.loads(fake.dbt_calls[0][fake.dbt_calls[0].index("--vars") + 1])["k2_inputs"]
+
+
+# ---- W0-7: an optional input read empty when absent ---------------------------------------------
+
+@pytest.mark.parametrize("when_absent", ["empty", "emptyIntoTable"])
+@pytest.mark.parametrize("state,refs", [("paused", {"audited": ("TAG", 7)}), ("active", {})])  # paused, or never tested
+def test_an_input_read_empty_when_absent_is_passed_absent_and_recorded_with_no_snapshot(state, refs, when_absent):
+    fake = Fake()
+    fake.seed()
+    fake.inputs[INPUT.relation] = [refs]
+    port = dataclasses.replace(INPUT, required=False, state=state, when_absent=when_absent)
+    assert w.run(ctx(inputs=(port,)), fake)[0] == 0
+    assert k2_inputs(fake) == {"ecb_fx/rates": {"absent": True}}
+    (started,) = [r for r in fake.records if r["event"] == "started"]
+    assert started["inputs"] == [{"contractId": INPUT.contract, "relation": INPUT.relation, "snapshot": None,
+                                  "state": state, "lagMinutes": None}]
+
+
+@pytest.mark.parametrize("when_absent", ["fail", "empty"])
+def test_a_present_input_is_pinned_as_before_whatever_its_port_says(when_absent):
+    fake = Fake()
+    fake.seed()
+    port = dataclasses.replace(INPUT, required=False, when_absent=when_absent)
+    assert w.run(ctx(inputs=(port,)), fake)[0] == 0
+    assert k2_inputs(fake) == {"ecb_fx/rates": {"snapshot": 7}}
+    assert [r["inputs"][0]["snapshot"] for r in fake.records if r["event"] == "started"] == [7]
+
+
+def test_a_paused_input_whose_port_says_fail_is_read_at_its_tested_snapshot():
+    fake = Fake()
+    fake.seed()
+    port = dataclasses.replace(INPUT, required=False, state="paused")
+    assert w.run(ctx(inputs=(port,)), fake)[0] == 0
+    assert k2_inputs(fake) == {"ecb_fx/rates": {"snapshot": 7}}
+
+
+def test_a_required_input_never_tested_exits_4_whatever_its_port_says():
+    fake = Fake()
+    fake.seed()
+    fake.inputs[INPUT.relation] = [{}]
+    assert w.run(ctx(inputs=(dataclasses.replace(INPUT, when_absent="empty"),)), fake) == (4, [])
+    assert fake.dbt_calls == []
+
+
+def test_when_absent_is_read_from_the_pipeline_fail_when_left_out_and_refused_when_unknown():
+    tables = {INPUT.contract: (INPUT.relation, "audited", "paused")}
+    port = {"contractId": INPUT.contract, "relation": INPUT.relation, "required": False, "maxLagMinutes": None}
+
+    def read(**extra):
+        pipeline = {**PIPELINE, "inputs": [{**port, **extra}]}
+        return w.ctx_from(RELEASE, Path("/r"), "governance.access-canary", "access_canary/r1", pipeline, VIEWS, tables, SCHEMAS).inputs
+
+    assert read() == (dataclasses.replace(INPUT, required=False, state="paused"),)  # a release compiled before W0-7
+    assert read(whenAbsent="empty")[0].when_absent == "empty"
+    with pytest.raises(w.Refused):
+        read(whenAbsent="skip")
+
+
 def test_the_second_read_catches_a_tag_that_moved_and_resolution_restarts():
     fake = Fake()
     fake.seed()
