@@ -69,14 +69,17 @@ def test_a_real_value_is_kept_and_a_missing_name_appended(tmp_path):
     assert f.read_text().count("K2_TOOLS_S3_SECRET_KEY=") == 1 and len(got["K2_TOOLS_S3_SECRET_KEY"]) == 40
 
 
-def test_rotate_replaces_one_engines_pair_alone(tmp_path):
+def test_rotate_replaces_one_engines_secret_and_keeps_its_user(tmp_path):
+    # The same access key, so lake-init's `mc admin user add` sets that user's secret and the old
+    # secret stops working; a new key would leave the old user, policy and secret all valid.
     f = scratch(tmp_path)
     run(f)
     before = keys.values(f.read_text())
     out = run(f, "--rotate", "TRINO")
-    assert out.returncode == 0 and sorted(written(out.stdout)) == ["K2_TRINO_S3_ACCESS_KEY", "K2_TRINO_S3_SECRET_KEY"]
+    assert out.returncode == 0 and written(out.stdout) == ["K2_TRINO_S3_SECRET_KEY"]
     after = keys.values(f.read_text())
-    assert {n for n in after if after[n] != before.get(n)} == {"K2_TRINO_S3_ACCESS_KEY", "K2_TRINO_S3_SECRET_KEY"}
+    assert {n for n in after if after[n] != before.get(n)} == {"K2_TRINO_S3_SECRET_KEY"}
+    assert len(after["K2_TRINO_S3_SECRET_KEY"]) == 40
     assert run(f, "--rotate", "fetch").returncode == 2  # fetch has no key and never gets one
 
 

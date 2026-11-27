@@ -7,8 +7,9 @@ The names: K2_<ENGINE>_S3_ACCESS_KEY and _SECRET_KEY for every policy file under
 docker/lake/minio/policies/ (the engines lake-init makes a MinIO user for), and K2_RUN_UID and
 K2_RUN_GID (os.getuid(), os.getgid()). Only a name that is missing, empty or still the value
 .env.example ships is written, and both names of a pair that holds the root user or password (as
-the release before phase 002 shipped Trino's); an engine named by --rotate gets a new pair whatever
-it holds.
+the release before phase 002 shipped Trino's); an engine named by --rotate gets a new secret whatever
+it holds, under the same access key, so the next lake-init replaces that MinIO user's secret and the
+old one stops working (a new access key would leave the old user, its policy and its secret valid).
 An access key is k2-<engine>-<8 hex>, distinct from every other engine's and the root user; a
 secret is 40 characters of secrets.token_urlsafe. Before a change the file is copied to
 <file>.bak-<UTC time>, mode 600; the new file is written beside it at mode 600 and renamed over it
@@ -55,7 +56,9 @@ def plan(current: dict[str, str], shipped: dict[str, str], rotate: set[str], uid
     for e in ENGINES:
         ak, sk = pair_names(e)
         on_root = bool(root & {current.get(ak), current.get(sk)})
-        if on_root or e in rotate or unset(ak):
+        # A rotation keeps the access key: lake-init's `mc admin user add` then sets that user's
+        # secret, so the old one stops working. A new key would leave the old user and policy valid.
+        if on_root or unset(ak):
             while (key := f"k2-{e}-{secrets.token_hex(4)}") in taken:
                 pass
             taken.add(key)
@@ -94,7 +97,7 @@ def write_600(path: Path, data: str) -> None:
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--env-file", default=str(ROOT / ".env"))
-    ap.add_argument("--rotate", default="", help="engines whose pair is replaced, comma-separated")
+    ap.add_argument("--rotate", default="", help="engines whose secret is replaced, comma-separated")
     a = ap.parse_args(argv)
     path = Path(a.env_file)
     rotate = {e.strip().lower() for e in a.rotate.split(",") if e.strip()}
