@@ -308,7 +308,7 @@ def test_the_results_union_has_one_guarded_branch_per_writer_and_is_its_contract
     macro = dbt.emit(m)[f"{dbt.ROOT}/macros/k2_test_results.sql"]
     branches = re.findall(r"k2_test_results_exist\('(\w+)', '(\w+)'\) %\}\nunion all\nselect '([\w.-]+)' as \"product_id\", "
                           r".* from (\S+) where \"writer\" = '(\w+)'\n", macro)
-    assert [b[2] for b in branches] == [p.id for p in model.test_results_writers(m)] and len(branches) == 6
+    assert [b[2] for b in branches] == [p.id for p in model.test_results_writers(m)] and len(branches) == 8
     for catalog, schema, pid, relation, writer in branches:
         p = product(m, pid)
         base = model.base_relation(p.domain, p.name, model.TEST_RESULTS)
@@ -422,7 +422,9 @@ def test_dbt_parses_compiles_and_selects_the_tree(tmp_path: Path, name: str) -> 
     assert len(foreign) == (1 if name == "good" else 0)  # daily-load's station_id into its input
     assert all("FOR VERSION AS OF BIGINT '42'" in sql for sql in foreign)  # the foreign-key test reads the pinned snapshot too
     quality = [sql for s, sql in compiled[False].items() if "/k2_quality_" in s]
-    rules = sum(1 for p, t in built for q in t.quality if q.type in ("sql", "library"))
+    # a custom dbt rule may name k2_quality itself, as a warn rule must (kraken-trades' unresolved_rows_zero)
+    rules = sum(1 for p, t in built for q in t.quality
+                if q.type in ("sql", "library") or (q.type == "custom" and q.engine == "dbt" and "k2_quality" in str(q.implementation)))
     assert len(quality) == rules and (rules or name == "repository"), "the good set's silver_readings has sql and library rules"
     assert not [sql for sql in quality if "${table}" in sql or "metric_value" not in sql]  # ${table} is the model's relation
 

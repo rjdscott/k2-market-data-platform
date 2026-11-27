@@ -1,0 +1,209 @@
+# dbt unit tests: each runs one model's SQL on the rows written here instead of its real inputs,
+# and compares the result with the expected rows (only the columns each test lists). They prove
+# the logic, not the data. Every symbol, id, price and time is invented (AAA/ZZZ, QQQ/ZZZ, round
+# numbers): no real trade is written here. Every fixture is format sql, every column typed: dbt
+# reads a dict fixture's column types from the input relation in the warehouse, which may not
+# exist there. For silver_trade, an incremental model, each test states its branch; for an
+# incremental run the expected rows are what the model hands the MERGE, not the merged table.
+unit_tests:
+  - name: silver_trade_unnests_each_frame_with_ordinals
+    model: kraken_trades__silver_trade
+    description: >-
+      An update frame with two trades gives two rows, ordinals 1 and 2; a snapshot frame gives
+      its one row marked snapshot. The receive time is truncated to the microsecond (999 ns go).
+    overrides:
+      macros:
+        is_incremental: false
+    given:
+      - input: source('kraken_trades', 'bronze_trade')
+        format: sql
+        rows: |
+          select 0 as kafka_partition, cast(10 as bigint) as kafka_offset, cast(1767607201000000999 as bigint) as recv_ts_ns, cast('c1' as varchar) as conn_id, cast(10 as bigint) as conn_msg_seq, to_utf8('{"channel":"trade","type":"update","data":[{"symbol":"AAA/ZZZ","side":"buy","price":10.5,"qty":2,"ord_type":"market","trade_id":1,"timestamp":"2026-01-05T10:00:00.000001Z"},{"symbol":"AAA/ZZZ","side":"sell","price":11,"qty":3,"ord_type":"limit","trade_id":2,"timestamp":"2026-01-05T10:00:00.000002Z"}]}') as payload
+          union all select 0, 11, 1767607201000000999, 'c1', 11, to_utf8('{"channel":"trade","type":"snapshot","data":[{"symbol":"AAA/ZZZ","side":"buy","price":12,"qty":1,"ord_type":"market","trade_id":3,"timestamp":"2026-01-05T10:00:00.000003Z"}]}')
+      - input: source('security_master', 'venue_symbol')  # k2_input renders source() in a unit test
+        format: sql
+        rows: |
+          select cast('kraken' as varchar) as venue, cast('AAA/ZZZ' as varchar) as venue_symbol, cast('i-aaa' as varchar) as instrument_id, cast(timestamp '1970-01-01 00:00:00 UTC' as timestamp(6) with time zone) as valid_from, cast(timestamp '9999-12-31 23:59:59 UTC' as timestamp(6) with time zone) as valid_to, cast(timestamp '2026-01-01 00:00:00 UTC' as timestamp(6) with time zone) as recorded_at
+    expect:
+      rows:
+        - {kafka_offset: 10, trade_ordinal: 1, trade_id: 1, side: buy, price: 10.5, quantity: 2, order_type: market, frame_type: update, is_duplicate: false, instrument_id: i-aaa, trade_ts: "2026-01-05 10:00:00.000001 UTC", received_at: "2026-01-05 10:00:01 UTC"}
+        - {kafka_offset: 10, trade_ordinal: 2, trade_id: 2, side: sell, price: 11, quantity: 3, order_type: limit, frame_type: update, is_duplicate: false, instrument_id: i-aaa, trade_ts: "2026-01-05 10:00:00.000002 UTC", received_at: "2026-01-05 10:00:01 UTC"}
+        - {kafka_offset: 11, trade_ordinal: 1, trade_id: 3, side: buy, price: 12, quantity: 1, order_type: market, frame_type: snapshot, is_duplicate: false, instrument_id: i-aaa, trade_ts: "2026-01-05 10:00:00.000003 UTC", received_at: "2026-01-05 10:00:01 UTC"}
+
+  - name: silver_trade_flags_a_later_delivery
+    model: kraken_trades__silver_trade
+    description: >-
+      Trade 7 arrives in an update (offset 10) and again in a snapshot after a reconnect (offset
+      12): both are kept, the first by offset is the original and the second is flagged.
+    overrides:
+      macros:
+        is_incremental: false
+    given:
+      - input: source('kraken_trades', 'bronze_trade')
+        format: sql
+        rows: |
+          select 0 as kafka_partition, cast(10 as bigint) as kafka_offset, cast(1767607201000000000 as bigint) as recv_ts_ns, cast('c1' as varchar) as conn_id, cast(10 as bigint) as conn_msg_seq, to_utf8('{"channel":"trade","type":"update","data":[{"symbol":"AAA/ZZZ","side":"buy","price":10,"qty":1,"ord_type":"market","trade_id":7,"timestamp":"2026-01-05T10:00:00Z"}]}') as payload
+          union all select 0, 12, 1767607201000000000, 'c2', 1, to_utf8('{"channel":"trade","type":"snapshot","data":[{"symbol":"AAA/ZZZ","side":"buy","price":10,"qty":1,"ord_type":"market","trade_id":7,"timestamp":"2026-01-05T10:00:00Z"}]}')
+      - input: source('security_master', 'venue_symbol')
+        format: sql
+        rows: |
+          select cast('kraken' as varchar) as venue, cast('AAA/ZZZ' as varchar) as venue_symbol, cast('i-aaa' as varchar) as instrument_id, cast(timestamp '1970-01-01 00:00:00 UTC' as timestamp(6) with time zone) as valid_from, cast(timestamp '9999-12-31 23:59:59 UTC' as timestamp(6) with time zone) as valid_to, cast(timestamp '2026-01-01 00:00:00 UTC' as timestamp(6) with time zone) as recorded_at
+    expect:
+      rows:
+        - {kafka_offset: 10, trade_id: 7, frame_type: update, is_duplicate: false, conn_id: c1}
+        - {kafka_offset: 12, trade_id: 7, frame_type: snapshot, is_duplicate: true, conn_id: c2}
+
+  - name: silver_trade_holds_a_frame_whose_symbol_resolves_to_nothing
+    model: kraken_trades__silver_trade
+    description: >-
+      QQQ/ZZZ is in no venue_symbol version: its frame (offset 11) stays out, and so does the
+      frame at offset 12, which holds an AAA/ZZZ trade beside a QQQ/ZZZ one. Only offset 10 comes in.
+    overrides:
+      macros:
+        is_incremental: false
+    given:
+      - input: source('kraken_trades', 'bronze_trade')
+        format: sql
+        rows: |
+          select 0 as kafka_partition, cast(10 as bigint) as kafka_offset, cast(1767607201000000000 as bigint) as recv_ts_ns, cast('c1' as varchar) as conn_id, cast(10 as bigint) as conn_msg_seq, to_utf8('{"channel":"trade","type":"update","data":[{"symbol":"AAA/ZZZ","side":"buy","price":10,"qty":1,"ord_type":"market","trade_id":1,"timestamp":"2026-01-05T10:00:00Z"}]}') as payload
+          union all select 0, 11, 1767607201000000000, 'c1', 11, to_utf8('{"channel":"trade","type":"update","data":[{"symbol":"QQQ/ZZZ","side":"buy","price":20,"qty":1,"ord_type":"market","trade_id":1,"timestamp":"2026-01-05T10:00:00Z"}]}')
+          union all select 0, 12, 1767607201000000000, 'c1', 12, to_utf8('{"channel":"trade","type":"update","data":[{"symbol":"AAA/ZZZ","side":"buy","price":10,"qty":1,"ord_type":"market","trade_id":2,"timestamp":"2026-01-05T10:00:00Z"},{"symbol":"QQQ/ZZZ","side":"buy","price":20,"qty":1,"ord_type":"market","trade_id":2,"timestamp":"2026-01-05T10:00:00Z"}]}')
+      - input: source('security_master', 'venue_symbol')
+        format: sql
+        rows: |
+          select cast('kraken' as varchar) as venue, cast('AAA/ZZZ' as varchar) as venue_symbol, cast('i-aaa' as varchar) as instrument_id, cast(timestamp '1970-01-01 00:00:00 UTC' as timestamp(6) with time zone) as valid_from, cast(timestamp '9999-12-31 23:59:59 UTC' as timestamp(6) with time zone) as valid_to, cast(timestamp '2026-01-01 00:00:00 UTC' as timestamp(6) with time zone) as recorded_at
+    expect:
+      rows:
+        - {kafka_offset: 10, trade_ordinal: 1, venue_symbol: AAA/ZZZ, trade_id: 1}
+
+  - name: silver_trade_takes_back_a_held_frame_and_reflags
+    model: kraken_trades__silver_trade
+    description: >-
+      Silver holds offset 10 (AAA/ZZZ trade 5). Offset 9, below it, was held for its QQQ/ZZZ
+      trade, and QQQ/ZZZ now resolves: the frame comes in, its AAA/ZZZ trade 5 is the original by
+      offset, so offset 10 is handed back flagged duplicate. Offset 11 is new. Offset 10's frame
+      is not read again.
+    overrides:
+      macros:
+        is_incremental: true
+    given:
+      - input: this
+        format: sql
+        rows: |
+          select 0 as kafka_partition, cast(10 as bigint) as kafka_offset, 1 as trade_ordinal, cast(timestamp '2026-01-05 10:00:00 UTC' as timestamp(6) with time zone) as trade_ts, cast(5 as bigint) as trade_id, cast('AAA/ZZZ' as varchar) as venue_symbol, cast('i-aaa' as varchar) as instrument_id, cast('buy' as varchar) as side, cast(10 as decimal(38, 18)) as price, cast(1 as decimal(38, 18)) as quantity, cast('market' as varchar) as order_type, cast('snapshot' as varchar) as frame_type, false as is_duplicate, cast(timestamp '2026-01-05 10:00:01 UTC' as timestamp(6) with time zone) as received_at, cast('c2' as varchar) as conn_id, cast(1 as bigint) as conn_msg_seq
+      - input: source('kraken_trades', 'bronze_trade')
+        format: sql
+        rows: |
+          select 0 as kafka_partition, cast(9 as bigint) as kafka_offset, cast(1767607201000000000 as bigint) as recv_ts_ns, cast('c1' as varchar) as conn_id, cast(9 as bigint) as conn_msg_seq, to_utf8('{"channel":"trade","type":"update","data":[{"symbol":"AAA/ZZZ","side":"buy","price":10,"qty":1,"ord_type":"market","trade_id":5,"timestamp":"2026-01-05T10:00:00Z"},{"symbol":"QQQ/ZZZ","side":"sell","price":20,"qty":1,"ord_type":"market","trade_id":1,"timestamp":"2026-01-05T10:00:00Z"}]}') as payload
+          union all select 0, 10, 1767607201000000000, 'c2', 1, to_utf8('{"channel":"trade","type":"snapshot","data":[{"symbol":"AAA/ZZZ","side":"buy","price":10,"qty":1,"ord_type":"market","trade_id":5,"timestamp":"2026-01-05T10:00:00Z"}]}')
+          union all select 0, 11, 1767607201000000000, 'c2', 2, to_utf8('{"channel":"trade","type":"update","data":[{"symbol":"AAA/ZZZ","side":"buy","price":10,"qty":1,"ord_type":"market","trade_id":6,"timestamp":"2026-01-05T10:00:01Z"}]}')
+      - input: source('security_master', 'venue_symbol')
+        format: sql
+        rows: |
+          select cast('kraken' as varchar) as venue, cast('AAA/ZZZ' as varchar) as venue_symbol, cast('i-aaa' as varchar) as instrument_id, cast(timestamp '1970-01-01 00:00:00 UTC' as timestamp(6) with time zone) as valid_from, cast(timestamp '9999-12-31 23:59:59 UTC' as timestamp(6) with time zone) as valid_to, cast(timestamp '2026-01-01 00:00:00 UTC' as timestamp(6) with time zone) as recorded_at
+          union all select 'kraken', 'QQQ/ZZZ', 'i-qqq', timestamp '1970-01-01 00:00:00 UTC', timestamp '9999-12-31 23:59:59 UTC', timestamp '2026-01-06 00:00:00 UTC'
+    expect:
+      rows:
+        - {kafka_offset: 9, trade_ordinal: 1, venue_symbol: AAA/ZZZ, trade_id: 5, is_duplicate: false}
+        - {kafka_offset: 9, trade_ordinal: 2, venue_symbol: QQQ/ZZZ, trade_id: 1, is_duplicate: false, instrument_id: i-qqq}
+        - {kafka_offset: 10, trade_ordinal: 1, venue_symbol: AAA/ZZZ, trade_id: 5, is_duplicate: true}
+        - {kafka_offset: 11, trade_ordinal: 1, venue_symbol: AAA/ZZZ, trade_id: 6, is_duplicate: false}
+
+  - name: silver_trade_takes_a_released_frame_once
+    model: kraken_trades__silver_trade
+    description: >-
+      The build after the take-back: offsets 9 and 10 are in silver, so only offset 12, new, is
+      handed to the MERGE; offset 9 does not come in a second time.
+    overrides:
+      macros:
+        is_incremental: true
+    given:
+      - input: this
+        format: sql
+        rows: |
+          select 0 as kafka_partition, cast(9 as bigint) as kafka_offset, 1 as trade_ordinal, cast(timestamp '2026-01-05 10:00:00 UTC' as timestamp(6) with time zone) as trade_ts, cast(1 as bigint) as trade_id, cast('QQQ/ZZZ' as varchar) as venue_symbol, cast('i-qqq' as varchar) as instrument_id, cast('sell' as varchar) as side, cast(20 as decimal(38, 18)) as price, cast(1 as decimal(38, 18)) as quantity, cast('market' as varchar) as order_type, cast('update' as varchar) as frame_type, false as is_duplicate, cast(timestamp '2026-01-05 10:00:01 UTC' as timestamp(6) with time zone) as received_at, cast('c1' as varchar) as conn_id, cast(9 as bigint) as conn_msg_seq
+          union all select 0, 10, 1, timestamp '2026-01-05 10:00:00 UTC', 2, 'AAA/ZZZ', 'i-aaa', 'buy', 10, 1, 'market', 'update', false, timestamp '2026-01-05 10:00:01 UTC', 'c1', 10
+      - input: source('kraken_trades', 'bronze_trade')
+        format: sql
+        rows: |
+          select 0 as kafka_partition, cast(9 as bigint) as kafka_offset, cast(1767607201000000000 as bigint) as recv_ts_ns, cast('c1' as varchar) as conn_id, cast(9 as bigint) as conn_msg_seq, to_utf8('{"channel":"trade","type":"update","data":[{"symbol":"QQQ/ZZZ","side":"sell","price":20,"qty":1,"ord_type":"market","trade_id":1,"timestamp":"2026-01-05T10:00:00Z"}]}') as payload
+          union all select 0, 10, 1767607201000000000, 'c1', 10, to_utf8('{"channel":"trade","type":"update","data":[{"symbol":"AAA/ZZZ","side":"buy","price":10,"qty":1,"ord_type":"market","trade_id":2,"timestamp":"2026-01-05T10:00:00Z"}]}')
+          union all select 0, 12, 1767607201000000000, 'c1', 12, to_utf8('{"channel":"trade","type":"update","data":[{"symbol":"AAA/ZZZ","side":"buy","price":10,"qty":1,"ord_type":"market","trade_id":3,"timestamp":"2026-01-05T10:00:02Z"}]}')
+      - input: source('security_master', 'venue_symbol')
+        format: sql
+        rows: |
+          select cast('kraken' as varchar) as venue, cast('AAA/ZZZ' as varchar) as venue_symbol, cast('i-aaa' as varchar) as instrument_id, cast(timestamp '1970-01-01 00:00:00 UTC' as timestamp(6) with time zone) as valid_from, cast(timestamp '9999-12-31 23:59:59 UTC' as timestamp(6) with time zone) as valid_to, cast(timestamp '2026-01-01 00:00:00 UTC' as timestamp(6) with time zone) as recorded_at
+          union all select 'kraken', 'QQQ/ZZZ', 'i-qqq', timestamp '1970-01-01 00:00:00 UTC', timestamp '9999-12-31 23:59:59 UTC', timestamp '2026-01-06 00:00:00 UTC'
+    expect:
+      rows:
+        - {kafka_offset: 12, trade_ordinal: 1, trade_id: 3, is_duplicate: false}
+
+  - name: silver_trade_resolves_through_the_1970_version
+    model: kraken_trades__silver_trade
+    description: >-
+      The master first fetched AAA/ZZZ on 15 February (recorded_at) and its first version opens at
+      1970-01-01, so a trade of 5 January resolves to it; the version that opens on 1 March names
+      another instrument, which a trade of 2 March resolves to.
+    overrides:
+      macros:
+        is_incremental: false
+    given:
+      - input: source('kraken_trades', 'bronze_trade')
+        format: sql
+        rows: |
+          select 0 as kafka_partition, cast(10 as bigint) as kafka_offset, cast(1767607201000000000 as bigint) as recv_ts_ns, cast('c1' as varchar) as conn_id, cast(10 as bigint) as conn_msg_seq, to_utf8('{"channel":"trade","type":"update","data":[{"symbol":"AAA/ZZZ","side":"buy","price":10,"qty":1,"ord_type":"market","trade_id":1,"timestamp":"2026-01-05T10:00:00Z"}]}') as payload
+          union all select 0, 11, 1767607201000000000, 'c1', 11, to_utf8('{"channel":"trade","type":"update","data":[{"symbol":"AAA/ZZZ","side":"buy","price":10,"qty":1,"ord_type":"market","trade_id":2,"timestamp":"2026-03-02T10:00:00Z"}]}')
+      - input: source('security_master', 'venue_symbol')
+        format: sql
+        rows: |
+          select cast('kraken' as varchar) as venue, cast('AAA/ZZZ' as varchar) as venue_symbol, cast('i-aaa-1' as varchar) as instrument_id, cast(timestamp '1970-01-01 00:00:00 UTC' as timestamp(6) with time zone) as valid_from, cast(timestamp '2026-03-01 00:00:00 UTC' as timestamp(6) with time zone) as valid_to, cast(timestamp '2026-02-15 00:00:00 UTC' as timestamp(6) with time zone) as recorded_at
+          union all select 'kraken', 'AAA/ZZZ', 'i-aaa-2', timestamp '2026-03-01 00:00:00 UTC', timestamp '9999-12-31 23:59:59 UTC', timestamp '2026-03-01 00:00:00 UTC'
+    expect:
+      rows:
+        - {kafka_offset: 10, trade_id: 1, instrument_id: i-aaa-1}
+        - {kafka_offset: 11, trade_id: 2, instrument_id: i-aaa-2}
+
+  - name: silver_trade_keeps_every_decimal_digit
+    model: kraken_trades__silver_trade
+    description: >-
+      A price with 26 significant digits and a quantity of 10^-18 come out exactly, which a double
+      (about 17 digits) would not; 1.50000000 is the decimal 1.5, nothing rounded.
+    overrides:
+      macros:
+        is_incremental: false
+    given:
+      - input: source('kraken_trades', 'bronze_trade')
+        format: sql
+        rows: |
+          select 0 as kafka_partition, cast(10 as bigint) as kafka_offset, cast(1767607201000000000 as bigint) as recv_ts_ns, cast('c1' as varchar) as conn_id, cast(10 as bigint) as conn_msg_seq, to_utf8('{"channel":"trade","type":"update","data":[{"symbol":"AAA/ZZZ","side":"buy","price":12345678.123456789012345678,"qty":0.000000000000000001,"ord_type":"market","trade_id":1,"timestamp":"2026-01-05T10:00:00Z"},{"symbol":"AAA/ZZZ","side":"buy","price":1.50000000,"qty":2.00000000,"ord_type":"market","trade_id":2,"timestamp":"2026-01-05T10:00:00Z"}]}') as payload
+      - input: source('security_master', 'venue_symbol')
+        format: sql
+        rows: |
+          select cast('kraken' as varchar) as venue, cast('AAA/ZZZ' as varchar) as venue_symbol, cast('i-aaa' as varchar) as instrument_id, cast(timestamp '1970-01-01 00:00:00 UTC' as timestamp(6) with time zone) as valid_from, cast(timestamp '9999-12-31 23:59:59 UTC' as timestamp(6) with time zone) as valid_to, cast(timestamp '2026-01-01 00:00:00 UTC' as timestamp(6) with time zone) as recorded_at
+    expect:
+      rows:
+        # quoted: YAML would read the number as a float and round it before dbt casts it
+        - {trade_id: 1, price: "12345678.123456789012345678", quantity: "0.000000000000000001"}
+        - {trade_id: 2, price: "1.5", quantity: "2"}
+
+  - name: unresolved_holds_every_trade_of_a_frame_not_in_silver
+    model: kraken_trades__silver_trade_unresolved
+    description: >-
+      Silver holds offset 10; offset 9, with a trade whose symbol resolved to nothing, is not in
+      it, so both of its trades are held. A frame with no trade (a subscribe acknowledgement)
+      adds no row.
+    given:
+      - input: ref('kraken_trades__silver_trade')
+        format: sql
+        rows: |
+          select 0 as kafka_partition, cast(10 as bigint) as kafka_offset
+      - input: source('kraken_trades', 'bronze_trade')
+        format: sql
+        rows: |
+          select 0 as kafka_partition, cast(9 as bigint) as kafka_offset, cast(1767607201000000000 as bigint) as recv_ts_ns, cast('c1' as varchar) as conn_id, cast(9 as bigint) as conn_msg_seq, to_utf8('{"channel":"trade","type":"update","data":[{"symbol":"AAA/ZZZ","side":"buy","price":10,"qty":1,"ord_type":"market","trade_id":5,"timestamp":"2026-01-05T10:00:00Z"},{"symbol":"QQQ/ZZZ","side":"sell","price":20,"qty":1,"ord_type":"market","trade_id":1,"timestamp":"2026-01-05T10:00:00Z"}]}') as payload
+          union all select 0, 10, 1767607201000000000, 'c1', 10, to_utf8('{"channel":"trade","type":"update","data":[{"symbol":"AAA/ZZZ","side":"buy","price":10,"qty":1,"ord_type":"market","trade_id":6,"timestamp":"2026-01-05T10:00:00Z"}]}')
+          union all select 0, 11, 1767607201000000000, 'c1', 11, to_utf8('{"method":"subscribe","result":{"channel":"trade","snapshot":true,"symbol":"AAA/ZZZ"},"success":true}')
+    expect:
+      rows:
+        - {kafka_offset: 9, trade_ordinal: 1, venue_symbol: AAA/ZZZ, trade_id: 5, price: 10, trade_ts: "2026-01-05 10:00:00 UTC"}
+        - {kafka_offset: 9, trade_ordinal: 2, venue_symbol: QQQ/ZZZ, trade_id: 1, price: 20, trade_ts: "2026-01-05 10:00:00 UTC"}

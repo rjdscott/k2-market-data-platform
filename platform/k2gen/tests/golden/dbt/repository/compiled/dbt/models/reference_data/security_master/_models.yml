@@ -1,0 +1,416 @@
+# Compiled by k2gen (platform/k2gen/k2gen/emit/dbt.py) from the release's documents. Never edit it: change the documents.
+version: 2
+models:
+- name: security_master__asset
+  description: 'One row per canonical asset code that a published instrument buys or is priced in, with its kind and when
+    a listing first showed it. No history: an asset''s code and kind do not change.'
+  config:
+    alias: asset
+    meta:
+      k2:
+        contract: reference-data.security-master.asset
+        reader: reference_data.security_master.asset
+  columns:
+  - name: asset_code
+    description: The canonical code, upper case, a venue's older code already mapped (BTC, USD).
+    data_type: varchar
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+    - unique
+  - name: kind
+    description: fiat when the currency master lists the code as a circulating currency (not a fund, with minor units, so
+      not a metal, the SDR or a testing code); stablecoin when seeds/stablecoins.csv lists it; else crypto.
+    data_type: varchar
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  - name: first_seen_at
+    description: The first fetch whose listing showed an instrument with this asset, in UTC.
+    data_type: timestamp(6) with time zone
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  data_tests:
+  - k2_quality:
+      arguments:
+        query: select count(*) from ${table} where kind <> 'fiat' and kind <> 'stablecoin' and kind <> 'crypto'
+        holds: metric_value = 0
+- name: security_master__instrument
+  description: 'Type-2: one row per instrument of a venue and version of its listing, valid from valid_from up to but not
+    including valid_to. A version is a change in the pair that lists it, its tick size, decimals, minimum order or status,
+    or whether it is listed at all: a delisting closes the listed version and opens one with is_listed false, a relisting
+    opens another.'
+  config:
+    alias: instrument
+    meta:
+      k2:
+        contract: reference-data.security-master.instrument
+        reader: reference_data.security_master.instrument
+  columns:
+  - name: venue
+    description: The venue that lists the instrument (kraken).
+    data_type: varchar
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  - name: instrument_id
+    description: <base_asset>-<quote_asset> of canonical codes (BTC-USD); the same on every venue.
+    data_type: varchar
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  - name: valid_from
+    description: The fetch that first saw this version, in UTC; the instrument's first version opens at 1970-01-01 00:00:00
+      UTC.
+    data_type: timestamp(6) with time zone
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  - name: valid_to
+    description: The next version's valid_from; 9999-12-31 23:59:59 UTC on the open row, never null.
+    data_type: timestamp(6) with time zone
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  - name: recorded_at
+    description: When the fetch that first saw this version ran, in UTC (knowledge time).
+    data_type: timestamp(6) with time zone
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  - name: base_asset
+    description: The canonical code of the asset bought (asset.asset_code).
+    data_type: varchar
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  - name: quote_asset
+    description: The canonical code of the asset it is priced in, an asset.asset_code.
+    data_type: varchar
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  - name: is_listed
+    description: False while no pair of the venue lists the instrument; every listing attribute below is then null.
+    data_type: boolean
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  - name: pair_code
+    description: The venue's REST code of the pair that lists it.
+    data_type: varchar
+  - name: tick_size
+    description: The smallest price step.
+    data_type: decimal(38,18)
+  - name: pair_decimals
+    description: Digits after the decimal point of a price.
+    data_type: integer
+  - name: lot_decimals
+    description: Digits after the decimal point of a volume.
+    data_type: integer
+  - name: order_min
+    description: The smallest order volume in the base asset.
+    data_type: decimal(38,18)
+  - name: status
+    description: The pair's trading status as the venue states it (online, cancel_only and the like).
+    data_type: varchar
+  data_tests:
+  - k2_unique_key:
+      arguments:
+        columns:
+        - venue
+        - instrument_id
+        - valid_from
+  - k2_quality:
+      arguments:
+        query: select count(*) from (select valid_to, lead(valid_from) over (partition by venue, instrument_id order by valid_from)
+          as next_from from ${table}) as v where next_from < valid_to
+        holds: metric_value = 0
+  - k2_quality:
+      arguments:
+        query: select count(*) from (select valid_to, lead(valid_from) over (partition by venue, instrument_id order by valid_from)
+          as next_from from ${table}) as v where valid_to < next_from
+        holds: metric_value = 0
+  - k2_quality:
+      arguments:
+        query: select count(*) from (select venue, instrument_id from ${table} group by venue, instrument_id having count_if(valid_to
+          = timestamp '9999-12-31 23:59:59 UTC') <> 1) as k
+        holds: metric_value = 0
+  - k2_quality:
+      arguments:
+        query: select count(*) from (select venue, instrument_id from ${table} group by venue, instrument_id having min(valid_from)
+          <> timestamp '1970-01-01 00:00:00 UTC') as k
+        holds: metric_value = 0
+  - k2_quality:
+      arguments:
+        query: select count(*) from ${table} where valid_from >= valid_to
+        holds: metric_value = 0
+- name: security_master__venue_symbol
+  description: 'Type-2: one row per venue spelling and version, the symbol the venue''s trades stream carries and the instrument
+    it names, valid from valid_from up to but not including valid_to. A trade resolves through the row of its venue and symbol
+    whose interval holds its time. A version changes when the instrument or the pair behind the spelling changes; a delisting
+    does not close it (the instrument''s is_listed records that), so the spelling still resolves.'
+  config:
+    alias: venue_symbol
+    meta:
+      k2:
+        contract: reference-data.security-master.venue_symbol
+        reader: reference_data.security_master.venue_symbol
+  columns:
+  - name: venue
+    description: The venue (kraken).
+    data_type: varchar
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  - name: venue_symbol
+    description: The symbol as the venue's trades stream spells it (BTC/USD on Kraken's websocket v2).
+    data_type: varchar
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  - name: valid_from
+    description: The fetch that first saw this version, in UTC; the spelling's first version opens at 1970-01-01 00:00:00
+      UTC.
+    data_type: timestamp(6) with time zone
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  - name: valid_to
+    description: The next version's valid_from; 9999-12-31 23:59:59 UTC on the open row, never null.
+    data_type: timestamp(6) with time zone
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  - name: instrument_id
+    description: The instrument the spelling names (instrument.instrument_id).
+    data_type: varchar
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  - name: pair_code
+    description: The venue's REST code of the pair whose listing claims the spelling.
+    data_type: varchar
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  - name: recorded_at
+    description: When the fetch that first saw this version ran, in UTC (knowledge time).
+    data_type: timestamp(6) with time zone
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  data_tests:
+  - k2_unique_key:
+      arguments:
+        columns:
+        - venue
+        - venue_symbol
+        - valid_from
+  - k2_quality:
+      arguments:
+        query: select count(*) from (select valid_to, lead(valid_from) over (partition by venue, venue_symbol order by valid_from)
+          as next_from from ${table}) as v where next_from < valid_to
+        holds: metric_value = 0
+  - k2_quality:
+      arguments:
+        query: select count(*) from (select valid_to, lead(valid_from) over (partition by venue, venue_symbol order by valid_from)
+          as next_from from ${table}) as v where valid_to < next_from
+        holds: metric_value = 0
+  - k2_quality:
+      arguments:
+        query: select count(*) from (select venue, venue_symbol from ${table} group by venue, venue_symbol having count_if(valid_to
+          = timestamp '9999-12-31 23:59:59 UTC') <> 1) as k
+        holds: metric_value = 0
+  - k2_quality:
+      arguments:
+        query: select count(*) from (select venue, venue_symbol from ${table} group by venue, venue_symbol having min(valid_from)
+          <> timestamp '1970-01-01 00:00:00 UTC') as k
+        holds: metric_value = 0
+  - k2_quality:
+      arguments:
+        query: select count(*) from ${table} where valid_to <= valid_from
+        holds: metric_value = 0
+- name: security_master__venue_symbol_claim
+  description: 'One row per span in which a venue''s pair is listed with one set of attributes: the listing''s websocket name
+    resolved by rule into canonical base and quote codes, the venue spelling and instrument id composed from them, and whether
+    the claim is held. The one place the matching rule lives: instrument and venue_symbol publish the claims that are not
+    held, and venue_symbol_held lists the ones that are.'
+  config:
+    alias: venue_symbol_claim
+    meta:
+      k2:
+        contract: reference-data.security-master.venue_symbol_claim
+        reader: reference_data.security_master.venue_symbol_claim
+  columns:
+  - name: venue
+    description: The venue whose listing states the pair (kraken).
+    data_type: varchar
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  - name: pair_code
+    description: The pair's REST code in the venue's listing.
+    data_type: varchar
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  - name: claimed_from
+    description: The first fetch that stated this listing of the pair (the listing version's first_fetched_at), in UTC.
+    data_type: timestamp(6) with time zone
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  - name: claimed_to
+    description: The pair's next listing version, changed or unlisted; 9999-12-31 23:59:59 UTC while none follows.
+    data_type: timestamp(6) with time zone
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  - name: ws_name
+    description: The websocket name as the listing spells it.
+    data_type: varchar
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  - name: base_asset
+    description: 'The canonical base code: the websocket name''s part before its one slash, upper-cased, then mapped through
+      seeds/code_exceptions.csv for the venue. Null when the name is not of the form base/quote.'
+    data_type: varchar
+  - name: quote_asset
+    description: The canonical quote code, by the same rule from the part after the slash; null as base_asset is.
+    data_type: varchar
+  - name: venue_symbol
+    description: base_asset/quote_asset, the spelling the venue's trades stream carries; null when either is.
+    data_type: varchar
+  - name: instrument_id
+    description: base_asset-quote_asset, the canonical instrument id; null when either is.
+    data_type: varchar
+  - name: tick_size
+    description: The smallest price step the listing states.
+    data_type: decimal(38,18)
+  - name: pair_decimals
+    description: Digits after the decimal point of a price.
+    data_type: integer
+  - name: lot_decimals
+    description: Digits after the decimal point of a volume.
+    data_type: integer
+  - name: order_min
+    description: The smallest order volume in the base asset.
+    data_type: decimal(38,18)
+  - name: status
+    description: The pair's trading status as the venue states it.
+    data_type: varchar
+  - name: held_reason
+    description: 'Null for a claim that is published. claimed_twice: another pair of the venue claims the same venue_symbol
+      over an overlapping span, so every claim of that spelling is held. not_base_slash_quote: the websocket name has no single
+      slash to split.'
+    data_type: varchar
+  data_tests:
+  - k2_unique_key:
+      arguments:
+        columns:
+        - venue
+        - pair_code
+        - claimed_from
+- name: security_master__venue_symbol_held
+  description: 'The claims held from publication: every claim of a spelling two pairs of one venue claim at overlapping times,
+    and every listing whose websocket name the rule cannot split. Other spellings and other venues publish as usual. Owner-only.'
+  config:
+    alias: venue_symbol_held
+    meta:
+      k2:
+        contract: reference-data.security-master.venue_symbol_held
+        reader: reference_data.security_master.venue_symbol_held
+  columns:
+  - name: venue
+    description: The venue whose listing states the pair.
+    data_type: varchar
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  - name: pair_code
+    description: The pair's REST code.
+    data_type: varchar
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  - name: claimed_from
+    description: The first fetch that stated this listing of the pair, in UTC.
+    data_type: timestamp(6) with time zone
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  - name: claimed_to
+    description: The pair's next listing version; 9999-12-31 23:59:59 UTC while none follows.
+    data_type: timestamp(6) with time zone
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  - name: ws_name
+    description: The websocket name as the listing spells it.
+    data_type: varchar
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  - name: venue_symbol
+    description: The spelling the rule composed; null when the name could not be split.
+    data_type: varchar
+  - name: held_reason
+    description: claimed_twice or not_base_slash_quote (venue_symbol_claim.held_reason).
+    data_type: varchar
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  data_tests:
+  - k2_unique_key:
+      arguments:
+        columns:
+        - venue
+        - pair_code
+        - claimed_from
+  - k2_quality:
+      arguments:
+        query: select count(*) from ${table} where held_reason is not null
+        holds: metric_value = 0
+      config:
+        severity: warn
+seeds:
+- name: security_master__code_exceptions
+  description: The synthetic seed contracts/reference-data/security-master/seeds/code_exceptions.csv.
+  config:
+    alias: code_exceptions
+- name: security_master__stablecoins
+  description: The synthetic seed contracts/reference-data/security-master/seeds/stablecoins.csv.
+  config:
+    alias: stablecoins

@@ -45,9 +45,12 @@ live access suite's drift row sees the same). Its ddl step is additive and nothi
 not drift, and so is each table and view in it that the same release declares (a table as a table,
 a view as a view with the same owner, read from its compiled files alone: this image's k2gen may
 not read a newer release's documents); anything else in it, and anything undeclared in a namespace
-of --release (a table planted beside a live base), is still DRIFT. Safe because the live rules
-name relations by exact name (emit/trino_rules.exact) and default deny: no rule of a release names
-a namespace it does not declare, so under it no principal reads what is LEFT.
+of --release (a table planted beside a live base), is still DRIFT, but for one case: a table a
+--left-by release declares in a namespace --release declares too (the holds table it added beside
+the run record) is LEFT while no table rule of --release grants a privilege on it, read from its own
+rules.json. Safe because the live rules name relations by exact name (emit/trino_rules.exact) and
+default deny: no rule of a release names a namespace it does not declare, so under it no principal
+reads what is LEFT; a builder's rules cover its whole base namespace, so a table left there is DRIFT.
 
 Exits 0 when the catalog equals the release (PENDING, SKIP and LEFT lines allowed), 1 naming every
 difference on a DRIFT line, 2 when the catalog cannot be reached or a release cannot be read.
@@ -78,6 +81,8 @@ RESULTS_TABLE = "dq_test_results"  # dbt/macros/k2_results.sql: the builder's te
 LEFT_ENV = "K2_DRIFT_LEFT_BY"  # --left-by's default, comma-separated release directories
 NOTHING_READS = ("nothing reads it under the live rules: they name relations by exact name and deny the rest, "
                  "and no rule of the live release names a namespace it does not declare")
+NOT_NAMED = ("no table rule of the live release grants a privilege on it (rules name relations by exact name and "
+             "deny the rest), so no principal reads it")
 _TOKEN = re.compile(r"'(?:[^']|'')*'|\"(?:[^\"]|\"\")*\"|[A-Za-z0-9_$]+|\S")
 
 
@@ -277,7 +282,24 @@ def expected(release: Path) -> dict[str, Any]:
         views[warehouse_of[catalog], ns][name] = {"view": view, "base": (base_ns, base_t), "record": record}
         pending_tables[warehouse_of[catalog], base_ns].add(base_t)
     return {"namespaces": namespaces, "tables": tables, "views": views, "pending_tables": pending_tables,
-            "results": results, "sql": generated_sql, "release": release.name}
+            "results": results, "sql": generated_sql, "release": release.name, "reached": rule_reach(release)}
+
+
+def rule_reach(release: Path) -> Callable[[str, str, str], bool]:
+    """reached(warehouse, namespace, table): True when a table rule of the release's own rules grants any
+    privilege on that relation through any Trino catalog over the warehouse (compiled/trino/etc/catalog,
+    each file's iceberg.rest-catalog.warehouse); a field a rule leaves out matches everything, as Trino
+    reads it."""
+    rules = json.loads((release / "compiled/trino/rules.json").read_text()).get("tables") or []
+    catalogs: dict[str, set[str]] = defaultdict(set)
+    for f in (release / "compiled/trino/etc/catalog").glob("*.properties"):
+        if m := re.search(r"(?m)^iceberg\.rest-catalog\.warehouse=(\S+)$", f.read_text()):
+            catalogs[m[1]].add(f.stem)
+
+    def reached(w: str, ns: str, t: str) -> bool:
+        return any(r.get("privileges") and re.fullmatch(r.get("schema", ".*"), ns) and re.fullmatch(r.get("table", ".*"), t)
+                   and any(re.fullmatch(r.get("catalog", ".*"), c) for c in catalogs[w]) for r in rules)
+    return reached
 
 
 def left_by(release: Path) -> dict[str, Any]:
@@ -310,6 +332,7 @@ def drift(uri: str, want: dict[str, Any], newest_audited: Callable[[str], int | 
     widen, each a difference here for that moment. None checks the whole release (release-verify). `left`: left_by() of each release deployed
     or attempted since the live one; None reads them from $K2_DRIFT_LEFT_BY."""
     found: dict[str, list[str]] = {"differences": [], "pending": [], "skipped": [], "left": []}
+    reach = want.get("reached") or (lambda w, ns, t: True)  # unknown rules: every relation reached, so never LEFT
     if left is None:
         left = [left_by(Path(p)) for p in os.environ.get(LEFT_ENV, "").split(",") if p]
 
@@ -372,7 +395,13 @@ def drift(uri: str, want: dict[str, Any], newest_audited: Callable[[str], int | 
             reader = ns in {n for (vw, n) in want["views"] if vw == w}
             for t in sorted(here - expect - ({RESULTS_TABLE} if (w, ns) in want["results"] else set())):
                 where = "a reader namespace, which holds views only" if reader else "a namespace of the release"
-                diff(f"DRIFT table {w}.{ns}.{t}: in {where}, and the release declares no such table")
+                # A platform table a release since the live one added (the holds beside the run record): its
+                # namespace is the live release's too, so LEFT only while no rule of the live release reaches it.
+                if (who := next((x["id"] for x in left if (w, ns, t) in x["tables"]), None)) and not reach(w, ns, t):
+                    leave("table", f"{w}.{ns}.{t}", who, f"in {where}, and {NOT_NAMED}")
+                    continue
+                diff(f"DRIFT table {w}.{ns}.{t}: in {where}, and the release declares no such table"
+                     + (f" ({who} does, and a rule of the live release reaches it)" if who else ""))
             for t in sorted(expect - here):
                 if t in listed:
                     diff(f"DRIFT base {w}.{ns}.{t}: a VIEW where the release's TABLE must be, so a reader view over it "

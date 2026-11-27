@@ -133,6 +133,18 @@
       "kind": "table",
       "mode": "rebuild",
       "ref": "audited",
+      "table": "market_capture.kraken_trades__base.silver_trade"
+    },
+    {
+      "kind": "table",
+      "mode": "rebuild",
+      "ref": "audited",
+      "table": "market_capture.kraken_trades__base.silver_trade_unresolved"
+    },
+    {
+      "kind": "table",
+      "mode": "rebuild",
+      "ref": "audited",
       "table": "reference_data.calendars__base.target_days"
     },
     {
@@ -140,6 +152,36 @@
       "mode": "rebuild",
       "ref": "audited",
       "table": "reference_data.currency_master__base.currency"
+    },
+    {
+      "kind": "table",
+      "mode": "rebuild",
+      "ref": "audited",
+      "table": "reference_data.security_master__base.asset"
+    },
+    {
+      "kind": "table",
+      "mode": "rebuild",
+      "ref": "audited",
+      "table": "reference_data.security_master__base.instrument"
+    },
+    {
+      "kind": "table",
+      "mode": "rebuild",
+      "ref": "audited",
+      "table": "reference_data.security_master__base.venue_symbol"
+    },
+    {
+      "kind": "table",
+      "mode": "rebuild",
+      "ref": "audited",
+      "table": "reference_data.security_master__base.venue_symbol_claim"
+    },
+    {
+      "kind": "table",
+      "mode": "rebuild",
+      "ref": "audited",
+      "table": "reference_data.security_master__base.venue_symbol_held"
     },
     {
       "kind": "lakekeeper-db"

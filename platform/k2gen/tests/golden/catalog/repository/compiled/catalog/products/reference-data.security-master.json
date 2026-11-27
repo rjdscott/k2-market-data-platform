@@ -1,0 +1,604 @@
+{
+  "id": "reference-data.security-master",
+  "name": "security-master",
+  "domain": "reference-data",
+  "version": "1.0.0",
+  "status": "active",
+  "type": "sourceAligned",
+  "owner": "reference-data-team",
+  "purpose": "One row per asset with its kind (fiat, stablecoin or crypto); one row per instrument and version of its venue listing (tick size, decimals, minimum order, status, listed or not); and one row per venue spelling and version, the symbol a venue's trades stream carries, with the instrument it names. A version is valid from the first fetch that saw it; the first version of a key opens at 1970-01-01 so that a trade older than the first fetch still resolves; the open version ends at 9999-12-31 23:59:59, never null.",
+  "limitations": "Kraken only, from its AssetPairs listing, so history starts at that product's first fetch and a version starts up to an hour late. A venue spelling is the listing's websocket name with each code upper-cased and mapped through seeds/code_exceptions.csv, recomposed as base/quote: if the trades stream spells a pair otherwise, its trades resolve to nothing and are held by the trades product. A spelling two pairs of one venue claim at overlapping times is held in venue_symbol_held, and neither claim is published until the owner resolves it. The kind of an asset is fiat when the currency master lists it as a circulating currency with minor units, stablecoin when seeds/stablecoins.csv lists it, else crypto.",
+  "usage": "Resolve a trade by venue and venue_symbol in reference_data.security_master.venue_symbol with valid_from <= trade time < valid_to, half-open, then read the instrument by venue and instrument_id over the same interval rule. Filter valid_to = TIMESTAMP '9999-12-31 23:59:59 UTC' for the current rows: a query that forgets it reads history.",
+  "issued": "2026-01-01T00:00:00Z",
+  "periodicity": "37 * * * *",
+  "productFile": "documents/contracts/reference-data/security-master/product.odps.yaml",
+  "inputs": [
+    {
+      "contractId": "market-capture.kraken-instruments.silver_listing",
+      "version": "1.0.0",
+      "relation": "market_capture.kraken_instruments.silver_listing",
+      "required": true,
+      "maxLagMinutes": null
+    },
+    {
+      "contractId": "reference-data.currency-master.currency",
+      "version": "1.0.0",
+      "relation": "reference_data.currency_master.currency",
+      "required": true,
+      "maxLagMinutes": null
+    }
+  ],
+  "outputs": [
+    {
+      "contractId": "reference-data.security-master.asset",
+      "relation": "reference_data.security_master.asset",
+      "build": "dbt",
+      "testedRef": "audited",
+      "contractFile": "documents/contracts/reference-data/security-master/asset.odcs.yaml",
+      "layer": "gold",
+      "version": "1.0.0",
+      "purpose": "One row per canonical asset code that a published instrument buys or is priced in, with its kind and when a listing first showed it. No history: an asset's code and kind do not change.",
+      "columns": [
+        {
+          "name": "asset_code",
+          "type": "varchar",
+          "required": true,
+          "primaryKey": true,
+          "description": "The canonical code, upper case, a venue's older code already mapped (BTC, USD).",
+          "primaryKeyPosition": 1
+        },
+        {
+          "name": "kind",
+          "type": "varchar",
+          "required": true,
+          "primaryKey": false,
+          "description": "fiat when the currency master lists the code as a circulating currency (not a fund, with minor units, so not a metal, the SDR or a testing code); stablecoin when seeds/stablecoins.csv lists it; else crypto."
+        },
+        {
+          "name": "first_seen_at",
+          "type": "timestamp(6) with time zone",
+          "required": true,
+          "primaryKey": false,
+          "description": "The first fetch whose listing showed an instrument with this asset, in UTC.",
+          "time": "known"
+        }
+      ],
+      "retentionDays": null,
+      "quality": [
+        {
+          "name": "kind_is_known",
+          "type": "sql",
+          "description": "Every asset is fiat, stablecoin or crypto."
+        }
+      ],
+      "roles": [],
+      "readers": [],
+      "dbtDocs": "dbt-docs/#!/model/model.k2.security_master__asset"
+    },
+    {
+      "contractId": "reference-data.security-master.instrument",
+      "relation": "reference_data.security_master.instrument",
+      "build": "dbt",
+      "testedRef": "audited",
+      "contractFile": "documents/contracts/reference-data/security-master/instrument.odcs.yaml",
+      "layer": "gold",
+      "version": "1.0.0",
+      "purpose": "Type-2: one row per instrument of a venue and version of its listing, valid from valid_from up to but not including valid_to. A version is a change in the pair that lists it, its tick size, decimals, minimum order or status, or whether it is listed at all: a delisting closes the listed version and opens one with is_listed false, a relisting opens another.",
+      "columns": [
+        {
+          "name": "venue",
+          "type": "varchar",
+          "required": true,
+          "primaryKey": true,
+          "description": "The venue that lists the instrument (kraken).",
+          "primaryKeyPosition": 1
+        },
+        {
+          "name": "instrument_id",
+          "type": "varchar",
+          "required": true,
+          "primaryKey": true,
+          "description": "<base_asset>-<quote_asset> of canonical codes (BTC-USD); the same on every venue.",
+          "primaryKeyPosition": 2
+        },
+        {
+          "name": "valid_from",
+          "type": "timestamp(6) with time zone",
+          "required": true,
+          "primaryKey": true,
+          "description": "The fetch that first saw this version, in UTC; the instrument's first version opens at 1970-01-01 00:00:00 UTC.",
+          "time": "valid",
+          "primaryKeyPosition": 3
+        },
+        {
+          "name": "valid_to",
+          "type": "timestamp(6) with time zone",
+          "required": true,
+          "primaryKey": false,
+          "description": "The next version's valid_from; 9999-12-31 23:59:59 UTC on the open row, never null.",
+          "time": "valid"
+        },
+        {
+          "name": "recorded_at",
+          "type": "timestamp(6) with time zone",
+          "required": true,
+          "primaryKey": false,
+          "description": "When the fetch that first saw this version ran, in UTC (knowledge time).",
+          "time": "known"
+        },
+        {
+          "name": "base_asset",
+          "type": "varchar",
+          "required": true,
+          "primaryKey": false,
+          "description": "The canonical code of the asset bought (asset.asset_code)."
+        },
+        {
+          "name": "quote_asset",
+          "type": "varchar",
+          "required": true,
+          "primaryKey": false,
+          "description": "The canonical code of the asset it is priced in, an asset.asset_code."
+        },
+        {
+          "name": "is_listed",
+          "type": "boolean",
+          "required": true,
+          "primaryKey": false,
+          "description": "False while no pair of the venue lists the instrument; every listing attribute below is then null."
+        },
+        {
+          "name": "pair_code",
+          "type": "varchar",
+          "required": false,
+          "primaryKey": false,
+          "description": "The venue's REST code of the pair that lists it."
+        },
+        {
+          "name": "tick_size",
+          "type": "decimal(38,18)",
+          "required": false,
+          "primaryKey": false,
+          "description": "The smallest price step."
+        },
+        {
+          "name": "pair_decimals",
+          "type": "integer",
+          "required": false,
+          "primaryKey": false,
+          "description": "Digits after the decimal point of a price."
+        },
+        {
+          "name": "lot_decimals",
+          "type": "integer",
+          "required": false,
+          "primaryKey": false,
+          "description": "Digits after the decimal point of a volume."
+        },
+        {
+          "name": "order_min",
+          "type": "decimal(38,18)",
+          "required": false,
+          "primaryKey": false,
+          "description": "The smallest order volume in the base asset."
+        },
+        {
+          "name": "status",
+          "type": "varchar",
+          "required": false,
+          "primaryKey": false,
+          "description": "The pair's trading status as the venue states it (online, cancel_only and the like)."
+        }
+      ],
+      "retentionDays": null,
+      "quality": [
+        {
+          "name": "versions_do_not_overlap",
+          "type": "sql",
+          "description": "Each version ends no later than the next one of its key starts."
+        },
+        {
+          "name": "versions_leave_no_gap",
+          "type": "sql",
+          "description": "Each version ends exactly where the next one of its key starts."
+        },
+        {
+          "name": "one_open_row_per_key",
+          "type": "sql",
+          "description": "Every instrument of a venue has exactly one open row."
+        },
+        {
+          "name": "first_version_opens_1970",
+          "type": "sql",
+          "description": "Every instrument's first version opens at 1970-01-01 00:00:00 UTC."
+        },
+        {
+          "name": "intervals_not_empty",
+          "type": "sql",
+          "description": "Every version is valid for some time."
+        }
+      ],
+      "roles": [
+        {
+          "role": "full_reader",
+          "inWords": "every row and column"
+        }
+      ],
+      "readers": [],
+      "dbtDocs": "dbt-docs/#!/model/model.k2.security_master__instrument"
+    },
+    {
+      "contractId": "reference-data.security-master.venue_symbol",
+      "relation": "reference_data.security_master.venue_symbol",
+      "build": "dbt",
+      "testedRef": "audited",
+      "contractFile": "documents/contracts/reference-data/security-master/venue_symbol.odcs.yaml",
+      "layer": "gold",
+      "version": "1.0.0",
+      "purpose": "Type-2: one row per venue spelling and version, the symbol the venue's trades stream carries and the instrument it names, valid from valid_from up to but not including valid_to. A trade resolves through the row of its venue and symbol whose interval holds its time. A version changes when the instrument or the pair behind the spelling changes; a delisting does not close it (the instrument's is_listed records that), so the spelling still resolves.",
+      "columns": [
+        {
+          "name": "venue",
+          "type": "varchar",
+          "required": true,
+          "primaryKey": true,
+          "description": "The venue (kraken).",
+          "primaryKeyPosition": 1
+        },
+        {
+          "name": "venue_symbol",
+          "type": "varchar",
+          "required": true,
+          "primaryKey": true,
+          "description": "The symbol as the venue's trades stream spells it (BTC/USD on Kraken's websocket v2).",
+          "primaryKeyPosition": 2
+        },
+        {
+          "name": "valid_from",
+          "type": "timestamp(6) with time zone",
+          "required": true,
+          "primaryKey": true,
+          "description": "The fetch that first saw this version, in UTC; the spelling's first version opens at 1970-01-01 00:00:00 UTC.",
+          "time": "valid",
+          "primaryKeyPosition": 3
+        },
+        {
+          "name": "valid_to",
+          "type": "timestamp(6) with time zone",
+          "required": true,
+          "primaryKey": false,
+          "description": "The next version's valid_from; 9999-12-31 23:59:59 UTC on the open row, never null.",
+          "time": "valid"
+        },
+        {
+          "name": "instrument_id",
+          "type": "varchar",
+          "required": true,
+          "primaryKey": false,
+          "description": "The instrument the spelling names (instrument.instrument_id)."
+        },
+        {
+          "name": "pair_code",
+          "type": "varchar",
+          "required": true,
+          "primaryKey": false,
+          "description": "The venue's REST code of the pair whose listing claims the spelling."
+        },
+        {
+          "name": "recorded_at",
+          "type": "timestamp(6) with time zone",
+          "required": true,
+          "primaryKey": false,
+          "description": "When the fetch that first saw this version ran, in UTC (knowledge time).",
+          "time": "known"
+        }
+      ],
+      "retentionDays": null,
+      "quality": [
+        {
+          "name": "versions_do_not_overlap",
+          "type": "sql",
+          "description": "Each version ends no later than the next one of its key starts."
+        },
+        {
+          "name": "versions_leave_no_gap",
+          "type": "sql",
+          "description": "Each version ends exactly where the next one of its key starts."
+        },
+        {
+          "name": "one_open_row_per_key",
+          "type": "sql",
+          "description": "Every spelling of a venue has exactly one open row."
+        },
+        {
+          "name": "first_version_opens_1970",
+          "type": "sql",
+          "description": "Every spelling's first version opens at 1970-01-01 00:00:00 UTC."
+        },
+        {
+          "name": "intervals_not_empty",
+          "type": "sql",
+          "description": "Every version is valid for some time."
+        }
+      ],
+      "roles": [
+        {
+          "role": "full_reader",
+          "inWords": "every row and column"
+        }
+      ],
+      "readers": [],
+      "dbtDocs": "dbt-docs/#!/model/model.k2.security_master__venue_symbol"
+    },
+    {
+      "contractId": "reference-data.security-master.venue_symbol_claim",
+      "relation": "reference_data.security_master.venue_symbol_claim",
+      "build": "dbt",
+      "testedRef": "audited",
+      "contractFile": "documents/contracts/reference-data/security-master/venue_symbol_claim.odcs.yaml",
+      "layer": "silver",
+      "version": "1.0.0",
+      "purpose": "One row per span in which a venue's pair is listed with one set of attributes: the listing's websocket name resolved by rule into canonical base and quote codes, the venue spelling and instrument id composed from them, and whether the claim is held. The one place the matching rule lives: instrument and venue_symbol publish the claims that are not held, and venue_symbol_held lists the ones that are.",
+      "columns": [
+        {
+          "name": "venue",
+          "type": "varchar",
+          "required": true,
+          "primaryKey": true,
+          "description": "The venue whose listing states the pair (kraken).",
+          "primaryKeyPosition": 1
+        },
+        {
+          "name": "pair_code",
+          "type": "varchar",
+          "required": true,
+          "primaryKey": true,
+          "description": "The pair's REST code in the venue's listing.",
+          "primaryKeyPosition": 2
+        },
+        {
+          "name": "claimed_from",
+          "type": "timestamp(6) with time zone",
+          "required": true,
+          "primaryKey": true,
+          "description": "The first fetch that stated this listing of the pair (the listing version's first_fetched_at), in UTC.",
+          "time": "valid",
+          "primaryKeyPosition": 3
+        },
+        {
+          "name": "claimed_to",
+          "type": "timestamp(6) with time zone",
+          "required": true,
+          "primaryKey": false,
+          "description": "The pair's next listing version, changed or unlisted; 9999-12-31 23:59:59 UTC while none follows.",
+          "time": "valid"
+        },
+        {
+          "name": "ws_name",
+          "type": "varchar",
+          "required": true,
+          "primaryKey": false,
+          "description": "The websocket name as the listing spells it."
+        },
+        {
+          "name": "base_asset",
+          "type": "varchar",
+          "required": false,
+          "primaryKey": false,
+          "description": "The canonical base code: the websocket name's part before its one slash, upper-cased, then mapped through seeds/code_exceptions.csv for the venue. Null when the name is not of the form base/quote."
+        },
+        {
+          "name": "quote_asset",
+          "type": "varchar",
+          "required": false,
+          "primaryKey": false,
+          "description": "The canonical quote code, by the same rule from the part after the slash; null as base_asset is."
+        },
+        {
+          "name": "venue_symbol",
+          "type": "varchar",
+          "required": false,
+          "primaryKey": false,
+          "description": "base_asset/quote_asset, the spelling the venue's trades stream carries; null when either is."
+        },
+        {
+          "name": "instrument_id",
+          "type": "varchar",
+          "required": false,
+          "primaryKey": false,
+          "description": "base_asset-quote_asset, the canonical instrument id; null when either is."
+        },
+        {
+          "name": "tick_size",
+          "type": "decimal(38,18)",
+          "required": false,
+          "primaryKey": false,
+          "description": "The smallest price step the listing states."
+        },
+        {
+          "name": "pair_decimals",
+          "type": "integer",
+          "required": false,
+          "primaryKey": false,
+          "description": "Digits after the decimal point of a price."
+        },
+        {
+          "name": "lot_decimals",
+          "type": "integer",
+          "required": false,
+          "primaryKey": false,
+          "description": "Digits after the decimal point of a volume."
+        },
+        {
+          "name": "order_min",
+          "type": "decimal(38,18)",
+          "required": false,
+          "primaryKey": false,
+          "description": "The smallest order volume in the base asset."
+        },
+        {
+          "name": "status",
+          "type": "varchar",
+          "required": false,
+          "primaryKey": false,
+          "description": "The pair's trading status as the venue states it."
+        },
+        {
+          "name": "held_reason",
+          "type": "varchar",
+          "required": false,
+          "primaryKey": false,
+          "description": "Null for a claim that is published. claimed_twice: another pair of the venue claims the same venue_symbol over an overlapping span, so every claim of that spelling is held. not_base_slash_quote: the websocket name has no single slash to split."
+        }
+      ],
+      "retentionDays": null,
+      "roles": [],
+      "readers": [],
+      "dbtDocs": "dbt-docs/#!/model/model.k2.security_master__venue_symbol_claim"
+    },
+    {
+      "contractId": "reference-data.security-master.venue_symbol_held",
+      "relation": "reference_data.security_master.venue_symbol_held",
+      "build": "dbt",
+      "testedRef": "audited",
+      "contractFile": "documents/contracts/reference-data/security-master/venue_symbol_held.odcs.yaml",
+      "layer": "silver",
+      "version": "1.0.0",
+      "purpose": "The claims held from publication: every claim of a spelling two pairs of one venue claim at overlapping times, and every listing whose websocket name the rule cannot split. Other spellings and other venues publish as usual. Owner-only.",
+      "columns": [
+        {
+          "name": "venue",
+          "type": "varchar",
+          "required": true,
+          "primaryKey": true,
+          "description": "The venue whose listing states the pair.",
+          "primaryKeyPosition": 1
+        },
+        {
+          "name": "pair_code",
+          "type": "varchar",
+          "required": true,
+          "primaryKey": true,
+          "description": "The pair's REST code.",
+          "primaryKeyPosition": 2
+        },
+        {
+          "name": "claimed_from",
+          "type": "timestamp(6) with time zone",
+          "required": true,
+          "primaryKey": true,
+          "description": "The first fetch that stated this listing of the pair, in UTC.",
+          "time": "valid",
+          "primaryKeyPosition": 3
+        },
+        {
+          "name": "claimed_to",
+          "type": "timestamp(6) with time zone",
+          "required": true,
+          "primaryKey": false,
+          "description": "The pair's next listing version; 9999-12-31 23:59:59 UTC while none follows.",
+          "time": "valid"
+        },
+        {
+          "name": "ws_name",
+          "type": "varchar",
+          "required": true,
+          "primaryKey": false,
+          "description": "The websocket name as the listing spells it."
+        },
+        {
+          "name": "venue_symbol",
+          "type": "varchar",
+          "required": false,
+          "primaryKey": false,
+          "description": "The spelling the rule composed; null when the name could not be split."
+        },
+        {
+          "name": "held_reason",
+          "type": "varchar",
+          "required": true,
+          "primaryKey": false,
+          "description": "claimed_twice or not_base_slash_quote (venue_symbol_claim.held_reason)."
+        }
+      ],
+      "retentionDays": null,
+      "quality": [
+        {
+          "name": "no_claim_held",
+          "type": "custom",
+          "description": "No claim is held; a held one warns and the build still publishes the rest."
+        }
+      ],
+      "roles": [],
+      "readers": [],
+      "dbtDocs": "dbt-docs/#!/model/model.k2.security_master__venue_symbol_held"
+    }
+  ],
+  "joinKeys": [],
+  "lineage": {
+    "nodes": [
+      {
+        "id": "market-capture.kraken-instruments.silver_listing",
+        "product": "market-capture.kraken-instruments",
+        "relation": "market_capture.kraken_instruments.silver_listing"
+      },
+      {
+        "id": "reference-data.currency-master.currency",
+        "product": "reference-data.currency-master",
+        "relation": "reference_data.currency_master.currency"
+      },
+      {
+        "id": "reference-data.security-master.asset",
+        "product": "reference-data.security-master",
+        "relation": "reference_data.security_master.asset"
+      },
+      {
+        "id": "reference-data.security-master.instrument",
+        "product": "reference-data.security-master",
+        "relation": "reference_data.security_master.instrument"
+      },
+      {
+        "id": "reference-data.security-master.venue_symbol",
+        "product": "reference-data.security-master",
+        "relation": "reference_data.security_master.venue_symbol"
+      },
+      {
+        "id": "reference-data.security-master.venue_symbol_claim",
+        "product": "reference-data.security-master",
+        "relation": "reference_data.security_master.venue_symbol_claim"
+      },
+      {
+        "id": "reference-data.security-master.venue_symbol_held",
+        "product": "reference-data.security-master",
+        "relation": "reference_data.security_master.venue_symbol_held"
+      }
+    ],
+    "edges": [
+      {
+        "from": "market-capture.kraken-instruments.silver_listing",
+        "to": "reference-data.security-master.venue_symbol_claim"
+      },
+      {
+        "from": "reference-data.security-master.venue_symbol_claim",
+        "to": "reference-data.security-master.venue_symbol_held"
+      },
+      {
+        "from": "reference-data.security-master.venue_symbol_claim",
+        "to": "reference-data.security-master.instrument"
+      },
+      {
+        "from": "reference-data.security-master.venue_symbol_claim",
+        "to": "reference-data.security-master.venue_symbol"
+      },
+      {
+        "from": "reference-data.security-master.instrument",
+        "to": "reference-data.security-master.asset"
+      },
+      {
+        "from": "reference-data.currency-master.currency",
+        "to": "reference-data.security-master.asset"
+      }
+    ]
+  },
+  "tag": "v3.0.0-alpha.3-rc.1"
+}

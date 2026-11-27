@@ -1,0 +1,42 @@
+{
+  "build": {
+    "engine": "dbt",
+    "outputs": [
+      "reference_data_build.security_master__base.asset",
+      "reference_data_build.security_master__base.instrument",
+      "reference_data_build.security_master__base.venue_symbol",
+      "reference_data_build.security_master__base.venue_symbol_claim",
+      "reference_data_build.security_master__base.venue_symbol_held"
+    ],
+    "publisher": "pub_security_master",
+    "selector": "security_master",
+    "writer": "dbt_security_master"
+  },
+  "dagId": "security_master",
+  "domain": "reference-data",
+  "fence": "security_master",
+  "inputs": [
+    {
+      "contractId": "market-capture.kraken-instruments.silver_listing",
+      "maxLagMinutes": null,
+      "relation": "market_capture.kraken_instruments__base.silver_listing",
+      "required": true,
+      "whenAbsent": "fail"
+    },
+    {
+      "contractId": "reference-data.currency-master.currency",
+      "maxLagMinutes": null,
+      "relation": "reference_data.currency_master__base.currency",
+      "required": true,
+      "whenAbsent": "fail"
+    }
+  ],
+  "maintain": {
+    "cron": "9 2 * * *"
+  },
+  "product": "reference-data.security-master",
+  "schedule": {
+    "cron": "37 * * * *"
+  },
+  "status": "active"
+}

@@ -402,6 +402,170 @@
     "partitioning": [],
     "sort": []
   },
+  "market_capture.kraken_trades__base.silver_trade": {
+    "columns": [
+      {
+        "name": "kafka_partition",
+        "required": true,
+        "type": "integer"
+      },
+      {
+        "name": "kafka_offset",
+        "required": true,
+        "type": "bigint"
+      },
+      {
+        "name": "trade_ordinal",
+        "required": true,
+        "type": "integer"
+      },
+      {
+        "name": "trade_ts",
+        "required": true,
+        "type": "timestamp(6) with time zone"
+      },
+      {
+        "name": "trade_id",
+        "required": true,
+        "type": "bigint"
+      },
+      {
+        "name": "venue_symbol",
+        "required": true,
+        "type": "varchar"
+      },
+      {
+        "name": "instrument_id",
+        "required": true,
+        "type": "varchar"
+      },
+      {
+        "name": "side",
+        "required": true,
+        "type": "varchar"
+      },
+      {
+        "name": "price",
+        "required": true,
+        "type": "decimal(38,18)"
+      },
+      {
+        "name": "quantity",
+        "required": true,
+        "type": "decimal(38,18)"
+      },
+      {
+        "name": "order_type",
+        "required": false,
+        "type": "varchar"
+      },
+      {
+        "name": "frame_type",
+        "required": true,
+        "type": "varchar"
+      },
+      {
+        "name": "is_duplicate",
+        "required": true,
+        "type": "boolean"
+      },
+      {
+        "name": "received_at",
+        "required": true,
+        "type": "timestamp(6) with time zone"
+      },
+      {
+        "name": "conn_id",
+        "required": true,
+        "type": "varchar"
+      },
+      {
+        "name": "conn_msg_seq",
+        "required": true,
+        "type": "bigint"
+      }
+    ],
+    "partitioning": [
+      "day(trade_ts)"
+    ],
+    "sort": []
+  },
+  "market_capture.kraken_trades__base.silver_trade_unresolved": {
+    "columns": [
+      {
+        "name": "kafka_partition",
+        "required": true,
+        "type": "integer"
+      },
+      {
+        "name": "kafka_offset",
+        "required": true,
+        "type": "bigint"
+      },
+      {
+        "name": "trade_ordinal",
+        "required": true,
+        "type": "integer"
+      },
+      {
+        "name": "trade_ts",
+        "required": true,
+        "type": "timestamp(6) with time zone"
+      },
+      {
+        "name": "trade_id",
+        "required": true,
+        "type": "bigint"
+      },
+      {
+        "name": "venue_symbol",
+        "required": true,
+        "type": "varchar"
+      },
+      {
+        "name": "side",
+        "required": true,
+        "type": "varchar"
+      },
+      {
+        "name": "price",
+        "required": true,
+        "type": "decimal(38,18)"
+      },
+      {
+        "name": "quantity",
+        "required": true,
+        "type": "decimal(38,18)"
+      },
+      {
+        "name": "order_type",
+        "required": false,
+        "type": "varchar"
+      },
+      {
+        "name": "frame_type",
+        "required": true,
+        "type": "varchar"
+      },
+      {
+        "name": "received_at",
+        "required": true,
+        "type": "timestamp(6) with time zone"
+      },
+      {
+        "name": "conn_id",
+        "required": true,
+        "type": "varchar"
+      },
+      {
+        "name": "conn_msg_seq",
+        "required": true,
+        "type": "bigint"
+      }
+    ],
+    "partitioning": [],
+    "sort": []
+  },
   "reference_data.calendars__base.target_days": {
     "columns": [
       {
@@ -449,6 +613,266 @@
         "name": "is_fund",
         "required": true,
         "type": "boolean"
+      }
+    ],
+    "partitioning": [],
+    "sort": []
+  },
+  "reference_data.security_master__base.asset": {
+    "columns": [
+      {
+        "name": "asset_code",
+        "required": true,
+        "type": "varchar"
+      },
+      {
+        "name": "kind",
+        "required": true,
+        "type": "varchar"
+      },
+      {
+        "name": "first_seen_at",
+        "required": true,
+        "type": "timestamp(6) with time zone"
+      }
+    ],
+    "partitioning": [],
+    "sort": []
+  },
+  "reference_data.security_master__base.instrument": {
+    "columns": [
+      {
+        "name": "venue",
+        "required": true,
+        "type": "varchar"
+      },
+      {
+        "name": "instrument_id",
+        "required": true,
+        "type": "varchar"
+      },
+      {
+        "name": "valid_from",
+        "required": true,
+        "type": "timestamp(6) with time zone"
+      },
+      {
+        "name": "valid_to",
+        "required": true,
+        "type": "timestamp(6) with time zone"
+      },
+      {
+        "name": "recorded_at",
+        "required": true,
+        "type": "timestamp(6) with time zone"
+      },
+      {
+        "name": "base_asset",
+        "required": true,
+        "type": "varchar"
+      },
+      {
+        "name": "quote_asset",
+        "required": true,
+        "type": "varchar"
+      },
+      {
+        "name": "is_listed",
+        "required": true,
+        "type": "boolean"
+      },
+      {
+        "name": "pair_code",
+        "required": false,
+        "type": "varchar"
+      },
+      {
+        "name": "tick_size",
+        "required": false,
+        "type": "decimal(38,18)"
+      },
+      {
+        "name": "pair_decimals",
+        "required": false,
+        "type": "integer"
+      },
+      {
+        "name": "lot_decimals",
+        "required": false,
+        "type": "integer"
+      },
+      {
+        "name": "order_min",
+        "required": false,
+        "type": "decimal(38,18)"
+      },
+      {
+        "name": "status",
+        "required": false,
+        "type": "varchar"
+      }
+    ],
+    "partitioning": [],
+    "sort": []
+  },
+  "reference_data.security_master__base.venue_symbol": {
+    "columns": [
+      {
+        "name": "venue",
+        "required": true,
+        "type": "varchar"
+      },
+      {
+        "name": "venue_symbol",
+        "required": true,
+        "type": "varchar"
+      },
+      {
+        "name": "valid_from",
+        "required": true,
+        "type": "timestamp(6) with time zone"
+      },
+      {
+        "name": "valid_to",
+        "required": true,
+        "type": "timestamp(6) with time zone"
+      },
+      {
+        "name": "instrument_id",
+        "required": true,
+        "type": "varchar"
+      },
+      {
+        "name": "pair_code",
+        "required": true,
+        "type": "varchar"
+      },
+      {
+        "name": "recorded_at",
+        "required": true,
+        "type": "timestamp(6) with time zone"
+      }
+    ],
+    "partitioning": [],
+    "sort": []
+  },
+  "reference_data.security_master__base.venue_symbol_claim": {
+    "columns": [
+      {
+        "name": "venue",
+        "required": true,
+        "type": "varchar"
+      },
+      {
+        "name": "pair_code",
+        "required": true,
+        "type": "varchar"
+      },
+      {
+        "name": "claimed_from",
+        "required": true,
+        "type": "timestamp(6) with time zone"
+      },
+      {
+        "name": "claimed_to",
+        "required": true,
+        "type": "timestamp(6) with time zone"
+      },
+      {
+        "name": "ws_name",
+        "required": true,
+        "type": "varchar"
+      },
+      {
+        "name": "base_asset",
+        "required": false,
+        "type": "varchar"
+      },
+      {
+        "name": "quote_asset",
+        "required": false,
+        "type": "varchar"
+      },
+      {
+        "name": "venue_symbol",
+        "required": false,
+        "type": "varchar"
+      },
+      {
+        "name": "instrument_id",
+        "required": false,
+        "type": "varchar"
+      },
+      {
+        "name": "tick_size",
+        "required": false,
+        "type": "decimal(38,18)"
+      },
+      {
+        "name": "pair_decimals",
+        "required": false,
+        "type": "integer"
+      },
+      {
+        "name": "lot_decimals",
+        "required": false,
+        "type": "integer"
+      },
+      {
+        "name": "order_min",
+        "required": false,
+        "type": "decimal(38,18)"
+      },
+      {
+        "name": "status",
+        "required": false,
+        "type": "varchar"
+      },
+      {
+        "name": "held_reason",
+        "required": false,
+        "type": "varchar"
+      }
+    ],
+    "partitioning": [],
+    "sort": []
+  },
+  "reference_data.security_master__base.venue_symbol_held": {
+    "columns": [
+      {
+        "name": "venue",
+        "required": true,
+        "type": "varchar"
+      },
+      {
+        "name": "pair_code",
+        "required": true,
+        "type": "varchar"
+      },
+      {
+        "name": "claimed_from",
+        "required": true,
+        "type": "timestamp(6) with time zone"
+      },
+      {
+        "name": "claimed_to",
+        "required": true,
+        "type": "timestamp(6) with time zone"
+      },
+      {
+        "name": "ws_name",
+        "required": true,
+        "type": "varchar"
+      },
+      {
+        "name": "venue_symbol",
+        "required": false,
+        "type": "varchar"
+      },
+      {
+        "name": "held_reason",
+        "required": true,
+        "type": "varchar"
       }
     ],
     "partitioning": [],

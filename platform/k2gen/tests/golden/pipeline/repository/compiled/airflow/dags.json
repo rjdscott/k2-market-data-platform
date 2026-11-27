@@ -93,6 +93,8 @@
         "load",
         "audit",
         "publish",
+        "build",
+        "expire",
         "record",
         "maintain"
       ]
@@ -102,6 +104,20 @@
       "pipeline": "compiled/products/governance.quality-results/pipeline.json",
       "product": "governance.quality-results",
       "schedule": "50 * * * *",
+      "status": "active",
+      "tasks": [
+        "resolve",
+        "build",
+        "expire",
+        "record",
+        "maintain"
+      ]
+    },
+    {
+      "dagId": "security_master",
+      "pipeline": "compiled/products/reference-data.security-master/pipeline.json",
+      "product": "reference-data.security-master",
+      "schedule": "37 * * * *",
       "status": "active",
       "tasks": [
         "resolve",
