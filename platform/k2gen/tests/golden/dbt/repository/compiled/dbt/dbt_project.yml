@@ -48,6 +48,9 @@ models:
       access_canary:
         +database: governance_build
         +schema: access_canary__base
+      quality_results:
+        +database: governance_build
+        +schema: quality_results__base
     reference_data:
       calendars:
         +database: reference_data_build

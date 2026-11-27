@@ -1,0 +1,40 @@
+# Quality results (ADR-046, rebuilt for the release-shaped platform): every dbt test and unit test
+# each product's builder recorded in its own results table, model.TEST_RESULTS, in one table. It
+# declares no input port: the compiler lists the writers from the release's products
+# (model.test_results_writers), so a new product is in from its first build with a test.
+apiVersion: v1.1.0
+kind: DataProduct
+id: governance.quality-results
+name: quality-results
+version: 1.0.0
+status: active
+domain: governance
+type: consumerAligned
+description:
+  purpose: >-
+    One place to read every dbt test result the platform records: each product's builder writes
+    its own tests' results beside its outputs, and this product unions them, one row per test per
+    dbt invocation, with the product it belongs to.
+  limitations: >-
+    As current as its last build, hourly at minute 50, so a product's build since then is not in it
+    yet. A product that has never built with a test has no results table and no rows here. Only
+    tests that ran are recorded: a build Airflow never started leaves no row. The bronze audit's
+    checks (lake.<fence>.audit_checks) are not in it yet.
+  usage: >-
+    The newest status of each test of a product: the rows of its product_id with the greatest
+    run_started_at per unique_id. run_id joins a row to the product's run records
+    (governance.run_records.run_record).
+team:
+  name: platform-team
+outputPorts:
+  - name: test_results
+    version: 1.0.0
+    contractId: governance.quality-results.test_results
+customProperties:
+  - property: schedule
+    value:
+      # Hourly, at a minute no other product builds at, so most runs read every product's newest results.
+      cron: "50 * * * *"
+  - property: terms
+    value:
+      redistribution: allowed

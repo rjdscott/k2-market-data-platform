@@ -63,6 +63,20 @@
         "record",
         "maintain"
       ]
+    },
+    {
+      "dagId": "quality_results",
+      "pipeline": "compiled/products/governance.quality-results/pipeline.json",
+      "product": "governance.quality-results",
+      "schedule": "50 * * * *",
+      "status": "active",
+      "tasks": [
+        "resolve",
+        "build",
+        "expire",
+        "record",
+        "maintain"
+      ]
     }
   ]
 }

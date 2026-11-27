@@ -238,7 +238,8 @@ LANDING_BUCKET = "k2-landing"
 LANDING_FILES = "landing_files"  # lake.<fence>.landing_files: one row per landed object
 AUDIT_CHECKS = "audit_checks"  # lake.<fence>.audit_checks: the bronze audit's results
 KAFKA_LANDING = "landing"  # lake.<fence>.landing: a kafka connector's records
-RESERVED_TABLE_NAMES = frozenset({LANDING_FILES, AUDIT_CHECKS, KAFKA_LANDING})
+TEST_RESULTS = "dq_test_results"  # <domain>_build.<fence>__base.dq_test_results: a builder's test results (TEST_RESULTS_TABLE)
+RESERVED_TABLE_NAMES = frozenset({LANDING_FILES, AUDIT_CHECKS, KAFKA_LANDING, TEST_RESULTS})
 LINEAGE_COLUMN = "source_file_sha256"  # every fetch-kind bronze table's landed-object sha256 (S05)
 AUDIT_BRANCH = "audit"  # bronze write-audit-publish branch (Spark)
 AUDITED_TAG = "audited"  # the tested-data marker on dbt and code outputs (ADR-061)
@@ -1238,6 +1239,33 @@ PLATFORM_TABLES: Mapping[str, PlatformTable] = {
         PlatformColumn("landed_at", "timestamp(6) with time zone", "When the batch committed, UTC; the partition source"),
         *_RUN), ("day(landed_at)",)),
 }
+
+# The results hook's table in each dbt product's base namespace (dbt/macros/k2_results.sql, which
+# creates it at the product's first build with a test, with these columns in this order). No DDL
+# here: the builder makes it. Only QUALITY_RESULTS's builder reads another product's, through the
+# reader catalog at main (emit/trino_rules.py), and its one model unions them all (emit/dbt.py).
+TEST_RESULTS_TABLE = PlatformTable(TEST_RESULTS, (
+    PlatformColumn("run_id", "varchar", "The Airflow run, <dag_id>/<run_id>: the var k2_run_id the wrapper sets"),
+    PlatformColumn("dbt_invocation_id", "varchar", "dbt's invocation id"),
+    PlatformColumn("release_id", "varchar", "The release the run resolved at its start (A1): the var k2_release"),
+    PlatformColumn("run_started_at", "timestamp(6) with time zone", "When the dbt invocation started, UTC"),
+    PlatformColumn("writer", "varchar", "The builder that ran the test, dbt_<fence>"),
+    PlatformColumn("unique_id", "varchar", "The test's dbt node id"),
+    PlatformColumn("test_name", "varchar", "The test's dbt name"),
+    PlatformColumn("tested", "varchar", "The relation of the model or seed tested, <catalog>.<namespace>.<table>"),
+    PlatformColumn("status", "varchar", "dbt's status: pass, fail, warn, error or skipped"),
+    PlatformColumn("failures", "bigint", "The failing rows dbt counted; null when it counted none"),
+    PlatformColumn("execution_time", "double", "Seconds the test ran"),
+    PlatformColumn("message", "varchar", "dbt's message, at most 1000 characters (a failed unit test's diff)")), ())
+QUALITY_RESULTS = "governance.quality-results"  # the one product that reads every TEST_RESULTS (ADR-046)
+
+
+def test_results_writers(m: Model) -> list[Product]:
+    """The products whose builder writes TEST_RESULTS and QUALITY_RESULTS reads: every one with a
+    dbt table but a retired one (no rules, ADR-055 part 4), itself included, by id. A paused one
+    stays: its history is still readable."""
+    return sorted((p for p in m.products if p.status != "retired" and any(t.build.kind == "dbt" for t in p.tables)),
+                  key=lambda p: p.id)
 
 
 # --- Loading (S04): private to load() ----------------------------------------------------

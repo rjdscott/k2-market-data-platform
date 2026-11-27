@@ -36,6 +36,26 @@
       "relation": "governance.access_canary.events"
     },
     {
+      "base": "governance.quality_results__base.test_results",
+      "columns": [
+        "product_id",
+        "run_id",
+        "dbt_invocation_id",
+        "release_id",
+        "run_started_at",
+        "writer",
+        "unique_id",
+        "test_name",
+        "tested",
+        "status",
+        "failures",
+        "execution_time",
+        "message"
+      ],
+      "owner": "pub_quality_results",
+      "relation": "governance.quality_results.test_results"
+    },
+    {
       "base": "reference_data.calendars__base.target_days",
       "columns": [
         "calendar_date",
