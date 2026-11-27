@@ -26,9 +26,13 @@ audit    checks the batch at `audit`'s head, scoped to its rows (source_file_sha
          non_empty, row_count (the parser's count), keys_unique, in_domain:<column> per declared
          pattern, values_unchanged (no published key with other values), and the parser's
          declared audits; one audit_checks row each, at that snapshot.
+publish  fast-forwards `main` to `audit` (Iceberg's fast_forward, which refuses anything else),
+         only if the batch's newest audit at `audit`'s current head passed every check; a batch
+         that staged nothing (the same bytes again) moves nothing.
 
 Exits: 0 done (audit: every check passed); 1 a task error; 2 refused (a sha256 or size mismatch,
-other bytes under the key, `audit` holding another unpublished batch); 3 the batch failed its audit.
+other bytes under the key, `audit` holding another unpublished batch); 3 the batch failed its audit
+(publish: its audit at `audit`'s head is missing or failed, main not moved).
 The last line on stdout is the task's result as JSON, {"exit": <n>, ...}, for the DAG's record
 task, which writes the run record (this task writes none).
 
@@ -318,6 +322,69 @@ def audit(run: Run, store, lake) -> tuple[int, dict]:
     return (EXIT_FAILED if failed else EXIT_OK), {"table": table, "snapshot": head, "failed": failed}
 
 
+def unaudited(found: list, expected: list[str]) -> str | None:
+    """Why the batch's newest audit at this snapshot does not license its publish, or None
+    (from #239). `found` is `(check, passed, checked_at)` per audit_checks row of the batch at
+    the snapshot; the newest checked_at is its latest audit, which must pass every expected check."""
+    if not found:
+        return "no audit of this batch at this snapshot is recorded"
+    newest = max(at for _, _, at in found)
+    last = {check: passed for check, passed, at in found if at == newest}
+    missing = [c for c in expected if c not in last]
+    failed = sorted(c for c, passed in last.items() if not passed)
+    if missing or failed:
+        return f"its newest audit, at {newest}, failed {failed or 'nothing'} and lacks {missing or 'nothing'}"
+    return None
+
+
+def publish(run: Run, store, lake) -> tuple[int, dict]:
+    """Fast-forwards `main` to `audit`'s head, only when the batch's newest audit at that very
+    head passed every check; a branch written after its audit is not published unaudited."""
+    bronze = run.bronze
+    table = bronze["table"]
+    refs = lake.refs(table)
+    head = refs.get(AUDIT, refs.get("main"))
+    result = {"table": table, "snapshotBefore": refs.get("main"), "snapshotAfter": refs.get("main")}
+    why = unaudited(lake.checks_of(bronze["checks"], table, run.run_id, head), check_names(bronze))
+    if why:
+        print(f"publish refused at {AUDIT} snapshot {head}: {why}; main {refs.get('main')} not moved", file=sys.stderr)
+        return EXIT_FAILED, result
+    pending = pending_batch(lake, table, refs)
+    if pending is None:
+        print(f"publish: batch {run.run_id} staged nothing unpublished; main {refs.get('main')} stays")
+        return EXIT_OK, result
+    if pending != run.run_id:
+        print(f"publish refused: {AUDIT} holds batch {pending}, not this one", file=sys.stderr)
+        return EXIT_REFUSED, result
+    lake.fast_forward(table)  # Iceberg refuses one that is not a fast-forward
+    after = lake.refs(table).get("main")
+    if after != head:
+        raise RuntimeError(f"main is {after} after the fast-forward, not {AUDIT}'s {head}")
+    print(f"publish: main {refs.get('main')} -> {after}, batch {run.run_id}")
+    return EXIT_OK, {**result, "snapshotAfter": after}
+
+
+def string_literal(value: str) -> str:
+    """A Spark SQL string literal, for the procedure arguments a parameter cannot carry: every
+    backslash and quote escaped, no control character, so it is always one token."""
+    if any(c < " " for c in value):
+        raise ValueError(f"{value!r}: a control character in a SQL literal")
+    return "'" + value.replace("\\", "\\\\").replace("'", "\\'") + "'"
+
+
+def procedure_table(relation: str) -> tuple[str, str]:
+    """`catalog.ns.table` as a procedure's quoted catalog and its `table =>` literal."""
+    rel(relation)
+    catalog, ns, table = relation.split(".")
+    return name(catalog), string_literal(f"{ns}.{table}")
+
+
+def fast_forward_sql(table: str) -> str:
+    catalog, ident = procedure_table(table)
+    return (f"CALL {catalog}.`system`.`fast_forward`(table => {ident}, branch => {string_literal('main')}, "
+            f"to => {string_literal(AUDIT)})")
+
+
 def audit_results(bronze: dict, lines: list[str] | None, lake, head, sha: str) -> list[tuple[str, bool, str]]:
     """`(check, passed, detail)` in check_names order; a batch that did not parse has one row."""
     if lines is None:
@@ -466,6 +533,13 @@ class SparkLake:
     def count(self, check: str, text: str, args: dict) -> int:
         return self._sql(text, **args)[0][0]
 
+    def checks_of(self, checks: str, table: str, batch: str, snapshot) -> list:
+        return self._sql(f"SELECT `check_name`, `passed`, `checked_at` FROM {rel(checks)} WHERE `table_name` = :t "
+                         "AND `batch_id` = :b AND `snapshot_id` <=> :s", t=table, b=batch, s=snapshot)
+
+    def fast_forward(self, table: str) -> None:
+        self.spark.sql(fast_forward_sql(table))
+
 
 def parse_args(argv: list[str] | None, read_pipeline) -> tuple[str, Run]:
     ap = argparse.ArgumentParser(prog="connector.py", description=__doc__,
@@ -485,7 +559,7 @@ def parse_args(argv: list[str] | None, read_pipeline) -> tuple[str, Run]:
     return a.task, Run(release=a.release, product=a.product, run_id=a.run_id, pipeline=pipeline)
 
 
-TASKS = {"load": load, "audit": audit}
+TASKS = {"load": load, "audit": audit, "publish": publish}
 
 
 def main(argv: list[str] | None = None) -> int:

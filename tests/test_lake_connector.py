@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import connector as C  # docker/lake is on sys.path (tests/conftest.py)
+import expire as E
 import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -420,3 +421,126 @@ def test_a_check_value_is_bound_never_spliced(pipeline):
     bronze["patterns"] = {"station_id": "x') OR ('1'='1"}
     [(_, text, args, _)] = [c for c in C.check_sql(bronze, 7, SHA, 1) if c[0].startswith("in_domain")]
     assert "OR ('1'" not in text and args["pattern"] == "^(?:x') OR ('1'='1)$"
+
+
+# --- W1-11: publish by fast-forward, and expire ----------------------------------------------
+
+
+def passed_batch(pipeline, spool):
+    spool()
+    pipeline["bronze"][0]["audits"] = []
+    store, lake = Store(), FakeLake()
+    lake.publish_main([], OTHER)
+    C.load(ctx(pipeline), store, lake)
+    assert C.audit(ctx(pipeline), store, lake)[0] == C.EXIT_OK
+    return store, lake
+
+
+def test_publish_fast_forwards_main_when_every_check_passed(pipeline, spool):
+    store, lake = passed_batch(pipeline, spool)
+    head = lake.refs_["audit"]
+    code, result = C.publish(ctx(pipeline), store, lake)
+    assert code == C.EXIT_OK and lake.calls[-1] == ("fast_forward", head) and lake.refs_["main"] == head
+    assert (result["snapshotAfter"], result["table"]) == (head, TABLE)
+    assert C.publish(ctx(pipeline), store, lake)[0] == C.EXIT_OK  # a retry: nothing left to move
+    assert [c for c in lake.calls if c[0] == "fast_forward"] == [("fast_forward", head)]
+
+
+def test_publish_refuses_a_batch_with_a_failed_check(pipeline, spool):
+    store, lake = passed_batch(pipeline, spool)
+    main = lake.refs_["main"]
+    lake.tables[CHECKS][2]["passed"] = False
+    assert C.publish(ctx(pipeline), store, lake)[0] == C.EXIT_FAILED
+    assert lake.refs_["main"] == main and not any(c[0] == "fast_forward" for c in lake.calls)
+
+
+def test_publish_refuses_a_branch_that_moved_after_its_audit(pipeline, spool):
+    store, lake = passed_batch(pipeline, spool)
+    lake.refs_["audit"] = lake._commit(staged(lake), [{"station_id": "s-2"}], RUN)  # written after the audit
+    assert C.publish(ctx(pipeline), store, lake)[0] == C.EXIT_FAILED
+    assert not any(c[0] == "fast_forward" for c in lake.calls)
+
+
+def test_publish_refuses_a_parse_failed_batch(pipeline, spool):
+    spool(rows=None)
+    store, lake = Store(), FakeLake()
+    C.load(ctx(pipeline), store, lake)
+    C.audit(ctx(pipeline), store, lake)
+    assert C.publish(ctx(pipeline), store, lake)[0] == C.EXIT_FAILED
+
+
+def test_publish_of_bytes_already_published_moves_nothing(pipeline, spool):
+    spool()
+    pipeline["bronze"][0]["audits"] = []
+    store, lake = Store(), FakeLake()
+    lake.publish_main([{**ROWS[0], model.LINEAGE_COLUMN: SHA}], OTHER)
+    C.load(ctx(pipeline), store, lake)
+    assert C.audit(ctx(pipeline), store, lake)[0] == C.EXIT_OK
+    assert C.publish(ctx(pipeline), store, lake)[0] == C.EXIT_OK
+    assert not any(c[0] == "fast_forward" for c in lake.calls)
+
+
+def test_the_newest_audit_of_the_snapshot_decides():
+    names = ["parses", "row_count"]
+    old, new = "2026-11-27T10:00:00", "2026-11-27T11:00:00"
+    assert C.unaudited([("parses", False, old), ("parses", True, new), ("row_count", True, new)], names) is None
+    assert "row_count" in C.unaudited([("parses", True, old), ("row_count", True, old),
+                                       ("parses", True, new), ("row_count", False, new)], names)
+    assert "lacks" in C.unaudited([("parses", True, new)], names)
+    assert "no audit" in C.unaudited([], names)
+
+
+def test_the_fast_forward_names_only_validated_identifiers():
+    assert C.fast_forward_sql(TABLE) == (
+        "CALL `lake`.`system`.`fast_forward`(table => 'station_readings.bronze_readings', "
+        "branch => 'main', to => 'audit')")
+    with pytest.raises(ValueError):
+        C.fast_forward_sql("lake.x.y') --")
+
+
+def test_a_string_literal_is_one_token():
+    assert C.string_literal("a'b\\c") == "'a\\'b\\\\c'"
+    with pytest.raises(ValueError):
+        C.string_literal("a\nb")
+
+
+OUT = "sensor_net_build.station_readings__base.silver_readings"
+
+
+def test_expire_renders_by_id_with_older_than_the_epoch():
+    assert E.statement(OUT, [11, 12]) == (
+        "CALL `sensor_net_build`.`system`.`expire_snapshots`("
+        "table => 'station_readings__base.silver_readings', snapshot_ids => array(11L, 12L), "
+        "older_than => TIMESTAMP '1970-01-01 00:00:00')")
+
+
+def test_expire_takes_only_the_products_outputs_and_integer_ids(pipeline):
+    assert E.plan(pipeline, [{"table": OUT, "ids": [11, 12]}]) == [(OUT, [11, 12])]
+    for bad in ([{"table": "other_build.x__base.y", "ids": [1]}],
+                [{"table": TABLE, "ids": [1]}],
+                [{"table": OUT, "ids": ["1); DROP TABLE x; --"]}],
+                [{"table": OUT, "ids": [True]}],
+                [{"table": OUT, "ids": []}],
+                [{"table": OUT, "ids": [1, 1]}]):
+        with pytest.raises(ValueError):
+            E.plan(pipeline, bad)
+
+
+def test_expire_fails_unless_the_deleted_manifest_lists_cover_the_ids(pipeline):
+    answers = []
+
+    def spark_sql(text):
+        answers.append(text)
+        return {"deleted_manifest_lists_count": 1, "deleted_data_files_count": 0}
+
+    code, result = E.expire(pipeline, [{"table": OUT, "ids": [11, 12]}], spark_sql)
+    assert code == E.EXIT_ERROR and result[0]["deletedManifestLists"] == 1 and len(answers) == 1
+    assert E.expire(pipeline, [{"table": OUT, "ids": [11]}], spark_sql)[0] == E.EXIT_OK
+    assert E.expire(pipeline, [], spark_sql) == (E.EXIT_OK, [])
+
+
+def test_expire_runs_with_the_maintenance_key():
+    assert E.KEY_ENV == ("K2_MAINTENANCE_S3_ACCESS_KEY", "K2_MAINTENANCE_S3_SECRET_KEY")
+    policy = json.loads((ROOT / "docker/lake/minio/policies/maintenance.json").read_text())
+    actions = {a for s in policy["Statement"] for a in s["Action"]}
+    assert "s3:DeleteObject" in actions and "s3:PutObject" not in actions
