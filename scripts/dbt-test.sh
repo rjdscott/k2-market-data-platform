@@ -20,8 +20,9 @@
 #      project dbt/tests/k2_input/ (a symlink to the macro, so the one shipped is the
 #      one tested): pinned (FOR VERSION AS OF BIGINT '<id>'), unpinned (no var), a
 #      unit test with the var set (the fixture's CTE, no clause), a var without the
-#      key, and a snapshot that is null, a string, a float or a boolean (each a
-#      compiler error at parse, never a guessed id). No warehouse: a unit test's SQL is only
+#      key (parses, since dbt parses every product's models for any selector, and is a
+#      compiler error at compile), and a snapshot that is null, a string, a float or a
+#      boolean (each a compiler error at parse, never a guessed id). No warehouse: a unit test's SQL is only
 #      rendered when dbt sends it, so it is read from dbt's log of the one statement
 #      it tried before the refused connection; the step refuses to run at all if
 #      anything listens on the profile's port.
@@ -70,8 +71,9 @@ k2i unit test -q --select test_type:unit --vars "$pin" >/dev/null 2>&1 || true  
 grep -q 'Connection refused' "$tmp/unit/dbt.log" || fail "unit test: did not stop at the refused connection"
 grep -qx 'from __dbt__cte__up__events' "$tmp/unit/dbt.log" \
   || fail "unit test: $(grep -m1 'from __dbt__cte__up__events' "$tmp/unit/dbt.log")"
-if out=$(k2i missing parse --vars '{"k2_inputs": {"other/table": {"snapshot": 1}}}' 2>&1); then
-  fail "missing key: parse passed"
+k2i missing-parse parse -q --vars '{"k2_inputs": {"other/table": {"snapshot": 1}}}' || fail "missing key: parse failed"
+if out=$(k2i missing compile --vars '{"k2_inputs": {"other/table": {"snapshot": 1}}}' 2>&1); then
+  fail "missing key: compile passed"
 fi
 grep -qF 'k2_input: k2_inputs is set but has no entry up/events' <<< "$out" || fail "missing key: $out"
 n=0

@@ -132,6 +132,7 @@ from k2gen.model import quote_relation, sql_literal
 trino, env = av.connect(Path("/work/env.json"))
 LK = f"{env['lakekeeper']}/catalog"
 OUT, VIEW, READER, BUILDER = "governance_build.access_canary__base.events", "governance.access_canary.events", "p.canary-full", "dbt_access_canary"
+PRODUCT = "governance.access-canary"
 RECORDS = "governance_build.run_records.run_record"
 D = Path("/work/w118")
 cmd, args = sys.argv[1], sys.argv[2:]
@@ -299,6 +300,14 @@ elif cmd == "claims":
         except (ValueError, IndexError, KeyError):
             xcom[r] = False
     claim("the XCom is the last stdout line of every run, its exit the container's", all(xcom.values()), xcom)
+    # F2: dbt parses every product's models for any --selector, and the wrapper passes k2_inputs {} for
+    # a product with no input; run1 proves that case only while R1 also holds a model reading an input.
+    r1 = Path("/work/releases") / args[0]
+    readers = sorted({m.parent.name for m in (r1 / "compiled/dbt/models").rglob("*.sql")
+                      if "k2_input(" in m.read_text() and m.parent.name != "access_canary"})
+    own = json.loads((r1 / model.pipeline_path(PRODUCT)).read_text()).get("inputs")
+    claim("a product with no input builds from a release in which another product reads one through k2_input",
+          rc.get("run1") == 0 and own == [] and bool(readers), f"run1 exit {rc.get('run1')}, its inputs {own}, readers {readers}")
     sys.exit(1 if fails else 0)
 PY
 probe() { bash "$L" py "$P" - "$@" < "$W/probe.py"; }
@@ -375,7 +384,7 @@ probe state run8
 run "$ID2" run9;            probe drift "$ID2" run9
 
 probe facts
-probe claims | tee "$W/claims"
+probe claims "$ID1" | tee "$W/claims"
 fail=$(grep -c '^FAIL' "$W/claims"); pass=$(grep -c '^PASS' "$W/claims")
 echo "dbt-wrapper: $pass PASS, $fail FAIL in $((SECONDS - T0)) s"
 [ "$fail" = 0 ] && [ "$pass" -gt 0 ]
