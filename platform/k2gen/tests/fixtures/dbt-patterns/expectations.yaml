@@ -1,0 +1,12 @@
+  # The fixture product reference-data.pattern-lab (scripts/verify/dbt-patterns.sh appends these
+  # rows to a scratch clone's tests/access/expectations.yaml): owner-only, so a reader of another
+  # product is refused each reader view, each base and each seed's table.
+  - {principal: p.canary-full, table: reference_data.pattern_lab.instrument_history, denied: true}
+  - {principal: p.canary-full, table: reference_data.pattern_lab.silver_trade, denied: true}
+  - {principal: p.canary-full, table: reference_data.pattern_lab.silver_trade_unresolved, denied: true}
+  - {principal: p.canary-full, table: reference_data.pattern_lab__base.instrument_history, denied: true}
+  - {principal: p.canary-full, table: reference_data.pattern_lab__base.silver_trade, denied: true}
+  - {principal: p.canary-full, table: reference_data.pattern_lab__base.silver_trade_unresolved, denied: true}
+  - {principal: p.canary-full, table: reference_data.pattern_lab__base.listing, denied: true}
+  - {principal: p.canary-full, table: reference_data.pattern_lab__base.symbols, denied: true}
+  - {principal: p.canary-full, table: reference_data.pattern_lab__base.trades, denied: true}

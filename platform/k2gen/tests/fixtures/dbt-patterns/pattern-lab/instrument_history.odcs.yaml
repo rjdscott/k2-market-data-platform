@@ -1,0 +1,75 @@
+apiVersion: v3.2.0
+kind: DataContract
+id: reference-data.pattern-lab.instrument_history
+name: instrument_history
+version: 1.0.0
+domain: reference-data
+description:
+  purpose: >-
+    Synthetic type-2 history: one row per symbol and version of its tick size, valid from
+    valid_from up to but not including valid_to.
+team:
+  name: reference-data-team
+schema:
+  - id: instrument_history
+    name: instrument_history
+    physicalName: pattern_lab.instrument_history
+    physicalType: table
+    properties:
+      - name: symbol
+        physicalType: varchar
+        required: true
+        primaryKey: true
+        primaryKeyPosition: 1
+        description: The made-up venue's symbol.
+      - name: valid_from
+        physicalType: timestamp(6) with time zone
+        required: true
+        primaryKey: true
+        primaryKeyPosition: 2
+        description: The fetch that first saw this version; the key's first version opens at 1970-01-01 00:00:00 UTC.
+      - name: valid_to
+        physicalType: timestamp(6) with time zone
+        required: true
+        description: The next version's valid_from; 9999-12-31 23:59:59 UTC on the open row, never null.
+      - name: tick_size
+        physicalType: decimal(18,8)
+        required: true
+        description: The made-up tick size.
+      - name: recorded_at
+        physicalType: timestamp(6) with time zone
+        required: true
+        description: When the fetch that first saw this version ran (knowledge time).
+    quality:
+      - name: versions_do_not_overlap
+        type: sql
+        query: "select count(*) from (select valid_to, lead(valid_from) over (partition by symbol order by valid_from) as next_from from ${table}) as v where next_from < valid_to"
+        mustBe: 0
+        description: Each version ends no later than the next one of its key starts.
+      - name: versions_leave_no_gap
+        type: sql
+        query: "select count(*) from (select valid_to, lead(valid_from) over (partition by symbol order by valid_from) as next_from from ${table}) as v where next_from > valid_to"
+        mustBe: 0
+        description: Each version ends exactly where the next one of its key starts.
+      - name: one_open_row_per_key
+        type: sql
+        query: "select count(*) from (select symbol from ${table} group by symbol having count_if(valid_to = timestamp '9999-12-31 23:59:59 UTC') <> 1) as k"
+        mustBe: 0
+        description: Every symbol has exactly one open row.
+      - name: first_version_opens_1970
+        type: sql
+        query: "select count(*) from (select symbol from ${table} group by symbol having min(valid_from) <> timestamp '1970-01-01 00:00:00 UTC') as k"
+        mustBe: 0
+        description: Every symbol's first version opens at 1970-01-01 00:00:00 UTC.
+      - name: intervals_not_empty
+        type: sql
+        query: "select count(*) from ${table} where valid_from >= valid_to"
+        mustBe: 0
+        description: Every version is valid for some time.
+customProperties:
+  - property: layer
+    value: silver
+  - property: build
+    value: dbt
+  - property: backup
+    value: rebuild

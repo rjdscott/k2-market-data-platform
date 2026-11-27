@@ -1,0 +1,45 @@
+apiVersion: v3.2.0
+kind: DataContract
+id: reference-data.pattern-lab.silver_trade
+name: silver_trade
+version: 1.0.0
+domain: reference-data
+description:
+  purpose: Synthetic trades whose symbol resolves, one row each.
+team:
+  name: reference-data-team
+schema:
+  - id: silver_trade
+    name: silver_trade
+    physicalName: pattern_lab.silver_trade
+    physicalType: table
+    properties:
+      - name: trade_id
+        physicalType: bigint
+        required: true
+        primaryKey: true
+        primaryKeyPosition: 1
+        description: The made-up trade's id.
+      - name: symbol
+        physicalType: varchar
+        required: true
+        description: The made-up venue's symbol.
+      - name: instrument_id
+        physicalType: bigint
+        required: true
+        description: The made-up instrument the symbol resolves to.
+      - name: price
+        physicalType: decimal(18,8)
+        required: true
+        description: The made-up price.
+      - name: quantity
+        physicalType: decimal(18,8)
+        required: true
+        description: The made-up quantity.
+customProperties:
+  - property: layer
+    value: silver
+  - property: build
+    value: dbt
+  - property: backup
+    value: rebuild

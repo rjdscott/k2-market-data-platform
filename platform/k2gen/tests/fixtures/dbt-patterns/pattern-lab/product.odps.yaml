@@ -1,0 +1,39 @@
+# A fixture, never deployed: scripts/verify/dbt-patterns.sh copies this directory into a scratch
+# clone's contracts/reference-data/ and builds it through the wrapper on a throwaway lake. Three
+# dbt patterns phase 004 builds on: type-2 history from a listing, a held table beside a silver,
+# and a warn test that fails and still publishes. Every row is invented.
+apiVersion: v1.1.0
+kind: DataProduct
+id: reference-data.pattern-lab
+name: pattern-lab
+version: 1.0.0
+status: active
+domain: reference-data
+type: sourceAligned
+description:
+  purpose: >-
+    Synthetic: a made-up venue's listing as type-2 history, and its made-up trades resolved
+    against a made-up symbol list, the unresolved ones held.
+  limitations: Synthetic; no real venue, instrument or trade.
+  usage: A fixture of scripts/verify/dbt-patterns.sh only.
+team:
+  name: reference-data-team
+outputPorts:
+  - name: instrument_history
+    version: 1.0.0
+    contractId: reference-data.pattern-lab.instrument_history
+  - name: silver_trade
+    version: 1.0.0
+    contractId: reference-data.pattern-lab.silver_trade
+  - name: silver_trade_unresolved
+    version: 1.0.0
+    contractId: reference-data.pattern-lab.silver_trade_unresolved
+customProperties:
+  - property: schedule
+    value:
+      cron: "0 5 * * *"
+  - property: seeds
+    value:
+      - {path: seeds/listing.csv, synthetic: true}
+      - {path: seeds/symbols.csv, synthetic: true}
+      - {path: seeds/trades.csv, synthetic: true}
