@@ -240,6 +240,12 @@ K2_SPARK_S3_ACCESS_KEY is missing a value: set K2_SPARK_S3_ACCESS_KEY in .env (m
   `api/keys.json` for k2-api (`make api-key`). MinIO publishes no host port: `127.0.0.1:9000` and
   `127.0.0.1:9001` (its console) are gone, and the first deploy from a release that published them needs
   `ALLOW_STATEFUL=minio`.
+- **From the release that carries phase 004** (`v3.0.0-alpha.6`, not yet deployed): every DAG is
+  created paused, whatever its status, so a cutover from that tag or later starts no product run until
+  the operator unpauses each after `make release-verify`, inputs first, with `docker exec
+  k2-airflow-scheduler airflow dags unpause <dag> -y` (not yet run by hand; the order is in
+  [onboard-a-kafka-product.md](./onboard-a-kafka-product.md) section 4). On the live stack, where the
+  DAGs exist already, only the DAGs the release adds start paused.
 
 **Recovery**
 

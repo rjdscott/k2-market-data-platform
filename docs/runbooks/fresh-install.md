@@ -143,6 +143,20 @@ first-deploy path expects the services to be running already from the checkout's
 (`scripts/deploy.py`). Stop at the first surprise and read
 [deploy-a-release.md](./deploy-a-release.md) sections 5 to 7.
 
+**From the release that carries phase 004** (`v3.0.0-alpha.6`, not yet deployed): a first deploy
+creates every DAG paused, the file products' included, since a DAG is created paused whatever its
+status, and nothing runs until the operator unpauses it. That release also needs the password files
+of `dbt_` and `pub_` for `kraken_instruments`, `security_master`, `kraken_trades`, `canonical_trades`
+and `candles`, and `svc.operator`'s for holds. After `make release-verify` exits 0, unpause inputs
+first; not yet run:
+
+```bash
+S=k2-airflow-scheduler
+for d in access_canary calendars currency_master ecb_fx_rates quality_results; do docker exec $S airflow dags unpause $d -y; done
+# then kraken_instruments, security_master, kraken_trades, canonical_trades, candles, in that order,
+# each after its inputs' first run succeeded (onboard-a-kafka-product.md section 4)
+```
+
 The v3 lake's own check, `lake-verify.sh`, retired with it: `make lake-verify` prints a SKIP line
 naming phase 004, where the new platform's product checks return.
 
