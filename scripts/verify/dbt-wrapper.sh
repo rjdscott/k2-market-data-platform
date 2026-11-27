@@ -42,6 +42,9 @@
 #
 #   bash scripts/verify/dbt-wrapper.sh        # KEEP=1 keeps the scratch directory
 #
+# Exit 0 only when the claims step exited 0, its last line is `claims: every claim run, 0 FAIL`,
+# and there is no FAIL line and at least one PASS line (tests/test_verify_exit.py).
+#
 # One container job: refuses to start while a container that is not the stack's runs. Builds the
 # image under a throwaway tag and removes it; the lake, the image and the scratch directory go in
 # the trap. Never touches the running stack, never prints a secret (the passwords are this lake's,
@@ -473,6 +476,7 @@ elif cmd == "claims":
     fell_back = [r for r, code in rc.items() if code == 0 and "the dbt invocation's time decides" in err.get(r, "")]
     claim("every publish matched its tested snapshot's trino_query_id to one dbt reported (none fell back to the time window)",
           not fell_back and sum(1 for code in rc.values() if code == 0) >= 8, f"fell back: {fell_back}")
+    print(f"claims: every claim run, {fails} FAIL", flush=True)  # the shell requires this last line
     sys.exit(1 if fails else 0)
 PY
 probe() { bash "$L" py "$P" - "$@" < "$W/probe.py"; }
@@ -564,6 +568,7 @@ probe q2-poll 200 & poller=$!
 sleep 4; probe q2-change; wait "$poller"
 probe q2-swap
 probe claims "$ID1" | tee "$W/claims"
-fail=$(grep -c '^FAIL' "$W/claims"); pass=$(grep -c '^PASS' "$W/claims")
-echo "dbt-wrapper: $pass PASS, $fail FAIL in $((SECONDS - T0)) s"
-[ "$fail" = 0 ] && [ "$pass" -gt 0 ]
+rc=${PIPESTATUS[0]}  # a crash after some PASS lines must not pass: the step's exit and its last line decide
+fail=$(grep -c '^FAIL' "$W/claims"); pass=$(grep -c '^PASS' "$W/claims"); last=$(tail -n 1 "$W/claims")
+echo "dbt-wrapper: $pass PASS, $fail FAIL in $((SECONDS - T0)) s (claims step exit $rc, last line: $last)"
+[ "$rc" = 0 ] && [ "$last" = "claims: every claim run, 0 FAIL" ] && [ "$fail" = 0 ] && [ "$pass" -gt 0 ]

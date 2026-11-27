@@ -1072,7 +1072,8 @@ Where: `contracts/schema/` (ODCS today; ODPS from the release and rules spine).
 A connector is the code that reads one kind of source for one product: `kafka`, `public-api`,
 `https-file`, `s3-file`, `sftp` or `ftp`. It is configured in the product's ODPS file, lands what
 it read verbatim in the product's own landing, and never shares a landing with another product.
-File and API kinds run in a one-shot fetch container limited to the product's declared hosts.
+File and API kinds run in a one-shot fetch container whose download is limited to the product's
+declared hosts.
 Where: [ADR-056](ADR-056-unified-data-product-platform.md) part 3,
 [ADR-036](ADR-036-connectors-land-verbatim-then-publish-bronze-after-audit.md).
 
@@ -1082,13 +1083,16 @@ The fetch container is a one-shot container that runs one fetch for one product:
 file or an API response, writes the bytes and a fetch record (URL, final URL, sha256, size, time)
 to the run's spool directory before anything parses them, then parses them with the product's
 registered parser. It holds no storage key and cannot reach MinIO or Lakekeeper. Its **host
-allow-list** is the product's `allowHosts`: it connects only to addresses resolved from those
-names and checked to be public, and follows a redirect only over `https` to a host on the list.
+allow-list** is the product's `allowHosts`: the download connects only to addresses resolved from
+those names and checked to be public, and follows a redirect only over `https` to a host on the
+list. The list guards the download, not the parser, which runs afterwards in the same container
+with ordinary sockets and can reach any internet host from `k2-egress`, a network no other service
+joins.
 That stops a **server-side request forgery** (SSRF), where a server is made to request an address
 an outsider chose, such as an internal service behind a redirect. Nothing a source sends is ever
 executed.
 Where: [ADR-036](ADR-036-connectors-land-verbatim-then-publish-bronze-after-audit.md) parts 2
-and 3.
+and 3, and its Outcome.
 
 ### Medallion layers of a product
 

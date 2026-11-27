@@ -148,10 +148,15 @@ root; a secret is 40 characters of `secrets.token_urlsafe`. It copies the file t
 at mode 600 first, writes the new file at mode 600 and renames it into place, and prints names, never a
 value.
 
-`make engine-keys ROTATE=<engine>[,<engine>]` replaces only the secret, under the same access key. The
-next `lake-init` (every `make deploy` runs it) sets that user's secret with `mc admin user add`, so the
-old one stops working. A new access key would instead leave the old user, its policy and its secret
-valid. The holders are then recreated so they read the new value.
+`make engine-keys ROTATE=<engine>[,<engine>]` replaces only the secret, under the same access key, in
+`.env` alone. A deploy runs `lake-init` only when its release changes `lake-init` (Consequences), so a
+rotation is followed by `make lake-init RECREATE="<service> ..."`, which does the other two steps in
+order: it runs `lake-init` on the live release as deploy runs it (the release's compose, script,
+policies and storage plan), which sets that user's secret with `mc admin user add` so the old one stops
+working; then it recreates the holders through the release so they read the new value: `trino` for
+Trino's pair, `spark-iceberg` for Spark's and maintenance's, none for backup's and the tools one's,
+which are passed per run. Until `lake-init` reruns, MinIO keeps the old secret, and a holder recreated
+first is refused. A new access key would instead leave the old user, its policy and its secret valid.
 
 `lake-init` and `scripts/check-env.py` refuse the same things before anything changes: a pair unset, a
 half equal to root, two engines sharing one access key. A user found holding any policy but its own is

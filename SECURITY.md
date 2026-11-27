@@ -41,10 +41,20 @@ hardened for production use. What is protected, and what is not, plainly:
   Lakekeeper hands out no credential. `make engine-keys` writes the five pairs into `.env`, and
   `scripts/check-env.py` refuses a pair that is the root's or that two engines share. MinIO
   publishes no host port: no port on the host reaches the lake's data but Trino's and k2-api's.
-- **Product code runs without keys or a way in.** A product's parser runs only in the fetch
-  one-shot, which holds no secret, joins `k2-egress` alone (a network no other service is on),
-  and connects only to the hosts its contract's `allowHosts` names, over HTTPS, refusing
-  private addresses and redirects off the list (`docker/fetch/fetch.py`). dbt models run in the
+  The catalog's database is the one path to the lake's metadata without Trino: `prefect-db`
+  publishes `127.0.0.1:15432`, which reaches Lakekeeper's and Airflow's databases, guarded by
+  loopback alone and `PREFECT_DB_PASSWORD`, the superuser's password, which Lakekeeper shares.
+- **Product code runs without keys.** A product's parser runs only in the fetch one-shot,
+  which holds no secret or storage key and joins `k2-egress` alone: a network with internet
+  egress that no other service of the stack is on. The allow-list guards the download, not the
+  parser. `docker/fetch/fetch.py` downloads only from the hosts the contract's `allowHosts`
+  names, over HTTPS, refusing private addresses and redirects off the list; the parser and its
+  audits then run in the same container with ordinary sockets. From `k2-egress` a parser cannot
+  reach MinIO, Lakekeeper, Trino, Redpanda or the Airflow API over the stack's networks, but it
+  can reach any internet host, and on Docker Desktop the host's published loopback ports through
+  `host.docker.internal`, as any container can (below). A parser is code sealed in the release
+  and approved by its tag ([ADR-036](docs/adr/ADR-036-connectors-land-verbatim-then-publish-bronze-after-audit.md)'s
+  Outcome, "What a parser can still reach"). dbt models run in the
   `dbt-runner` one-shot, on `k2-catalog`, with only their builder's, their publisher's and the
   run records' (`svc.runs`) passwords and the CA (`docker/airflow/dags/oneshot.py`, `ALLOWED`).
 

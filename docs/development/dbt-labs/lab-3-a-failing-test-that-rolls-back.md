@@ -40,9 +40,11 @@ SELECT "rate_date", "currency", "rate", "source_file_sha256" FROM "fx_reference"
 The `WHERE EXISTS` on the table's `$refs` (the metadata table listing its branches and tags) makes
 the read fail, rather than serve rows, if anything but a tagged Iceberg table ever sits at that name
 (ADR-061, its first Outcome). The builder `dbt_ecb_fx_rates` writes the base and cannot touch the
-view; the publisher `pub_ecb_fx_rates` owns the view and alone moves the tag. So the question
-"can a reader see a failed build?" becomes "can the tag ever move onto one?", and the wrapper is
-the one program that moves it.
+view; the publisher `pub_ecb_fx_rates` owns the view. So the question "can a reader see a failed
+build?" becomes "can the tag ever move onto one?", and the wrapper is the one program meant to move
+it. Lakekeeper does not enforce that: its REST API has no authentication, so any member of network
+`k2-catalog` could move the tag; the network fence (ADR-059 part 7) keeps every container but the
+platform's own off that network.
 
 ### 3. The wrapper's steps, in order
 
@@ -196,8 +198,10 @@ reconciled by the next, which passes: ...`). The script's last line is
 
 ## Why it works
 
-Readers name the tag, never `main`, and only the publisher, only after a passing build, in a commit
-that fails if `main` moved since the tests read it, moves the tag. A failed build changes `main`
+Readers name the tag, never `main`, and the wrapper moves the tag only after a passing build, in a
+commit that fails if `main` moved since the tests read it. Lakekeeper checks no identity on that
+commit, so what keeps any other program from moving the tag is the network fence: only the
+platform's own services join `k2-catalog`. A failed build changes `main`
 alone, and the wrapper puts `main` back before the run ends; a run that dies before that is put
 back by the next run's reconcile, before it builds anything.
 

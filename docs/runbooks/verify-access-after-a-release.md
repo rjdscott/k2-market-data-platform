@@ -177,7 +177,8 @@ promise a person wrote down. Read the reason:
    (the policy, the grant) or to the row, reviewed by the product's owner.
 2. If it is live and a reader sees more than the row allows, roll back to the previous release:
    `make rollback` (step S19, built in parallel with this runbook and not run here). Then run
-   `make access-verify LIVE=1` again.
+   `make access-verify LIVE=1` again, which reruns the canary's, the platform's and the storage-key
+   rows; a row naming another product SKIPs live, so reproduce it on a throwaway lake (step 3).
 3. To reproduce a row, bring up and stage a throwaway lake as section 4, step 1 does (it sets
    `RELEASE` and `ID`), then run the suite on it:
 
