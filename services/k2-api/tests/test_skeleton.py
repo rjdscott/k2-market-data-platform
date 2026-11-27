@@ -47,6 +47,9 @@ def test_no_pointer_or_one_out_of_the_releases_root_is_503(client: TestClient, r
     (tmp_path / "elsewhere").mkdir()
     pointer.symlink_to(tmp_path / "elsewhere")
     assert client.get("/v1/release").status_code == 503
+    pointer.unlink()
+    pointer.symlink_to("../pointers")  # under the root, and no release
+    assert client.get("/v1/release").status_code == 503
 
 
 def test_a_manifest_naming_another_release_is_503(client: TestClient, releases: Path) -> None:
