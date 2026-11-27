@@ -7,7 +7,10 @@ The frozen contract is docs/development/phase-001-interfaces.md, "Run-time contr
 wrapper"; the measurements behind it are spikes (d), (f) and (g) of
 docs/research/2026-11-26-release-spine-spikes.md. In order:
 
-1. reconcile: an output whose `main` is not its `audited` tag (an earlier run died) is restored to
+1. orphans: every query the builder still runs (an earlier run killed mid-statement leaves its
+   CTAS or MERGE running in Trino for up to query.client.timeout) is killed, and none may remain
+   after ORPHAN_WAIT seconds, before anything below reads the lake (stop_orphans()).
+   reconcile: an output whose `main` is not its `audited` tag (an earlier run died) is restored to
    the tag as the builder (no tag: DROP TABLE), `reconciled`; a tag ahead of the run records, which
    only an unfinished run explains (it died between the tag commit and its `audited` row), gets
    that row; every view is put back to C and the tagged columns; then the catalog drift check,
@@ -19,8 +22,9 @@ docs/research/2026-11-26-release-spine-spikes.md. In order:
 4. one `dbt build --selector <fence> --vars <k2_inputs, k2_run_id, k2_release>` as the builder,
    unit tests inside it (spike d). Any non-zero exit is a failed build.
 5. on a failure, every output whose main moved is restored as the builder, `rolled_back`.
-6. on a pass, as the publisher: views narrowed, one compare-and-set tag commit, views widened,
-   `audited` (publish()).
+6. on a pass, as the publisher: each moved main must be this dbt invocation's own commit
+   (built_here()), then views narrowed, one compare-and-set tag commit, views widened, `audited`
+   (publish()).
 
 Exits: 0 passed and published; 1 tests failed, outputs restored; 2 build error, outputs restored;
 3 a restore, the tag commit, the view sync, the reconcile or the drift check failed (pages); 4 a
@@ -33,7 +37,8 @@ quoted by k2gen's quote_relation; snapshot ids pass snap() (an int, never a stri
 passwords are read from their files at connect time, never logged (log() scrubs every one read),
 never in an argument list. Trino cannot move a tag (spike g), so the tag commit and the current
 view SQL are the two calls to Lakekeeper's REST API, at K2_CATALOG_URI (steps 1 and 6), beside the
-drift check's own reads.
+drift check's own reads; listing and cancelling the builder's orphaned queries are the two calls to
+Trino's own REST API (step 1), as the builder.
 
 Imports beyond the standard library: trino, k2gen (platform/k2gen), and catalog_drift
 (scripts/verify/catalog_drift.py), which docker/dbt-runner/Dockerfile puts beside this file, so
@@ -44,14 +49,19 @@ Imports beyond the standard library: trino, k2gen (platform/k2gen), and catalog_
 from __future__ import annotations
 
 import argparse
+import base64
 import importlib.util
 import json
 import os
 import re
 import shutil
+import ssl
 import subprocess
 import sys
 import tempfile
+import time
+import urllib.error
+import urllib.request
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -80,6 +90,8 @@ PRODUCT_ID = re.compile(r"[a-z][a-z0-9]*(-[a-z0-9]+)*\.[a-z][a-z0-9]*(-[a-z0-9]+
 RUN_ID = re.compile(r"([a-z][a-z0-9_]*)/([A-Za-z0-9][A-Za-z0-9_.:+-]{0,200})")
 HOST = re.compile(r"[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?")
 INVOCATION = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
+QUERY_ID = re.compile(r"[0-9]{8}_[0-9]{6}_[0-9]{5}_[a-z0-9]{5}")  # Trino's QueryId
+ORPHAN_WAIT = 60  # seconds a killed query has to end (its commit or abort) before reconcile reads
 
 
 class Refused(Exception):
@@ -289,6 +301,23 @@ def restore(io: Any, o: Output, target: int | None, tagged: bool) -> None:
     io.sql("builder", restore_statement(o.relation, target, tagged, at_target, io.columns(o.relation, None), o.partitioning, o.sort))
 
 
+def stop_orphans(ctx: Ctx, io: Any) -> None:
+    """Step 1, first: a build killed mid-statement (docker rm -f, on_kill, a scheduler crash) stops
+    the client, not the query, which Trino runs on until query.client.timeout; a CTAS or MERGE that
+    commits after this run's tests would put an untested snapshot on main just before publish. So
+    every query the builder still runs is killed and must end before reconcile reads anything. Only
+    this product's one run is ever its builder (max_active_runs 1, the container-name mutex), so
+    each one found is an orphan. Raises Refused when one outlives ORPHAN_WAIT; the caller exits 3."""
+    for q in io.running():
+        log(f"{ctx.writer}'s query {q} is still running, left by an earlier run: killed")
+        io.kill(q)
+    deadline = time.monotonic() + ORPHAN_WAIT
+    while left := io.running():
+        if time.monotonic() >= deadline:
+            raise Refused(f"{ctx.writer}'s queries {left} still run {ORPHAN_WAIT} s after the kill")
+        time.sleep(1)
+
+
 def reconcile(ctx: Ctx, io: Any) -> None:
     """Step 1. Raises Refused on anything a reconcile must not repair; the caller exits 3."""
     rels = {o.relation for o in ctx.outputs}
@@ -424,6 +453,31 @@ def rollback(ctx: Ctx, io: Any, before: dict[str, dict[str, Any]], invocation: s
                dbt_invocation_id=invocation)
 
 
+def reported(results: dict[str, Any] | None) -> set[str]:
+    """Every query id dbt-trino reported, one per node: its adapter_response, the node's last
+    statement (dbt-trino splits a contract table's CREATE and INSERT, a merge's MERGE comes last)."""
+    ids = {((r.get("adapter_response") or {}).get("query_id")) for r in (results or {}).get("results", [])}
+    return {q for q in ids if isinstance(q, str) and QUERY_ID.fullmatch(q)}
+
+
+def built_here(rel: str, meta: dict[str, Any], queries: set[str], window: tuple[datetime, datetime]) -> None:
+    """The tested snapshot, a main this run moved, is this dbt invocation's own commit, not a write
+    that landed after its tests (an orphaned query of an earlier run, stop_orphans' other end).
+    Trino's Iceberg connector writes the committing query's id into the snapshot summary, and dbt
+    reports each node's: when both sides have one, the snapshot's must be one dbt reported. When
+    either lacks it, only the time can decide: committed inside the dbt invocation. Weaker, since a
+    write after a node's tests but before dbt returns passes it; the log says which was used. A
+    product hook writing {{ this }} after the model (no product has one) would refuse here."""
+    qid = meta.get("query_id")
+    if qid and queries:
+        if qid not in queries:
+            raise Refused(f"{rel}: main was committed by query {qid}, which this dbt build did not run: a write after its tests")
+        return
+    log(f"{rel}: {'the snapshot names no query' if not qid else 'dbt reported no query id'}; the dbt invocation's time decides")
+    if not window[0] <= meta["committed_at"] <= window[1]:
+        raise Refused(f"{rel}: main was committed at {meta['committed_at']}, outside this dbt build ({window[0]} to {window[1]})")
+
+
 def tag_change(o: Output, tested: int, previous: int | None) -> dict[str, Any]:
     """One output's part of the commit: the tag onto the tested snapshot, only while main is still
     that snapshot and the tag is still where this run found it (spike g, ADR-061 part 4)."""
@@ -435,7 +489,8 @@ def tag_change(o: Output, tested: int, previous: int | None) -> dict[str, Any]:
             "updates": [{"action": "set-snapshot-ref", "ref-name": k2.AUDITED_TAG, "type": "tag", "snapshot-id": snap(tested)}]}
 
 
-def publish(ctx: Ctx, io: Any, before: dict[str, dict[str, Any]], invocation: str | None) -> int:
+def publish(ctx: Ctx, io: Any, before: dict[str, dict[str, Any]], invocation: str | None,
+            queries: set[str], window: tuple[datetime, datetime]) -> int:
     """Step 6, as the publisher, after every test passed.
 
     INVARIANT: at every instant each reader view (a) reads its base at the `audited` tag, and the
@@ -456,6 +511,8 @@ def publish(ctx: Ctx, io: Any, before: dict[str, dict[str, Any]], invocation: st
             raise Refused(f"{o.relation}: the build passed and left no main")
         if tag != before[o.relation]["tag"]:
             raise Refused(f"{o.relation}: the tag moved during the build ({before[o.relation]['tag']} to {tag})")
+        if main != before[o.relation]["main"]:
+            built_here(o.relation, io.snapshot(o.relation, main), queries, window)
         tested[o.relation] = main
         old = io.columns(o.relation, tag) if tag is not None else None
         new = io.columns(o.relation, main)
@@ -499,6 +556,7 @@ def run(ctx: Ctx, io: Any) -> tuple[int, list[dict[str, Any]]]:
     """Steps 1 to 6; (exit code, expire)."""
     expire: list[dict[str, Any]] = []
     try:
+        stop_orphans(ctx, io)
         reconcile(ctx, io)
     except Exception as e:
         log(f"reconcile: {type(e).__name__}: {e}")
@@ -523,11 +581,13 @@ def run(ctx: Ctx, io: Any) -> tuple[int, list[dict[str, Any]]]:
     except Exception as e:
         log(f"started: {type(e).__name__}: {e}")
         return 3, expire
+    window_start = datetime.now(timezone.utc)
     try:
         code, results = io.dbt(dbt_argv(ctx, inputs))
     except Exception as e:
         log(f"dbt: {type(e).__name__}: {e}")
         code, results = 2, None
+    window = (window_start, datetime.now(timezone.utc))
     invocation = ((results or {}).get("metadata") or {}).get("invocation_id")
     invocation = invocation if isinstance(invocation, str) and INVOCATION.fullmatch(invocation) else None
     outcome = verdict(code, results)
@@ -536,7 +596,7 @@ def run(ctx: Ctx, io: Any) -> tuple[int, list[dict[str, Any]]]:
             log(f"dbt build {'failed its tests' if outcome == 1 else 'failed'} (exit {code}); restoring the outputs")
             rollback(ctx, io, before, invocation, expire)
             return outcome, expire
-        return publish(ctx, io, before, invocation), expire
+        return publish(ctx, io, before, invocation, reported(results), window), expire
     except Exception as e:
         log(f"{'rollback' if outcome else 'publish'}: {type(e).__name__}: {e}")
         return 3, expire
@@ -608,6 +668,45 @@ class Live:
         at = "" if snapshot is None else f" {version(snapshot)}"
         _, description = self.query("builder", f"SELECT * FROM {relation(rel)}{at} LIMIT 0")
         return {d[0]: d[1] for d in description}  # type_code is Trino's type as DESCRIBE spells it
+
+    def rest(self, method: str, path: str) -> Any:
+        """Trino's coordinator REST API as the builder, over the same HTTPS and CA. Trino lists to a
+        user, and lets it cancel, only its own queries unless a `queries` rule grants view or kill,
+        which none does but the operator's (trino_rules_test.py's `queries` row), so the builder
+        reaches its own orphans and nothing else, and no rule is added for it (review Q1)."""
+        user = self.environ["K2_TRINO_USER"]
+        token = base64.b64encode(f"{user}:{password('builder')}".encode()).decode()
+        url = f"https://{self.environ['K2_TRINO_HOST']}:{self.environ['K2_TRINO_INTERNAL_PORT']}{path}"
+        req = urllib.request.Request(url, method=method, headers={"Authorization": f"Basic {token}", "X-Trino-User": user})
+        with urllib.request.urlopen(req, context=ssl.create_default_context(cafile=CA), timeout=30) as r:
+            body = r.read()
+        return json.loads(body) if body else None
+
+    def running(self) -> list[str]:
+        """The builder's queries Trino still runs (GET /v1/query: a listing is no query itself)."""
+        return sorted(str(q["queryId"]) for q in self.rest("GET", "/v1/query")
+                      if (q.get("session") or {}).get("user") == self.ctx.writer and q.get("state") not in ("FINISHED", "FAILED"))
+
+    def kill(self, query_id: str) -> None:
+        """Cancel one of the builder's own queries (DELETE /v1/query/<id>). Refused credentials
+        refuse; any other answer (it ended meanwhile, an unknown id) is left to the wait."""
+        if not QUERY_ID.fullmatch(query_id):
+            raise Refused(f"{query_id!r} is not a Trino query id")
+        try:
+            self.rest("DELETE", f"/v1/query/{query_id}")
+        except urllib.error.HTTPError as e:
+            if e.code in (401, 403):
+                raise Refused(f"Trino refused {self.ctx.writer} the cancel of its own query {query_id}: HTTP {e.code}") from None
+            log(f"cancel {query_id}: HTTP {e.code}; the wait decides")
+
+    def snapshot(self, rel: str, snapshot: int) -> dict[str, Any]:
+        """One snapshot's commit time and committing query, from `t$snapshots`."""
+        relation(rel)
+        rows, _ = self.query("builder", "SELECT committed_at, element_at(summary, 'trino_query_id') FROM "
+                                        f"{k2.quote_relation(rel + '$snapshots')} WHERE snapshot_id = {snap(snapshot)}")
+        if not rows:
+            raise Refused(f"{rel}: snapshot {snapshot} is not in its $snapshots")
+        return {"committed_at": rows[0][0], "query_id": rows[0][1]}
 
     def snapshots(self, rel: str) -> set[int]:
         relation(rel)

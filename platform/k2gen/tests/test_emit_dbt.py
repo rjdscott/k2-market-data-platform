@@ -351,29 +351,39 @@ PROFILE = f"""k2:
 PROOF_MACRO = "{% macro is_incremental() %}{{ return(var('proof_incremental', false)) }}{% endmacro %}\n"
 
 
-def run_dbt(tmp: Path, *args: str) -> str:
+def run_dbt(tmp: Path, *args: str, ok: bool = True) -> str:
     env = {k: v for k, v in os.environ.items() if k != "VIRTUAL_ENV"}
     out = subprocess.run(["uv", "run", "--locked", "dbt", *args, "--project-dir", str(tmp / "tree" / dbt.ROOT),
                           "--profiles-dir", str(tmp), "--target-path", str(tmp / "target"), "--log-path", str(tmp / "logs"),
                           "--no-partial-parse"], cwd=model.REPO / "dbt", env=env, capture_output=True, text=True)
-    assert out.returncode == 0, f"dbt {' '.join(args)}:\n{out.stdout}\n{out.stderr}"
+    assert (out.returncode == 0) == ok, f"dbt {' '.join(args)} exited {out.returncode}:\n{out.stdout}\n{out.stderr}"
     return out.stdout
 
 
-@pytest.mark.skipif(os.environ.get("K2_DBT_PROOF") != "1", reason="the dbt proof runs under make test-dbt-tree (K2_DBT_PROOF=1)")
-@pytest.mark.parametrize("name", ["good", "repository"])
-def test_dbt_parses_compiles_and_selects_the_tree(tmp_path: Path, name: str) -> None:
+def proof_tree(tmp: Path, m: Model) -> None:
+    """The model's tree under tmp/tree, with the proof profile and is_incremental; nothing may listen."""
     try:
         subprocess.run(["bash", "-c", f"exec 3<>/dev/tcp/127.0.0.1/{PROOF_PORT}"], check=True, capture_output=True)
         pytest.fail(f"something listens on 127.0.0.1:{PROOF_PORT}, and the proof must reach no warehouse")
     except subprocess.CalledProcessError:
         pass
-    m = loaded(repository() if name == "repository" else good())
     for path, text in dbt.emit(m).items():
-        (tmp_path / "tree" / path).parent.mkdir(parents=True, exist_ok=True)
-        (tmp_path / "tree" / path).write_text(text)
-    (tmp_path / "profiles.yml").write_text(PROFILE)
-    (tmp_path / "tree" / dbt.ROOT / "macros" / "proof_is_incremental.sql").write_text(PROOF_MACRO)
+        (tmp / "tree" / path).parent.mkdir(parents=True, exist_ok=True)
+        (tmp / "tree" / path).write_text(text)
+    (tmp / "profiles.yml").write_text(PROFILE)
+    (tmp / "tree" / dbt.ROOT / "macros" / "proof_is_incremental.sql").write_text(PROOF_MACRO)
+
+
+def pin_key(contract_id: str) -> str:
+    _, producer, table = contract_id.split(".")
+    return f"{model.fence(producer)}/{table}"
+
+
+@pytest.mark.skipif(os.environ.get("K2_DBT_PROOF") != "1", reason="the dbt proof runs under make test-dbt-tree (K2_DBT_PROOF=1)")
+@pytest.mark.parametrize("name", ["good", "repository"])
+def test_dbt_parses_compiles_and_selects_the_tree(tmp_path: Path, name: str) -> None:
+    m = loaded(repository() if name == "repository" else good())
+    proof_tree(tmp_path, m)
 
     out = run_dbt(tmp_path, "parse")
     assert "WARNING" not in out, out
@@ -389,8 +399,7 @@ def test_dbt_parses_compiles_and_selects_the_tree(tmp_path: Path, name: str) -> 
             node = manifest["nodes"][f"seed.k2.{model.dbt_model(p.name, s.removesuffix('.csv'))}"]
             assert f"{node['database']}.{node['schema']}.{node['alias']}" == model.build_relation(p.domain, p.name, s.removesuffix(".csv"))
 
-    pins = {f"{model.fence(port.contract_id.split('.')[1])}/{port.contract_id.split('.')[2]}": {"snapshot": 42}
-            for p in m.products for port in p.input_ports}
+    pins = {pin_key(port.contract_id): {"snapshot": 42} for p in m.products for port in p.input_ports}
     compiled = {}
     for incremental in (False, True):
         target = tmp_path / "target"
@@ -423,6 +432,31 @@ def test_dbt_parses_compiles_and_selects_the_tree(tmp_path: Path, name: str) -> 
         listed = run_dbt(tmp_path, "ls", "-q", "--selector", model.dag_id(p.name), "--resource-types", "model", "seed", "--output", "name")
         want = {model.dbt_model(p.name, t.name) for t in p.tables if t.build.kind == "dbt"} | {model.dbt_model(p.name, s.removesuffix(".csv")) for s in p.seeds}
         assert set(listed.split()) == want, listed
+
+
+@pytest.mark.skipif(os.environ.get("K2_DBT_PROOF") != "1", reason="the dbt proof runs under make test-dbt-tree (K2_DBT_PROOF=1)")
+@pytest.mark.parametrize("name", ["good", "repository"])
+def test_parse_with_k2_inputs_for_one_product_only(tmp_path: Path, name: str) -> None:
+    # The wrapper's vars (docker/dbt-runner/k2_dbt.py dbt_argv): the selected product's pins only, {}
+    # for a product with no input. dbt parses every product's models for any --selector, so another
+    # product's k2_input must not raise at parse; it compiles only the selected nodes, so a selected
+    # model whose input has no pin still fails, at compile, before any SQL reaches a warehouse.
+    m = loaded(repository() if name == "repository" else good())
+    proof_tree(tmp_path, m)
+    built = [p for p in m.products if any(t.build.kind == "dbt" for t in p.tables) or p.seeds]
+    read = [(p, port) for p in built for port in p.input_ports
+            if any("k2_input('{}', '{}')".format(*pin_key(port.contract_id).split("/")) in str(sql) for sql in p.models.values())]
+    assert read, "a product in the set reads an input through k2_input, or this proves nothing"
+    assert [p for p in built if not p.input_ports], "a product in the set has no input, the wrapper's {} case"
+    for p in built:
+        own = {pin_key(port.contract_id): {"snapshot": 42} for port in p.input_ports}
+        run_dbt(tmp_path, "compile", "--selector", model.dag_id(p.name), "--exclude", "resource_type:operation",
+                "--vars", json.dumps({"k2_inputs": own}))
+    for p, port in read:
+        others = {pin_key(q.contract_id): {"snapshot": 42} for q in p.input_ports if q is not port}
+        out = run_dbt(tmp_path, "compile", "--selector", model.dag_id(p.name), "--exclude", "resource_type:operation",
+                      "--vars", json.dumps({"k2_inputs": others}), ok=False)
+        assert f"k2_input: k2_inputs is set but has no entry {pin_key(port.contract_id)}" in out, out
 
 
 def regenerate(root: Path) -> None:

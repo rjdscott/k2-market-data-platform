@@ -147,3 +147,11 @@ Appended after publication; the table above is never edited.
   resolved in `a989438`. `CLAUDE.md` states the link rule.
 - Medium, the locked bucket: open. `make drop TARGET=bucket:scratch-p4-landing` is run after
   2026-11-27 06:00:18 UTC by the phase's operator; the result is appended here.
+  - **Resolved 2026-11-27 06:08:48 UTC** (the lock had expired at 06:00:18 UTC; nothing was
+    bypassed). `make health` PASS, then `make drop TARGET=bucket:scratch-p4-landing DRY_RUN=1`
+    (no refusal), then `make drop TARGET=bucket:scratch-p4-landing`, which printed: `copied
+    s3://scratch-p4-landing to ~/k2-backup/drop/2026-11-27/bucket:scratch-p4-landing: 13 objects,
+    2432 bytes in MinIO; 13 objects, 2432 bytes in the copy; 19 object versions, 2814 bytes in
+    MinIO; 19, 2814 bytes in ....versions: match`, `bucket removed`, `drop: OK:
+    bucket:scratch-p4-landing dropped`. The copy's manifest is
+    `bucket:scratch-p4-landing.060848Z.json` in that directory. `make health` PASS after it.

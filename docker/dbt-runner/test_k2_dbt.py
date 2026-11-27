@@ -13,7 +13,7 @@ import os
 import re
 import sys
 import types
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -69,6 +69,12 @@ class Fake:
         self.after_dbt = None
         self.extra_drift: list[str] = []
         self.fail_on: str | None = None
+        self.meta: dict[int, dict] = {}  # each snapshot's commit time and committing query
+        self.queries = iter(range(1, 10**5))
+        self.report_queries = True  # dbt's run_results carry each node's query id
+        self.orphans: list[str] = []  # the builder's queries an earlier run left running
+        self.kills: list[str] = []
+        self.unkillable = False
 
     # -- set-up
     def seed(self, rel=OUT, cols=V1, tagged=True, record=True):
@@ -82,8 +88,9 @@ class Fake:
             self.views[v.relation] = {c: cols[c] for c in v.columns if c in cols}
         return sid
 
-    def _snap(self, rel, cols, passed):
+    def _snap(self, rel, cols, passed, query_id=None):
         sid = next(self.ids)
+        self.meta[sid] = {"committed_at": datetime.now(timezone.utc), "query_id": query_id}
         t = self.tables.setdefault(rel, {"snaps": {}, "schema": None, "main": None, "tag": None})
         t["snaps"][sid] = (dict(cols), passed)
         t["schema"], t["main"] = dict(cols), sid
@@ -125,6 +132,18 @@ class Fake:
 
     def snapshots(self, rel):
         return set(self.tables[rel]["snaps"])
+
+    def snapshot(self, rel, sid):
+        assert sid in self.tables[rel]["snaps"]
+        return dict(self.meta[sid])
+
+    def running(self):
+        return sorted(self.orphans)
+
+    def kill(self, query_id):
+        self.kills.append(query_id)
+        if not self.unkillable:
+            self.orphans.remove(query_id)
 
     def sql(self, role, stmt):
         self.statements.append((role, stmt))
@@ -168,13 +187,16 @@ class Fake:
 
     def dbt(self, argv):
         self.dbt_calls.append(argv)
+        results = []
         for rel in self.view_of:  # every output is rebuilt; its tests pass only on a passing build
-            self._snap(rel, self.build.get(rel) or (self.tables[rel]["schema"] if rel in self.tables else V1), self.dbt_code == 0)
+            qid = f"20261127_000000_{next(self.queries):05d}_dbtqy"
+            self._snap(rel, self.build.get(rel) or (self.tables[rel]["schema"] if rel in self.tables else V1), self.dbt_code == 0, qid)
+            results.append({"status": self.dbt_status, "adapter_response": {"query_id": qid} if self.report_queries else {}})
         self._snap("governance_build.access_canary__base.dq_test_results", {"run_id": "varchar"}, True)  # the results hook
         self.check()
         if self.after_dbt:
             self.after_dbt(self)
-        return self.dbt_code, {"metadata": {"invocation_id": UUID}, "results": [{"status": self.dbt_status}]}
+        return self.dbt_code, {"metadata": {"invocation_id": UUID}, "results": results}
 
     def commit(self, warehouse, changes):
         if self.crash == "narrow":
@@ -482,6 +504,88 @@ def test_a_crash_at_each_point_of_the_publish_never_exposes_untested_data(crash)
     with pytest.raises(Crash):
         w.run(ctx(), fake)
     assert fake.violations == []
+
+
+ORPHAN = "20261127_010203_00042_orph1"
+
+
+def test_a_commit_after_the_tests_by_a_query_dbt_did_not_run_is_refused_and_never_tagged():
+    # an orphaned CTAS of an earlier run commits between this run's tests and the publish (review Q1)
+    fake = Fake()
+    s0 = fake.seed()
+    fake.after_dbt = lambda f: f._snap(OUT, V1, False, query_id=ORPHAN)
+    assert w.run(ctx(), fake)[0] == 3
+    assert fake.tables[OUT]["tag"] == s0 and fake.commits == [] and fake.leaks() == []
+    assert not [s for _, s in fake.statements if "VIEW" in s]
+
+
+@pytest.mark.parametrize("lacking", ["dbt", "snapshot"])
+def test_with_a_query_id_missing_on_one_side_the_dbt_invocations_time_decides(lacking):
+    fake = Fake()
+    fake.seed()
+    unnamed = lambda f: f.meta[f.tables[OUT]["main"]].update(query_id=None)  # noqa: E731
+    fake.report_queries = lacking != "dbt"
+    fake.after_dbt = None if lacking == "dbt" else unnamed
+    assert w.run(ctx(), fake)[0] == 0  # committed inside the invocation
+    tagged = fake.tables[OUT]["tag"]
+    later = datetime.now(timezone.utc) + timedelta(hours=1)
+    fake.after_dbt = lambda f: (unnamed(f), f.meta[f.tables[OUT]["main"]].update(committed_at=later))
+    assert w.run(ctx(run="access_canary/r2"), fake)[0] == 3  # committed after dbt returned
+    assert fake.tables[OUT]["tag"] == tagged and fake.leaks() == []
+
+
+def test_only_well_formed_query_ids_count_as_reported():
+    results = {"results": [{"adapter_response": {"query_id": "20261127_000000_00001_abcde"}}, {"adapter_response": {}},
+                           {"adapter_response": {"query_id": "x' OR 1=1"}}, {"status": "pass"}, {"adapter_response": None}]}
+    assert w.reported(results) == {"20261127_000000_00001_abcde"} and w.reported(None) == set()
+
+
+def test_an_orphaned_builder_query_is_killed_before_reconcile_reads_anything():
+    fake = Fake()
+    fake.seed()
+    fake.orphans = [ORPHAN, "20261127_010203_00043_orph2"]
+    real = fake.history
+
+    def history(product):  # reconcile's first read
+        assert fake.orphans == [] and fake.kills == [ORPHAN, "20261127_010203_00043_orph2"]
+        return real(product)
+    fake.history = history
+    assert w.run(ctx(), fake) == (0, [])
+
+
+def test_a_builder_query_that_outlives_the_kill_exits_3_before_anything_is_read(monkeypatch):
+    monkeypatch.setattr(w, "ORPHAN_WAIT", 0)
+    fake = Fake()
+    fake.seed()
+    before = list(fake.records)
+    fake.orphans, fake.unkillable = [ORPHAN], True
+    fake.history = lambda product: pytest.fail("reconcile read the run records")
+    assert w.run(ctx(), fake) == (3, []) and fake.kills == [ORPHAN]
+    assert fake.dbt_calls == [] and fake.statements == [] and fake.records == before
+
+
+def test_the_live_orphan_calls_list_the_builders_own_and_cancel_only_a_query_id(monkeypatch):
+    live = object.__new__(w.Live)
+    live.ctx = ctx()
+    sent = []
+    listing = [{"queryId": ORPHAN, "state": "RUNNING", "session": {"user": "dbt_access_canary"}},
+               {"queryId": "20261127_010203_00043_done1", "state": "FINISHED", "session": {"user": "dbt_access_canary"}},
+               {"queryId": "20261127_010203_00044_fail1", "state": "FAILED", "session": {"user": "dbt_access_canary"}},
+               {"queryId": "20261127_010203_00045_other", "state": "RUNNING", "session": {"user": "dbt_other"}}]
+    monkeypatch.setattr(live, "rest", lambda method, path: sent.append((method, path)) or (listing if method == "GET" else None),
+                        raising=False)
+    assert live.running() == [ORPHAN] and sent == [("GET", "/v1/query")]
+    live.kill(ORPHAN)
+    assert sent[-1] == ("DELETE", f"/v1/query/{ORPHAN}")
+    for bad in ("20261127_010203_00042_orph1/../../v1/node", "", "x"):
+        with pytest.raises(w.Refused):
+            live.kill(bad)
+
+    def refused(method, path):
+        raise w.urllib.error.HTTPError(path, 403, "Forbidden", {}, None)
+    monkeypatch.setattr(live, "rest", refused, raising=False)
+    with pytest.raises(w.Refused, match="HTTP 403"):
+        live.kill(ORPHAN)
 
 
 # ---- W1-17: reconcile --------------------------------------------------------------------------
