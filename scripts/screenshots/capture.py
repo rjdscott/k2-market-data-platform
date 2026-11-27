@@ -4,14 +4,13 @@ gallery, docs/operations/dashboards.md.
 
 Runs inside k2-screenshots:1.65.2 (the Dockerfile beside this file) on the host
 network, so every URL is the localhost one an operator opens. Credentials come
-from the environment the Makefile passes by name: GRAFANA_PASSWORD,
-MINIO_ROOT_USER, MINIO_ROOT_PASSWORD. They live in this process only: nothing
+from the environment the Makefile passes by name: GRAFANA_PASSWORD. It
+lives in this process only: nothing
 here prints one, writes one, or saves a cookie, and a page whose text contains
 one fails instead of being saved.
 
 Read-only. It logs in and opens pages. It clicks nothing that triggers, pauses
-or changes a setting; the one UI preference it needs (MinIO's licence notice) is
-set in this browser's own localStorage.
+or changes a setting.
 
 A page that times out, shows a spinner, reads "No data" where shots.py does not
 allow it, or shows a credential is not saved: the run carries on, then exits 1
@@ -36,14 +35,9 @@ from playwright.sync_api import sync_playwright
 WIDTH = 1600
 TIMEOUT_MS = 30_000
 GRAFANA_PARAMS = "?orgId=1&kiosk&theme=dark&from=now-6h&to=now"
-SECRETS = ("GRAFANA_PASSWORD", "MINIO_ROOT_USER", "MINIO_ROOT_PASSWORD")
+SECRETS = ("GRAFANA_PASSWORD",)
 # Visible busy indicators: Grafana's panel loading bar, Chakra UI's spinner.
 BUSY = "[aria-label='Panel loading bar'], .chakra-spinner"
-# A per-browser preference, set before any page script runs: MinIO's AGPL notice
-# acknowledged in this browser (the server-side /license/ack is never called).
-INIT_JS = """try {
-  localStorage.setItem('agpl_minio_license_consent', 'true');
-} catch (e) {}"""
 # Numbered markers: an outline round the target and a numbered disc at (bx, by).
 DRAW_JS = """marks => marks.forEach(m => {
   const add = css => { const d = document.createElement('div'); d.style.cssText =
@@ -76,9 +70,6 @@ def env(name):
 def login(ctx, app):
     if app == "grafana":
         r = ctx.request.post("http://localhost:3000/login", data={"user": "admin", "password": env("GRAFANA_PASSWORD")})
-    elif app == "minio":
-        r = ctx.request.post("http://localhost:9001/api/v1/login",
-                             data={"accessKey": env("MINIO_ROOT_USER"), "secretKey": env("MINIO_ROOT_PASSWORD")})
     if not r.ok:
         raise RuntimeError(f"{app} login answered HTTP {r.status}")
 
@@ -160,7 +151,6 @@ def main():
         browser = p.chromium.launch()
         ctx = browser.new_context(viewport={"width": WIDTH, "height": 1000}, color_scheme="dark",
                                   device_scale_factor=1, timezone_id="UTC")
-        ctx.add_init_script(INIT_JS)
         ctx.set_default_timeout(TIMEOUT_MS)
         logged_in = set()
         for shot in selected:
