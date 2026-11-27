@@ -1,0 +1,35 @@
+{
+  "build": {
+    "engine": "dbt",
+    "outputs": [
+      "market_analytics_build.candles__base.ohlcv_1d",
+      "market_analytics_build.candles__base.ohlcv_1h",
+      "market_analytics_build.candles__base.ohlcv_1m",
+      "market_analytics_build.candles__base.ohlcv_5m"
+    ],
+    "publisher": "pub_candles",
+    "selector": "candles",
+    "writer": "dbt_candles"
+  },
+  "dagId": "candles",
+  "domain": "market-analytics",
+  "fence": "candles",
+  "inputs": [
+    {
+      "contractId": "market-analytics.canonical-trades.trades",
+      "maxLagMinutes": 15,
+      "relation": "market_analytics.canonical_trades__base.trades",
+      "required": true,
+      "whenAbsent": "fail"
+    }
+  ],
+  "maintain": {
+    "cron": "50 4 * * *"
+  },
+  "product": "market-analytics.candles",
+  "schedule": {
+    "cron": "4-59/5 * * * *",
+    "timeoutMinutes": 10
+  },
+  "status": "active"
+}
