@@ -84,6 +84,18 @@ no longer exists, do not follow them against this stack.
 | [file-source-audit-failed.md](./file-source-audit-failed.md) | A landed file failed its bronze audit, or a later file's `load` waits behind it: reading `audit_checks` and `landing_files` in Spark (no Trino principal may), a bad file versus a wrong check, resetting branch `audit` to `main` as the Spark key, rerun and verify. Written from the code at this release, **not yet run on the live stack** | `AirflowTaskFailed` (`task_id="audit"` or `"load"`); no alert specific to an audit yet |
 | [onboard-a-file-product.md](./onboard-a-file-product.md) | Adding a file product from nothing: its documents, parser and synthetic fixtures, the checks and tests, the pull request, tag, release, its two principals' passwords, deploy, the first run, its run records and catalog page, with the three products of phase 002 as the worked example. The unit steps run; **the live steps not yet run** | none, manual |
 
+### Kafka and public-API products (phase 004: built, not yet deployed)
+
+Written from the code on the phase 004 branch for the release that carries it (`v3.0.0-alpha.6`, not yet tagged). Each says which of its sections ran on a throwaway lake and which have not run anywhere.
+
+| Runbook | When to use | Triggering alert |
+|---------|-------------|------------------|
+| [onboard-a-kafka-product.md](./onboard-a-kafka-product.md) | Adding a product that reads a topic of its own domain: the connector block as `kraken-trades` writes it, the bronze shape, the k2gen checks it meets (`connectors.*`, `refresh.*`, `docs.empty-input-into-table`, `access.*`), the password files, the deploy and the unpause order after it. Unit steps written from the tree; **no live step run** | none, manual |
+| [onboard-a-public-api-product.md](./onboard-a-public-api-product.md) | Adding a product fetched from a public JSON endpoint, `kraken-instruments` as the example: the connector block, pagination `none`, the parser and its audits, the checks, and what the first live fetch must confirm about the venue's symbol spelling. **No live step run** | none, manual |
+| [hold-a-product.md](./hold-a-product.md) | Stopping one product's runs for an incident: `make hold PRODUCT= REASON=`, `make unhold`, the one-time `svc.operator` password file, what `resolve` prints for a held product, why no deploy unpauses it, the alerts to silence. Unit-tested; **not yet run on a stack** | `ProductStale_<dag>`, `ProductRunFailed_<dag>` while held |
+| [accept-data-loss.md](./accept-data-loss.md) | A Kafka product's `load` refused because its committed offset fell below the log start: the loud failure, the manual trigger with `{"acceptDataLoss": true, "reason": ...}`, what is recorded (`k2.kafka-gaps` cumulative, the `offset_gap` run record, the catalog page). The load proven on a throwaway lake; **the Airflow trigger not yet run** | `ProductRunFailed_<dag>`, `AirflowTaskFailed` (`task_id="load"`) |
+| [kafka-batch-blocked.md](./kafka-batch-blocked.md) | A Kafka product's batch failed its audit and blocks bronze: reading the failed checks, the clearing statement the refusal prints, and the interrupted batch that heals by itself. The failing audit proven on a throwaway lake; **not yet run on a stack** | `ProductRunFailed_<dag>`, `AirflowTaskFailed` (`task_id="audit"` or `"load"`) |
+
 ### Host / operations
 
 | Runbook | When to use | Triggering alert |
