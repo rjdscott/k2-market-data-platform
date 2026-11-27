@@ -742,6 +742,26 @@ def test_publish_refuses_a_parse_failed_batch(pipeline, spool):
     assert C.publish(ctx(pipeline), store, lake)[0] == C.EXIT_FAILED
 
 
+def test_a_kafka_batch_publishes_on_kafkas_own_checks_not_the_file_kinds(pipeline, catalog):
+    import kafka as K
+
+    pipeline["connector"] = {"kind": "kafka"}
+    lake = FakeLake()
+    catalog.lake, lake.catalog_uri = lake, catalog.uri
+    lake.publish_main([], OTHER)
+    main = lake.refs_["main"]
+    lake.refs_["audit"] = head = lake._commit([], [{"station_id": "s-1"}], RUN, main)
+
+    def audited(names):
+        lake.tables[CHECKS][:] = [{"table_name": TABLE, "batch_id": RUN, "snapshot_id": head, "check_name": c,
+                                   "passed": True, "checked_at": "2026-11-28T00:00:00"} for c in names]
+
+    audited(K.CHECKS[:2])  # keys_unique missing: refused
+    assert C.publish(ctx(pipeline), Store(), lake)[0] == C.EXIT_FAILED and lake.refs_["main"] == main
+    audited(K.CHECKS)  # no parses-of-rows.jsonl, row_count or non_empty: a Kafka audit writes none of them
+    assert C.publish(ctx(pipeline), Store(), lake)[0] == C.EXIT_OK and lake.refs_["main"] == head
+
+
 def test_publish_of_bytes_already_published_moves_nothing(pipeline, spool, catalog):
     spool()
     pipeline["bronze"][0]["audits"] = []
