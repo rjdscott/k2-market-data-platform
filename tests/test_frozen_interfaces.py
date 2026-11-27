@@ -1,7 +1,8 @@
-"""Two phase 001 interfaces this suite can hold without a stack
-(docs/development/phase-001-interfaces.md): the REST routes' OpenAPI document (A12)
-and the run-record table's DDL (A6). A change to either fails here until the test
-moves with it, which is the point of freezing them.
+"""The frozen interfaces this suite can hold without a stack
+(docs/development/phase-001-interfaces.md): the REST routes' OpenAPI document (A12),
+the run-record table's DDL (A6) and a Kafka connector's snapshot summary keys (I-1).
+A change to any fails here until the test moves with it, which is the point of
+freezing them.
 
 Each validator runs in a subprocess under its own pin, so test-python's dependency
 line, which the Makefile and CI each carry, stays as it is.
@@ -9,7 +10,9 @@ line, which the Makefile and CI each carry, stays as it is.
 # ponytail: a uv subprocess per validator; fold the pins into test-python's --with
 # list when ci.yml next moves (step S21 owns it).
 
+import ast
 import json
+import re
 import subprocess
 from pathlib import Path
 
@@ -140,3 +143,70 @@ def test_the_run_record_ddl_and_its_json_schema_are_one_row():
         assert json_types <= {expected, "null"}, (name, json_types)
     # recorded_at is the partition source: never null
     assert schema["properties"]["recorded_at"]["type"] == "string"
+
+
+# I-1: the summary keys a Kafka connector commit carries, read from kafka.py's source (no Spark).
+LAKE = ROOT / "docker/lake"
+MODEL = ROOT / "platform/k2gen/k2gen/model.py"
+SUMMARY_KEY = re.compile(r"k2\.[a-z0-9-]+")
+
+
+def constants(source: str) -> dict:
+    """A module's top-level `NAME = <literal>` assignments."""
+    out = {}
+    for n in ast.parse(source).body:
+        if isinstance(n, ast.Assign) and len(n.targets) == 1 and isinstance(n.targets[0], ast.Name):
+            try:
+                out[n.targets[0].id] = ast.literal_eval(n.value)
+            except ValueError:
+                pass
+    return out
+
+
+def kafka_keys(source: str) -> set:
+    """Every k2.* key kafka.py names: a literal, one of its own constants, or one of offsets.py's
+    (`O.`) or connector.py's (`C.`), a slice taken as written (`C.SUMMARY_KEYS[:3]`)."""
+    own = constants(source)
+    mods = {m: constants((LAKE / f).read_text()) for m, f in (("O", "offsets.py"), ("C", "connector.py"))}
+    seen, skip = set(), set()
+
+    def value(node):
+        if isinstance(node, ast.Constant):
+            return node.value
+        if isinstance(node, ast.Name):
+            return own.get(node.id)
+        if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name):
+            return mods.get(node.value.id, {}).get(node.attr)
+        if isinstance(node, ast.Subscript) and isinstance(node.slice, ast.Slice):
+            whole, s = value(node.value), node.slice
+            if isinstance(whole, tuple):
+                skip.add(id(node.value))  # the slice is what is written, not the whole tuple
+                return whole[slice(*(ast.literal_eval(b) if b else None for b in (s.lower, s.upper, s.step)))]
+        return None
+
+    for node in ast.walk(ast.parse(source)):  # breadth first: a subscript before its operand
+        if id(node) in skip:
+            continue
+        v = value(node)
+        for k in v if isinstance(v, tuple) else (v,):
+            if isinstance(k, str) and SUMMARY_KEY.fullmatch(k):
+                seen.add(k)
+    return seen
+
+
+def test_kafka_py_writes_exactly_the_frozen_summary_keys():
+    frozen = constants(MODEL.read_text())
+    keys, source = frozen["KAFKA_SUMMARY_KEYS"], (LAKE / "kafka.py").read_text()
+    assert kafka_keys(source) == {k for ks in keys.values() for k in ks}
+    assert constants(source)["JOB_CONNECTOR"] == frozen["KAFKA_JOB"]
+    # every commit carries the file connector's run keys but the sha256, as kafka.summary zips them
+    assert keys["every"] == ("k2.job", *frozen["SNAPSHOT_SUMMARY_KEYS"][:3])
+    assert set(keys) == {"every", "landing", "bronze"}
+
+
+def test_a_key_kafka_py_starts_writing_is_seen():
+    # Not a no-op: a new key by literal, or through offsets.py, fails the equality above.
+    source = (LAKE / "kafka.py").read_text()
+    assert "k2.extra" in kafka_keys(source + '\nprops = {"k2.extra": "1"}\n')
+    assert "k2.kafka-backlog" in kafka_keys(source + "\nprops = {O.KAFKA_BACKLOG: 1}\n")
+    assert "k2.source-sha256" not in kafka_keys(source)  # C.SUMMARY_KEYS[:3] is not the whole tuple
