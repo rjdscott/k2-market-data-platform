@@ -306,7 +306,7 @@ def test_the_signature_is_aws_signature_v4():
 class FakeS3:
     """MinIO's answers, in memory, by the access key a request is signed with: a policy per key
     (rw, ro, wo: write but no delete, none) and, as MinIO does, the policy checked before the
-    bucket exists, so a refused key gets AccessDenied on a bucket that is not there; `bad` is a
+    bucket exists, so a refused key gets AccessDenied on a bucket that is not there; `ak-unknown` is a
     key MinIO does not know."""
 
     POLICY = {"ak-rw": "rw", "ak-ro": "ro", "ak-wo": "wo", "ak-none": "none", "root-ak": "rw"}
@@ -371,12 +371,16 @@ class FakeS3:
 import urllib.parse  # noqa: E402  (FakeS3's handler)
 from types import SimpleNamespace  # noqa: E402
 
+# Every name and secret holds a non-hex letter (k, s, n, u), so none can turn up inside a probe
+# object's hex name: "bad", the unknown key's first name, was all hex and sometimes did.
 SECRETS = {"ak-rw": "sk-rw-0123456789", "ak-ro": "sk-ro-0123456789", "ak-wo": "sk-wo-0123456789",
-           "ak-none": "sk-none-0123456789", "bad": "sk-bad-0123456789", "root-ak": "sk-root-0123456789"}
+           "ak-none": "sk-none-0123456789", "ak-unknown": "sk-unknown-0123456789", "root-ak": "sk-root-0123456789"}
+PROBE_UUID = "6b3c0e3a-5f1e-4c2d-9a7b-1e2f3a4b5c6d"  # the write probe's name, fixed: no run differs from another
 
 
 @pytest.fixture
-def s3():
+def s3(monkeypatch):
+    monkeypatch.setattr(av.uuid, "uuid4", lambda: av.uuid.UUID(PROBE_UUID))
     fake = FakeS3()
     yield fake
     fake.server.shutdown()
@@ -406,7 +410,7 @@ def row(engine, target, operation, expect):
     ({"tools": "ak-none", "trino": "ak-ro"}, row("tools", "k2-typo/warehouse", "read", "refused"), False, "NoSuchBucket"),
     ({"tools": "ak-none"}, row("tools", "k2-lake/warehouse/governance", "read", "refused"), False, "no key here shows"),
     # a key MinIO does not know is a 403 too, but not AccessDenied
-    ({"tools": "bad"}, row("tools", "k2-lake/warehouse/governance", "read", "refused"), False, "InvalidAccessKeyId"),
+    ({"tools": "ak-unknown"}, row("tools", "k2-lake/warehouse/governance", "read", "refused"), False, "InvalidAccessKeyId"),
     ({"spark": "ak-rw"}, row("spark", "k2-typo", "write", "allowed"), False, "NoSuchBucket"),
 ])
 def test_a_storage_key_row_passes_on_its_outcome_alone(s3, engines, r, passes, says, capsys):
@@ -420,7 +424,8 @@ def test_a_storage_key_row_passes_on_its_outcome_alone(s3, engines, r, passes, s
 def test_a_write_probe_is_removed_with_the_root_key_when_its_own_cannot_delete(s3):
     r = row("backup", "k2-backup", "write", "allowed")
     passed, why = av.storage_key(r, keys(s3, backup="ak-wo"))
-    assert not passed and "left s3://k2-backup/k2-access-probe/" in why and len(s3.buckets["k2-backup"]) == 1
+    assert not passed and f"left s3://k2-backup/k2-access-probe/{av.uuid.UUID(PROBE_UUID).hex} " in why
+    assert list(s3.buckets["k2-backup"]) == [f"k2-access-probe/{av.uuid.UUID(PROBE_UUID).hex}"]
     s3.buckets["k2-backup"].clear()
     env = keys(s3, backup="ak-wo") | {"MINIO_ROOT_USER": "root-ak", "MINIO_ROOT_PASSWORD": SECRETS["root-ak"]}
     passed, why = av.storage_key(r, env)
