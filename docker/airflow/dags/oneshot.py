@@ -11,7 +11,8 @@ the standard library and Airflow (docker/airflow/tests/test_oneshot.py holds it 
 refuses anything off the release's shape before it starts a container.
 
 Every run, whatever the kind: `--rm`, `--pull never` (images arrive with the deploy, never at run
-time), a read-only root with a small `/tmp`, every capability dropped, no new privileges; never
+time), a read-only root with a small `/tmp`, every capability dropped, no new privileges, at most
+256 processes; never
 `--privileged`, never the socket, never a mount the release does not list. Environment values go
 by name only (`-e NAME`): docker copies each from its own environment, so no value is in argv or
 in the logged command line.
@@ -19,7 +20,9 @@ in the logged command line.
 The scheduler's own environment gives the host side of each mount and the network prefix:
 `K2_RELEASES` and `K2_SECRETS` are host paths (the daemon resolves a bind source on the host, not in
 this container), `K2_COMPOSE_PROJECT` the compose project whose `<project>_k2-net` and
-`<project>_k2-catalog` the networks are.
+`<project>_k2-catalog` the networks are and whose `<project>_k2-spool` fetch writes. A kind with
+secret mounts runs as `K2_RUN_UID:K2_RUN_GID`, the host user who owns the mode-600 secret files (as
+scripts/deploy.py runs tools with `--user`); fetch, which holds none, runs as its image's USER.
 """
 
 from __future__ import annotations
@@ -37,6 +40,11 @@ from airflow.sdk.exceptions import AirflowException, AirflowFailException, Airfl
 RELEASES_MOUNT = "/k2/releases"  # k2gen.model.RELEASES_MOUNT
 SECRETS_MOUNT = "/run/k2-secrets"  # k2gen.model.SECRETS_MOUNT
 TMPFS = "/tmp:rw,noexec,nosuid,size=64m"  # counted against the kind's memory limit
+PIDS = "256"
+# ponytail: the whole spool volume, so one run's parser could touch another run's spool files;
+# parsers are release-sealed code the tag approved. Mount `<dagId>/<runId>` alone with
+# volume-subpath once `resolve` can create that directory in the volume.
+SPOOL = {"fetch"}  # the kinds that get `<project>_k2-spool` at /spool; fetch makes /spool/<dagId>/<runId>/
 
 KEYS = {"image", "cpus", "memory", "networks", "env", "secrets"}
 NETWORKS = {"k2-net", "k2-catalog"}
@@ -51,6 +59,7 @@ PASSWORD = re.compile(r"/run/k2-secrets/[a-z0-9_-]+\.password")
 PRINCIPAL = re.compile(r"(dbt|pub)_[a-z0-9_]+|svc\.[a-z0-9_-]+")
 RELEASE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
 HOST_PATH = re.compile(r"/[^,]*")  # absolute, and no comma: --mount is comma-separated
+ID = re.compile(r"[1-9][0-9]*|0")
 
 # Exit codes with a meaning other than failure; any other non-zero exit fails the task.
 SKIP = {"fetch": {10}}  # unchanged: nothing new to land
@@ -146,7 +155,7 @@ class OneShotOperator(BaseOperator):
         if unset := [e for e in spec["env"] if not values.get(e)]:
             raise AirflowFailException(f"{self.kind}: no value for {unset}, in the task's env or the scheduler's")
 
-        mounts = [(_host_path("K2_RELEASES") + "/" + release, f"{RELEASES_MOUNT}/{release}")]
+        mounts = [(_host_path("K2_RELEASES") + "/" + release, f"{RELEASES_MOUNT}/{release}")]  # the release first
         by_role = {}
         for p in self.principals:
             if not PRINCIPAL.fullmatch(p) or password_mount(p) not in spec["secrets"] or password_mount(p) in by_role:
@@ -165,13 +174,22 @@ class OneShotOperator(BaseOperator):
 
         argv = ["docker", "run", "--rm", "--name", name, "--pull", "never",
                 "--read-only", "--tmpfs", TMPFS, "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
-                "--cpus", spec["cpus"], "--memory", spec["memory"]]
+                "--pids-limit", PIDS]
+        if spec["secrets"]:  # the files are mode 600, owned by the host user
+            uid, gid = os.environ.get("K2_RUN_UID", ""), os.environ.get("K2_RUN_GID", "")
+            if not ID.fullmatch(uid) or not ID.fullmatch(gid) or uid == "0":
+                raise AirflowFailException(f"{self.kind} mounts secrets: K2_RUN_UID and K2_RUN_GID must be the "
+                                           "host user's ids, digits, uid not 0, in the scheduler's environment")
+            argv += ["--user", f"{uid}:{gid}"]
+        argv += ["--cpus", spec["cpus"], "--memory", spec["memory"]]
         for network in spec["networks"]:
             argv += ["--network", f"{project}_{network}"]
         for e in spec["env"]:
             argv += ["-e", e]
         for source, target in mounts:
             argv += ["--mount", f"type=bind,source={source},target={target},readonly"]
+        if self.kind in SPOOL:
+            argv += ["--mount", f"type=volume,source={project}_k2-spool,target=/spool"]
         return [*argv, spec["image"], *self.command], {**os.environ, **{e: values[e] for e in spec["env"]}}
 
     def execute(self, context) -> None:

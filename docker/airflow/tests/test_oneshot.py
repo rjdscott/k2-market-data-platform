@@ -32,7 +32,8 @@ RELEASE_PATH = f"/k2/releases/{RID}"
 SECRET = "s3cret-value-never-in-argv"
 HOST = {"K2_RELEASES": "/home/owner/k2-releases", "K2_SECRETS": "/home/owner/k2-secrets",
         "K2_COMPOSE_PROJECT": "k2proj", "K2_TRINO_HOST": "trino", "K2_TRINO_INTERNAL_PORT": "8443",
-        "K2_RUNS_USER": "svc.runs", "K2_CATALOG_URI": "http://lakekeeper:8181/catalog", "K2_RELEASE": "stale"}
+        "K2_RUNS_USER": "svc.runs", "K2_CATALOG_URI": "http://lakekeeper:8181/catalog", "K2_RELEASE": "stale",
+        "K2_RUN_UID": "1000", "K2_RUN_GID": "1001"}
 RELEASE_MOUNT = ["--mount", f"type=bind,source=/home/owner/k2-releases/{RID},target=/k2/releases/{RID},readonly"]
 DBT = {"kind": "dbt-runner", "command": ["k2-dbt", "build", "--release", RID, "--product", "fx.ecb_fx",
                                          "--run-id", "ecb_fx/manual__1"],
@@ -90,9 +91,12 @@ class ArgumentList(unittest.TestCase):
         self.assertEqual(run.docker_run, [
             "docker", "run", "--rm", "--name", "k2-fetch-ecb_fx-1", "--pull", "never", "--read-only", "--tmpfs",
             "/tmp:rw,noexec,nosuid,size=64m", "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
+            "--pids-limit", "256",
             "--cpus", "0.5", "--memory", "512M", "--network", "k2proj_k2-net", "-e", "K2_RELEASE", *RELEASE_MOUNT,
+            "--mount", "type=volume,source=k2proj_k2-spool,target=/spool",
             "fetch:4008294739ab", "k2-fetch", "--spool", "/spool/ecb_fx/manual__1"])
         self.assertNotIn("--privileged", run.docker_run)
+        self.assertNotIn("--user", run.docker_run)  # no secret: the image's own USER
         self.assertEqual(run.popen_env["K2_RELEASE"], RID)  # the run's release, never the scheduler's
 
     def test_dbt_runner_runs_with_exactly_what_its_kind_names(self):
@@ -101,6 +105,7 @@ class ArgumentList(unittest.TestCase):
         self.assertEqual(run.docker_run, [
             "docker", "run", "--rm", "--name", "k2-dbt-runner-ecb_fx-2", "--pull", "never", "--read-only", "--tmpfs",
             "/tmp:rw,noexec,nosuid,size=64m", "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
+            "--pids-limit", "256", "--user", "1000:1001",
             "--cpus", "0.5", "--memory", "768M", "--network", "k2proj_k2-catalog",
             "-e", "K2_TRINO_HOST", "-e", "K2_TRINO_INTERNAL_PORT", "-e", "K2_TRINO_USER", "-e", "K2_PUB_USER",
             "-e", "K2_RUNS_USER", "-e", "K2_CATALOG_URI", "-e", "K2_RELEASE", *RELEASE_MOUNT,
@@ -177,6 +182,13 @@ class Refusals(unittest.TestCase):
         self.refused(host={"K2_RELEASES": "relative/path"})
         self.refused(host={"K2_RELEASES": "/a,source=/var/run/docker.sock"})
         self.refused(host={"K2_COMPOSE_PROJECT": ""})
+
+    def test_a_kind_with_secrets_runs_only_as_a_named_non_root_user(self):
+        for uid, gid in (("", "1001"), ("1000", ""), ("0", "1001"), ("00", "1001"), ("abc", "1001"),
+                         ("1000", "1001:0"), ("-1", "1001")):
+            self.assertIn("K2_RUN_", self.refused(host={"K2_RUN_UID": uid, "K2_RUN_GID": gid}, **DBT))
+        self.refused(host={"K2_RUN_UID": "0"}, kind="tools")
+        Run(env={"K2_RUN_UID": "", "K2_RUN_GID": ""})(**FETCH)  # fetch holds no secret and needs neither
 
 
 class Names(unittest.TestCase):
