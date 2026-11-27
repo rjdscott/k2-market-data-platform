@@ -20,28 +20,32 @@ docs/research/2026-11-26-release-spine-spikes.md. In order:
    never tested exits 4. An optional input whose port says whenAbsent empty (or emptyIntoTable)
    is absent while it is paused in the release or was never tested: no snapshot, and k2_input
    reads it as zero rows of its columns (W0-7).
-3. `started` per output, with `snapshot_before`, its main.
+3. `started` per output, with `snapshot_before`, its main, and each input's `lagMinutes` (lag()).
 4. one `dbt build --selector <fence> --vars <k2_inputs, k2_run_id, k2_release>` as the builder,
    unit tests inside it (spike d). Any non-zero exit is a failed build.
 5. on a failure, every output whose main moved is restored as the builder, `rolled_back`.
 6. on a pass, as the publisher: each moved main must be this dbt invocation's own commit
    (built_here(): committed by a query that carried this run's client tag, or that dbt reported),
-   then views narrowed, one compare-and-set tag commit, views widened, `audited` (publish()).
+   then views narrowed, one compare-and-set tag commit, views widened, `audited` (publish()). A
+   pass with warn-severity test failures publishes degraded: each `audited` row's detail is
+   {"degraded": true, "warned": [<test unique_id>, ...]}, as k2runs.state reads it (warned()).
 
 Exits: 0 passed and published; 1 tests failed, outputs restored; 2 build error, outputs restored;
 3 a restore, the tag commit, the view sync, the reconcile or the drift check failed (pages); 4 a
 required input was never tested. The last stdout line, on every path, is the XCom
 {"exit": n, "expire": [{"table": <relation>, "ids": [...]}]}: the failed build's snapshots, which
-the Spark `expire` task removes by id. dbt's own output goes to stderr.
+the Spark `expire` task removes by id; a degraded publish adds "degraded": true and "warned".
+dbt's own output goes to stderr.
 
 Trust: identifiers come from the compiled release only, each part held to k2gen's IDENTIFIER and
 quoted by k2gen's quote_relation; snapshot ids pass snap() (an int, never a string spliced in);
 passwords are read from their files at connect time, never logged (log() scrubs every one read),
 never in an argument list. Trino cannot move a tag (spike g), so the tag commit and the current
 view SQL are the two calls to Lakekeeper's REST API, at K2_CATALOG_URI (steps 1 and 6), beside the
-drift check's own reads; listing and cancelling the builder's orphaned queries (step 1), and listing
-the queries that carried this run's client tag (step 6), are the calls to Trino's own REST API, as
-the builder.
+drift check's own reads and step 3's read of each input's table metadata (svc.runs may read only
+`t$refs` in Trino, which holds no commit time); listing and cancelling the builder's orphaned
+queries (step 1), and listing the queries that carried this run's client tag (step 6), are the
+calls to Trino's own REST API, as the builder.
 
 Imports beyond the standard library: trino, k2gen (platform/k2gen), and catalog_drift
 (scripts/verify/catalog_drift.py), which docker/dbt-runner/Dockerfile puts beside this file, so
@@ -423,6 +427,42 @@ def resolve(ctx: Ctx, io: Any) -> dict[str, int | None]:
     return first
 
 
+def commit_time(meta: dict[str, Any] | None, snapshot: int, rel: str) -> datetime:
+    """When the data at `snapshot` was committed, from the table's catalog metadata: the snapshot's
+    own timestamp-ms or, while it is a compaction (operation replace: files rewritten, table data
+    unchanged, by the Iceberg spec), its parent's, so a compaction after the audited commit never
+    makes an input look fresher (phase-001-interfaces.md, I-1: a Kafka input's lag is its
+    connector snapshot's, never a compaction's after it)."""
+    snaps = {s.get("snapshot-id"): s for s in (meta or {}).get("snapshots") or []}
+    s = snaps.get(snap(snapshot))
+    for _ in range(len(snaps)):  # bounded: a parent cycle in the metadata never loops
+        if s is None or (s.get("summary") or {}).get("operation") != "replace" or s.get("parent-snapshot-id") not in snaps:
+            break
+        s = snaps[s["parent-snapshot-id"]]
+    if s is None:
+        raise Refused(f"{rel}: snapshot {snapshot} is not in the catalog's metadata of the table")
+    return datetime.fromtimestamp(int(s["timestamp-ms"]) / 1000, timezone.utc)
+
+
+def lag(started: datetime, committed: datetime | None) -> float | None:
+    """`inputs[].lagMinutes` (run-record.schema.json): the run's start minus the input's audited
+    commit time, in minutes, never below 0 (an input published after the run started); None when
+    the run read no snapshot of it."""
+    return None if committed is None else round(max(0.0, (started - committed).total_seconds() / 60), 1)
+
+
+WARNED_MAX, WARNED_CHARS = 5, 160  # k2runs.record cuts a detail at 1000 characters: 5 names of 160 keep its JSON whole
+
+
+def warned(results: dict[str, Any] | None) -> list[str]:
+    """The tests dbt's run_results mark `warn` (a warn-severity test that failed), by unique_id,
+    which joins dq_test_results; at most WARNED_MAX, each cut to WARNED_CHARS. The log names all."""
+    names = sorted(str(r.get("unique_id")) for r in (results or {}).get("results", []) if r.get("status") == "warn")
+    if names:
+        log(f"{len(names)} warn-severity test(s) failed: {', '.join(names)}")
+    return [n[:WARNED_CHARS] for n in names[:WARNED_MAX]]
+
+
 def dbt_argv(ctx: Ctx, inputs: dict[str, int | None]) -> list[str]:
     """Step 4's one invocation. An absent() input is {"absent": true}, zero rows of its columns
     (k2_input); any other input with no snapshot (an optional one, whenAbsent fail) is left out of
@@ -523,8 +563,11 @@ def tag_change(o: Output, tested: int, previous: int | None) -> dict[str, Any]:
 
 
 def publish(ctx: Ctx, io: Any, before: dict[str, dict[str, Any]], invocation: str | None,
-            queries: set[str], window: tuple[datetime, datetime]) -> int:
-    """Step 6, as the publisher, after every test passed.
+            queries: set[str], window: tuple[datetime, datetime], warns: list[str] | None = None,
+            xcom: dict[str, Any] | None = None) -> int:
+    """Step 6, as the publisher, after every test passed. With `warns` (warn-severity failures,
+    warned()) each `audited` row's detail is {"degraded": true, "warned": [...]} and `xcom` gains
+    the same two keys once those rows are written; with none, both are as before.
 
     INVARIANT: at every instant each reader view (a) reads its base at the `audited` tag, and the
     tag names only a snapshot whose tests passed; (b) selects only columns that the tagged snapshot
@@ -575,9 +618,13 @@ def publish(ctx: Ctx, io: Any, before: dict[str, dict[str, Any]], invocation: st
     for _, widen in steps.values():
         if widen:
             io.sql("publisher", widen)
+    degraded = {"degraded": True, "warned": list(warns)} if warns else {}
+    detail = {"detail": json.dumps(degraded, separators=(",", ":"))} if degraded else {}
     for o in ctx.outputs:
         record(ctx, io, event="audited", table_name=o.relation, snapshot_before=before[o.relation]["tag"],
-               snapshot_after=tested[o.relation], dbt_invocation_id=invocation)
+               snapshot_after=tested[o.relation], dbt_invocation_id=invocation, **detail)
+    if xcom is not None:
+        xcom.update(degraded)
     if deliberate:
         log(f"published, but no column was common to the old and new snapshots of {', '.join(deliberate)}: "
             "readers lost the view between the tag commit and the widen")
@@ -585,8 +632,8 @@ def publish(ctx: Ctx, io: Any, before: dict[str, dict[str, Any]], invocation: st
     return 0
 
 
-def run(ctx: Ctx, io: Any) -> tuple[int, list[dict[str, Any]]]:
-    """Steps 1 to 6; (exit code, expire)."""
+def run(ctx: Ctx, io: Any, xcom: dict[str, Any] | None = None) -> tuple[int, list[dict[str, Any]]]:
+    """Steps 1 to 6; (exit code, expire). A degraded publish adds its keys to `xcom` (publish())."""
     expire: list[dict[str, Any]] = []
     try:
         stop_orphans(ctx, io)
@@ -608,7 +655,8 @@ def run(ctx: Ctx, io: Any) -> tuple[int, list[dict[str, Any]]]:
             main, tag = heads(io, o.relation)
             before[o.relation] = {"main": main, "tag": tag, "ids": io.snapshots(o.relation) if main is not None else set()}
         listed = [{"contractId": i.contract, "relation": i.relation, "snapshot": inputs[i.contract], "state": i.state,
-                   "lagMinutes": None} for i in ctx.inputs]
+                   "lagMinutes": lag(ctx.started_at, None if inputs[i.contract] is None else io.committed(i.relation, inputs[i.contract]))}
+                  for i in ctx.inputs]
         for o in ctx.outputs:
             record(ctx, io, event="started", table_name=o.relation, snapshot_before=before[o.relation]["main"], inputs=listed)
     except Exception as e:
@@ -629,7 +677,7 @@ def run(ctx: Ctx, io: Any) -> tuple[int, list[dict[str, Any]]]:
             log(f"dbt build {'failed its tests' if outcome == 1 else 'failed'} (exit {code}); restoring the outputs")
             rollback(ctx, io, before, invocation, expire)
             return outcome, expire
-        return publish(ctx, io, before, invocation, reported(results) | io.tagged(tag), window), expire
+        return publish(ctx, io, before, invocation, reported(results) | io.tagged(tag), window, warned(results), xcom), expire
     except Exception as e:
         log(f"{'rollback' if outcome else 'publish'}: {type(e).__name__}: {e}")
         return 3, expire
@@ -671,7 +719,7 @@ class Live:
         self.ctx, self.environ, self.k2runs = ctx, environ, load_k2runs(ctx.release_path)
         self.uri = environ["K2_CATALOG_URI"]
         self.conns: dict[str, Any] = {}
-        self.catalog: Any = None
+        self.catalogs: dict[str, Any] = {}
 
     def conn(self, role: str) -> Any:
         if role not in self.conns:
@@ -779,10 +827,18 @@ class Live:
                               stdout=sys.stderr, stderr=sys.stderr, check=False)
         return done.returncode, json.loads(results.read_text()) if results.exists() else None
 
-    def cat(self) -> Any:
-        if self.catalog is None:
-            self.catalog = catalog_drift.Catalog(self.uri, self.ctx.warehouse)
-        return self.catalog
+    def cat(self, warehouse: str | None = None) -> Any:
+        warehouse = warehouse or self.ctx.warehouse
+        if warehouse not in self.catalogs:
+            self.catalogs[warehouse] = catalog_drift.Catalog(self.uri, warehouse)
+        return self.catalogs[warehouse]
+
+    def committed(self, rel: str, snapshot: int) -> datetime:
+        """An input's audited commit time (commit_time()), from its table's metadata in Lakekeeper:
+        catalog `lake` is warehouse k2, any other reader catalog is its domain's warehouse."""
+        relation(rel)
+        catalog, ns, table = rel.split(".")
+        return commit_time(self.cat(k2.LAKE_WAREHOUSE if catalog == k2.LAKE else catalog).table(ns, table), snapshot, rel)
 
     def commit(self, warehouse: str, changes: list[dict[str, Any]]) -> int:
         if warehouse != self.ctx.warehouse:
@@ -897,19 +953,19 @@ def main(argv: list[str] | None = None) -> int:
         except Exception as e:
             log(f"{type(e).__name__}: {e}")
             return 1
-    code, expire = 3, []
+    code, expire, xcom = 3, [], {}
     try:
         try:
             a = ap.parse_args(argv)
         except SystemExit:
             raise Refused("usage: k2-dbt build --release <id> --product <domain>.<product> --run-id <dag_id>/<run_id>") from None
         ctx = load(a.release, a.product, a.run_id)
-        code, expire = run(ctx, Live(ctx, dict(os.environ)))
+        code, expire = run(ctx, Live(ctx, dict(os.environ)), xcom)
     except Exception as e:
         log(f"{type(e).__name__}: {e}")
         code = 3
     finally:
-        print(json.dumps({"exit": code, "expire": expire}, separators=(",", ":")), flush=True)
+        print(json.dumps({"exit": code, "expire": expire, **xcom}, separators=(",", ":")), flush=True)
     return code
 
 
