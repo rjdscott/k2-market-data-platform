@@ -144,7 +144,8 @@ class Pinned(http.client.HTTPSConnection):
 
     def __init__(self, host: str, addresses: list[str]):
         super().__init__(host, 443, timeout=READ_TIMEOUT_S, context=TLS)
-        # tls: the socket itself, kept because getresponse() drops self.sock on a closing response
+        # tls: the socket itself, kept because getresponse() drops self.sock on a closing response;
+        # set its timeout only while the response is open (download())
         self.addresses, self.address, self.tls = addresses, None, None
 
     def connect(self) -> None:
@@ -187,7 +188,11 @@ def download(url: str, allow: set[str], cap: int, out: Path) -> dict:
                 raise Refused(f"{where(url)}: Content-Length over {cap} bytes")
             digest, size = hashlib.sha256(), 0
             with out.open("xb") as f:
-                while True:
+                # A response that closes its connection owns the socket: it closes it as it reads
+                # the body's last byte, so a closed response is the end of the body and its socket
+                # is never touched again (settimeout on it is EBADF). While open, its file keeps
+                # the descriptor alive, so the timeout below always lands on a live socket.
+                while not resp.isclosed():
                     # read1: what has arrived, one recv at most, under a timeout cut to the time
                     # left, so a host trickling bytes cannot hold a read past the deadline
                     if (left := deadline - monotonic()) <= 0:
@@ -200,6 +205,8 @@ def download(url: str, allow: set[str], cap: int, out: Path) -> dict:
                         raise Refused(f"{where(url)}: more than {cap} bytes")
                     digest.update(chunk)
                     f.write(chunk)
+            if resp.length:  # read1 ends at an early EOF quietly; length is what never came
+                raise Failed(f"{where(url)}: the body ended {resp.length} bytes short of its Content-Length")
             record = {"url": first, "finalUrl": url, "sha256": digest.hexdigest(), "bytes": size,
                       "fetchedAt": datetime.now(UTC).isoformat(timespec="microseconds"),
                       "httpStatus": resp.status, "address": conn.address}

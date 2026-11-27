@@ -13,7 +13,8 @@ compiled/lake/retention.json"; the owner's O6 in docs/research/2026-11-26-decisi
                                               older_than => TIMESTAMP '<now UTC - days>', retain_last => 1)
 
    The table's refs (`main`, `audit`, `audited`) are read before and after; one that vanished
-   fails the task, though Iceberg keeps a referenced snapshot.
+   fails the task, though Iceberg keeps a referenced snapshot. A build output that does not exist
+   yet (Spark's TABLE_OR_VIEW_NOT_FOUND: no good build so far) is skipped as `not built yet`.
 2. Landings. Objects under the product's own prefix `<domain>/<product>/` in k2-landing whose key's
    day, `<prefix><YYYY-MM-DD>/<sha256>.<ext>`, is more than LANDING_DAYS before today (UTC) are
    deleted, by the day in the key and never by mtime. Kept, and counted by reason: a key that does
@@ -27,7 +28,7 @@ key's policy must carry; without it the task exits 1 and says so.
 
 Exits: 0 done; 1 an error (a ref vanished, a refused delete, a missing retention entry, any other).
 The last line on stdout is the result as JSON, {"exit": <n>, "task": "maintain", "expired": {...},
-"landingsDeleted": <n>, "landingsKept": {...}}, for the DAG's record task.
+"notBuilt": [...], "landingsDeleted": <n>, "landingsKept": {...}}, for the DAG's record task.
 """
 
 from __future__ import annotations
@@ -67,6 +68,7 @@ RETAIN_LAST = 1  # Iceberg's own default, stated: the newest snapshot of a table
 GRANT = ("the maintenance key lacks s3:ListBucket on arn:aws:s3:::k2-landing and s3:DeleteObject on "
          "arn:aws:s3:::k2-landing/*")
 KEY_PART = re.compile(r"(\d{4}-\d{2}-\d{2})/([0-9a-f]{64})\.[a-z0-9]+")
+NOT_FOUND = "TABLE_OR_VIEW_NOT_FOUND"  # Spark's error class for a relation that is not there
 
 
 class Denied(Exception):
@@ -137,10 +139,29 @@ def parse_key(prefix: str, key: str) -> tuple[date, str] | None:
 # --- The flows, over a store and a lake -------------------------------------------------------
 
 
-def expire_snapshots(pipeline: dict, retention: dict, lake, at: datetime) -> tuple[int, dict]:
-    code, expired = EXIT_OK, {}
+def not_found(e: Exception) -> bool:
+    """Spark's AnalysisException for a relation that does not exist, by its error class (pyspark
+    3.5's getErrorClass; the pure core imports no pyspark)."""
+    get = getattr(e, "getErrorClass", None)
+    return callable(get) and get() == NOT_FOUND
+
+
+def expire_snapshots(pipeline: dict, retention: dict, lake, at: datetime) -> tuple[int, dict, list[str]]:
+    """(exit, snapshots expired per table, the build outputs not built yet). A build output exists
+    only after the product's first good build, so one that is not there has nothing to expire;
+    every other table is made at deploy, and any other error reading a table is raised."""
+    code, expired, unbuilt = EXIT_OK, {}, []
+    outputs = set((pipeline.get("build") or {}).get("outputs", []))
     for relation, older_than, retain_last in snapshot_plan(pipeline, retention, at):
-        before_refs, before = lake.refs(relation), lake.snapshot_count(relation)
+        try:
+            before_refs = lake.refs(relation)
+        except Exception as e:
+            if relation not in outputs or not not_found(e):
+                raise
+            print(f"maintain: {relation}: not built yet")
+            unbuilt.append(relation)
+            continue
+        before = lake.snapshot_count(relation)
         lake.run(statement(relation, older_than, retain_last))
         gone = set(before_refs) - set(lake.refs(relation))
         expired[relation] = before - lake.snapshot_count(relation)
@@ -148,7 +169,7 @@ def expire_snapshots(pipeline: dict, retention: dict, lake, at: datetime) -> tup
             print(f"maintain FAILED: {relation}: refs {sorted(gone)} vanished in expiry", file=sys.stderr)
             code = EXIT_ERROR
         print(f"maintain: {relation}: {expired[relation]} snapshots expired (older than {older_than}, keep {retain_last})")
-    return code, expired
+    return code, expired, unbuilt
 
 
 def expire_landings(pipeline: dict, store, lake, at: datetime) -> tuple[int, int, dict]:
@@ -267,8 +288,8 @@ def main(argv: list[str] | None = None) -> int:
     code, result = EXIT_ERROR, {}
     try:
         lake = MaintainLake(spark)
-        code, expired = expire_snapshots(pipeline, retention, lake, at)
-        result["expired"] = expired
+        code, expired, unbuilt = expire_snapshots(pipeline, retention, lake, at)
+        result.update(expired=expired, notBuilt=unbuilt)
         if pipeline.get("landing") and pipeline.get("bronze"):
             lcode, deleted, kept = expire_landings(pipeline, Store(), lake, at)
             code = max(code, lcode)
