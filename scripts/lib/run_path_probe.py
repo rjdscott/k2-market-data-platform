@@ -12,8 +12,11 @@ throwaway lake's tools container: /work is the lake's state, /work/rp the run's 
 `seed` writes the spool; nothing else here writes the lake."""
 import hashlib
 import json
+import os
 import sys
 import time
+import urllib.error
+import urllib.request
 from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
@@ -259,6 +262,53 @@ elif cmd == "claim":  # claim <name> [release ids]: one PASS or FAIL line; exit 
             f"pinned {cal}; audited = main on silver and gold; {sum(n for _, n in dq)} tests passed; {READER} reads "
             f"{len(read.rows)} gold rows; silver {s['silver_rows']} = bronze's distinct keys; {len(pairs)} rates exact, "
             f"e.g. {pairs[0] if pairs else None}")
+    elif name == "rest":  # gold's rows through k2-api against the same principal's SQL; the refusals
+        rid = args[1]
+        key = av.api_key(env, READER)  # read from the file the lake made; sent in the header alone
+        api = (os.environ.get("K2_API_URL") or av.API_URL).rstrip("/")
+        found = {rel: av.route(release(rid), rel) for rel in (READER_GOLD, "lake.ecb_fx_rates.bronze_daily", "fx_reference.ecb_fx_rates.silver_rates")}
+        gold_path, pk = found[READER_GOLD] or ("", [])
+        published = len(rows("rp-good") or [])
+
+        def same(where=""):  # (SQL's rows, REST's rows, REST's status line), each a list in key order, values in one form
+            sql = trino.run(READER, f"SELECT * FROM {READER_GOLD}{where} ORDER BY {', '.join(pk)}", zone="UTC")
+            types, cols = dict(sql.columns), [c for c, _ in sql.columns]
+
+            def one(t, v):  # a decimal as its exact string; dates and times as access_verify's REST leg puts them
+                return str(v) if t.startswith("decimal") and v is not None else av.norm(t, v)
+            query = {"limit": str(av.REST_PAGE)} | ({"filter.currency": where.split("'")[1]} if where else {})
+            status, body = av.api_get(api + gold_path, key, query)
+            got = body.get("rows", []) if status == 200 else []
+            return ([tuple(one(types[c], v) for c, v in zip(cols, r, strict=True)) for r in sql.rows],
+                    [tuple(one(types[c], r.get(c)) for c in cols) for r in got if sorted(r) == sorted(cols)] if len(got) else [],
+                    f"HTTP {status}" if status == 200 else av.said(status, body), sql.says())
+        whole_sql, whole_rest, whole_said, whole_sql_said = same()
+        currency = whole_sql[0][1] if whole_sql else "USD"
+        one_sql, one_rest, one_said, _ = same(f" WHERE currency = '{currency}'")
+        try:  # no key at all
+            with urllib.request.urlopen(f"{api}{gold_path}?limit=1", timeout=60) as r:
+                anonymous = r.status
+        except urllib.error.HTTPError as x:
+            anonymous = x.code
+        except OSError:
+            anonymous = 0
+        bronze_ok, bronze_why = av.rest_denied(api, found["lake.ecb_fx_rates.bronze_daily"][0], key) if key and found["lake.ecb_fx_rates.bronze_daily"] else (False, "no key or no route")
+        st, body = av.api_get(api + found["fx_reference.ecb_fx_rates.silver_rates"][0], key, {"limit": "1"}) if key and found["fx_reference.ecb_fx_rates.silver_rates"] else (0, {"error": "none", "message": "no key or no route"})
+        verdict("gold through k2-api is exactly the reader's SQL rows; no key 401, bronze and silver 403", [
+            (key is not None and all(found.values()), f"key file {'there' if key else 'missing'} under {env['apiKeys']}; routes {found}"),
+            (whole_rest == whole_sql and len(whole_sql) == published > 0,
+             f"REST ({whole_said}) {len(whole_rest)} rows, SQL ({whole_sql_said}) {len(whole_sql)}, published {published}; "
+             f"first difference {next(((a, b) for a, b in zip(whole_rest, whole_sql) if a != b), None)}"),
+            (one_rest == one_sql and 0 < len(one_sql) < len(whole_sql) and all(r[1] == currency for r in one_rest),
+             f"filter.currency={currency}: REST ({one_said}) {len(one_rest)} rows, SQL {len(one_sql)}"),
+            (anonymous == 401, f"no key: HTTP {anonymous}"),
+            (bronze_ok, f"bronze: {bronze_why}"),
+            # 403: k2-api asks Trino as the caller before it says anything of a relation's state, and Trino
+            # denies silver's reader view to a principal no role on it is granted to (a 404 is for an output
+            # with no reader relation, or one not yet published, told only to a caller who may read it).
+            ((st, body.get("error")) == (403, "forbidden"), f"silver: {av.said(st, body)}")],
+            f"{len(whole_rest)} rows equal in key order ({', '.join(pk)}), decimals as strings; filter.currency={currency} "
+            f"{len(one_rest)} rows equal; no key 401; bronze 403; silver 403 (Trino denies the caller its view)")
     elif name == "again":
         g, b, a, sd = state("good"), state("built"), state("again"), seed("rp-again")
         load = result("rp-again.load")

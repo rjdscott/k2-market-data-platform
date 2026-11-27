@@ -16,23 +16,30 @@
 #     tests pass, audited moves on both outputs, p.analyst-a reads gold through the reader view,
 #     silver holds bronze's distinct (rate_date, currency), each gold rate is the fixture's string
 #     as DECIMAL(20,10)
-#   4 the same bytes again (a new run): no new landing object or landing_files row, no new bronze
+#   4 gold through k2-api (the lake's, as p.analyst-a with the key the lake made, read from its
+#     file): GET /v1/data/fx-reference/ecb-fx-rates/gold_eur_rates_daily?limit=10000 is exactly
+#     the rows the same principal reads over SQL from the reader view, in key order, decimals as
+#     their strings, times as scripts/access_verify.py's REST leg puts them; a filter on one
+#     currency likewise; no key 401; bronze_daily 403; silver_rates 403, since k2-api asks Trino as
+#     the caller before it tells a relation's state and Trino denies silver's view to a reader no
+#     role on it is granted to (404 is an output with no reader relation, or one not yet published)
+#   5 the same bytes again (a new run): no new landing object or landing_files row, no new bronze
 #     row, and the build passes with the same rows (fetch itself would exit 10 here: unchanged)
-#   5 the corrupt fixture lands, fails its audit (rate_positive, no_future_date) and leaves bronze
+#   6 the corrupt fixture lands, fails its audit (rate_positive, no_future_date) and leaves bronze
 #     main where it was; a third good batch (the good fixture and one more day, made here) is
 #     refused at load (exit 2) while `audit` holds the failed batch, its file landed all the same;
 #     the operator's clearing step (`audit` reset to main) lets its load proceed
-#   6 a failing test (gold given a duplicate row, in a release of this tree compiled here): the
+#   7 a failing test (gold given a duplicate row, in a release of this tree compiled here): the
 #     wrapper restores silver and lists the build's snapshots in its XCom line; expire.py removes
 #     them with the maintenance key; maintain.py runs clean on the product
-#   7 every build's run records are in governance_build.run_records.run_record under its release
+#   8 every build's run records are in governance_build.run_records.run_record under its release
 #
 # One container job (run-path-lib.sh's guards); a killed run leaves the lake to
 # `bash scripts/lib/throwaway-lake.sh down run-path`.
 set -uo pipefail
 # shellcheck source=scripts/lib/run-path-lib.sh
 . "$(dirname "$0")/../lib/run-path-lib.sh"
-rp_start run-path "${1:-}" 7
+rp_start run-path "${1:-}" 8
 # claim 6's release: this tree with gold given a duplicate row, which gold's unit test catches
 rp_fail_release "$(cat <<'PY'
 import sys
@@ -48,9 +55,10 @@ rp_lake
 rp_calendars  # 1
 rp_good       # 2
 rp_build      # 3
-rp_again      # 4
-rp_corrupt    # 5
-# 6. a failing test, its rollback, expire by the XCom list, maintain (one DAG run, pinned to the failing release)
+claim rest "$ID"  # 4
+rp_again      # 5
+rp_corrupt    # 6
+# 7. a failing test, its rollback, expire by the XCom list, maintain (one DAG run, pinned to the failing release)
 build "$IDF" "$ECB" rp-fail
 probe state fail
 expire=$(python3 -c 'import json, sys; lines = [x for x in open(sys.argv[1]) if x.strip()]; print(json.dumps(json.loads(lines[-1])["expire"], separators=(",", ":")))' \
@@ -59,6 +67,6 @@ expire=$(python3 -c 'import json, sys; lines = [x for x in open(sys.argv[1]) if 
 task "$IDF" rp-fail maintain
 probe state expired
 claim expire "$ID"
-# 7. the run records of every build above
+# 8. the run records of every build above
 claim records "$ID" "$IDF"
 finish

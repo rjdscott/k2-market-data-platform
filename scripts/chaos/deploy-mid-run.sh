@@ -147,4 +147,4 @@ state=$(wait_end "${RUN}-next")
 got=$(releases_of "${RUN}-next")
 claim "$(is [ "$state:$got" = "success:$TARGET" ])" "the next run ${RUN}-next succeeded ($state) and its rows carry $TARGET (found: ${got:-no rows})"
 echo "deploy-mid-run: $((n - fails)) PASS, $fails FAIL in $((SECONDS - T0)) s"
-[ "$fails" = 0 ]
+[ "$fails" = 0 ] && [ "$n" = 4 ]  # every claim reached and passed
