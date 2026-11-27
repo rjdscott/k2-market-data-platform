@@ -73,6 +73,7 @@ V2_PRODUCT_FILE = "product.odps.yaml"  # its directory is a v2 product; the old 
 #   docker/prometheus/rules/  prometheus: deploy SIGHUPs Prometheus at every swap
 #   domains/                  the parsers, read by the fetch one-shot at its run
 #   platform/runs/            k2runs, the run-records client, read by `record` and the dbt wrapper
+#   platform/catalog-site/    k2site, the catalog site generator, run in tools after each deploy (W3-9)
 PLATFORM_DIR = "platform"
 PLATFORM_CODE: Mapping[str, tuple[tuple[str, ...], str | None]] = {
     "docker/airflow/dags/": ((".py",), "dagShapeChange"),
@@ -80,6 +81,7 @@ PLATFORM_CODE: Mapping[str, tuple[tuple[str, ...], str | None]] = {
     "docker/prometheus/rules/": ((".yml",), None),
     "domains/": ((".py",), None),
     "platform/runs/": ((".py",), None),
+    "platform/catalog-site/": ((".py",), None),
 }
 # The roots of a document set: docset.load lists them in the tag's tree (git ls-tree) and reads
 # each blob as the tag holds it (git cat-file), never through `git archive`, whose output follows

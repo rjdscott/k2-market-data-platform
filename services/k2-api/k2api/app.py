@@ -10,6 +10,7 @@ It never writes, accepts SQL, evaluates a rule, reads storage or Lakekeeper, or 
 import base64
 import json
 import logging
+import os
 import re
 from datetime import UTC, date, datetime, time
 from decimal import Decimal
@@ -19,8 +20,10 @@ from uuid import UUID
 
 import yaml
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import JSONResponse, PlainTextResponse, Response
 from starlette.exceptions import HTTPException
+from starlette.staticfiles import StaticFiles
+from starlette.types import Scope
 
 from k2api import db, keys
 
@@ -38,11 +41,72 @@ FILTERABLE = re.compile(r"varchar|boolean|integer|bigint|real|double|date|uuid|d
 SLUG = re.compile(r"[a-z][a-z0-9-]*")  # openapi.yaml Domain, Product
 TABLE = re.compile(r"[a-z][a-z0-9_]*")  # openapi.yaml Table
 NAME = re.compile(r"[a-z][a-z0-9_]*")  # a relation part or a column (catalog-product.schema.json)
+SITE = Path("/srv/k2-site")  # the k2-site volume, read-only: <name>/current/ of each generated site
+CURRENT = "current"  # the link each generator renames onto its newest tree (k2site.CURRENT)
+# The catalog site is static HTML with one inline <style> and no script, image or font.
+CATALOG_CSP = "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
+# dbt's docs app: one index.html of inline script and style (AngularJS, which falls back to its
+# no-eval mode under a CSP), data: fonts and images, manifest.json and catalog.json fetched from
+# this origin. Nothing else: its usage tracker and any external asset are refused.
+DBT_DOCS_CSP = ("default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; "
+                "img-src 'self' data:; font-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; "
+                "base-uri 'none'; form-action 'none'")
 log = logging.getLogger("k2api")
 SPEC = yaml.safe_load((Path(__file__).parent.parent / "openapi.yaml").read_text())
 
 # The frozen document is the one served; FastAPI's generated one and its doc pages are off.
 app = FastAPI(openapi_url=None, docs_url=None, redoc_url=None)
+
+
+class Site(StaticFiles):
+    """A generated site, <SITE>/<name>/current/, as files: not an API route, so not in openapi.yaml.
+    `current` is read at every lookup, so a new tree is served from the next request on; before the
+    first one the answer is 503. Every answer carries the site's headers."""
+
+    def __init__(self, name: str, csp: str) -> None:
+        super().__init__(html=True, check_dir=False)
+        self.name = name
+        self.headers = {"Cache-Control": "no-cache", "X-Content-Type-Options": "nosniff", "Content-Security-Policy": csp}
+
+    def tree(self) -> str | None:
+        """The real directory `current` names, only when it is a directory directly beside it:
+        `current -> /` would otherwise serve this container's files, its secrets among them."""
+        site = os.path.join(os.path.realpath(SITE), self.name)
+        tree = os.path.realpath(os.path.join(site, CURRENT))
+        return tree if os.path.dirname(tree) == site and os.path.isdir(tree) else None
+
+    def lookup_path(self, path: str) -> tuple[str, os.stat_result | None]:
+        """Starlette's lookup with follow_symlink=False, over the tree resolved once for this lookup:
+        the path is resolved, links and all, and found only inside the tree, so a planted
+        current/evil -> /etc is not followed."""
+        tree = self.tree()
+        if tree is None or path.startswith(("/", "\\")):
+            return "", None
+        full = os.path.realpath(os.path.join(tree, path))
+        if os.path.commonpath([full, tree]) != tree:
+            return "", None
+        try:
+            return full, os.stat(full)
+        except (FileNotFoundError, NotADirectoryError):
+            return "", None
+
+    async def check_config(self) -> None:
+        """No check at the first request: a site not generated yet is get_response's 503."""
+
+    async def get_response(self, path: str, scope: Scope) -> Response:
+        if self.tree() is None:
+            response: Response = PlainTextResponse("not generated yet\n", 503)
+        else:
+            try:
+                response = await super().get_response(path, scope)
+            except HTTPException as e:  # 404, 405: answered here, so they carry the headers too
+                response = PlainTextResponse(f"{e.detail}\n", e.status_code, e.headers)
+        response.headers.update(self.headers)
+        return response
+
+
+app.mount("/catalog", Site("catalog", CATALOG_CSP))  # platform/catalog-site/k2site.py --out /site/catalog
+app.mount("/dbt-docs", Site("dbt-docs", DBT_DOCS_CSP))  # k2-dbt docs --out /site/dbt-docs
 
 
 class Refused(Exception):
@@ -147,6 +211,14 @@ def quoted(relation: str, suffix: str = "") -> str:
 
 def columns(out: dict[str, Any]) -> list[str]:
     return [c["name"] for c in out["columns"]]
+
+
+def primary_key(out: dict[str, Any]) -> list[str]:
+    """The declared key, by primaryKeyPosition, then declaration order: what a page is sorted by,
+    so SQL and REST answers compare row for row and a phase 007 cursor has an order."""
+    key = [(c.get("primaryKeyPosition", len(out["columns"]) + 1), i, c["name"])
+           for i, c in enumerate(out["columns"]) if c["primaryKey"]]
+    return [name for _, _, name in sorted(key)]
 
 
 def ask(user: str, sql: str, params: list[Any]) -> list[list[Any]]:
@@ -319,8 +391,11 @@ def get_data(domain: str, product: str, table: str, request: Request) -> Respons
         raise Refused(404, "not_found", f"{out['contractId']} has no reader relation: only its serving copy holds it")
     fields, limit, filters = parameters(request, out)
     where = " AND ".join(f"{ident(column)} = ?" for column, _ in filters)
+    # ponytail: a table that declares no key is read in Trino's order; give it a key to sort it
+    order = ", ".join(map(ident, primary_key(out)))
     sql = (f"SELECT {', '.join(map(ident, fields))} FROM {quoted(out['relation'])}"
-           f"{' WHERE ' + where if filters else ''} LIMIT {limit + 1}")  # one row past the limit: result_too_large
+           f"{' WHERE ' + where if filters else ''}{' ORDER BY ' + order if order else ''}"
+           f" LIMIT {limit + 1}")  # one row past the limit: result_too_large
     values = [value for _, value in filters]
     snapshot = tested_snapshot(rel, out)
     for _ in range(2):  # the tag read before and after; when it moved, once more

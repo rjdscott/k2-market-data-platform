@@ -83,7 +83,7 @@ adding one with the right signature, leaves it green; a drifted signature fails 
 | `API_PRINCIPALS` | `compiled/api/principals.json`, `{"principals": [id]}` | S14 |
 | `CATALOG_INDEX`, `catalog_path(id)` | `compiled/catalog/index.json`, `compiled/catalog/products/<id>.json` | S18 |
 | (S17) | `compiled/dbt/` | S17 |
-| `PLATFORM_DIR`, `PLATFORM_CODE` (added 2026-11-27) | `platform/<repository path>`: the set's run code under `docker/airflow/dags/`, `docker/lake/`, `docker/prometheus/rules/`, `domains/` and `platform/runs/`, each root's suffixes only (`.py`; `.yml` for the rules), never a test, a cache or `conftest.py`; each root is a `DOCUMENT_ROOTS` entry too, so the tag approves the code and `documents/` holds it as well | W1-4 (`release.run_code`) |
+| `PLATFORM_DIR`, `PLATFORM_CODE` (added 2026-11-27) | `platform/<repository path>`: the set's run code under `docker/airflow/dags/`, `docker/lake/`, `docker/prometheus/rules/`, `domains/`, `platform/runs/` and `platform/catalog-site/` (W3-9), each root's suffixes only (`.py`; `.yml` for the rules), never a test, a cache or `conftest.py`; each root is a `DOCUMENT_ROOTS` entry too, so the tag approves the code and `documents/` holds it as well | W1-4 (`release.run_code`) |
 
 `need_of(path)`: `compose/docker-compose.yml` can set `recreate` (the services whose definition
 differs), `compiled/trino/etc/` sets `trinoRestart`, `compiled/airflow/dags.json` can set

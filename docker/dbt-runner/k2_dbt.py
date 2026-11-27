@@ -1,6 +1,7 @@
 """k2-dbt, the dbt wrapper: what guarantees readers see only tested data (ADR-061 parts 4 and 5).
 
     k2-dbt build --release <id> --product <domain>.<product> --run-id <dag_id>/<run_id>
+    k2-dbt docs --release <id> --out <dir>    # the release's dbt docs site, no warehouse (docs())
 
 The frozen contract is docs/development/phase-001-interfaces.md, "Run-time contracts", "The dbt
 wrapper"; the measurements behind it are spikes (d), (f) and (g) of
@@ -47,8 +48,10 @@ import importlib.util
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
+import tempfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -661,6 +664,72 @@ class Live:
         return found
 
 
+# ---- k2-dbt docs (W3-11): the release's dbt docs site, which k2-api serves at /dbt-docs/ ---------
+
+DOCS_FILES = ("index.html", "manifest.json", "catalog.json")  # what dbt's docs app loads, and all it loads
+SITE_TREE, SITE_CURRENT = "tree-", "current"  # as platform/catalog-site/k2site.py names them
+
+
+def docs_argv(project: Path) -> list[list[str]]:
+    """dbt parse (manifest.json), then docs generate (index.html, catalog.json) without compiling
+    and with an empty catalog: neither opens a connection, so the docs run as no principal and
+    read no password (compiling would connect: is_incremental asks whether each table exists).
+    Lost against a full generate: each model's compiled SQL, and the warehouse's column types and
+    table statistics; the descriptions, raw SQL, tests, lineage and contract columns remain."""
+    common = ["--project-dir", str(project), "--profiles-dir", str(PROFILES_DIR), "--target-path", str(WORK / "docs"),
+              "--log-path", str(WORK / "logs"), "--no-partial-parse"]
+    return [["dbt", "parse", *common], ["dbt", "docs", "generate", "--no-compile", "--empty-catalog", *common]]
+
+
+def docs_env(environ: dict[str, str]) -> dict[str, str]:
+    """The docs' whole environment, no secret in it: dbt/profiles.yml names the password variable
+    with no default, so it must be set, and nothing connects, so it is a placeholder; the host is
+    one that never resolves, so a dbt that did try would fail rather than reach a Trino."""
+    return {"PATH": environ.get("PATH", "/usr/local/bin:/usr/bin:/bin"), "HOME": str(WORK), "LANG": "C.UTF-8",
+            "K2_TRINO_HOST": "trino.invalid", "DBT_ENV_SECRET_K2_TRINO_PASSWORD": "unused",
+            "DBT_SEND_ANONYMOUS_USAGE_STATS": "false", "DBT_USE_COLORS": "false"}
+
+
+def publish_site(files: dict[str, bytes], out: Path) -> Path:
+    """k2site.publish's swap, copied so neither image ships the other's code: a new tree beside the
+    old, then a relative `current` symlink renamed onto it (atomic on one file system); the tree
+    before is kept for a reader mid-request, older ones are removed."""
+    current = out / SITE_CURRENT
+    if current.exists() and not current.is_symlink():
+        raise Refused(f"{current} is not a symlink; move it away once, then rerun")
+    out.mkdir(parents=True, exist_ok=True)
+    tree = Path(tempfile.mkdtemp(prefix=SITE_TREE, dir=out))
+    for name, data in files.items():
+        (tree / name).write_bytes(data)
+        (tree / name).chmod(0o644)
+    tree.chmod(0o755)  # mkdtemp makes 0700; k2-api reads as another user
+    previous = os.readlink(current) if current.is_symlink() else None
+    staged = out / f".{SITE_CURRENT}.new"
+    staged.unlink(missing_ok=True)
+    staged.symlink_to(tree.name)
+    os.replace(staged, current)
+    for old in out.glob(f"{SITE_TREE}*"):
+        if old.name not in (tree.name, previous):
+            shutil.rmtree(old)
+    return tree
+
+
+def docs(release: str, out: Path, environ: dict[str, str]) -> Path:
+    """`k2-dbt docs --release <id> --out <dir>`: the site of /k2/releases/<id>/compiled/dbt,
+    published as <dir>/current. A failed dbt step publishes nothing, so the site before stays."""
+    if not RELEASE_ID.fullmatch(release):
+        raise Refused(f"release {release!r} is not an id")
+    project = RELEASES / release / "compiled" / "dbt"
+    if not (project / "dbt_project.yml").is_file():
+        raise Refused(f"{project}: the release holds no compiled dbt project")
+    shutil.rmtree(WORK / "docs", ignore_errors=True)
+    for argv in docs_argv(project):
+        code = subprocess.run(argv, env=docs_env(environ), stdin=subprocess.DEVNULL, check=False).returncode
+        if code != 0:
+            raise Refused(f"{' '.join(argv[:3])} exited {code}; the site is unchanged")
+    return publish_site({name: (WORK / "docs" / name).read_bytes() for name in DOCS_FILES}, out)
+
+
 def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
     ap = argparse.ArgumentParser(prog="k2-dbt", description=__doc__.split("\n\n")[0])
@@ -669,9 +738,22 @@ def main(argv: list[str] | None = None) -> int:
     b.add_argument("--release", required=True)
     b.add_argument("--product", required=True)
     b.add_argument("--run-id", required=True)
+    d = sub.add_parser("docs")
+    d.add_argument("--release", required=True)
+    d.add_argument("--out", required=True, type=Path)
     if argv in (["--help"], ["-h"]):  # not a run, so no XCom: the image's build and CI check its imports by it
         ap.print_help()
         return 0
+    if argv[:1] == ["docs"]:  # deploy's step after a swap, not an Airflow run: no XCom line
+        try:
+            a = ap.parse_args(argv)
+            print(f"k2-dbt: wrote {docs(a.release, a.out, dict(os.environ))}", flush=True)
+            return 0
+        except SystemExit:
+            return 2
+        except Exception as e:
+            log(f"{type(e).__name__}: {e}")
+            return 1
     code, expire = 3, []
     try:
         try:

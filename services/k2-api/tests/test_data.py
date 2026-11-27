@@ -30,15 +30,18 @@ ROWS = [
 
 @pytest.fixture
 def lake(trino):
-    trino.rows[VIEW] = ROWS
+    trino.rows[VIEW] = ROWS[::-1]  # stored out of key order: the page comes back sorted by the key
     trino.snapshots[BASE] = [SNAPSHOT]
     trino.snapshots["lake.station_readings.bronze_readings"] = [7]
     trino.snapshots["ops_insight.daily_load__base.gold_daily_load"] = [8]
     return trino
 
 
-def data(user: str, select: str, where: str = "", params: list | None = None, limit: int = 10001) -> tuple:
-    return (user, f'SELECT {select} FROM "sensor_net"."station_readings"."silver_readings"{where} LIMIT {limit}', params or [])
+ORDER = ' ORDER BY "station_id", "read_at", "region"'  # the declared key, by primaryKeyPosition
+
+
+def data(user: str, select: str, where: str = "", params: list | None = None, limit: int = 10001, order: str = ORDER) -> tuple:
+    return (user, f'SELECT {select} FROM "sensor_net"."station_readings"."silver_readings"{where}{order} LIMIT {limit}', params or [])
 
 
 def test_rows_of_the_view_as_the_caller_at_the_tested_snapshot(client: TestClient, lake) -> None:
@@ -199,3 +202,30 @@ def test_the_release_lets_svc_api_become_exactly_its_principals(releases: Path, 
     for user in [*callers, "p.not-served", "svc.api", "svc.platform", "pub_station_readings", "dbt_station_readings"]:
         rule = [r for r in lake.rules["impersonation"] if re.fullmatch(r["new_user"], user)]
         assert bool(rule) == (user in callers), user
+
+
+def test_rows_are_sorted_by_the_declared_key_in_its_positions(client: TestClient, releases: Path, lake) -> None:
+    path = releases / RELEASE_ID / "compiled/catalog/products/sensor-net.station-readings.json"
+    doc = json.loads(path.read_text())
+    columns = doc["outputs"][1]["columns"]  # silver: station_id 1, read_at 2, region 3
+    positions = {"region": 1, "station_id": 2}
+    for c in columns:
+        c["primaryKey"] = c["name"] in (*positions, "value")  # value: a key column with no position sorts last
+        c.pop("primaryKeyPosition", None)
+        if c["name"] in positions:
+            c["primaryKeyPosition"] = positions[c["name"]]
+    path.write_text(json.dumps(doc))
+    r = client.get(SILVER, headers=bearer(FULL), params={"fields": "station_id"})
+    assert lake.calls[1] == data("p.analyst-full", '"station_id"', order=' ORDER BY "region", "station_id", "value"')
+    assert [row["station_id"] for row in r.json()["rows"]] == ["st-1", "st-3", "st-2"]  # north before south
+
+
+def test_a_table_with_no_declared_key_has_no_order_by(client: TestClient, releases: Path, lake) -> None:
+    path = releases / RELEASE_ID / "compiled/catalog/products/sensor-net.station-readings.json"
+    doc = json.loads(path.read_text())
+    for c in doc["outputs"][1]["columns"]:
+        c["primaryKey"] = False
+        c.pop("primaryKeyPosition", None)
+    path.write_text(json.dumps(doc))
+    assert client.get(SILVER, headers=bearer(FULL)).status_code == 200
+    assert lake.calls[1] == data("p.analyst-full", ALL, order="")

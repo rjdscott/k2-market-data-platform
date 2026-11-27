@@ -6,7 +6,7 @@
     An invocation that ran no test writes nothing and needs no var.
 
     dbt 1.12 runs on-run-end after the nodes whatever their result, so a failed, errored or skipped
-    test gets its row (make test-dbt plants a failing one and reads it back). If the hook fails,
+    test gets its row (scripts/verify/dbt-wrapper.sh plants a failing one and reads it back). If the hook fails,
     dbt exits non-zero although every test passed, and the rows are lost: nothing here is caught.
 
     Columns: those of record_test_results.sql (ADR-046), its invocation_id named
