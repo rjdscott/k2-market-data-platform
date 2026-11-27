@@ -42,7 +42,10 @@ first failure:
  5 views-narrow  before any rule can change, each reader view whose contract columns or SQL change loses
                  every column the new contract drops (k2gen.emit.lake.view_update, against the tag), in
                  the target's shape if the old rules admit it, else the old release's shape; each
-                 release's statements come from its own k2gen, in its tools image. A rollback that finds
+                 release's statements come from its own k2gen, in its tools image. A view the release it
+                 moves from does not declare is never touched here: the rules loaded now do not know its
+                 publisher and name no reader of it, so views-widen (after its rules load) and its first
+                 tested publish create it. A rollback that finds
                  Trino not answering swaps and recreates first, then syncs the views (converge)
  6 canary        a fresh password for this release's canary k2_release_<setSha256[:12]>, its line
                  written into trino/password.db in place under the file's lock
@@ -440,6 +443,12 @@ def views_of(rel: Release | None) -> dict[str, View]:
             for v in json.loads((rel.root / model.VIEWS).read_bytes())["views"]}
 
 
+def declared(p: Plan, v: View) -> list[Release]:
+    """The releases the plan moves from that declare the view, by relation: the rules loaded before the
+    swap are one of theirs, so a view none of them declares has no publisher or reader those rules know."""
+    return [s for s in p.sources if s and v.relation in views_of(s)]
+
+
 def make_plan(ctx: Ctx, target: Release, sources: list[Release | None]) -> Plan:
     """The union of k2gen's needs from each source to the target: compose is idempotent, so a
     service another source already moved is left as it is. Never a stateful service the target
@@ -522,7 +531,10 @@ def show(ctx: Ctx, p: Plan, frm: str | None) -> None:
     if p.remove:
         say(f"  stopped and removed, out of the release's default set: {', '.join(p.remove)}")
     say(f"  Trino restart: {'yes' if p.trino_restart else 'no'}; DDL: {', '.join(p.ddl) or 'none'}")
-    say(f"  views to re-sync: {', '.join(v.relation for v in p.views) or 'none'}")
+    new = [v.relation for v in p.views if not declared(p, v)]
+    say(f"  views to re-sync: {', '.join(v.relation for v in p.views if v.relation not in new) or 'none'}")
+    if new:
+        say(f"  views new in this release: {', '.join(new)} (created after its rules load, at its first tested publish)")
     for line in p.skipped:
         say(f"  not recreated: {line}")
 
@@ -1034,16 +1046,31 @@ def sync_views(ctx: Ctx, p: Plan, phase: str) -> list[str]:
         return ["a first deploy: no view has been published under a release yet"]
     source = p.sources[0]
     for v in p.views:
+        by = declared(p, v)
+        if phase == "narrow" and not by:  # nothing published under the loaded rules has a column to take out
+            lines.append(f"{v.relation}: not in {', '.join(s.id for s in p.sources if s)}, so the rules loaded now do not "
+                         f"know its publisher {v.owner} and name no reader of it: nothing to narrow; views-widen syncs it "
+                         "once this release's rules load, or its first tested publish creates it")
+            continue
         try:
-            lines += _sync_view(ctx, p, phase, source, v)
+            lines += _sync_view(ctx, p, phase, source, v, unsure=phase == "narrow" and len(by) < len(p.sources))
         except Exception as e:  # which view could not be synced: after a rollback's swap that is exit 3
             raise Failed(f"view {v.relation} not synced ({phase}): {type(e).__name__}: {e}") from e
     return lines
 
 
-def _sync_view(ctx: Ctx, p: Plan, phase: str, source: Release | None, v: View) -> list[str]:
+def _sync_view(ctx: Ctx, p: Plan, phase: str, source: Release | None, v: View, unsure: bool = False) -> list[str]:
+    """unsure: the view is in some release the plan moves from, not all, so the rules loaded now (an
+    interrupted attempt's, or the live release's) may be a release without it: their refusal of its owner
+    is that, and nothing of it to narrow, since those rules name no reader of it either."""
     lines = []
-    live = live_view(ctx, v)
+    try:
+        live = live_view(ctx, v)
+    except k2tools.TrinoError as e:
+        if not (unsure and e.name == "PERMISSION_DENIED"):
+            raise
+        return [f"{v.relation}: the rules loaded now refuse its publisher {v.owner} ({str(e)[:80]}), so they are a "
+                "release without it and name no reader of it: nothing to narrow; views-widen syncs it"]
     tag = tagged(ctx, v) if live else None
     if live is None or tag is None:
         return [f"{v.relation}: not published yet; the wrapper creates it at its first tag"]
