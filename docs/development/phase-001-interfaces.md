@@ -558,3 +558,11 @@ so `ecb-fx-rates`'s grant passes over it; the exemption on the product itself is
 within the owning team needs no terms). No phase 004 product grants anyone yet; a grant on
 `candles` outside its team would be refused until `canonical-trades`, `kraken-trades`,
 `security-master`, `kraken-instruments`, `currency-master` and `candles` record terms.
+
+2026-11-28, the role order checked (finding A6): each `within` entry of
+`contracts/access/roles.yaml` names a declared role, never the role itself, with no cycle, and
+`public_reader` is within none (`access.role-within-invalid`). The forbidden direction is the one
+that leaks: `public_reader` within `full_reader` would let an output offer data to holders who may
+take it off the platform over an input that offered it only inside. An internal role within
+`public_reader` is allowed: the output is held to that role's policy on the public input, and
+nothing leaves.

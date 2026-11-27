@@ -18,7 +18,7 @@ CODES = {"principal-duplicate", "principal-collides", "role-undeclared", "policy
          "role-requirement-unmet", "grant-unknown-principal", "grant-unknown-role", "grant-role-not-offered", "grant-two-roles",
          "grant-to-platform", "inherit-role", "inherit-delay", "inherit-mask", "inherit-row-scope", "inherit-undeclared",
          "expectation-missing", "expectation-weak", "expectation-unknown-principal", "delay-type", "row-scope-unpartitioned",
-         "connector-role", "input-undeclared"}
+         "connector-role", "input-undeclared", "role-within-invalid"}
 SILVER = "contracts/sensor-net/station-readings/silver_readings.odcs.yaml"
 GOLD = "contracts/ops-insight/daily-load/gold_daily_load.odcs.yaml"
 
@@ -261,3 +261,14 @@ def test_a_sibling_reached_by_ref_passes_its_reads_on() -> None:
     (chain,) = [f.message for f in found if f.code == "access.input-undeclared" and f.message.startswith(ids + "instrument")]
     assert ("models/instrument.sql: ref('security_master__venue_symbol_claim') -> models/venue_symbol_claim.sql: "
             "k2_input('currency_master', 'currency')") in chain
+
+
+def test_public_reader_within_full_reader_would_offer_internal_data_publicly() -> None:
+    """Why A6 forbids the one direction: declared, gold could offer public_reader over silver,
+    which offers no public_reader, and only the order check stops it; the other direction, an
+    internal role within public_reader, is no finding."""
+    steps = [{"file": "contracts/access/roles.yaml", "set": "roles/public_reader/within", "value": ["full_reader"]},
+             {"file": GOLD, "append": "roles", "value": {"role": "public_reader", "access": "read"}}]
+    assert codes(changed(steps)) == {"access.role-within-invalid"}
+    assert codes(changed(steps[1:])) == {"access.inherit-role"}
+    assert codes(changed([{"file": "contracts/access/roles.yaml", "set": "roles/full_reader/within", "value": ["public_reader"]}])) == set()

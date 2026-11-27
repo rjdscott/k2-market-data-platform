@@ -263,6 +263,23 @@ cases:
     code: access.expectation-weak
     changes:
       - {file: tests/access/expectations.yaml, remove: expectations/1/mustAppear}
+  # the role order (A6 of the 2026-11-28 review)
+  - name: a role within one roles.yaml does not declare
+    code: access.role-within-invalid
+    changes:
+      - {file: contracts/access/roles.yaml, set: roles/delayed_reader/within, value: [full_raeder]}
+  - name: a role within itself
+    code: access.role-within-invalid
+    changes:
+      - {file: contracts/access/roles.yaml, set: roles/delayed_reader/within, value: [delayed_reader]}
+  - name: two roles each within the other
+    code: access.role-within-invalid
+    changes:
+      - {file: contracts/access/roles.yaml, set: roles/full_reader/within, value: [delayed_reader]}
+  - name: public_reader within full_reader, which would offer internal data off the platform
+    code: access.role-within-invalid
+    changes:
+      - {file: contracts/access/roles.yaml, set: roles/public_reader/within, value: [full_reader]}
   # what a model reads (A1 of the 2026-11-28 review)
   - name: a model reading an input through k2_input that its output port does not declare
     code: access.input-undeclared

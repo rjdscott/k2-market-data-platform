@@ -8,7 +8,12 @@ declared roles (`access.role-undeclared`); its `policies` name only roles it off
 (`access.policy-role-not-offered`: a misspelt role would leave the real one with no policy) and
 only its own columns (`access.policy-column-unknown`: a misspelt mask leaves the column shown); a
 role's `requires` are set for it on every table offering it (`access.role-requirement-unmet`).
-A delay's column is `timestamp(6) with time zone` (`access.delay-type`): Trino compares any other
+The role order in roles.yaml (`within`) names declared roles, never the role itself, with no cycle,
+and `public_reader` is within none (`access.role-within-invalid`, A6 of the 2026-11-28 review).
+`R within S` lets an output offer R over an input offering only S: with R `public_reader`, whose
+holders may take data off the platform, data an input offered only inside it would leave. The other
+way is allowed: an output offering an internal role over an input offering `public_reader` is held
+to that role's policy there, and nothing leaves. A delay's column is `timestamp(6) with time zone` (`access.delay-type`): Trino compares any other
 time type with `current_timestamp` in the reader's own session time zone, which a reader may set,
 so a `timestamp(6)` or `date` delay moves with it, and a `time(6)` one fails every read. A row
 scope's column is an identity partition field of its table (`access.row-scope-unpartitioned`):
@@ -114,6 +119,7 @@ _PLATFORM = (*model.PIPELINE_PRINCIPALS, *model.BUILD_CATALOG_PRINCIPALS, *model
              *model.READER_NAMESPACE_OWNERS, *model.RETENTION_PROPERTY_PRINCIPALS,
              *(re.escape(p) for p in model.REFS_READERS))
 _VIEW_BUILDS = ("dbt", "code")
+PUBLIC_ROLE = "public_reader"  # whose holders may take data off the platform (roles.yaml): within no role
 _READER_CATALOG_BUILDS = ("dbt", "code", "platform")
 
 
@@ -189,6 +195,7 @@ def check(docs: DocumentSet, previous: DocumentSet | None) -> list[Finding]:
 def _declarations(roles: dict[str, Any], principals: list[str], products: dict[str, _Product]) -> list[Finding]:
     out = [_err("principal-duplicate", model.PRINCIPALS, f"principal {p} is declared {principals.count(p)} times; declare it once")
            for p in sorted({p for p in principals if principals.count(p) > 1})]
+    out += _role_order(roles)
     fences = {model.fence(p.name) for p in products.values()}
     for p in principals:
         for prefix, what in (("dbt_", "builder"), ("pub_", "publisher")):
@@ -235,6 +242,28 @@ def _declarations(roles: dict[str, Any], principals: list[str], products: dict[s
                 if missing:
                     out.append(_err("role-requirement-unmet", path,
                                     f"{t['id']} offers {role}, which requires {', '.join(missing)} (roles.yaml), and sets none for it"))
+    return out
+
+
+def _role_order(roles: dict[str, Any]) -> list[Finding]:
+    out = []
+    within = {r: [w for w in d.get("within", []) if w in roles and w != r] for r, d in roles.items()}
+    for role, d in roles.items():
+        for other in d.get("within", []):
+            if other == role or other not in roles:
+                out.append(_err("role-within-invalid", model.ROLES, f"{role} is within {other}, "
+                                f"{'itself' if other == role else 'which roles.yaml does not declare'}; name another declared role"))
+        if role == PUBLIC_ROLE and d.get("within"):
+            out.append(_err("role-within-invalid", model.ROLES, f"{role} is within {', '.join(d['within'])}: its holders may take data "
+                            f"off the platform, so an output may offer it only over an input offering it too; declare it within none"))
+        seen, todo = set(), list(within[role])
+        while todo:
+            r = todo.pop()
+            if r not in seen:
+                seen.add(r)
+                todo += within[r]
+        if role in seen:
+            out.append(_err("role-within-invalid", model.ROLES, f"{role} is within itself through a cycle of within; the order runs one way"))
     return out
 
 
