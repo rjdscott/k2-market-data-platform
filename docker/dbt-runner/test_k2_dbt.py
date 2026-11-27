@@ -294,6 +294,67 @@ def test_verdict_any_non_zero_exit_fails_and_only_a_test_failure_is_1(code, stat
     assert w.verdict(code, results) == expected
 
 
+# ---- W1-15: rollback ---------------------------------------------------------------------------
+
+def test_a_failed_test_with_the_schema_unchanged_rolls_back_and_names_the_snapshot_to_expire():
+    fake = Fake()
+    s0 = fake.seed()
+    fake.dbt_code, fake.dbt_status = 1, "fail"
+    code, expire = w.run(ctx(), fake)
+    failed = max(fake.tables[OUT]["snaps"])
+    assert code == 1 and fake.tables[OUT]["main"] == s0 and fake.tables[OUT]["tag"] == s0
+    assert ("builder", f'ALTER TABLE {k2.quote_relation(OUT)} EXECUTE rollback_to_snapshot({s0})') in fake.statements
+    assert expire == [{"table": OUT, "ids": [failed]}]
+    (rb,) = [r for r in fake.records if r["event"] == "rolled_back"]
+    assert (rb["snapshot_before"], rb["snapshot_after"], rb["dbt_invocation_id"]) == (s0, s0, UUID)
+    assert fake.violations == []
+
+
+def test_a_failed_build_that_changed_the_schema_is_restored_by_create_or_replace():
+    fake = Fake()
+    s0 = fake.seed()
+    fake.build[OUT], fake.dbt_code, fake.dbt_status = V2, 1, "fail"
+    code, expire = w.run(ctx(), fake)
+    t = fake.tables[OUT]
+    assert code == 1 and t["schema"] == V1 and t["snaps"][t["main"]][0] == V1 and t["tag"] == s0
+    assert any(s.startswith("CREATE OR REPLACE TABLE") and s.endswith(f"FOR VERSION AS OF BIGINT '{s0}'")
+               for _, s in fake.statements)
+    restored = t["main"]
+    assert expire == [{"table": OUT, "ids": sorted(set(t["snaps"]) - {s0, restored})}] and restored not in expire[0]["ids"]
+
+
+def test_a_failed_first_build_drops_the_table_it_made_and_leaves_the_results_table():
+    fake = Fake()
+    fake.dbt_code, fake.dbt_status = 1, "fail"
+    fake.build[OUT] = V1
+    code, expire = w.run(ctx(), fake)
+    assert (code, expire) == (1, []) and OUT not in fake.tables
+    assert ("builder", f"DROP TABLE {k2.quote_relation(OUT)}") in fake.statements
+    assert "governance_build.access_canary__base.dq_test_results" in fake.tables  # not an output: never restored
+    assert not any("dq_test_results" in s for _, s in fake.statements)
+
+
+def test_a_build_error_exits_2_and_restores():
+    fake = Fake()
+    s0 = fake.seed()
+    fake.dbt_code, fake.dbt_status = 2, "error"
+    assert w.run(ctx(), fake)[0] == 2 and fake.tables[OUT]["main"] == s0
+    assert events(fake, "access_canary/r1") == [("started", OUT), ("rolled_back", OUT)]
+
+
+def test_a_failed_restore_exits_3():
+    fake = Fake()
+    fake.seed()
+    fake.dbt_code, fake.dbt_status, fake.fail_on = 1, "fail", "rollback_to_snapshot"
+    assert w.run(ctx(), fake)[0] == 3
+
+
+def test_a_tagged_table_is_never_dropped():
+    with pytest.raises(w.Refused):
+        w.restore_statement(OUT, None, True, None, V1)
+    assert w.restore_statement(OUT, 5, True, V1, dict(reversed(V1.items()))).startswith("CREATE OR REPLACE TABLE")  # order counts
+
+
 # ---- trust boundaries --------------------------------------------------------------------------
 
 @pytest.mark.parametrize("bad", ["a.b", 'a.b.c"; DROP TABLE x --', "A.b.c", "a.b.c$refs", "a.b." + "x" * 64, "a..c", None])

@@ -248,6 +248,26 @@ def record(ctx: Ctx, io: Any, **row: Any) -> None:
                  "started_at": ctx.started_at, **row})
 
 
+def restore_statement(rel: str, target: int | None, tagged: bool, at_target: dict[str, str] | None,
+                      now: dict[str, str]) -> str:
+    """How an output goes back to `target`, as the builder (spike f): no target, DROP TABLE (never a
+    tagged table); the same columns and types in the same order, rollback_to_snapshot; otherwise a
+    create-or-replace from the old snapshot, since a rollback restores rows but not the schema."""
+    q = relation(rel)
+    if target is None:
+        if tagged:
+            raise Refused(f"{rel}: no snapshot to restore to, and it carries a tag: never dropped")
+        return f"DROP TABLE {q}"
+    if at_target is not None and list(at_target.items()) == list(now.items()):
+        return f"ALTER TABLE {q} EXECUTE rollback_to_snapshot({snap(target)})"
+    return f"CREATE OR REPLACE TABLE {q} AS SELECT * FROM {q} {version(target)}"
+
+
+def restore(io: Any, rel: str, target: int | None, tagged: bool) -> None:
+    at_target = io.columns(rel, target) if target is not None else None
+    io.sql("builder", restore_statement(rel, target, tagged, at_target, io.columns(rel, None)))
+
+
 def resolve(ctx: Ctx, io: Any) -> dict[str, int | None]:
     """Step 2: every input's tested snapshot, as svc.runs. One full read can straddle a publish,
     so the set is read twice and must agree; tags only move forward, so two equal reads hold one
@@ -297,6 +317,27 @@ def verdict(code: int, results: dict[str, Any] | None) -> int:
     return 2
 
 
+def rollback(ctx: Ctx, io: Any, before: dict[str, dict[str, Any]], invocation: str | None,
+             expire: list[dict[str, Any]]) -> None:
+    """Step 5, as the builder: each output whose main moved goes back to snapshot_before; the build's
+    snapshots are named for expire. Every output gets its rolled_back row, moved or not, with main
+    after the restore as snapshot_after (a create-or-replace's new snapshot, which reconcile reads)."""
+    for o in ctx.outputs:
+        b = before[o.relation]
+        main, tag = heads(io, o.relation)
+        if main != b["main"]:
+            log(f"rollback {o.relation}: main {main} back to {b['main']}")
+            restore(io, o.relation, b["main"], tag is not None)
+            if b["main"] is not None:
+                main, tag = heads(io, o.relation)
+                if ids := sorted(io.snapshots(o.relation) - b["ids"] - {main, tag}):
+                    expire.append({"table": o.relation, "ids": ids})
+            else:
+                main = None
+        record(ctx, io, event="rolled_back", table_name=o.relation, snapshot_before=b["main"], snapshot_after=main,
+               dbt_invocation_id=invocation)
+
+
 def run(ctx: Ctx, io: Any) -> tuple[int, list[dict[str, Any]]]:
     """Steps 1 to 6; (exit code, expire)."""
     expire: list[dict[str, Any]] = []
@@ -328,8 +369,16 @@ def run(ctx: Ctx, io: Any) -> tuple[int, list[dict[str, Any]]]:
     invocation = ((results or {}).get("metadata") or {}).get("invocation_id")
     invocation = invocation if isinstance(invocation, str) and INVOCATION.fullmatch(invocation) else None
     outcome = verdict(code, results)
-    log(f"dbt build exit {code} (invocation {invocation}): verdict {outcome}")
-    return outcome, expire  # W1-15 restores a failed build (step 5), W1-16 publishes a pass (step 6)
+    if not outcome:
+        log(f"dbt build passed (invocation {invocation})")
+        return 0, expire  # W1-16 publishes a pass (step 6)
+    try:
+        log(f"dbt build {'failed its tests' if outcome == 1 else 'failed'} (exit {code}); restoring the outputs")
+        rollback(ctx, io, before, invocation, expire)
+        return outcome, expire
+    except Exception as e:
+        log(f"rollback: {type(e).__name__}: {e}")
+        return 3, expire
 
 
 # ---- the adapters: Trino as builder, publisher and svc.runs; the catalog; dbt ------------------
@@ -396,10 +445,18 @@ class Live:
             raise
         return {str(n): (str(t), snap(s)) for n, t, s in rows}
 
+    def columns(self, rel: str, snapshot: int | None) -> dict[str, str]:
+        at = "" if snapshot is None else f" {version(snapshot)}"
+        _, description = self.query("builder", f"SELECT * FROM {relation(rel)}{at} LIMIT 0")
+        return {d[0]: d[1] for d in description}  # type_code is Trino's type as DESCRIBE spells it
+
     def snapshots(self, rel: str) -> set[int]:
         relation(rel)
         rows, _ = self.query("builder", f"SELECT snapshot_id FROM {k2.quote_relation(rel + '$snapshots')}")
         return {snap(r[0]) for r in rows}
+
+    def sql(self, role: str, statement: str) -> None:
+        self.query(role, statement)
 
     def record(self, **row: Any) -> None:
         self.k2runs.record(self.conn("runs"), **row)
