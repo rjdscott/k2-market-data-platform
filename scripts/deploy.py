@@ -133,6 +133,7 @@ SCHEDULER = "airflow-scheduler"  # the compose service deploy asks Airflow throu
 BUSY = ("queued", "running", "restarting")  # a task instance's states a pause does not stop
 PASSWORD_DB = "trino/password.db"
 CA = "tls/ca.pem"
+LAKE_INIT = f"{model.PLATFORM_DIR}/docker/lake/init-lake.sh"  # lake-init runs the deployed release's own (review R6)
 CANARY_SQL = "SELECT 1"  # the canary's one statement (S12's rules)
 # Spark's `lake` catalog, as k2gen's Trino catalogs and docker/lake/spark_conf.py name it; the keys come
 # from the container's AWS_* environment, S3FileIO's default chain (A4), never from this file.
@@ -470,6 +471,12 @@ def make_plan(ctx: Ctx, target: Release, sources: list[Release | None]) -> Plan:
             remove.append(name)
         elif spec.get("profiles") and name not in running:
             skipped.append(f"{name}: profile {','.join(spec['profiles'])}, not running; its next start uses the release")
+        elif name == "lake-init" and LAKE_INIT not in target.manifest.files:
+            # Its compose runs the checkout's script, which a newer checkout's lake-init demands ten more names
+            # for than that compose passes. Its warehouses exist (each deploy since alpha.3 made them) and it
+            # never had scoped users, whose grants a newer release made and an older one never reads.
+            skipped.append(f"lake-init: {target.id} carries no {LAKE_INIT} (a release before review R6), and its "
+                           "compose would run this checkout's script; not run, its warehouses already exist")
         elif str(spec.get("restart", "no")) == "no":
             oneshots.append(name)
         else:
@@ -1436,11 +1443,12 @@ def ddl(ctx: Ctx, p: Plan) -> list[str]:
     """Step 4: the one-shots, the storage plan's namespaces, then the tables (all additive)."""
     plan = f"{model.RELEASES_MOUNT}/{p.target.id}/{model.STORAGE_PLAN}"
     out = []
-    # The one-shots first: lake-init makes the warehouses the namespaces go into. It reads the TARGET's
-    # plan (K2_STORAGE_PLAN), not the pointer, which still names the previous release, or nothing yet.
+    # The one-shots first: lake-init makes the warehouses the namespaces go into. It runs the TARGET's
+    # script and policies (K2_LAKE_INIT_RELEASE) and reads its plan (K2_STORAGE_PLAN), not the pointer's,
+    # which still names the previous release, or nothing yet.
     for s in p.oneshots:  # a fresh container each time, so an old exit is never read as this run's
         run(*compose(ctx, p.target, "up", "-d", "--no-deps", "--no-build", "--pull", "never", "--force-recreate", s),
-            env={**compose_env(ctx), "K2_STORAGE_PLAN": plan})
+            env={**compose_env(ctx), "K2_STORAGE_PLAN": plan, "K2_LAKE_INIT_RELEASE": p.target.id})
         out.append(f"one-shot {s} exited 0 in {wait_service(ctx, s, True):.1f} s")
     out += tools(ctx, p.target, "namespaces", CATALOG_URI, plan).splitlines() or ["every namespace exists"]
     return out + compare_ddl(ctx, p) + create_tables(ctx, p, late=False)

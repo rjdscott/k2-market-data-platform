@@ -462,6 +462,8 @@ CODE = {
     "docker/airflow/dags/oneshot.py": b"def run() -> None: ...\n",
     "docker/lake/connector.py": b"import spark_conf\n",
     "docker/lake/spark_conf.py": b"CONF = {}\n",
+    "docker/lake/init-lake.sh": b"#!/bin/sh\n",  # lake-init runs the release's own (review R6)
+    "docker/lake/minio/policies/spark.json": b"{}\n",  # and grants these
     "docker/prometheus/rules/platform-alerts.yml": b"groups: []\n",
     "domains/sensor-net/parsers/station_csv.py": b"def parse(data: bytes) -> list[dict]:\n    return []\n",
     "platform/runs/k2runs.py": b"def record() -> None: ...\n",
@@ -472,8 +474,8 @@ NOT_CODE = {
     "docker/airflow/dags/__pycache__/factory.cpython-312.pyc": b"\0",
     "docker/airflow/dags/conftest.py": b"",
     "docker/lake/README.md": b"# lake\n",
-    "docker/lake/init-lake.sh": b"#!/bin/sh\n",
     "docker/lake/test_connector.py": b"",
+    "docker/lake/tests/policy.json": b"{}\n",
     "docker/lake/tests/fixture.py": b"",
     "docker/prometheus/rules/tests/platform-alerts_test.yml": b"tests: []\n",
     "domains/sensor-net/parsers/tests/test_station_csv.py": b"",
@@ -517,6 +519,8 @@ def test_every_run_code_root_is_a_document_root_and_classified() -> None:
     ("docker/airflow/dags/factory.py", Needs((), False, True, ())),  # the factory decides each DAG's tasks: drain
     ("docker/airflow/dags/oneshot.py", Needs((), False, True, ())),
     ("docker/lake/connector.py", NONE),  # read at each Spark task's start
+    ("docker/lake/init-lake.sh", NONE),  # read at lake-init's next run, from the release deploy names
+    ("docker/lake/minio/policies/spark.json", NONE),
     ("docker/prometheus/rules/platform-alerts.yml", NONE),  # deploy SIGHUPs Prometheus at every swap
     ("domains/sensor-net/parsers/station_csv.py", NONE),
     ("platform/runs/k2runs.py", NONE),

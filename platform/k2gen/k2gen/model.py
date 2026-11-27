@@ -69,7 +69,9 @@ V2_PRODUCT_FILE = "product.odps.yaml"  # its directory is a v2 product; the old 
 # through a pointer, at `/k2/releases/pointers/<pointer>/platform/<root>`:
 #   docker/airflow/dags/      airflow: the DAG folder; the factory decides each DAG's tasks, so any
 #                             change drains (the DAG processor rereads the folder every 30 s)
-#   docker/lake/              spark: the scripts each Spark task runs, read at the task's start
+#   docker/lake/              spark: the scripts each Spark task runs, read at the task's start; and
+#                             lake-init's init-lake.sh with the MinIO policies it grants (minio/policies/
+#                             *.json), run from the release deploy names (review R6), never the checkout
 #   docker/prometheus/rules/  prometheus: deploy SIGHUPs Prometheus at every swap
 #   domains/                  the parsers, read by the fetch one-shot at its run
 #   platform/runs/            k2runs, the run-records client, read by `record` and the dbt wrapper
@@ -77,7 +79,7 @@ V2_PRODUCT_FILE = "product.odps.yaml"  # its directory is a v2 product; the old 
 PLATFORM_DIR = "platform"
 PLATFORM_CODE: Mapping[str, tuple[tuple[str, ...], str | None]] = {
     "docker/airflow/dags/": ((".py",), "dagShapeChange"),
-    "docker/lake/": ((".py",), None),
+    "docker/lake/": ((".py", ".sh", ".json"), None),
     "docker/prometheus/rules/": ((".yml",), None),
     "domains/": ((".py",), None),
     "platform/runs/": ((".py",), None),

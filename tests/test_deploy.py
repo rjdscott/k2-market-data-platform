@@ -159,7 +159,7 @@ if rest[0] == "up":
     oneshot = svc in S.get("oneshots", [])
     S["containers"].append({"id": uuid.uuid4().hex, "service": svc, "created": f"{time.time_ns()}",
                             "image": S["images"][pinned[svc]["image"]], "status": "exited" if oneshot else "running"})
-    save(); log("up", svc, pinned[svc]["image"]); sys.exit(0)
+    save(); log("up", svc, pinned[svc]["image"], E.get("K2_LAKE_INIT_RELEASE", "")); sys.exit(0)
 sys.exit(f"fake docker: no answer for {A}")
 '''
 
@@ -221,9 +221,11 @@ sys.exit(f"fake docker: no answer for {A}")
             return [json.loads(x)[1:] for x in self.log.read_text().splitlines()] if self.log.exists() else []
 
         def release(self, compose: dict[str, Any] | None = None, over: dict[str, bytes] | None = None,
-                    images: dict[str, str] | None = None) -> Any:
-            """A sealed release of the good set with `over` laid on it, compiled against the newest one."""
+                    images: dict[str, str] | None = None, lake_init: bool = True) -> Any:
+            """A sealed release of the good set with `over` laid on it, compiled against the newest one;
+            lake_init: it carries docker/lake/init-lake.sh, as every release since review R6 does."""
             self.n += 1
+            over = ({"docker/lake/init-lake.sh": b"#!/bin/bash\n"} if lake_init else {}) | (over or {})
             set_dir = write_set(self.tmp / f"set{self.n}", compose or compose_doc(), over)
             refs = {"trino": TRINO, "standin": A, "lakekeeper": LK, "lake-init": A, "tools": TOOLS} | (images or {})
             (self.tmp / f"images{self.n}.json").write_text(json.dumps(refs))
@@ -915,6 +917,26 @@ sys.exit(f"fake docker: no answer for {A}")
             (world.secrets / n).parent.mkdir(parents=True, exist_ok=True)
             (world.secrets / n).write_text("fixture\n")
         assert deploy.required_secrets(world.ctx, p) == []
+
+    # --- review R6: lake-init runs the deployed release's own script and policies --------
+
+    def test_lake_init_runs_the_target_release_script_and_an_older_release_skips_it(world: World) -> None:
+        lake = yaml.safe_load((ROOT / "docker-compose.yml").read_text())["services"]["lake-init"]
+        assert not any(str(v).startswith("./") for v in lake["volumes"]), "never the checkout's docker/lake"
+        entry = lake["entrypoint"][-1]
+        assert entry == f"/k2/releases/${{K2_LAKE_INIT_RELEASE:-pointers/trino}}/{deploy.LAKE_INIT}", entry
+        world.live(world.release())
+        r1 = world.release(images={"lake-init": B})  # lake-init's image moves: it runs, from r1's own copy
+        assert world.deploy(r1) == 0
+        assert ["up", "lake-init", B, r1.id] in [e[:4] for e in world.timeline()]
+        assert (world.root / entry.replace("${K2_LAKE_INIT_RELEASE:-pointers/trino}", r1.id).removeprefix("/k2/releases/")).is_file()
+        doc = compose_doc(standin="alpine:3")
+        doc["services"]["lake-init"]["environment"] = {"MINIO_ROOT_USER": "${MINIO_ROOT_USER}"}  # its old shape
+        old = world.release(compose=doc, images={"standin": B, "lake-init": B}, lake_init=False)
+        p = deploy.make_plan(world.ctx, old, [r1])
+        assert "lake-init" not in p.oneshots and any(x.startswith(f"lake-init: {old.id} carries no {deploy.LAKE_INIT}") for x in p.skipped)
+        world.log.unlink()
+        assert world.deploy(old) == 0 and world.ups() == ["standin"]
 
     # --- the drain (W1-6, ADR-058) ------------------------------------------------------
 
