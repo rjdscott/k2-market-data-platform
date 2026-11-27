@@ -6,7 +6,7 @@
 # Idempotent: every step treats "already exists" as success, so a re-run on a
 # live stack is a no-op.
 #
-# Runs in the `minio/minio` image — the only image already in this stack that
+# Runs in the MinIO image (the project's mirror, docker-compose.yml): the only image already in this stack that
 # ships BOTH `mc` (bucket create) and `curl` (Lakekeeper REST). Using it costs
 # no extra pull; a curl-only image would need a second service to make the
 # bucket, and `minio/mc` has no curl.

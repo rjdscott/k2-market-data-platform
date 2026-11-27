@@ -104,8 +104,9 @@ pipeline runs yet; the run spine (phase 002) brings the first.
 - The Docker socket is inside the catalog's trust boundary: the Airflow scheduler and cAdvisor
   hold it, and a network fence does not stop a service that can start containers (ADR-059,
   Outcome of 2026-11-27).
-- The pinned MinIO image is no longer published by its vendor; the stack runs a mirrored copy
-  pinned by digest. <!-- VERIFY: the mirror reference, once pushed -->
+- The pinned MinIO image is no longer published by its vendor; the stack runs an unmodified
+  mirror, `ghcr.io/rjdscott/minio`, pinned by digest (NOTICE). Replacing MinIO is a decision
+  for the hardening sprint.
 
 ## [3.0.0-alpha.2] - 2026-11-26
 

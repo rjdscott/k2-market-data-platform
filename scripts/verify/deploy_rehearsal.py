@@ -105,7 +105,7 @@ services:
     restart: unless-stopped
     <<: *small
   minio:
-    image: minio/minio:RELEASE.2025-09-07T16-13-09Z
+    image: ghcr.io/rjdscott/minio:RELEASE.2025-09-07T16-13-09Z@sha256:a1a8bd4ac40ad7881a245bab97323e18f971e4d4cba2c2007ec1bedd21cbaba2
     command: ["server", "/data"]
     environment: {MINIO_ROOT_USER: "${MINIO_ROOT_USER}", MINIO_ROOT_PASSWORD: "${MINIO_ROOT_PASSWORD}"}
     networks: [k2-net, k2-catalog]
