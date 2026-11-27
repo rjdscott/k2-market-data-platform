@@ -232,6 +232,36 @@ def _fold(tokens: list[_J], code: str) -> list[str | _Ph] | None:
     return parts
 
 
+def model_reads(text: str) -> tuple[list[tuple[str, str]], list[str], list[str]]:
+    """What a model's Jinja reads, for checks.access (A1 of the 2026-11-28 review): each
+    `k2_input('<fence>', '<table>')`, each `ref()` by its last argument, and each expression that
+    may render a relation this module cannot name: a `{{ }}` that does not fold (a variable, a
+    macro, `api.Relation.create`), or a `k2_input` or `ref` whose arguments are not literals. A
+    string holding Jinja (a hook's SQL) is read the same way, since dbt renders it."""
+    inputs: list[tuple[str, str]] = []
+    refs: list[str] = []
+    opaque: list[str] = []
+    for b in _blocks(text):
+        if b.kind == "{#":
+            continue
+        tokens = _jtokens(b.code)
+        for t in tokens:
+            if t.kind == "str" and ("{{" in t.value or "{%" in t.value):
+                i, r, o = model_reads(t.value)
+                inputs, refs, opaque = inputs + i, refs + r, opaque + o
+        for name, args in _calls(tokens, ("k2_input", "ref")):
+            values = _positional(args)
+            if name == "k2_input" and len(args) == 2 and len(values) == 2 and None not in values:
+                inputs.append((str(values[0]), str(values[1])))
+            elif name == "ref" and values and None not in values:
+                refs.append(str(values[-1]))
+            else:
+                opaque.append(b.code)
+        if b.kind == "{{" and tokens[:2] != [_J("name", "config"), _J("op", "(")] and _fold(tokens, b.code) is None:
+            opaque.append(b.code)
+    return inputs, refs, opaque
+
+
 # --- The product a file belongs to ---------------------------------------------------------
 
 @dataclass(frozen=True)

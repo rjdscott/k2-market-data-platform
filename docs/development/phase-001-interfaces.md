@@ -525,3 +525,14 @@ offering no role still blocks every role. Why: `silver_trade` of `kraken-trades`
 `delayed_reader` (plan 004) over `security-master`, reference data with no event time to delay,
 which offers `full_reader` alone (ADR-056 part 8: an enriched product is never less restricted
 than its inputs).
+
+## The access review's fixes, 2026-11-28 (phases 004 and 005)
+
+2026-11-28, what an output derives from (finding A1): the inputs every `access.inherit-*` rule runs
+over are the output port's `inputContracts`, as before, plus every `k2_input` target its model
+reads, a sibling's through the product's own `ref()` chain included
+(`k2gen.checks.sql.model_reads`). A model expression the lint cannot name (a variable, a macro,
+`api.Relation.create`, a `k2_input` with arguments that are not literals) stands for every input
+port of the product, all that Trino lets its builder read. An input read and not declared for that
+output is `access.input-undeclared`, on the product file, naming the model, the input and the
+chain; one declared and never read stays no finding.

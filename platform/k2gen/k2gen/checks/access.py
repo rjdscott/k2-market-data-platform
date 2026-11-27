@@ -34,7 +34,7 @@ declared principal falls under a platform pattern by accident: `dbt_<x>` and `pu
 **Inheritance: "at least as strict".** For an output O, a role R that O offers, and each input I
 that O derives from (the contracts its output port lists in `inputContracts`, a sibling table of
 the product replaced by what that sibling derives from; every input port of the product when it
-lists none), O's policy for R is at least as strict as I's when:
+lists none), and each input O's model reads, O's policy for R is at least as strict as I's when:
 
 - role: I offers R, or, where it does not, a role that roles.yaml declares R `within` (a role whose
   holders see no less: `delayed_reader` within `full_reader`), and then each such role's policy on I
@@ -49,6 +49,13 @@ lists none), O's policy for R is at least as strict as I's when:
   on O; a masked column may also reach O through no column at all (`access.inherit-mask`);
 - row scope: if I scopes R to values V on column c, O scopes R to a subset of V, on a column
   declared to derive from I.c (`access.inherit-row-scope`).
+
+**What a model reads** (A1 of the 2026-11-28 review: the port's list is the author's claim, and
+Trino lets a builder read every input port of its product): each `k2_input` target of O's model,
+and of each sibling model it reaches through `ref()`, read by `sql.model_reads`; an expression that
+module cannot name stands for every input port. One the port does not declare is
+`access.input-undeclared`, on the product file, naming the model, the input and the chain. One
+declared and never read is no finding: it only adds a floor.
 
 A role I offers with no policy constrains nothing. **Derivation** is the column's ODCS
 `transformSourceObjects`, each entry `<contract id>.<column>` of an input. SQL does not tell it
@@ -91,10 +98,12 @@ from __future__ import annotations
 
 import re
 from collections import defaultdict
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
 from k2gen import model
+from k2gen.checks import sql
 from k2gen.model import DocumentSet, Finding
 
 _KINDS = {"roles", "principals", "grants", "contract", "product", "expectations"}
@@ -173,7 +182,8 @@ def check(docs: DocumentSet, previous: DocumentSet | None) -> list[Finding]:
         elif product and model.document_kind(path) == "grants":
             product.grants = list(doc.get("grants", []))
     return [*_declarations(roles, principals, products), *_grants(roles, principals, products),
-            *_deprecated(products, previous), *_inheritance(roles, products), *_coverage(principals, products, rows)]
+            *_deprecated(products, previous), *_inheritance(roles, products, docs.documents),
+            *_coverage(principals, products, rows)]
 
 
 def _declarations(roles: dict[str, Any], principals: list[str], products: dict[str, _Product]) -> list[Finding]:
@@ -293,21 +303,63 @@ def _inputs(product: _Product, contract: dict[str, Any], seen: frozenset[str] = 
     return [p["contractId"] for p in product.doc.get("inputPorts", [])]
 
 
+def _reads(product: _Product, contract: dict[str, Any], documents: Mapping[str, bytes], fences: dict[str, _Product],
+           seen: frozenset[str] = frozenset()) -> dict[str, str]:
+    """Each input `contract`'s model reads, to the chain that reaches it: every k2_input target, a
+    sibling's through the product's own ref() chain included. An expression k2gen cannot read
+    (sql.model_reads) stands for every input port of the product, all that Trino lets its builder
+    read."""
+    here = f"models/{contract['name']}.sql"
+    text = documents.get(f"{product.path}/{here}")
+    if _build(contract) != "dbt" or text is None:
+        return {}
+    inputs, refs, opaque = sql.model_reads(text.decode("utf-8", errors="replace"))
+    own = {t["name"]: t for t in product.tables.values()}
+    seen = seen | {contract["name"]}
+    out: dict[str, str] = {}
+
+    def follow(table: str, how: str) -> None:
+        if table in own and table not in seen:
+            for cid, chain in _reads(product, own[table], documents, fences, seen).items():
+                out.setdefault(cid, f"{here}: {how} -> {chain}")
+
+    for fence, table in inputs:
+        p = fences.get(fence)
+        if p is product:
+            follow(table, f"k2_input('{fence}', '{table}')")
+        else:
+            out.setdefault(model.contract_id(p.domain, p.name, table) if p else f"{fence}/{table}", f"{here}: k2_input('{fence}', '{table}')")
+    for name in refs:  # a seed, or another product's model (sql.foreign-read), has no model here to follow
+        follow(name.removeprefix(model.fence(product.name) + "__"), f"ref('{name}')")
+    for code in opaque:
+        for port in product.doc.get("inputPorts", []):
+            out.setdefault(port["contractId"], f"{here}: {{{{ {code} }}}}, which k2gen cannot read, so any input port")
+    return out
+
+
 def _derives(column: dict[str, Any]) -> set[str] | None:
     sources = column.get("transformSourceObjects")
     return None if sources is None else set(sources)
 
 
-def _inheritance(roles: dict[str, Any], products: dict[str, _Product]) -> list[Finding]:
+def _inheritance(roles: dict[str, Any], products: dict[str, _Product], documents: Mapping[str, bytes]) -> list[Finding]:
     contracts = {t["id"]: t for p in products.values() for t in p.tables.values()}
+    fences = {model.fence(p.name): p for p in products.values()}
     out = []
     for product in products.values():
         for path, o in product.tables.items():
             columns = {c["name"]: c for c in _columns(o)}
+            declared, reads = _inputs(product, o), _reads(product, o, documents, fences)
+            for input_id, chain in reads.items():
+                if input_id not in declared:
+                    out.append(_err("input-undeclared", f"{product.path}/{model.V2_PRODUCT_FILE}",
+                                    f"{o['id']}'s model reads {input_id} ({chain}), which its output port does not declare "
+                                    f"(inputs: {', '.join(declared) or 'none'}): every inherit-* rule runs over what a model "
+                                    f"reads, so list it in the port's inputContracts, or stop reading it"))
             for role in _offered(o):
                 mine = _policies(o).get(role, {})
                 within = list(roles.get(role, {}).get("within", []))  # ponytail: one declared pair, no chain followed
-                for input_id in _inputs(product, o):
+                for input_id in dict.fromkeys([*declared, *reads]):
                     i = contracts.get(input_id)
                     if i is None:  # an unknown input is the docs check's
                         continue
