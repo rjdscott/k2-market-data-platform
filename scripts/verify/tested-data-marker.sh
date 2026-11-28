@@ -158,6 +158,7 @@ else:
         t0 = time.monotonic()
         if first:
             trino.ok(pub, first)
+            time.sleep(2.0)  # the wrapper's settle (k2_dbt.VIEW_SETTLE_S): a poll that read the old view loads its base before the tag moves
         st, doc = cd.call("POST", f"{cat.base}/transactions/commit", {"table-changes": [{
             "identifier": {"namespace": [model.base_namespace(p.name)], "name": t.name},
             "requirements": [{"type": "assert-ref-snapshot-id", "ref": "main", "snapshot-id": tested},

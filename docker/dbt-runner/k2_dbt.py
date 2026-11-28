@@ -497,6 +497,9 @@ def dbt_argv(ctx: Ctx, inputs: dict[str, int | None]) -> list[str]:
             "--target-path", str(WORK / "target"), "--log-path", str(WORK / "logs")]
 
 
+VIEW_SETTLE_S = 2.0  # between narrowing a view and moving its tag (publish())
+
+
 def client_tag() -> str:
     """This run's own Trino client tag, which every statement of its dbt build carries (the
     profile's client_tags). Made after stop_orphans and fresh per run, a retry of the same run id
@@ -713,6 +716,12 @@ def publish(ctx: Ctx, io: Any, before: dict[str, dict[str, Any]], invocation: st
     for narrow, _ in steps.values():
         if narrow:
             io.sql("publisher", narrow)
+    if any(narrow for narrow, _ in steps.values()):
+        # A reader's query reads the view, then its base, at two instants: one that read the view
+        # before the narrow and its base after the commit fails (INVALID_VIEW; an error, never a
+        # wrong row). The catalog has no commit across a view and a table, so the commit waits
+        # until such a query has loaded its base (ADR-061 Outcome, 2026-11-28).
+        time.sleep(VIEW_SETTLE_S)
     changes = [tag_change(o, tested[o.relation], before[o.relation]["tag"]) for o in ctx.outputs]
     try:
         status = io.commit(ctx.warehouse, changes)

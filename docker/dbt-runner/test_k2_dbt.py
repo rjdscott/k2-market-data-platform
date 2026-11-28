@@ -22,6 +22,8 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path[:0] = [str(Path(__file__).parent), str(ROOT / "platform" / "k2gen"), str(ROOT / "scripts" / "verify"),
                 str(ROOT / "platform" / "runs")]
 import k2_dbt as w  # noqa: E402
+
+w.VIEW_SETTLE_S = 0  # no test waits out the settle; one asserts its place
 import k2runs  # noqa: E402
 from k2gen import model as k2  # noqa: E402
 from k2gen.emit import lake  # noqa: E402
@@ -539,7 +541,7 @@ def test_a_pass_moves_every_outputs_tag_in_one_compare_and_set_commit():
     assert fake.violations == []
 
 
-def test_a_schema_change_narrows_before_the_tag_and_widens_after_it():
+def test_a_schema_change_narrows_then_settles_before_the_tag_and_widens_after_it(monkeypatch):
     fake = Fake()
     fake.seed()
     fake.build[OUT] = V2
@@ -548,8 +550,10 @@ def test_a_schema_change_narrows_before_the_tag_and_widens_after_it():
     real_sql, real_commit = fake.sql, fake.commit
     fake.sql = lambda role, s: (order.append(re.findall(r'SELECT (.+?) FROM', s)[0]), real_sql(role, s))[1]
     fake.commit = lambda wh, ch: (order.append("commit"), real_commit(wh, ch))[1]
+    monkeypatch.setattr(w, "VIEW_SETTLE_S", 0.25)
+    monkeypatch.setattr(w.time, "sleep", lambda s: order.append(f"settle {s}"))
     assert w.run(ctx(), fake)[0] == 0
-    assert order == ["dbt", '"id", "region"', "commit", '"id", "region", "amount"']
+    assert order == ["dbt", '"id", "region"', "settle 0.25", "commit", '"id", "region", "amount"']
     assert fake.views[VIEW.relation] == V2 and fake.violations == []
 
 
