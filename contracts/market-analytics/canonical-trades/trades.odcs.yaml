@@ -105,8 +105,9 @@ schema:
           The build order of the row: each build numbers the rows it writes, new or with a
           changed flag, after the highest number already here, in key order. A derived product
           (candles) reads the rows past the highest number it has counted, a number rather than a
-          clock (I-1's rule for a watermark). A full refresh numbers from 1 again, so the products
-          built on this one are rebuilt after it.
+          clock (I-1's rule for a watermark). A full refresh numbers every row after the highest
+          number the table held before it, so a product built on this one finds every row past
+          its watermark and needs no rebuild of its own.
         transformSourceObjects:
           - market-capture.kraken-trades.silver_trade.kafka_partition
           - market-capture.kraken-trades.silver_trade.kafka_offset
