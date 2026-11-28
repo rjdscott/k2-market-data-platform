@@ -1535,3 +1535,12 @@ sys.exit(f"fake docker: no answer for {A}")
         monkeypatch.setattr(deploy, "drift", lambda ctx, rel: stuck)
         lines, wrong = deploy.s20_checks(None, None)  # type: ignore[arg-type]
         assert any("drift check exit 1" in w for w in wrong) and any("waited 20 s" in x for x in lines), (lines, wrong)
+
+    def test_a_failed_drift_check_names_its_differences_not_the_last_lines_of_its_output(monkeypatch: pytest.MonkeyPatch) -> None:
+        """The deploy rehearsal, 2026-11-28: with this branch's 19 outputs the drift check prints a SKIP line
+        per tag, and verify's failure quoted the output's last 12 lines, every one a SKIP, never the DRIFT."""
+        plant = "DRIFT table governance.access_canary__base.planted: in a namespace of the release, and the release declares no such table"
+        skips = "\n".join(f"SKIP tag k2.p{i}__base.t audited = {i}: no run-records reader given" for i in range(19))
+        monkeypatch.setattr(deploy, "drift", lambda ctx, rel: {"exit": 1, "doc": {"differences": [plant], "pending": ["p"]}, "text": skips})
+        _, wrong = deploy.s20_checks(None, None)  # type: ignore[arg-type]
+        assert len(wrong) == 1 and plant in wrong[0], wrong

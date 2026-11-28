@@ -1,4 +1,4 @@
-.PHONY: chaos help up down logs ps health backup backup-install gates test test-python test-rust test-airflow record-fixtures test-notebooks test-legacy-kotlin dev-up check-docs check-alerts build-capture lint lake-verify test-clickhouse test-trino test-dbt parity-ohlcv parity-bars test-k2gen screenshots
+.PHONY: chaos help up down logs ps health backup backup-install gates test test-python test-rust test-airflow record-fixtures test-notebooks test-legacy-kotlin dev-up check-docs check-alerts check-release-alerts build-capture lint lake-verify test-clickhouse test-trino test-dbt parity-ohlcv parity-bars test-k2gen screenshots
 
 # Stamped into the capture binary's k2_capture_build_info gauge. `git describe`
 # and not `rev-parse`: an image built from a dirty tree must not claim to be the
@@ -45,7 +45,7 @@ logs:  ## Tail all service logs
 ps:  ## Show service status
 	docker compose ps
 
-test: test-python test-rust test-clickhouse test-trino test-dbt test-notebooks test-k2gen test-airflow test-connectors test-api test-platform  ## Run all unit tests
+test: test-python test-rust test-clickhouse test-trino test-dbt test-notebooks test-k2gen test-airflow test-connectors test-api test-platform check-release-alerts  ## Run all unit tests
 
 # One recipe line per gate, not prerequisites: recipe lines run in order and
 # stop at the first failure even under `make -j`, where prerequisites would not
@@ -147,6 +147,16 @@ check-alerts:  ## promtool: syntax-check every rule file and run the alert unit 
 	  -c 'promtool check rules /p/rules/*.yml'
 	docker run --rm -v "$(CURDIR)/docker/prometheus":/p --entrypoint sh prom/prometheus:v3.2.0 \
 	  -c 'promtool test rules /p/tests/*.test.yml /p/rules/tests/*_test.yml'
+
+# The release's own rules (k2gen's emit/alerts.py), not a file of the checkout: compiled from this
+# tree by ci-validate.sh under $HOME (Docker Desktop shares nothing else), or RELEASE=<dir> as given.
+check-release-alerts:  ## [RELEASE=<dir>] promtool: check a compiled release's product-alerts.yml and run its unit test (platform/k2gen/tests/promtool)
+	@d=$$(mktemp -d "$$HOME/k2-promtool.XXXXXX"); trap 'chmod -R u+w "$$d"; rm -rf "$$d"' EXIT; \
+	rel=$${RELEASE:-$$(bash scripts/verify/ci-validate.sh "$$d" 2>/dev/null | tail -1)}; \
+	[ -f "$$rel/compiled/prometheus/product-alerts.yml" ] || { echo "check-release-alerts: no compiled/prometheus/product-alerts.yml under '$$rel'" >&2; exit 1; }; \
+	docker run --rm --entrypoint sh -v "$$rel/compiled/prometheus/product-alerts.yml:/p/product-alerts.yml:ro" \
+	  -v "$(CURDIR)/platform/k2gen/tests/promtool/product-alerts_test.yml:/p/product-alerts_test.yml:ro" prom/prometheus:v3.2.0 \
+	  -c 'promtool check rules /p/product-alerts.yml && promtool test rules /p/product-alerts_test.yml'
 
 # platform/k2gen is checked with the ruff and mypy pinned in its own lock, as CI's contracts job does.
 lint:  ## Ruff over docker/lake, the Airflow image tests, the gate scripts and other scripts/ Python, and the tests; ruff and mypy (strict) over platform/k2gen

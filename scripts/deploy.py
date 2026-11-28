@@ -1563,8 +1563,9 @@ def s20_checks(ctx: Ctx, target: Release) -> tuple[list[str], list[str]]:
                      f"pending {pending or 'none'}, {len(d['doc'].get('skipped', []))} skipped, "
                      f"{len(d['doc'].get('left', []))} left by a release since)")
         lines += [str(x) for x in d["doc"].get("left", [])]
-    else:
-        wrong.append(f"catalog drift check exit {d['exit']}: {d['text']}")
+    else:  # its DRIFT lines, not the output's tail: a SKIP line per tag can push every one out of it
+        found = d["doc"].get("differences") or []
+        wrong.append(f"catalog drift check exit {d['exit']}: {' | '.join(map(str, found)) if found else d['text']}")
     if pending:
         lines.append(f"SKIP access-verify LIVE=1: not yet published, so no live row can read it: {', '.join(pending)}; "
                      "every row ran on a throwaway lake at release time (preflight); phase 002 publishes them")
