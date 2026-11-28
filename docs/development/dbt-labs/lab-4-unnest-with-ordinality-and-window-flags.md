@@ -241,20 +241,31 @@ The unit tests in `unit_tests.yml` run the model on invented frames, each input 
 - `silver_trade_resolves_through_the_1970_version`: a trade before the symbol's first fetch still
   resolves, because the security master's first version opens at 1970-01-01 (lab 5).
 
-Running them needs Trino, so it is **run at a merge point**:
+Running them needs Trino, which a throwaway lake gives (Docker, a few minutes):
 
 ```bash
 make test-dbt SELECTOR=kraken_trades
 ```
 
-`SELECTOR=kraken_trades` builds this product and the products its inputs name, transitively
-(`security_master`, and what that reads), each with its tests, on a throwaway lake. The lines it
-prints are those of lab 2, step 5: a row per test as `<table> run_id=<run id>: <unique_id> |
-<status> | <failures> | <tested> | <release id> | <invocation id>`, ending `dbt-test: PASS`. The
-rows for this lab are the ones whose `unique_id` contains `silver_trade_unnests_each_frame_with_ordinals`
-and `rejected_keeps_each_frame_it_cannot_type_with_its_reason`, status `pass`. The run's exact
-output is not pasted here because this lab was written without a run: read it at the merge point
-and compare it with this shape.
+`SELECTOR=kraken_trades` builds this product and the products its inputs name, transitively, each
+with its tests, on a throwaway lake: it prints `dbt-test: building in order: currency_master
+kraken_instruments security_master kraken_trades`. Each product then prints a row per test, as
+lab 2, step 5 showed: `<table> run_id=<run id>: <unique_id> | <status> | <failures> | <tested> |
+<release id> | <invocation id>`. A run on 2026-11-28 printed these rows among kraken_trades' (the
+ids are that run's own; the data is the synthetic fixtures'), and its last three lines:
+
+```text
+  "market_capture_build"."kraken_trades__base"."dq_test_results" run_id=dbt-test/dbt-test-2121393-kraken_trades: unit_test.k2.kraken_trades__silver_trade.silver_trade_resolves_through_the_1970_version | pass | 0 | market_capture_build.kraken_trades__base.silver_trade | v0.0.0-ci.1-f8bf65111acb | 0a233acb-df69-4026-9949-3c8e94394026
+  "market_capture_build"."kraken_trades__base"."dq_test_results" run_id=dbt-test/dbt-test-2121393-kraken_trades: unit_test.k2.kraken_trades__silver_trade.silver_trade_unnests_each_frame_with_ordinals | pass | 0 | market_capture_build.kraken_trades__base.silver_trade | v0.0.0-ci.1-f8bf65111acb | 0a233acb-df69-4026-9949-3c8e94394026
+  "market_capture_build"."kraken_trades__base"."dq_test_results" run_id=dbt-test/dbt-test-2121393-kraken_trades: unit_test.k2.kraken_trades__silver_trade_rejected.rejected_keeps_each_frame_it_cannot_type_with_its_reason | pass | 0 | market_capture_build.kraken_trades__base.silver_trade_rejected | v0.0.0-ci.1-f8bf65111acb | 0a233acb-df69-4026-9949-3c8e94394026
+ok results: 49 row(s) in "market_capture_build"."kraken_trades__base"."dq_test_results" under run_id dbt-test/dbt-test-2121393-kraken_trades, one per test, statuses as dbt reported
+ok build: 4 compiled product(s) of v0.0.0-ci.1-f8bf65111acb built with their tests on a throwaway lake, every result recorded
+dbt-test: PASS
+```
+
+The two tests above and the rejected table's (step 5) each read `pass` with no failing row; the
+`results` line is the check that the results table holds one row per test dbt ran, and `4
+compiled product(s)` are kraken_trades and the three it reads through.
 
 ## Exercise
 
