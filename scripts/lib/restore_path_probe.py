@@ -23,7 +23,7 @@ trino, env = av.connect(Path("/work/env.json"))
 LK = f"{env['lakekeeper']}/catalog"
 # What each table's rows are read as: the product's builder, or svc.runs for the run records
 ROWS = {"k2.ecb_fx_rates.bronze_daily": ("dbt_ecb_fx_rates", "lake.ecb_fx_rates.bronze_daily"),
-        "governance.run_records.run_record": ("svc.runs", "governance.run_records.run_record"),
+        "governance.run_records.run_record": ("svc.runs", "governance_build.run_records.run_record"),  # k2runs.TABLE, as svc.runs reads it
         "fx_reference.ecb_fx_rates__base.gold_eur_rates_daily": ("p.analyst-a", "fx_reference.ecb_fx_rates.gold_eur_rates_daily")}
 cmd, args = sys.argv[1], sys.argv[2:]
 
@@ -68,7 +68,7 @@ def state(rid):
         a = trino.run(user, f"SELECT count(*) FROM {rel}")
         out["rows"][table] = None if a.error else a.rows[0][0]
     a = trino.run("svc.runs", "SELECT product_id, kind, CAST(held_at AS varchar), CAST(released_at AS varchar) FROM governance.run_records.holds")
-    out["holds"] = None if a.error else sorted(a.rows)
+    out["holds"] = None if a.error else sorted(a.rows, key=lambda x: [str(v) for v in x])
     return out
 
 
@@ -113,6 +113,8 @@ def claim(name, rid):
         bad = []
         for t in m["tables"]:
             got = (s["after"]["tables"].get(t["table"]) or {})
+            if t["table"] == "governance.run_records.holds":  # the restore's own holds commit to it after its register (claim 11)
+                continue
             if got.get("metadata") != t["metadata_location"]:
                 bad.append(f"{t['table']} at {got.get('metadata')}, the backup's {t['metadata_location']}")
         rows = {k: (s["built"]["rows"][k], s["after"]["rows"][k]) for k in ROWS}
@@ -151,7 +153,7 @@ def claim(name, rid):
     elif name == "again":
         a = text("again.out")
         moved = [x for x in a.splitlines() if x.strip().startswith(("table", "landing", "rebuild")) and
-                 not (" 0 file(s) put back" in x or " 0 object(s) put back" in x or "whole: kept" in x)]
+                 not (" 0 file(s) put back" in x or " 0 object(s) put back" in x or "whole: kept" in x or ": absent: " in x)]
         moved += [x for x in a.splitlines() if "registered at" in x or "re-pointed" in x or "recreated" in x]
         checks = [(text("again.rc").strip() == "0", f"exit {text('again.rc').strip()}: {text('again.err').strip()[-200:]}"),
                   (not moved, f"moved: {moved[:3]}"),

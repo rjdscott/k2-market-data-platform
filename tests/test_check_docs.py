@@ -453,3 +453,9 @@ def test_gate_h_lets_an_old_dash_through_once_and_never_a_new_one(tmp_path):
     verdict, *flagged = gate_h(repo, K2_DIFF_BASE=before).splitlines()
     assert verdict.startswith("FAIL: (h) em-dash")
     assert sorted(x.split(": ")[0] for x in flagged) == ["both.md:1", "new.md:1", "target.md:1", "twice.md:2"]
+
+
+def test_a_character_cut_by_the_head_is_text_and_a_bad_byte_is_not():
+    # docker-compose.yml's first 64 KiB once ended inside a three-byte character, and read as binary
+    assert not check_docs.binary(b"# a rule \xe2\x94") and not check_docs.binary("━ text".encode())
+    assert check_docs.binary(b"text \xe2\x28 more") and check_docs.binary(b"nul \x00 here")

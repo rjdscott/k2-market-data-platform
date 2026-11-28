@@ -249,7 +249,7 @@ def storage_problems(doc: dict) -> list[str]:
 
 
 def test_every_engine_holds_its_own_storage_pair_and_only_lake_init_the_root():
-    assert ENGINES == ["BACKUP", "MAINTENANCE", "SPARK", "TOOLS", "TRINO"]
+    assert ENGINES == ["BACKUP", "MAINTENANCE", "RESTORE", "SPARK", "TOOLS", "TRINO"]
     assert storage_problems(COMPOSE) == []
     for n in ("fetch", "dbt-runner", "k2-api", "tools", "prometheus", "grafana", "airflow-scheduler", "airflow-dag-processor",
               "airflow-api-server", "airflow-migrate"):
