@@ -6,9 +6,11 @@
 # moved past the resume point by the pinned Redpanda's delete-records command (docker-compose.yml's
 # redpanda v25.3.4: `rpk topic trim-prefix <topic> -p <partition> -o <offset> --no-confirm`). Claims 1
 # to 3 are kafka-path.sh group b's 1 to 3 (its fixture product there, kraken-trades here). Claim 4 is
-# the record task's half: with no Airflow here, the release's own factory.py, imported in compose's
-# Airflow image as the scheduler parses it, builds the offset_gap row from load's result line (the
-# XCom `result` SparkTask pushes) under the manual run's conf {"acceptDataLoss": true, "reason"},
+# the record task's half: with no Airflow here, the release's own factory.py, imported in the Airflow
+# image built from this tree (docker/airflow/Dockerfile, as make test-airflow builds it; compose's
+# k2-airflow:3.3.2 tag is whatever a host last built under it) as the scheduler parses it, builds
+# the offset_gap row from load's result line (the XCom `result` SparkTask pushes) under the manual
+# run's conf {"acceptDataLoss": true, "reason"},
 # checked by its own data_loss_reason; the release's k2runs writes it as svc.runs, and
 # k2runs.offset_gaps, the product page's reader, reads it back. Airflow's XCom between the two tasks
 # is docker/airflow/tests/test_factory.py's to prove, and the live stack's.
@@ -33,8 +35,9 @@ set -uo pipefail
 # shellcheck source=scripts/lib/run-path-lib.sh
 . "$(dirname "$0")/../lib/run-path-lib.sh"
 rp_start kafka-below-log-start "${1:-}" 4
-AIRFLOW_IMAGE=$(grep -oE 'image: *k2-airflow:[^ ]*' docker-compose.yml | head -1 | sed 's/image: *//')
-docker image inspect "$AIRFLOW_IMAGE" > /dev/null 2>&1 || die "no image $AIRFLOW_IMAGE (compose's Airflow image) on this host"
+IMAGE=k2-airflow:kafka-below-log-start  # no dbt build here: rp_cleanup removes this tag in the dbt-runner's place
+docker build -q -f docker/airflow/Dockerfile -t "$IMAGE" . > "$W/build.log" 2>&1 \
+  || { tail -20 "$W/build.log" >&2; die "the Airflow image did not build"; }
 export K2_THROWAWAY_REDPANDA=1
 rp_lake
 rp_chain_files
@@ -56,7 +59,7 @@ python3 -c 'import json, sys; [print(p, o) for p, o in json.load(open(sys.argv[1
 echo "$P: trimmed $(cat "$RP/trims.json") (partition: new log start)"
 TP=$KT task "$ID" b3 load; kfacts b3
 TP=$KT task "$ID" b4 load --accept-data-loss; TP=$KT task "$ID" b4 audit; TP=$KT task "$ID" b4 publish; kfacts b4
-# The record task's offset_gap row, by the release's factory.py and k2runs in compose's Airflow image, as svc.runs.
+# The record task's offset_gap row, by the release's factory.py and k2runs in the Airflow image, as svc.runs.
 REASON="kafka-below-log-start.sh: the log start moved past the resume point on a throwaway lake"
 docker run -i --rm --name "$P-record" --label "k2.throwaway=$P" --pull never --cap-drop ALL --security-opt no-new-privileges \
   --user "$(id -u):0" --network "$NET" -e K2_TRINO_HOST -e K2_TRINO_INTERNAL_PORT -e K2_RUNS_USER \
@@ -64,7 +67,7 @@ docker run -i --rm --name "$P-record" --label "k2.throwaway=$P" --pull never --c
   --mount "type=bind,source=$STATE/releases/$ID,target=/k2/releases/$ID,readonly" \
   --mount "type=bind,source=$S/principals/svc.runs.password,target=/run/k2-secrets/runs.password,readonly" \
   --mount "type=bind,source=$S/tls/ca.pem,target=/run/k2-secrets/tls/ca.pem,readonly" \
-  --entrypoint python "$AIRFLOW_IMAGE" - "/k2/releases/$ID" "$ID" "$KT" "$REASON" \
+  --entrypoint python "$IMAGE" - "/k2/releases/$ID" "$ID" "$KT" "$REASON" \
   "$(grep -v '^\s*$' "$RP/b4.load.out" | tail -1)" > "$RP/b4.record.out" 2> "$RP/b4.record.err" <<'PY'
 import json, sys
 path, release, product, reason, last = sys.argv[1:6]
