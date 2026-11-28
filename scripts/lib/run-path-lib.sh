@@ -1,8 +1,9 @@
 # shellcheck shell=bash
-# The throwaway run path, shared by scripts/verify/run-path.sh (spine-e2e's stage run) and plan
+# The throwaway run path, shared by scripts/verify/run-path.sh (spine-e2e's stage run), plan
 # 002's verification scripts (scripts/verify/fx-idempotent.sh, scripts/chaos/fx-bad-file.sh,
-# dbt-failing-test.sh, trino-stop-mid-build.sh). Sourced, never executed: each script calls
-# rp_start, then the setup it needs, then its steps, then finish.
+# dbt-failing-test.sh, trino-stop-mid-build.sh) and plan 004's chaos scripts (scripts/chaos/README.md).
+# Sourced, never executed: each script calls rp_start, then the setup it needs, then its steps,
+# then finish.
 #
 # ONE throwaway lake (scripts/lib/throwaway-lake.sh, the script's own prefix), and every task run
 # from the release's own code (<release>/platform/) in the shape docker/airflow/dags/factory.py
@@ -176,8 +177,8 @@ print(doc["dagId"], doc["build"]["writer"], doc["build"]["publisher"], k["cpus"]
   timed "$run.build" "$t0"
   echo "$P: $run build ($product, $id) exit $(cat "$RP/$run.build.rc")"
 }
-spark_py() {  # spark_py <facts|clear> <label>: scripts/lib/run_path_spark.py in the Spark container, on the release
-  docker exec -i "$SPARK" python3 - "/k2/releases/$ID" "$ECB" "$1" < scripts/lib/run_path_spark.py > "$RP/$2.out" 2> "$RP/$2.err"
+spark_py() {  # spark_py <facts|clear> <label>: scripts/lib/run_path_spark.py in the Spark container, on the release; TP=<product> for another than ECB
+  docker exec -i "$SPARK" python3 - "/k2/releases/$ID" "${TP:-$ECB}" "$1" < scripts/lib/run_path_spark.py > "$RP/$2.out" 2> "$RP/$2.err"
   echo $? > "$RP/$2.rc"
 }
 objects() { docker exec "$P-minio" mc ls -r --json local/k2-landing > "$RP/objects-$1.json"; }
@@ -247,6 +248,63 @@ trades() {  # trades <run> [release]: kraken-trades' DAG, load, audit, publish, 
   local t
   for t in load audit publish; do TP=$KT task "${2:-$ID}" "$1" "$t"; done
   build "${2:-$ID}" "$KT" "$1"
+}
+rp_chain() {  # the chain's first cycle, each product ending in its claim (run-path.sh claims 10 to 12)
+  listing ki-1 listing-1.json; build "$ID" "$KI" ki-1; probe chain-state ki-1
+  claim instruments "$ID"
+  build "$ID" "$SM" sm-1; probe chain-state sm-1
+  claim master "$ID"
+  kseed "$RP/frames.jsonl"; trades kt-1; probe chain-state kt-1
+  build "$ID" "$CT" ct-1; build "$ID" "$CA" ca-1; probe chain-state ca-1
+  claim trades "$ID"
+}
+# rp_fail_release's two plants on kraken-trades (run-path.sh claims 16 and 17, pause-input.sh, venue-test-fails.sh)
+PLANT_PAUSED=$(cat <<'PY'
+import sys
+from pathlib import Path
+p = Path(sys.argv[1]) / "contracts/market-capture/kraken-trades/product.odps.yaml"
+doc = p.read_text()
+assert doc.count("\nstatus: active\n") == 1 and doc.count("\ncustomProperties:\n") == 1, "kraken-trades' status or customProperties moved: move the plant"
+p.write_text(doc.replace("\nstatus: active\n", "\nstatus: paused\n").replace("\ncustomProperties:\n", """
+customProperties:
+  - property: lifecycleChange
+    value:
+      since: "2026-11-28"
+      reason: The run path pauses the venue to prove its derived product goes partial.
+      decision: ADR-056
+      resume: From the topic's records still held when it resumes.
+"""))
+PY
+)
+PLANT_VENUE_FAIL=$(cat <<'PY'
+import sys
+from pathlib import Path
+p = Path(sys.argv[1]) / "contracts/market-capture/kraken-trades/models/silver_trade.sql"
+sql = p.read_text()
+tail = "\nfrom flagged\nwhere is_new or is_duplicate <> was_duplicate\n"
+assert sql.endswith(tail) and sql.count(tail) == 1, "silver_trade no longer ends 'from flagged where ...': move the plant"
+p.write_text(sql.removesuffix(tail) + "\nfrom (select * from flagged union all (select * from flagged where is_new limit 1)) as flagged\n"
+             "where is_new or is_duplicate <> was_duplicate\n")
+PY
+)
+
+# The Kafka connector on a product of the release (TP, default kraken-trades), for the chaos scripts
+# W2-12 and W2-13: scripts/lib/kafka_path_probe.py's facts and claims, as kafka-path.sh runs them on
+# its fixture product.
+KPROBE=scripts/lib/kafka_path_probe.py
+kruns() {  # kruns <run>: load, audit, publish of TP
+  local t
+  for t in load audit publish; do TP=${TP:-$KT} task "$ID" "$1" "$t"; done
+}
+kfacts() {  # kfacts <label>: TP's topic, landing, bronze and audit_checks to $RP/facts-<label>.json
+  docker exec -i "$SPARK" python3 - facts "/k2/releases/$ID" "${TP:-$KT}" < "$KPROBE" 2> "$RP/facts-$1.err" | tail -1 > "$RP/facts-$1.json"
+  [ -s "$RP/facts-$1.json" ] || echo "$P: facts $1 failed: $(grep -v '^\s' "$RP/facts-$1.err" | tail -2)"
+}
+kclaim() {  # kclaim <name>: kafka_path_probe.py's claim over $RP, numbered as this script's next; a FAIL stops the run
+  local out code
+  out=$(python3 "$KPROBE" claim "$1" "$RP" 2>&1)
+  code=$?
+  claimed "$1" "$(sed -E 's/^(PASS|FAIL|INFO) [0-9]+ /\1 /' <<< "$out")" $code
 }
 
 # The steps more than one script takes, each ending in its claim.

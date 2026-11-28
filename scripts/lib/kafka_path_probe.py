@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""scripts/verify/kafka-path.sh's steps. Three run in the throwaway's Spark container on the
-release's own code, fed on stdin (`python3 - <command> /k2/releases/<id> ...`); `claim` runs on the
-host over what they printed.
+"""scripts/verify/kafka-path.sh's steps, and plan 004's Kafka chaos scripts' (run-path-lib.sh's
+kfacts and kclaim, on a product of the release). All but `claim` run in the throwaway's Spark
+container on the release's own code, fed on stdin (`python3 - <command> /k2/releases/<id> ...`);
+`claim` runs on the host over what they printed.
 
     facts   <release> <product>                 the topic, the landing, bronze and audit_checks as
                                                 JSON: offsets and counts, every snapshot's summary,
@@ -12,6 +13,11 @@ host over what they printed.
                                                 SparkLanding.land (before the landing commit) or at
                                                 kafka.stage (after it, before staging): no finally,
                                                 no result line, as a container OOM-kill leaves it
+    unregistered <release> <product> <line>     one trade frame (a fixture line, {recv_ts_ns, payload}) whose
+                                                body is written under the subject's latest RawMessage with
+                                                one optional field added, framed with the id the registry
+                                                gives the next schema it registers, not served yet; prints
+                                                {"id", "latest", "schema"} (bronze-failed-then-repaired.sh)
     cycles  <release> <product> <dag> <n>       group c's small files: n runs in one Spark application, each
                                                 three of the topic's own trade frames produced again
                                                 and kafka.py's load, audit and publish as the DAG's
@@ -123,6 +129,40 @@ def corrupt(release: str, product: str) -> None:
      .option("kafka.bootstrap.servers", c["brokers"]).option("kafka.acks", "all").option("topic", c["topic"]).save())
     print(f"kafka-path: one corrupt frame (schema id {sid}, a body that is no Avro) onto {c['topic']}")
     spark.stop()
+
+
+def unregistered(release: str, product: str, line: str) -> None:
+    """A capture writing a new envelope shape before its schema is registered: the stage keeps the
+    frame undecoded (the registry answers 404 for its id) and parses fails; once the schema is
+    registered under that id the same bytes decode, a writer schema with a field added. The next
+    id is the subject's latest + 1 on a registry holding that one subject (the throwaway's); the
+    script checks the id the registration returns."""
+    import urllib.request
+
+    from pyspark.sql import SparkSession
+    from pyspark.sql import functions as F
+    from pyspark.sql.avro.functions import to_avro
+    from pyspark.sql.types import BinaryType, LongType, StringType, StructField, StructType
+
+    c = pipeline(release, product)["connector"]
+    with urllib.request.urlopen(f"{c['registry']}/subjects/{c['topic']}-value/versions/latest", timeout=10) as r:
+        latest = json.load(r)
+    schema = json.loads(latest["schema"])
+    schema["fields"].append({"name": "note", "type": ["null", "string"], "default": None})
+    sid, d = latest["id"] + 1, json.loads(line)
+    [symbol] = {t["symbol"] for t in json.loads(d["payload"])["data"]}
+    fields = [("exchange", StringType(), False), ("stream", StringType(), False), ("symbol", StringType(), True),
+              ("recv_ts_ns", LongType(), False), ("conn_id", StringType(), False), ("conn_msg_seq", LongType(), False),
+              ("payload", BinaryType(), False), ("note", StringType(), True)]
+    spark = (SparkSession.builder.appName("kafka-path-unregistered").master("local[1]")
+             .config("spark.driver.memory", "512m").config("spark.ui.enabled", "false").getOrCreate())
+    df = spark.createDataFrame([("kraken", "trade", symbol, d["recv_ts_ns"], "00000000-0000-4000-8000-0000000000fx", 1,
+                                 d["payload"].encode(), None)], StructType([StructField(*f) for f in fields]))
+    value = F.concat(F.lit(bytearray([0]) + sid.to_bytes(4, "big")), to_avro(F.struct(*df.columns), json.dumps(schema)))
+    (df.select(F.col("symbol").cast("binary").alias("key"), value.alias("value")).write.format("kafka")
+     .option("kafka.bootstrap.servers", c["brokers"]).option("kafka.acks", "all").option("topic", c["topic"]).save())
+    spark.stop()
+    print(json.dumps({"id": sid, "latest": latest["id"], "schema": json.dumps(schema, separators=(",", ":"))}))
 
 
 def cycles(release: str, product: str, dag: str, n: int) -> None:
@@ -644,7 +684,7 @@ def claim(name: str, rp: Path) -> bool:
                    "the landing holds every offset but the gap, once each")
     if name == "gap-audit":  # b3
         f = load_json(rp, "facts-b4.json")
-        rows = [c for c in f["checks"] if c[0] == "kafka_fixture/b4"]
+        rows = [c for c in f["checks"] if c[0].endswith("/b4")]  # the fixture's DAG or a 004 product's
         bad = [] if sorted((c[2], c[3]) for c in rows) == [("accounting", True), ("keys_unique", True), ("parses", True)] \
             else [f"audit_checks {[(c[2], c[3], c[4]) for c in rows]}"]
         if rc(rp, "b4.audit") != "0" or rc(rp, "b4.publish") != "0":
@@ -686,6 +726,25 @@ def claim(name: str, rp: Path) -> bool:
         return say(6, "a topic trimmed before the product's first run loads, audits and publishes cleanly", bad,
                    f"log starts {earliest}; b1 landed {r.get('landed')} from them, staged {r.get('rows')}, accounting: "
                    f"{acc}; publish moved main; every offset from each log start once, bronze main = the trades")
+    if name == "offset-gap":  # kafka-below-log-start.sh: the accept-data-loss run's offset_gap row, as the page reads it
+        f1, trims, load = load_json(rp, "facts-b1.json"), load_json(rp, "trims.json"), result(rp, "b4.load")
+        [(_, ends)] = offsets_of(connector_snapshots(f1["landing"])[-1][4]).items()
+        r = result(rp, "b4.record")
+        row, gaps, bad = r.get("row") or {}, r.get("gaps") or [], []
+        want = sorted(({"partition": int(p), "fromOffset": ends[int(p)], "toOffset": o - 1} for p, o in trims.items()),
+                      key=lambda g: g["partition"])
+        if rc(rp, "b4.record") != "0" or not trims:
+            bad.append(f"record exit {rc(rp, 'b4.record')}, trims {trims}: {(rp / 'b4.record.err').read_text().strip()[-300:]}")
+        elif (row.get("task"), row.get("event"), row.get("table_name")) != ("load", "offset_gap", load.get("landing")) \
+                or not str(row.get("run_id")).endswith("/b4"):
+            bad.append(f"the row {row}")
+        elif len(gaps) != 1 or sorted(gaps[0]["partitions"], key=lambda g: g["partition"]) != want \
+                or gaps[0]["reason"] != r.get("reason"):
+            bad.append(f"k2runs.offset_gaps read {gaps}, want one gap {want} with reason {r.get('reason')!r}")
+        return say(4, "the accept-data-loss run records offset_gap: the factory's row from load's result, read back as "
+                   "the product page reads it", bad,
+                   f"factory.offset_gap wrote {row.get('run_id')} {row.get('task')} {row.get('event')} on {row.get('table_name')}; "
+                   f"k2runs.offset_gaps reads {gaps[0]['partitions'] if gaps else '?'}, reason {r.get('reason')!r}")
     raise SystemExit(f"kafka_path_probe.py: no claim {name}")
 
 
@@ -695,6 +754,8 @@ if __name__ == "__main__":
         print(json.dumps(facts(*args[:2]), default=str))
     elif cmd == "corrupt":
         corrupt(*args[:2])
+    elif cmd == "unregistered":
+        unregistered(*args[:3])
     elif cmd == "cycles":
         cycles(args[0], args[1], args[2], int(args[3]))
     elif cmd == "expire":

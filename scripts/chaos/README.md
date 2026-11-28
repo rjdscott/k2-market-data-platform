@@ -1,6 +1,6 @@
 # `scripts/chaos/`: fault injection for the capture tier and the run path
 
-Two groups. The run path's four (plan 002's verification, [below](#the-run-path-scripts-plan-002)) break one product's run on a throwaway lake, or on the live stack under a deploy. The capture tier's five come first here: four break the running stack on purpose, wait for the alert that is
+Three groups. The run path's four (plan 002's verification, [below](#the-run-path-scripts-plan-002)) break one product's run on a throwaway lake, or on the live stack under a deploy; the Kafka products' six ([plan 004](#the-kafka-product-scripts-plan-004)) break kraken-trades' run on a throwaway lake. The capture tier's five come first here: four break the running stack on purpose, wait for the alert that is
 supposed to notice, measure how long recovery took, and put the stack back; the
 fifth records an honest gap it cannot yet inject. They
 are the `proof` column of
@@ -150,16 +150,28 @@ script's header says so). And on a throwaway lake the dbt runner's flags are
 `run-path-lib.sh`'s, which mirror `oneshot.py`; the operator's own flags are held to the same
 names by `docker/airflow/tests/test_oneshot.py`.
 
-## The Kafka product scripts (plan 004): not written yet
+## The Kafka product scripts (plan 004)
 
-Plan 004 names six: `kafka-connector-kill.sh`, `kafka-below-log-start.sh`, `unknown-symbol.sh`,
-`bronze-failed-then-repaired.sh`, `venue-test-fails.sh` and `pause-input.sh`. None exists at this
-commit. Until they do, the Kafka connector's kills, the below-log-start refusal and the accept-data-loss
-load are proven on a fixture product by [`../verify/kafka-path.sh`](../verify/kafka-path.sh) groups a,
-b and c ([`docs/development/testing.md`](../../docs/development/testing.md)), with the connector run
-directly, not through Airflow. The runbooks the scripts will measure are
-[accept-data-loss.md](../../docs/runbooks/accept-data-loss.md) and
+Plan 004's six, each on a throwaway lake of its own with a Redpanda (`K2_THROWAWAY_REDPANDA=1`), on
+the release's own `kraken-trades` and the products around it, every task in the DAG factory's shape
+through `scripts/lib/run-path-lib.sh`, frames and listings synthetic. Each takes a compiled release as
+the run-path ones do, prints one numbered PASS or FAIL line per claim and `<n> PASS, <m> FAIL`, stops
+at the first FAIL and exits 0 only when every claim passed. They run a scenario
+[`../verify/kafka-path.sh`](../verify/kafka-path.sh) or [`../verify/run-path.sh`](../verify/run-path.sh)
+already proves through the same probes, on the 004 products, worded as the plan's exit lines. With no
+Airflow on a throwaway, what only the scheduler does (the refresh trigger, XCom between tasks) is
+`docker/airflow/tests/test_factory.py`'s to prove; each header says where that line falls. The
+runbooks they exercise are [accept-data-loss.md](../../docs/runbooks/accept-data-loss.md) and
 [kafka-batch-blocked.md](../../docs/runbooks/kafka-batch-blocked.md).
+
+| Script | What it proves | Where it runs | Recorded result |
+|---|---|---|---|
+| `kafka-connector-kill.sh` | kraken-trades' load killed after its landing commit, then before it, then retried under its run id: each next run lands and stages the range once, no hole (kafka-path.sh a4 to a6) | a throwaway lake, prefix `kafka-connector-kill` | not yet run |
+| `kafka-below-log-start.sh` | the log start moved past the resume point (`rpk topic trim-prefix`, Redpanda v25.3.4): the load fails naming each partition; the accept-data-loss load lands from the log start, its audit passes; the release's `factory.offset_gap`, in compose's Airflow image, writes the `offset_gap` row and `k2runs.offset_gaps` reads it back | a throwaway lake, prefix `kafka-below-log-start` | not yet run |
+| `unknown-symbol.sh` | an unlisted symbol's trade held beside a listed one's in one batch; the listed one publishes, the build is `degraded`, `factory.Refresh`'s rule starts the instruments run, which lists it; the next build takes it in once | a throwaway lake, prefix `unknown-symbol` | not yet run |
+| `bronze-failed-then-repaired.sh` | a frame of a schema id not yet registered fails `parses`; the next load lands and is refused, bronze unmoved; the schema registered and the clearing statement run, the next run restages, publishes and silver takes both trades | a throwaway lake, prefix `bronze-failed` | not yet run |
+| `venue-test-fails.sh` | a kraken-trades build that fails its tests rolls back; canonical-trades and candles then change no row (run-path.sh claim 17) | a throwaway lake, prefix `venue-test-fails` | not yet run |
+| `pause-input.sh <input>` | `kraken-trades`: canonical-trades builds with it paused and is `partial: market-capture.kraken-trades.silver_trade` (run-path.sh claim 16); phase 005 adds `ecb-fx-rates` | a throwaway lake, prefix `pause-input` | not yet run |
 
 ---
 
