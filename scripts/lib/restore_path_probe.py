@@ -149,7 +149,7 @@ def claim(name, rid):
                   (gone.get("before") == gone.get("after") == 0, f"the wiped table's objects: {gone}")]
         what = "`lake --phase rest` with no product held is refused (exit 2) and puts nothing back"
     elif name == "refused-drill":
-        no, stale, lacks = text("noconfirm.err"), text("stale.err"), text("lacks.err")
+        no, stale, lacks, nopol, badkey = (text(f"{x}.err") for x in ("noconfirm", "stale", "lacks", "nopolicy", "badkey"))
         checks = [(text("noconfirm.rc").strip() == "2" and "the drill destroys" in no and f"CONFIRM={rid}" in no
                    and "rebuild table(s) k2.kraken_trades.bronze_trade" in no and "k2.currency_master.bronze_currencies file product bronze" in no,
                    f"without CONFIRM: exit {text('noconfirm.rc').strip()}: {no.strip()[-300:]}"),
@@ -158,16 +158,22 @@ def claim(name, rid):
                   (text("lacks.rc").strip() == "2" and ("does not hold what the live backup set names" in lacks or "is incomplete" in lacks)
                    and "k2.ecb_fx_rates.added_since" in lacks,
                    f"a release with a table the run lacks: exit {text('lacks.rc').strip()}: {lacks.strip()[-300:]}"),
+                  (text("nopolicy.rc").strip() == "2" and f"the live release {rid} cannot be restored onto" in nopol and "restore MinIO user" in nopol,
+                   f"a release with no restore user: exit {text('nopolicy.rc').strip()}: {nopol.strip()[-300:]}"),
+                  (text("badkey.rc").strip() == "2" and "does not grant the restore key" in badkey and text("badkey.out").count("drill:") == 0,
+                   f"a key MinIO does not hold: exit {text('badkey.rc').strip()}: {badkey.strip()[-300:]}"),
                   (s["refused"]["landings"] == s["built"]["landings"] and s["refused"]["rows"] == s["built"]["rows"]
                    and all((s["refused"]["tables"][t] or {}).get("metadata") == (s["built"]["tables"][t] or {}).get("metadata")
                            for t in s["built"]["tables"] if t != "governance.run_records.holds"), "the refused drill changed the lake")]
         what = ("the drill refuses (exit 2) before any pause, hold or damage, the lake as it was: without CONFIRM, saying what it "
                 "destroys (the rebuild table it names) and spares (a file product's bronze); on a run older than a commit since it; "
-                "and when the live release names a table the run lacks")
+                "when the live release names a table the run lacks, or makes no restore user; with a restore key MinIO does not hold")
     elif name == "drill":
         rc = text("drill.rc").strip()
         took = [x for x in out.splitlines() if x.startswith(("restore: OK in", "drill:"))]
+        keyed = [x for x in out.splitlines() if x.strip().startswith("key ") and "refused as existing (412)" in x]
         checks = [(rc == "0", f"restore.py drill exit {rc}: {text('drill.err').strip()[-300:]}"),
+                  (len(keyed) == 3, f"the key proven with a 412 in each of its 3 scopes: {keyed}"),
                   ("catalog database: replayed from" in out, "the catalog database was not replayed from its dump")]
         what = ("the drill empties the catalog database and each restore table's, landing's and rebuildable rebuild table's "
                 "location, and restores: " + " | ".join(took))

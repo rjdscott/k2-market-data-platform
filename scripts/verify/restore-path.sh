@@ -19,8 +19,9 @@
 #     copy of the backup whose newest run lacks one file
 #   7 (R1) the drill refused (exit 2) before any pause, hold or damage, the lake as it was: without CONFIRM
 #     (its statement names what it destroys and what it spares); after a commit since the run (an operator
-#     hold and its release); with a live release whose backup set names a table the run lacks. Then a
-#     third backup run, the one the drill restores
+#     hold and its release); with a live release whose backup set names a table the run lacks; (E2) with
+#     a live release whose lake-init makes no restore user; (E1) with a restore key MinIO does not hold.
+#     Then a third backup run, the one the drill restores
 #   8 one restore table's files wiped: `restore.py lake --phase rest` with no product held is refused
 #     (exit 2) and puts nothing back
 #   9 (R2) Postgres stopped: the catalog's answer is an error, not a loss: `restore.py run` fails (exit 1)
@@ -28,7 +29,8 @@
 #  10 the drill (CONFIRM=<release id> restore.py drill): the catalog database emptied, every object at
 #     each restore table's location, each landing and each rebuildable rebuild table of warehouses k2
 #     and governance deleted with the root pair; then the restore, the catalog database replayed from
-#     its dump; exit 0 and its times
+#     its dump; exit 0 and its times; (E1) before it, the key proven in each scope it writes, every put
+#     refused as existing (412): nothing written
 #  11 every restore table registered at the backup's metadata, its rows as before the damage
 #  12 every landing object back, key for key and size for size
 #  13 kraken-trades' bronze recreated empty with its columns; the whole rebuild tables kept, refs and all,
@@ -72,7 +74,8 @@ ran() {  # ran <label> <command...>: its stdout, stderr and exit to $RP/<label>.
 }
 restore() {  # restore.py <run|drill> on this lake, as make restore runs it on the stack
   python3 scripts/restore.py "$@" --releases "$STATE/releases" --backup "$BK" --secrets "$S" --network "$NET" \
-    --tools-image "$TOOLS" --minio-image "$MINIO" --postgres "$P-postgres" --lakekeeper "$P-lakekeeper" --no-airflow --holds-in-network
+    --tools-image "$TOOLS" --minio-image "$MINIO" --postgres "$P-postgres" --lakekeeper "$P-lakekeeper" --no-airflow --holds-in-network \
+    --dbt-image "$IMAGE"  # the image this lake's builds run: the scratch release pins a placeholder
 }
 backup() {  # backup <stamp>: the backup's two halves, as scripts/backup-lake.sh runs them
   bash scripts/backup-lake.sh --dump "$P-postgres" lakekeeper "$B/catalog/$1.sql.gz" > /dev/null || die "the catalog dump $1 failed"
@@ -120,6 +123,11 @@ json.dump(s, open(sys.argv[1], "w"))
 PY2
 BK=$B CONFIRM=$ID ran lacks python3 scripts/restore.py drill --releases "$EXTRA" --backup "$B" --secrets "$S" --network "$NET" \
   --tools-image "$TOOLS" --minio-image "$MINIO" --postgres "$P-postgres" --lakekeeper "$P-lakekeeper" --no-airflow --holds-in-network
+NOPOL=$W/releases-nopolicy; cp -a "$STATE/releases" "$NOPOL"; chmod -R u+w "$NOPOL"
+rm "$NOPOL/$ID/platform/docker/lake/minio/policies/restore.json"  # a release from before the restore key
+BK=$B CONFIRM=$ID ran nopolicy python3 scripts/restore.py drill --releases "$NOPOL" --backup "$B" --secrets "$S" --network "$NET" \
+  --tools-image "$TOOLS" --minio-image "$MINIO" --postgres "$P-postgres" --lakekeeper "$P-lakekeeper" --no-airflow --holds-in-network
+BK=$B CONFIRM=$ID K2_RESTORE_S3_SECRET_KEY=not-the-secret-minio-holds ran badkey restore drill  # make engine-keys ran, lake-init did not
 rpy state "$ID" refused
 pclaim refused-drill  # 7
 sleep 1; T3=$(date -u +%Y%m%dT%H%M%SZ); backup "$T3"  # after the touch: the run the drill restores

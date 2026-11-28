@@ -27,12 +27,14 @@ The writers, each named before it writes, none of them MinIO's root pair:
   NOT proven by anything here.
 
 `run`, in order, stopping at the first refusal (exit 2) or failure (exit 1):
- 1. checks that touch nothing: both storage keys set, svc.operator's file there, no `make rebuild`
-    one-shot running, and the run: the newest complete one under ${K2_BACKUP_DIR}/runs (refused: a --run
+ 1. checks that touch nothing: both storage keys set, the live release's own files holding what the
+    restore needs (its lake-init's restore user, the holds table), svc.operator's file there, no
+    `make rebuild` one-shot running, and the run: the newest complete one under ${K2_BACKUP_DIR}/runs (refused: a --run
     that is not the newest, a .partial, one `make backup-verify`'s check finds incomplete, one whose
     tables and landings are not the live backup set's);
  2. every DAG of dags.json that is not paused already paused (and only those are ever unpaused here),
-    then each drained as scripts/rebuild.py drains one: every task of a running run waited for;
+    then each drained as scripts/rebuild.py drains one: every task of a running run waited for; then
+    `lake --phase key`: the restore key proven against MinIO before the first write (run_key says how);
  3. the catalog database from the run's dump, only when it is lost: the query answers no warehouse row,
     or Postgres says the database or its table does not exist; any other answer touches nothing;
  4. `lake --phase check`: refused unless every `restore` table the catalog holds sits at the location the
@@ -58,9 +60,10 @@ The writers, each named before it writes, none of them MinIO's root pair:
     once its full refresh passes (upstream first: the order is printed); the DAGs this restore paused
     unpaused but theirs. A refusal before any write unpauses what step 2 paused; after a catalog replay,
     or any failure, nothing is unpaused and the output says what is left.
-`drill` checks before it damages, in order: every check of step 1; `lake --phase check --fresh` (nothing
+`drill` checks before it damages, in order: every check of step 1; `lake --phase key`; `lake --phase check --fresh` (nothing
 committed since the run: each restore table's catalog metadata the run's, each landing's listing the
-run's, and no run record written since the run began; no rebuild lock open); its statement of what it
+run's, and no run record written since the run began; no rebuild lock open); when it destroys a rebuild table, the release's own k2-dbt taking
+--full-refresh (scripts/rebuild.py's full_refresh_problem: its pinned dbt-runner image is asked); its statement of what it
 destroys, refused without CONFIRM=<the live release id>; step 2; the fresh check again, now drained; a
 restore hold on every product. Then the damage, with MinIO's root pair from the environment in MinIO's
 own image (the damage, not the restore): the catalog database dropped and made empty, and every object
@@ -214,11 +217,16 @@ class Store:
             raise Failed(f"{uri}: storage answered HTTP {status} to GET")
         return data
 
-    def put(self, uri: str, data: bytes) -> None:
+    def put_if_absent(self, uri: str, data: bytes) -> int:
+        """PUT with If-None-Match: *: 200 put, 412 an object there already (nothing written), 403 refused."""
         status, _ = self._request("PUT", uri, data)
+        self._lists.clear()
+        return status
+
+    def put(self, uri: str, data: bytes) -> None:
+        status = self.put_if_absent(uri, data)
         if status not in (200, 412):  # 412: an object there already; put_back's listing said none, so the caller re-checks
             raise Failed(f"{uri}: storage answered HTTP {status} to PUT")
-        self._lists.clear()
         if status == 412:
             bucket, key = bl.split(uri)
             if self.list(f"s3://{bucket}/{key.rsplit('/', 1)[0]}").get(uri) != len(data):
@@ -480,11 +488,62 @@ def freshness(m: dict[str, Any], run: str, lake: Any, store: Any, newest: dateti
     return out
 
 
+def key_probes(m: dict[str, Any]) -> list[tuple[str, str, str]]:
+    """(scope, prefix to list, file of the run to put) for each scope the restore key writes: each
+    warehouse a restore table sits in (its first table's location and metadata file) and the landing
+    bucket (its first landed object)."""
+    out, seen = [], set()
+    for t in m["tables"]:
+        bucket, key = bl.split(t["location"].rstrip("/") + "/x")
+        scope = f"{bucket}/{'/'.join(key.split('/')[:2])}"  # <bucket>/warehouse/<name>: one policy resource each
+        if scope not in seen:
+            seen.add(scope)
+            out.append((scope, t["location"], "objects/" + "/".join(bl.split(t["metadata_location"]))))
+    for g in m["landings"]:
+        if g["files"] and g["bucket"] not in seen:
+            seen.add(g["bucket"])
+            out.append((g["bucket"], f"s3://{g['bucket']}/{g['prefix']}", sorted(g["files"])[0]))
+    return out
+
+
+def run_key(m: dict[str, Any], run: Path, store: Any) -> tuple[list[str], list[str]]:
+    """(lines, problems): the restore key proven against MinIO with the reach the restore needs, before
+    anything moves. The key has no delete and no admin right, so it can neither clean up a probe object
+    nor read its own policy; a listing proves MinIO knows it and its list reach, and a PUT with
+    If-None-Match of a file the run holds, at its own key with its own bytes, proves put reach: MinIO
+    authorizes s3:PutObject before it evaluates the precondition, so an object there answers 412 and
+    nothing is written; one not there (a lost lake) is put, the very bytes the restore would put
+    (Iceberg and landing objects are written once under unique keys, so even a store that ignored the
+    precondition would rewrite the same bytes)."""
+    lines, bad = [], []
+    for scope, prefix, rel in key_probes(m):
+        uri = "s3://" + rel.removeprefix("objects/")
+        try:
+            store.list(prefix)
+        except Failed as e:
+            bad.append(f"{scope}: the restore key cannot list it ({e})")
+            continue
+        status = store.put_if_absent(uri, (run / rel).read_bytes())
+        if status == 412:
+            lines.append(f"key {scope}: listed; a put of {uri} refused as existing (412): put reach proven, nothing written")
+        elif status == 200:
+            lines.append(f"key {scope}: listed; {uri} was not there and is put back, the run's own bytes: put reach proven")
+        else:
+            bad.append(f"{scope}: the restore key's put answered HTTP {status}")
+    return lines, bad
+
+
 def run_lake(a: argparse.Namespace, lake: Any = None, store: Any = None, holds: Callable[[str], list[dict[str, Any]]] | None = None,
              newest: Callable[[], datetime | None] | None = None) -> dict[str, Any]:
     release, run = Path(a.release), Path(a.run_dir)
     m = json.loads((run / "manifest.json").read_text())
     lake, store = lake or Lake(), store or Store(READ_KEY if a.phase == "check" else KEY)
+    if a.phase == "key":
+        lines, bad = run_key(m, run, store)
+        if bad:
+            raise Refused("MinIO does not grant the restore key the reach the restore needs (no user or policy for it: "
+                          "`make engine-keys`, then deploy a release whose lake-init makes the restore user): " + "; ".join(bad))
+        return {"lines": lines}  # before any catalog call: the catalog may be what was lost
     problems = lake_problems(m["tables"], lake.load)
     platform = [t for t in m["tables"] if t["table"].startswith(PLATFORM)]
     others = [t for t in m["tables"] if t not in platform]
@@ -604,6 +663,7 @@ class Stack:
     trino: str = "localhost:8443"  # the holds' Trino, from where svc.operator connects
     holds_in_network: bool = False  # a throwaway lake publishes no Trino port: the holds go in-network
     operator_password: Path | None = None  # default <secrets>/principals/svc.operator.password
+    dbt_image: str | None = None  # the dbt-runner image builds run; default the release's pin (a throwaway builds its own)
     sh: Callable[..., subprocess.CompletedProcess] = field(default=subprocess.run, repr=False)
 
 
@@ -614,7 +674,10 @@ def operator_file(st: Stack) -> Path:
 def docker_run(st: Stack, *argv: str, key: tuple[str, str] | None = None, operator: bool = False) -> list[str]:
     """`restore.py <argv>` in the release's tools image on the catalog's network, as this user, with
     `key` (a storage key's two names) only for a phase that touches the store."""
-    m = [f"{st.releases}:{MOUNT['release']}:ro", f"{HERE}:/opt/k2/scripts:ro", f"{st.backup}:{MOUNT['backup']}:ro",
+    # scripts/ and platform/runs from the checkout, as scripts/backup-lake.sh mounts scripts/: the holds client
+    # (k2runs) and the drift check are this tree's, so the release's tools image needs neither
+    m = [f"{st.releases}:{MOUNT['release']}:ro", f"{HERE}:/opt/k2/scripts:ro", f"{ROOT / 'platform/runs'}:/opt/k2/platform/runs:ro",
+         f"{st.backup}:{MOUNT['backup']}:ro",
          f"{st.secrets / 'principals' / (RUNS + '.password')}:{MOUNT['runs']}:ro", f"{st.secrets / 'tls/ca.pem'}:{MOUNT['ca']}:ro"]
     if operator:
         m.append(f"{operator_file(st)}:{MOUNT['operator']}:ro")
@@ -688,10 +751,23 @@ class Prep:
     manifest: dict[str, Any]
 
 
+def release_lacks(rel: Path) -> list[str]:
+    """What the live release lacks that the restore needs, from its own sealed files: the restore user its
+    lake-init makes, and the holds table every product is held in."""
+    out = []
+    if not (rel / "platform/docker/lake/minio/policies/restore.json").is_file():
+        out.append("its lake-init makes no restore MinIO user (no platform/docker/lake/minio/policies/restore.json)")
+    if not (rel / "compiled/lake/ddl/trino/governance.run_records.holds.sql").is_file():
+        out.append("it has no holds table (no compiled/lake/ddl/trino/governance.run_records.holds.sql)")
+    return out
+
+
 def prepare(st: Stack, want: str | None) -> Prep:
     """Step 1: every check that needs no change and no lake."""
     pair(KEY), pair(READ_KEY)
     rel = live_release(st)
+    if lacks := release_lacks(rel):
+        raise Refused(f"the live release {rel.name} cannot be restored onto: " + "; ".join(lacks) + "; deploy a release that has them")
     backup_set = json.loads((rel / "compiled/lake/backup-set.json").read_text())
     run, manifest = choose_run(st.backup, backup_set, want)
     if not st.holds_in_network and not operator_file(st).is_file():
@@ -751,11 +827,15 @@ def restore(st: Stack, want: str | None, say: Callable[[str], None] = print, pre
     prep = prep or prepare(st, want)
     rel, run, m = prep.rel, prep.run, prep.manifest
     say(f"restore: run {run.name} (release {m['release']}, tag {m['tag']}) onto live release {rel.name}")
-    if paused is None:
+    own_quiesce = paused is None
+    if own_quiesce:
         paused = quiesce(st, rel, say)
     by_dag = dag_products(rel)
     replayed = False
     try:
+        if own_quiesce:  # the drill proved the key before its damage
+            for line in lake_step(st, rel, run, "key")["lines"]:
+                say(f"  {line}")
         if "lakekeeper-db" in {e["kind"] for e in prep.backup_set["entries"]} and catalog_lost(st):
             restore_db(st, st.backup / m["dumps"]["lakekeeper"]["file"], say)
             replayed = True
@@ -821,6 +901,14 @@ def finish(st: Stack, rel: Path, run: Path, say: Callable[[str], None], t0: floa
 
 # ---- the drill ---------------------------------------------------------------------------------------
 
+def wrapper_help(st: Stack, image: str) -> tuple[int, str]:
+    """`k2-dbt build --help` of the release's dbt-runner image (or the image this stack's builds run, on
+    a throwaway): read-only, no network, nothing pulled."""
+    done = st.sh(["docker", "run", "--rm", "--network", "none", "--pull", "never", "--entrypoint", "k2-dbt", st.dbt_image or image,
+                  "build", "--help"], capture_output=True, text=True)
+    return done.returncode, done.stdout or ""
+
+
 def drill_damage(prep: Prep, check: dict[str, Any]) -> dict[str, Any]:
     """What the drill deletes, and what it says it destroys that the run does not hold."""
     rel, m = prep.rel, prep.manifest
@@ -852,10 +940,14 @@ def drill(st: Stack, confirm: str, say: Callable[[str], None] = print) -> int:
     root = {n: os.environ.get(n, "") for n in ("MINIO_ROOT_USER", "MINIO_ROOT_PASSWORD")}
     if not all(root.values()):
         raise Refused("the drill's damage needs MINIO_ROOT_USER and MINIO_ROOT_PASSWORD in the environment (.env loaded)")
+    for line in lake_step(st, prep.rel, prep.run, "key")["lines"]:
+        say(f"  {line}")
     first = lake_step(st, prep.rel, prep.run, "check", fresh=True)
     if first["problems"] or first["stale"]:
         raise Refused("the run cannot put back what the drill would destroy (take a fresh `make backup`): "
                       + "; ".join(first["problems"] + first["stale"]))
+    if drill_damage(prep, first)["rebuild"] and (problem := rb.full_refresh_problem(prep.rel, lambda image: wrapper_help(st, image))):
+        raise Refused(f"the drill destroys rebuild tables that only make rebuild brings back, and {problem}")
     said = statement(prep, drill_damage(prep, first))
     if confirm != prep.rel.name:
         raise Refused(f"{said}. To go ahead: CONFIRM={prep.rel.name} (the live release)")
@@ -905,7 +997,7 @@ def stack(a: argparse.Namespace) -> Stack:
                  secrets=Path(a.secrets or env.get("K2_SECRETS") or home / "k2-secrets"), network=net, tools_image=image,
                  minio_image=minio, postgres=a.postgres, lakekeeper=a.lakekeeper, io=rb.Live() if not a.no_airflow else None,
                  trino=a.trino or f"localhost:{env.get('K2_TRINO_PORT', '8443')}", holds_in_network=a.holds_in_network,
-                 operator_password=Path(a.operator_password) if a.operator_password else None)
+                 operator_password=Path(a.operator_password) if a.operator_password else None, dbt_image=a.dbt_image)
 
 
 def main(argv: list[str]) -> int:
@@ -914,14 +1006,15 @@ def main(argv: list[str]) -> int:
     for name in ("run", "drill"):
         p = sub.add_parser(name)
         p.add_argument("--run", help="the run's stamp; refused unless it is the newest complete run")
-        for f in ("--releases", "--backup", "--secrets", "--network", "--tools-image", "--minio-image", "--trino", "--operator-password"):
+        for f in ("--releases", "--backup", "--secrets", "--network", "--tools-image", "--minio-image", "--trino", "--operator-password",
+                  "--dbt-image"):
             p.add_argument(f)
         p.add_argument("--postgres", default="k2-prefect-db")
         p.add_argument("--lakekeeper", default="k2-lakekeeper")
         p.add_argument("--no-airflow", action="store_true", help="a lake with no Airflow: no DAG to pause, drain or unpause")
         p.add_argument("--holds-in-network", action="store_true", help="a throwaway lake: no Trino port on the host")
     lk = sub.add_parser("lake")
-    lk.add_argument("--phase", choices=("check", "platform", "rest"), required=True)
+    lk.add_argument("--phase", choices=("key", "check", "platform", "rest"), required=True)
     lk.add_argument("--release", required=True)
     lk.add_argument("--run-dir", required=True)
     lk.add_argument("--fresh", action="store_true", help="check: also what was committed or landed since the run")

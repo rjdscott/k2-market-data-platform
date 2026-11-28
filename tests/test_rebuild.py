@@ -35,7 +35,15 @@ def release(tmp_path, *products, pipeline=None):
         (rel / "compiled" / "products" / p / "pipeline.json").write_text(json.dumps(doc))
     (rel / BRONZE_DDL).parent.mkdir(parents=True)
     shutil.copy(GOLDEN / "lake" / "repository" / BRONZE_DDL, rel / BRONZE_DDL)
+    (rel / "compiled" / "oneshots.json").write_text(json.dumps({"oneshots": {"dbt-runner": {"image": DBT_IMAGE}}}))
     return rel
+
+
+DBT_IMAGE = "ghcr.io/example/dbt-runner@sha256:" + "ab" * 32
+# `k2-dbt build --help` as argparse prints it: this tree's wrapper, and the one before W1-15a (rc.1)
+HELP = ("usage: k2-dbt build [-h] --release RELEASE --product PRODUCT --run-id RUN_ID [--full-refresh]\n\noptions:\n"
+        "  -h, --help         show this help message and exit\n  --release RELEASE\n  --product PRODUCT\n  --run-id RUN_ID\n  --full-refresh\n")
+OLD_HELP = HELP.replace(" [--full-refresh]", "").replace("  --full-refresh\n", "")
 
 
 class Holds:
@@ -91,6 +99,12 @@ class IO:
 
     def busy(self, dag):
         return self.busy_answers.pop(0) if len(self.busy_answers) > 1 else self.busy_answers[0]
+
+    help = (3, HELP)  # this tree's k2-dbt prints its help, then refuses the usage (exit 3)
+
+    def wrapper_help(self, image):
+        assert image == DBT_IMAGE  # the release's pinned image, never the checkout's
+        return self.help
 
     def replace(self, inside, statements):
         self._maybe("replace")
@@ -481,3 +495,33 @@ def test_make_rebuild_passes_unlock_only_when_asked():
 def test_the_help_and_header_say_bronze_reads_no_row_until_the_restage_publishes():
     assert "no snapshot" in (ROOT / "mk/rebuild.mk").read_text() and "readers see no row" in (ROOT / "mk/rebuild.mk").read_text()
     assert "bronze main has\n          no snapshot" in rebuild.__doc__
+
+
+@pytest.mark.parametrize("answer, says", [
+    ((3, OLD_HELP), "takes no --full-refresh"),                        # rc.1's wrapper: refused before bronze is replaced
+    ((125, "Unable to find image locally"), "could not read release"),  # never pulled: nothing to ask
+])
+def test_a_live_release_whose_k2_dbt_cannot_full_refresh_is_refused_before_the_lock(tmp_path, monkeypatch, answer, says):
+    run, log, holds, fake = go(tmp_path, monkeypatch)
+    fake.help = answer
+    with pytest.raises(rebuild.Refused, match=says):
+        run()
+    assert log == [] and holds.open == []  # no lock, no pause, no replace
+
+
+def test_the_wrapper_is_read_from_the_releases_pinned_image_with_no_network(tmp_path):
+    rel = release(tmp_path, KAFKA)
+    seen = []
+
+    class Run(rebuild.Live):
+        @staticmethod
+        def _run(argv, stdin=None):
+            seen.append(argv)
+            return subprocess.CompletedProcess(argv, 3, HELP, "")
+
+    assert rebuild.full_refresh_problem(rel, Run().wrapper_help) is None
+    [argv] = seen
+    assert argv[:2] == ["docker", "run"] and argv[argv.index("--network") + 1] == "none" and "--pull" in argv
+    assert argv[-3:] == [DBT_IMAGE, "build", "--help"]
+    (rel / "compiled" / "oneshots.json").unlink()
+    assert "pins no dbt-runner image" in rebuild.full_refresh_problem(rel, Run().wrapper_help)
