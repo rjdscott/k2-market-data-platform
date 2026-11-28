@@ -9,14 +9,16 @@
 
 A market data platform for quantitative research. Three crypto exchanges are captured
 verbatim over public WebSocket feeds into Redpanda. The Iceberg lakehouse (Lakekeeper, MinIO,
-Spark, Airflow, with Trino for SQL over it) runs, but the old pipeline that filled it is
-retired to [`legacy/v3-lake-ingest/`](./legacy/v3-lake-ingest/) and the lake receives no live
-crypto data until phase `004` of the plan below; the ClickHouse hot tier is paused while the
+Spark, Airflow, with Trino for SQL over it) is filled by products: since phase `004` of the plan
+below, live as the release candidate `v3.0.0-alpha.6-rc.1`, Kraken's trades land from Redpanda
+every five minutes into `kraken-trades`, beside Kraken's instrument list, a security master, and
+`canonical-trades` and `candles` derived from them; Binance and Coinbase reach Redpanda only. The
+first products, ISO 4217 currencies, TARGET calendars and the ECB's daily euro reference rates,
+run beside them. Each product is landed, audited, built by dbt, listed in a catalog site and served
+through SQL and a read-only REST API to the principals granted it (none yet on Kraken's: their grants
+are empty until the venue's terms are recorded). The ClickHouse hot tier is paused while the
 platform is built ([ADR-057](./docs/adr/ADR-057-clickhouse-hot-tier-paused-during-platform-build.md)).
-What runs end to end today is the new platform's first products: ISO 4217 currencies, TARGET
-calendars and the ECB's daily euro reference rates, each fetched, audited, built by dbt, listed
-in a catalog site and served through SQL and a read-only REST API. One host, inside a 25 CPU /
-48 GiB ceiling. Not a trading path.
+One host, inside a 25 CPU / 48 GiB ceiling. Not a trading path.
 
 [![CI](https://github.com/rjdscott/k2-market-data-platform/actions/workflows/ci.yml/badge.svg)](https://github.com/rjdscott/k2-market-data-platform/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
@@ -64,10 +66,10 @@ runs today**. Each phase of the plan updates them in the pull request that makes
 | Property | How |
 |---|---|
 | Complete | One Rust process per venue holds a single socket carrying trades and L2 book, stamps `recv_ts_ns` before parsing, verifies Kraken's CRC32 on every update, tracks each venue's sequence numbers, and publishes every frame verbatim. The L2 book is paused on every venue while the platform is built, by a per-venue switch ([ADR-050](./docs/adr/ADR-050-order-book-capture-paused-during-platform-build.md)). |
-| Retained | Redpanda keeps the raw topics for 48 hours or 2 GiB per partition, and trades and book for 7 days, so phase `004`'s first lake product starts at the log start; nothing older is recovered. The old lake ingest, its four layers and its dbt marts are archived in [`legacy/v3-lake-ingest/`](./legacy/v3-lake-ingest/), and their tables were dropped after a verified copy (`make drop`). |
+| Retained | Redpanda keeps the raw topics for 48 hours or 2 GiB per partition, and trades and book for 7 days. `kraken-trades` lands every record of Kraken's raw topic into a landing that is never expired ([ADR-063](./docs/adr/ADR-063-kafka-product-landing-per-product-bronze-staged-by-offset.md)); its first run started at the log start, and nothing older is recovered. Binance's and Coinbase's frames are kept by Redpanda alone. The old lake ingest, its four layers and its dbt marts are archived in [`legacy/v3-lake-ingest/`](./legacy/v3-lake-ingest/), and their tables were dropped after a verified copy (`make drop`). |
 | Disposable serving | ClickHouse `gold` is paused behind the compose profile `hot-gold` while the platform is built, its DDL still tested by `make test-clickhouse` ([ADR-057](./docs/adr/ADR-057-clickhouse-hot-tier-paused-during-platform-build.md)). Dedup is a `ReplacingMergeTree` key; candles are computed on read, so a replay cannot corrupt one. |
-| Products | Each product is defined once in its contract under [`contracts/`](./contracts/) and compiled into a sealed release. One Airflow DAG runs each product; a file product's fetch runs in a one-shot that holds no key and downloads only from its listed hosts, then runs the product's parser, which can reach the internet but no network of the stack ([SECURITY.md](./SECURITY.md)); Spark lands the bytes unchanged, audits the batch and only then publishes bronze, a failed batch holding back the next; dbt builds silver and gold with tests that roll a failed build back, and readers see only tested rows, through Trino or k2-api. Today: `reference-data.currency-master`, `reference-data.calendars`, `fx-reference.ecb-fx-rates` and `governance.quality-results`. |
-| Proven | 16 alert rules as code, routed by Alertmanager to Slack, chaos scripts with measured recovery, a fresh-clone release check before every tag. Every gate that read the old lake tables prints a `SKIP` line naming the phase that restores it. |
+| Products | Each product is defined once in its contract under [`contracts/`](./contracts/) and compiled into a sealed release. One Airflow DAG runs each product; a file product's fetch runs in a one-shot that holds no key and downloads only from its listed hosts, then runs the product's parser, which can reach the internet but no network of the stack ([SECURITY.md](./SECURITY.md)); Spark lands the bytes unchanged, audits the batch and only then publishes bronze, a failed batch holding back the next; a Kafka product lands every record of its offset range in one commit, with the offsets inside the snapshot, then stages bronze from that landing by offset ([ADR-063](./docs/adr/ADR-063-kafka-product-landing-per-product-bronze-staged-by-offset.md)); dbt builds silver and gold with tests that roll a failed build back, and readers see only tested rows, through Trino or k2-api. Today: `market-capture.kraken-trades`, `market-capture.kraken-instruments`, `reference-data.security-master`, `market-analytics.canonical-trades`, `market-analytics.candles` (1m, 5m, 1h, 1d), `reference-data.currency-master`, `reference-data.calendars`, `fx-reference.ecb-fx-rates` and `governance.quality-results`. |
+| Proven | 16 alert rules as code, and three per product DAG compiled into each release, routed by Alertmanager to Slack; chaos scripts with measured recovery, the Kafka products' own on throwaway lakes; `make product-verify`, which accounts for every offset of a Kafka product from its landing to bronze; a fresh-clone release check before every tag. Every gate that read the old lake tables prints a `SKIP` line. |
 
 [![K2 Pipeline Overview on a live run: every scrape target up, trade records per venue, Redpanda throughput, and the pipeline's CPU and memory](docs/images/dashboards/01-pipeline-overview.png)](docs/operations/dashboards.md)
 
@@ -83,8 +85,8 @@ flowchart TB
   F["k2-capture ×3 · Rust<br/>trades + L2 book on one socket<br/>L2 paused: ADR-050"]:::rs
   R[("Redpanda 25.3 · Avro + schema registry<br/>raw · trades · book per venue<br/>raw kept 48 h")]:::rp
   C["ClickHouse 24.3 · gold<br/>paused behind profile hot-gold<br/>ADR-057"]:::ch
-  P["Published files · ECB, ISO 4217<br/>fetch one-shot on k2-egress"]:::ex
-  subgraph L["Iceberg lakehouse · Lakekeeper + MinIO · no crypto data until phase 004"]
+  P["Published files and APIs · ECB, ISO 4217<br/>Kraken AssetPairs · fetch one-shot on k2-egress"]:::ex
+  subgraph L["Iceberg lakehouse · Lakekeeper + MinIO · Kraken trades since phase 004"]
     direction TB
     S["Airflow 3 · Spark 3.5 · dbt<br/>one DAG per product"]:::sp
     T["Trino 484 · SQL over the lake, read-only<br/>one warehouse per domain"]:::nb
@@ -94,6 +96,7 @@ flowchart TB
 
   E --> F --> R
   R -.->|Kafka engine, paused| C
+  R -->|raw.kraken, every 5 min| S
   P --> S --> T --> A
   F -.-> O
 
@@ -199,10 +202,11 @@ Step by step, with a command that fills every secret: the
 stopping, restarting one service and rolling out a change. The measured timeline of a fresh
 install: [fresh install](./docs/runbooks/fresh-install.md).
 
-The lake holds no crypto tables until phase `004`: the old data catalog, notebooks and labs
-are archived in [`legacy/v3-lake-ingest/`](./legacy/v3-lake-ingest/). The new labs are the
-[dbt labs](./docs/development/dbt-labs/README.md), on the ECB products: a source and a model, an
-incremental merge with a unit test, a failing test that rolls back.
+The old data catalog, notebooks and labs are archived in
+[`legacy/v3-lake-ingest/`](./legacy/v3-lake-ingest/); the new catalog is k2-api's catalog site. The
+new labs are the [dbt labs](./docs/development/dbt-labs/README.md): on the ECB products a source and
+a model, an incremental merge with a unit test, a failing test that rolls back; on Kraken's,
+`UNNEST WITH ORDINALITY` with window flags, and type-2 history from listings.
 
 Grafana is on http://localhost:3000, Airflow on http://localhost:8090 and Trino on
 https://localhost:8443, by password only ([ADR-060](./docs/adr/ADR-060-trino-logins-by-password-over-tls-under-a-local-ca.md)).
@@ -233,7 +237,7 @@ of 68 / 287 / 10). A gate that read the old lake tables prints `SKIP` and the ph
 | k2-api against a fake Trino that enforces a compiled release's rules | `make test-api` |
 | The run records client, the catalog site generator and the dbt wrapper, fakes only | `make test-platform` |
 | Prometheus rule unit tests (10 of 16 alerts) and 11 documentation gates | `bash scripts/check-docs.sh` |
-| Live stack: chaos against the captures and Redpanda. `make lake-verify`, `make parity-ohlcv` and `make parity-bars` print `SKIP` until phase `004` | `make chaos` |
+| Live stack: chaos against the captures and Redpanda. The Kafka products' six chaos scripts run apart, each on a throwaway lake ([`scripts/chaos/`](./scripts/chaos/README.md)). `make lake-verify` and `make parity-bars` print `SKIP` | `make chaos` |
 
 [^rust]: `grep -rc '#\[test\]' services/capture-rust/src services/capture-rust/tests --include='*.rs' | awk -F: '{s+=$2} END {print s}'`
 [^py]: the last line `make test-python` prints
@@ -251,7 +255,7 @@ services/capture-rust/     k2-capture: one binary, three exchanges
 docker/airflow/            the Airflow image and the DAG factory: one DAG per product of the release
 docker/fetch/              the fetch one-shot: one guarded HTTPS download, then the product's parser
 docker/dbt-runner/         the dbt wrapper: tests before readers see a row, rollback, run records
-docker/lake/               the Spark connector, maintenance, and modules phase 004 reuses: offsets, wire framing, bars, books
+docker/lake/               the Spark connectors (file and Kafka), maintenance, offsets, wire framing, bars, books
 docker/clickhouse/ddl/     gold contract (CI-tested) and Kafka feeds; the tier is paused (ADR-057)
 docker/trino/              notes on Trino; its etc and rules are compiled into each release by k2gen
 docker/prometheus/rules/   16 alert rules, 10 with unit tests
@@ -272,8 +276,9 @@ legacy/                    v1, v2 Kotlin handlers, v2 ClickHouse DDL, v2 offload
 ## Not built
 
 No query API: k2-api reads one table at a time and takes no SQL. No replication or failover: one broker, one host. No
-paging: alerts go to one Slack channel. No load test above 1×. A pcap sidecar and a cross-venue security
-master are designed ([ADR-026](./docs/adr/ADR-026-four-layer-lake-and-gold-served-from-clickhouse.md),
+paging: alerts go to one Slack channel. No load test above 1×. The security master and the products
+derived from trades cover one venue, Kraken. A pcap sidecar is designed
+([ADR-026](./docs/adr/ADR-026-four-layer-lake-and-gold-served-from-clickhouse.md),
 [data strategy](./docs/architecture/12-data-strategy.md)) and not started.
 
 ## Documentation

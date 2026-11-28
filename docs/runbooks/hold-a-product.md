@@ -8,11 +8,11 @@ writer: [`phase-001-interfaces.md`](../development/phase-001-interfaces.md), "Ho
 [ADR-059](../adr/ADR-059-access-rules-compiled-default-deny-over-two-catalogs-per-domain.md)'s Outcome
 of 2026-11-28.
 
-> **From the release that carries phase 004 (`v3.0.0-alpha.6`, not yet tagged or deployed).** The
-> holds table, `make hold` and `make unhold`, `resolve`'s refusal and deploy's respect for a hold are
-> built on branch `phase/004-005-kraken-and-enriched` and unit-tested (`tests/test_hold.py`,
-> `tests/test_deploy.py`, `docker/airflow/tests/test_factory.py`). **No command below has run against a
-> stack yet**; no output is shown where none was read. Every message quoted is the code's own text.
+> **Deployed in the release candidate `v3.0.0-alpha.6-rc.1` on 2026-11-28.** The holds table, `make
+> hold` and `make unhold`, `resolve`'s refusal and deploy's respect for a hold are in that release and
+> unit-tested (`tests/test_hold.py`, `tests/test_deploy.py`, `docker/airflow/tests/test_factory.py`).
+> **`make hold` and `make unhold` have not run on the live stack yet** (plan 004's drill of them comes
+> after the soak); no output is shown where none was read. Every message quoted is the code's own text.
 
 **Run every command from the repo root of the live checkout with `set -a && . ./.env && set +a`
 loaded.**

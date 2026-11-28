@@ -9,14 +9,18 @@ the product fails loudly instead of skipping:
 [ADR-022](../adr/ADR-022-exactly-once-via-snapshot-offsets.md). The conf shape is frozen in
 [`phase-001-interfaces.md`](../development/phase-001-interfaces.md), "Accepting data loss".
 
-> **From the release that carries phase 004 (`v3.0.0-alpha.6`, not yet tagged or deployed).** The
-> failure and the accept-data-loss load are proven on a throwaway lake by `bash
-> scripts/verify/kafka-path.sh <release dir> b` (group b, `5 PASS, 0 FAIL` on 2026-11-28; its claim
-> b6, a topic trimmed before the first run, was added since and its run is pending), which runs
-> `connector.py load --accept-data-loss` directly. **The Airflow trigger with its conf, the
-> `offset_gap` run record it writes and the catalog page's list have not run on any stack**; the
-> factory's conf rule and the record are unit-tested (`docker/airflow/tests/test_factory.py`). Every
-> message quoted is the code's own text.
+> **Deployed in the release candidate `v3.0.0-alpha.6-rc.1` on 2026-11-28; nothing here has run on the
+> live stack.** The failure and the accept-data-loss load are proven on a throwaway lake by `bash
+> scripts/verify/kafka-path.sh <release dir> b` (group b, `5 PASS, 0 FAIL` on 2026-11-28; its claim b6,
+> a topic trimmed before the first run, was added since, and its rerun is recorded only by merge
+> `95e12a0`'s message, with no PASS line kept), which runs `connector.py load --accept-data-loss`
+> directly. On `kraken-trades` itself, `bash scripts/chaos/kafka-below-log-start.sh <release dir>`
+> (`kafka-below-log-start: 4 PASS, 0 FAIL in 160 s`, 2026-11-28, a throwaway lake) trims the topic past
+> the resume point, sees the load fail naming each partition, lands the accept-data-loss load from the log
+> start with its audit passing, and has the release's `factory.offset_gap` write the `offset_gap` row,
+> which `k2runs.offset_gaps` reads back. **The Airflow trigger with its conf and the catalog page's list
+> have not run on any stack**; the factory's conf rule is unit-tested
+> (`docker/airflow/tests/test_factory.py`). Every message quoted is the code's own text.
 
 **Run every command from the repo root of the live checkout with `set -a && . ./.env && set +a`
 loaded.** The example is `market-capture/kraken-trades`: DAG `kraken_trades`, landing

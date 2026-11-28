@@ -148,10 +148,18 @@ Stated plainly, because the gaps are structural rather than accidental:
 - **The produce path**, `sink.rs` has one test, that `warm_up()` fetches every subject a
   record can need. Avro encoding against a real registry and librdkafka delivery reports
   are not covered; that needs an embedded broker or a registry stub.
-- **Every alert**, the 10 capture rules are evaluated against live series, but `make chaos`
-  has never run, so no rule has been shown to fire on the fault it names and no capture
-  recovery time is measured. Three of them carry `promtool` unit tests
-  (`make check-alerts`) that pin the expression, not the recovery.
+- **Every alert**, the 10 capture rules are evaluated against live series. The capture chaos
+  scripts ran once, on 2026-08-26 ([`scripts/chaos/results/2026-08-26.tsv`](../../scripts/chaos/results/2026-08-26.tsv)):
+  `CaptureDown` and `CaptureProduceErrors` fired on the faults they name, with their recovery
+  measured; the other eight capture rules have never been shown to fire on their fault, and
+  `capture-corrupt-frame.sh` is a SKIP by design. Plan 004's six Kafka product chaos scripts ran on
+  throwaway lakes on 2026-11-28, each `0 FAIL`
+  ([`scripts/chaos/README.md`](../../scripts/chaos/README.md#the-kafka-product-scripts-plan-004)), but a
+  throwaway has no Prometheus or Airflow, so none of the per-product alerts (`ProductRunFailed_<dag>`,
+  `ProductStale_<dag>`, `ProductRunSlow_<dag>`) has been shown to fire on a fault, and none of those
+  scripts has run against the live stack. Four capture rules carry `promtool` unit tests
+  (`make check-alerts`), and the three `kraken_trades` product rules one more
+  (`make check-release-alerts`); they pin the expression, not the recovery.
 - **The ClickHouse feeds**, `make test-clickhouse` applies the `gold` DDL to a throwaway
   server and asserts on it, but the Kafka-engine feeds never read a real broker in a test.
   The hot tier is paused (ADR-057).
@@ -159,10 +167,14 @@ Stated plainly, because the gaps are structural rather than accidental:
   are covered as pure flows over a fake store and lake (`tests/test_lake_connector.py`), and a real
   Spark write by `storage-keys.sh`; no automated test runs a product's whole DAG on a lake (fetch
   to gold). The kept helpers (`offsets.py`, `wire.py`, `bars.py`, `books.py`) are covered as pure
-  code; the Kafka read returns with phase 004's connector and its tests. The v3 ingest's jobs and
+  code. The Kafka connector (`docker/lake/kafka.py`) is covered as pure code by
+  `tests/test_lake_kafka.py`, and against Spark, Iceberg and a Redpanda on throwaway lakes by
+  `kafka-path.sh` and `run-path.sh` claims 10 to 18, each task run directly, not by Airflow. The v3 ingest's jobs and
   their tests are archived in [`legacy/v3-lake-ingest/`](../../legacy/v3-lake-ingest/).
 - **End-to-end**, no automated test asserts that a trade leaving an exchange arrives in
-  a product: nothing carries it past Redpanda until phase 004
+  a product: `run-path.sh` claims 12 to 14 carry synthetic trade frames from a Redpanda topic to
+  `silver_trade`, `canonical-trades` and `candles` on a throwaway lake, but nothing joins the
+  capture's socket to that path in a test
   ([../operations/latency-budgets.md](../operations/latency-budgets.md)).
 
 ## Manual failure-mode suite
@@ -172,7 +184,8 @@ stack**, broker restart, database restart, feed-handler crash, offload failure,
 object-store outage and network partition. All six passed, worst MTTR 32 seconds. Those
 numbers belong to the Kotlin tier and have not been re-measured since it retired, and two
 of them were induced against the v2 offload, which is deleted; of those, the batch-job failure
-retired with the v3 lake too, and MinIO's lake-side recovery is unmeasured until phase 004.
+retired with the v3 lake too, and MinIO's lake-side recovery is unmeasured; phase 004's restore
+drill measured a restore of a lake whose objects are gone, on a throwaway lake only.
 The capture-tier
 equivalent is `make chaos`; the Kafka products' six faults are plan 004's chaos scripts, each on a
 throwaway lake of its own, with their recorded results in
