@@ -33,18 +33,18 @@ def written(out: str) -> list[str]:
     return re.findall(r"^engine-keys: wrote (\S+)$", out, re.M)
 
 
-def test_twelve_names_on_the_example_then_none(tmp_path):
-    assert keys.ENGINES == ["backup", "maintenance", "spark", "tools", "trino"]
+def test_fourteen_names_on_the_example_then_none(tmp_path):
+    assert keys.ENGINES == ["backup", "maintenance", "restore", "spark", "tools", "trino"]
     f = scratch(tmp_path)
     first = run(f)
-    assert first.returncode == 0 and sorted(written(first.stdout)) == sorted(NAMES) and len(NAMES) == 12
+    assert first.returncode == 0 and sorted(written(first.stdout)) == sorted(NAMES) and len(NAMES) == 14
     got = keys.values(f.read_text())
     for e in keys.ENGINES:
         ak, sk = keys.pair_names(e)
         assert re.fullmatch(rf"k2-{e}-[0-9a-f]{{8}}", got[ak]) and len(got[sk]) == 40
         assert got[ak] not in first.stdout + first.stderr and got[sk] not in first.stdout + first.stderr
     assert got["K2_RUN_UID"] == str(os.getuid()) and got["K2_RUN_GID"] == str(os.getgid())
-    assert len({got[keys.pair_names(e)[0]] for e in keys.ENGINES}) == 5
+    assert len({got[keys.pair_names(e)[0]] for e in keys.ENGINES}) == 6
     assert f.stat().st_mode & 0o777 == 0o600
     backups = list(tmp_path.glob(".env.bak-*"))
     assert len(backups) == 1 and backups[0].read_text() == EXAMPLE and backups[0].stat().st_mode & 0o777 == 0o600
@@ -120,7 +120,7 @@ def test_a_new_access_key_never_takes_another_engines_or_the_roots(monkeypatch):
     monkeypatch.setattr(keys.secrets, "token_hex", lambda n: next(draws))
     current = {"MINIO_ROOT_USER": "k2-spark-aaaaaaaa", "K2_TOOLS_S3_ACCESS_KEY": "k2-tools-x",
                **{n: "x" * 40 for e in keys.ENGINES for n in keys.pair_names(e)[1:]}}
-    current |= {"K2_BACKUP_S3_ACCESS_KEY": "b", "K2_MAINTENANCE_S3_ACCESS_KEY": "m", "K2_TRINO_S3_ACCESS_KEY": "t",
+    current |= {"K2_BACKUP_S3_ACCESS_KEY": "b", "K2_MAINTENANCE_S3_ACCESS_KEY": "m", "K2_TRINO_S3_ACCESS_KEY": "t", "K2_RESTORE_S3_ACCESS_KEY": "r",
                 "K2_RUN_UID": "1", "K2_RUN_GID": "1"}
     assert keys.plan(current, {}, set(), 1, 1) == {"K2_SPARK_S3_ACCESS_KEY": "k2-spark-bbbbbbbb"}
 
@@ -143,7 +143,7 @@ def test_a_missing_file_is_refused(tmp_path):
 
 
 def test_each_engines_holders_are_the_services_compose_gives_its_secret():
-    assert keys.HOLDERS == {"backup": [], "maintenance": ["spark-iceberg"], "spark": ["spark-iceberg"],
+    assert keys.HOLDERS == {"backup": [], "maintenance": ["spark-iceberg"], "restore": [], "spark": ["spark-iceberg"],
                             "tools": [], "trino": ["trino"]}
 
 

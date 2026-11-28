@@ -40,10 +40,10 @@ INPUT = w.Input("fx.ecb-fx.rates", "fx.ecb_fx__base.rates", True, "audited", "ec
 UUID = "0123abcd-0000-4000-8000-000000000000"
 
 
-def ctx(run="access_canary/r1", inputs=(INPUT,), outputs=((OUT, VIEW),), incremental=False):
+def ctx(run="access_canary/r1", inputs=(INPUT,), outputs=((OUT, VIEW),), incremental=False, full_refresh=False):
     return w.Ctx(RELEASE, Path(f"/k2/releases/{RELEASE}"), "governance.access-canary", run, "governance", "access_canary",
                  "dbt_access_canary", "pub_access_canary", tuple(w.Output(r, v, ("region",), (), incremental) for r, v in outputs),
-                 tuple(inputs), datetime.now(timezone.utc))
+                 tuple(inputs), datetime.now(timezone.utc), full_refresh)
 
 
 class Crash(BaseException):
@@ -437,6 +437,55 @@ def test_the_dbt_environment_is_an_allow_list_and_the_argv_holds_no_secret():
     assert env["K2_TRINO_USER"] == "dbt_access_canary" and env["DBT_USE_COLORS"] == "false"
     argv = w.dbt_argv(ctx(), {INPUT.contract: 7})
     assert not any("password" in a or "s3cr3t" in a for a in argv)
+
+
+# ---- W1-15a: k2-dbt build --full-refresh ---------------------------------------------------------
+
+def test_a_full_refresh_appends_dbts_flag_and_without_it_the_argv_is_as_before():
+    plain = w.dbt_argv(ctx(), {INPUT.contract: 7})
+    assert "--full-refresh" not in plain
+    assert plain[-4:] == ["--target-path", str(w.WORK / "target"), "--log-path", str(w.WORK / "logs")]
+    assert w.dbt_argv(ctx(full_refresh=True), {INPUT.contract: 7}) == [*plain, "--full-refresh"]
+
+
+ORPHAN_AFTER = "20261127_010203_00043_orph2"
+# Each case once as a normal build and once as a full refresh; its exit as either.
+FULL_REFRESH_CASES = {
+    "pass": (lambda f: None, 0),
+    "schema change": (lambda f: f.build.__setitem__(OUT, V2), 0),
+    "failed test": (lambda f: (setattr(f, "dbt_code", 1), setattr(f, "dbt_status", "fail")), 1),
+    "write after its tests": (lambda f: setattr(f, "after_dbt", lambda g: g._snap(OUT, V1, False, query_id=ORPHAN_AFTER)), 3),
+    "tag commit refused": (lambda f: setattr(f, "commit_status", 409), 3),
+}
+
+
+@pytest.mark.parametrize("case", sorted(FULL_REFRESH_CASES))
+def test_a_full_refresh_keeps_the_guard_the_order_and_the_run_records_of_any_build(case):
+    setup, exit_code = FULL_REFRESH_CASES[case]
+    seen = {}
+    for full in (False, True):
+        fake = Fake()
+        fake.seed()
+        setup(fake)
+        code, expire = w.run(ctx(full_refresh=full), fake)
+        (argv,) = fake.dbt_calls
+        assert (argv[-1] == "--full-refresh") is full
+        seen[full] = (code, expire, [{k: v for k, v in r.items() if k != "started_at"} for r in fake.records],
+                      fake.statements, fake.commits, fake.views, {r: (t["main"], t["tag"]) for r, t in fake.tables.items()},
+                      argv[:-1] if full else argv)
+        assert fake.leaks() == []
+    assert seen[True][0] == exit_code and seen[True] == seen[False]
+
+
+def test_main_hands_the_flag_to_the_run_only_when_it_is_given(monkeypatch, capsys):
+    got = []
+    monkeypatch.setattr(w, "load", lambda release, product, run_id, full: ctx(full_refresh=full))
+    monkeypatch.setattr(w, "Live", lambda c, env: None)
+    monkeypatch.setattr(w, "run", lambda c, io, xcom: (got.append(c.full_refresh), (0, []))[1])
+    base = ["build", "--release", RELEASE, "--product", "governance.access-canary", "--run-id", "access_canary/r1"]
+    assert w.main(base) == 0 and w.main([*base, "--full-refresh"]) == 0
+    assert got == [False, True]
+    assert [json.loads(line) for line in capsys.readouterr().out.splitlines()] == [{"exit": 0, "expire": []}] * 2
 
 
 @pytest.mark.parametrize("code,statuses,expected", [

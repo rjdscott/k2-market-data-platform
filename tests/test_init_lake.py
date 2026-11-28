@@ -21,7 +21,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 PLAN = ROOT / "platform/k2gen/tests/golden/lake/compiled/lake/storage-plan.json"
 POLICIES = ROOT / "docker/lake/minio/policies"
-ENGINES = ["backup", "maintenance", "spark", "tools", "trino"]
+ENGINES = ["backup", "maintenance", "restore", "spark", "tools", "trino"]
 ROOT_USER, ROOT_PASSWORD = "root-user", "r00t:p@ss/w%rd"   # characters MC_HOST_<alias> must encode
 
 FAKE_CURL = r"""#!/usr/bin/env python3
@@ -343,6 +343,10 @@ def test_each_key_reaches_its_own_scope_and_nothing_else(tmp_path: Path) -> None
     for e in ("backup", "tools"):
         assert all(can(e, R, x) for x in [k2, *doms, landing])
         assert not any(can(e, a, x) for a in (W, D, "s3:AbortMultipartUpload") for x in [k2, *doms, landing])
+    # restore (scripts/restore.py): puts the backup's files back in every warehouse and the landings;
+    # reads them (a HEAD before each put, so nothing is overwritten); deletes nothing, aborts nothing.
+    assert all(can("restore", a, x) for a in (R, W) for x in [k2, *doms, landing])
+    assert not any(can("restore", a, x) for a in (D, "s3:AbortMultipartUpload") for x in [k2, *doms, landing])
     for e in ENGINES:
         assert not any(can(e, a, x) for a in (R, W, D) for x in outside), e
     # Listing follows the same scopes.
@@ -353,7 +357,7 @@ def test_each_key_reaches_its_own_scope_and_nothing_else(tmp_path: Path) -> None
     # GetBucketLocation (metadata only) on exactly the buckets each engine holds anything in, so a
     # refused storage-key row confirms the bucket with its own key (scripts/access_verify.py).
     located = {e: sorted(b for b in ("k2-lake", "k2-landing") if can(e, "s3:GetBucketLocation", f"{b}/")) for e in ENGINES}
-    assert located == {"backup": ["k2-lake", "k2-landing"], "maintenance": ["k2-lake", "k2-landing"],
+    assert located == {"backup": ["k2-lake", "k2-landing"], "maintenance": ["k2-lake", "k2-landing"], "restore": ["k2-lake", "k2-landing"],
                        "spark": ["k2-lake", "k2-landing"], "tools": ["k2-lake", "k2-landing"], "trino": ["k2-lake"]}
     assert not any(can(e, "s3:GetBucketLocation", "other-bucket/") for e in ENGINES)
 

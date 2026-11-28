@@ -9,12 +9,13 @@ endpoint is [onboard-a-public-api-product.md](./onboard-a-public-api-product.md)
 container, the pull request, the catalog page) apply here unchanged. Why the path is shaped this way:
 [ADR-063](../adr/ADR-063-kafka-product-landing-per-product-bronze-staged-by-offset.md) (Proposed).
 
-> **From the release that carries phase 004 (`v3.0.0-alpha.6`, not yet tagged or deployed).** Sections
-> 1 and 2 are written from the documents and checks on branch `phase/004-005-kraken-and-enriched`;
-> `make test-dbt SELECTOR=candles` built six products in their input order (`candles` and the five it
-> reads through its inputs, `currency-master` among them) with every test passing on a throwaway lake
-> on 2026-11-28, on empty bronze: no row of a frame was built. **Sections 3 to 5 have not run anywhere**;
-> no output is shown for them.
+> **Deployed in the release candidate `v3.0.0-alpha.6-rc.1` on 2026-11-28.** Sections 1 and 2 are
+> written from the documents and checks on branch `phase/004-005-kraken-and-enriched`; `make test-dbt
+> SELECTOR=candles` built six products in their input order (`candles` and the five it reads through
+> its inputs, `currency-master` among them) with every test passing on a throwaway lake on 2026-11-28,
+> on empty bronze: no row of a frame was built. Sections 3 to 5 were done for rc.1 on the live stack on
+> 2026-11-28: the release deployed and the first runs of its five DAGs green. The commands below are
+> written from the code; **no output of that deploy is pasted here**, and none was timed but the runs.
 
 **Run every command from the repo root.** Sections 3 to 5 need the live checkout at the tag with
 `set -a && . ./.env && set +a` loaded.
@@ -23,9 +24,9 @@ container, the pull request, the catalog page) apply here unchanged. Why the pat
 |---|------|--------|----------|
 | 1 | Write the documents | a day | not measured: a person's work |
 | 2 | Check them, no container | < 5 min | not measured for these products |
-| 3 | Release and secrets | < 10 min | not yet run |
-| 4 | Deploy, then unpause in order | < 15 min | not yet run |
-| 5 | First runs | the backlog's | not yet run |
+| 3 | Release and secrets | < 10 min | done for rc.1 on the live stack, 2026-11-28; not timed |
+| 4 | Deploy, then unpause in order | < 15 min | done for rc.1 on the live stack, 2026-11-28; not timed |
+| 5 | First runs | the backlog's | live, rc.1, 2026-11-28: the five DAGs' first runs green; `kraken_trades` a median 71 s a run over its first 11, catch-up runs included (`airflow dags list-runs kraken_trades -o json`, end minus start): a first measurement, not a benchmark |
 
 ---
 
@@ -144,7 +145,7 @@ make password PRINCIPAL=svc.operator TO_FILE=1
 make principals-status
 ```
 
-**Measured**, not yet run.
+**Measured**, done for rc.1 on the live stack, 2026-11-28; not timed.
 
 ---
 
@@ -178,7 +179,7 @@ docker exec $S airflow dags unpause candles -y
 docker exec $S airflow dags list                                  # is_paused False for the five
 ```
 
-**Measured**, not yet run.
+**Measured**, done for rc.1 on the live stack, 2026-11-28; not timed.
 
 ---
 
@@ -212,7 +213,10 @@ What the first runs must confirm, and where each is read:
 below the log start: [accept-data-loss.md](./accept-data-loss.md); `audit` failed or `load` refused
 behind a failed batch: [kafka-batch-blocked.md](./kafka-batch-blocked.md).
 
-**Measured**, not yet run.
+**Measured**, live, rc.1, 2026-11-28: the five DAGs' first runs green, and `make product-verify
+PRODUCT=market-capture/kraken-trades` then accounted for every offset
+([verify-a-kafka-product.md](./verify-a-kafka-product.md)). The three confirmations above are not
+recorded here.
 
 ## 5a. A rejected frame
 
@@ -235,10 +239,11 @@ stays, and the product degraded, until that frame leaves `bronze_trade`.
 
 ## Failure modes / incidents
 
-None yet: nothing here has run against a stack.
+None recorded from the rc.1 deploy of 2026-11-28.
 
 ---
 
 **Last verified:** sections 1 and 2 against the documents and checks on branch
 `phase/004-005-kraken-and-enriched` on 2026-11-28, `make test-dbt SELECTOR=candles` passing on empty
-bronze on a throwaway lake. Not yet: sections 3 to 5, every command in them.
+bronze on a throwaway lake. Sections 3 to 5 done for rc.1 on the live stack on 2026-11-28, its first runs
+green; this page's commands were not each run as written there.

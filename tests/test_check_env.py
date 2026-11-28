@@ -47,7 +47,7 @@ def test_the_example_as_is_fails_on_every_secret():
 
 
 def test_every_engine_has_a_pair_in_the_example_and_the_table():
-    assert guard.ENGINES == ["BACKUP", "MAINTENANCE", "SPARK", "TOOLS", "TRINO"]
+    assert guard.ENGINES == ["BACKUP", "MAINTENANCE", "RESTORE", "SPARK", "TOOLS", "TRINO"]
     for e in guard.ENGINES:
         assert f"K2_{e}_S3_SECRET_KEY" in NAMES and guard.CREDENTIALS[f"K2_{e}_S3_SECRET_KEY"] == f"$K2_{e}_S3_ACCESS_KEY"
         assert re.search(rf"^K2_{e}_S3_ACCESS_KEY=k2-{e.lower()}-placeholder$", EXAMPLE, re.M)

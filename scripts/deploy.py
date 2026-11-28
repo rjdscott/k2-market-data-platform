@@ -370,8 +370,12 @@ def compose_env(ctx: Ctx) -> dict[str, str]:
 
 
 def containers(ctx: Ctx) -> list[dict[str, Any]]:
-    """Every container of the project but `compose run` ones, newest first, as docker inspect gives them."""
-    ids = run("docker", "ps", "-aq", "--no-trunc", "--filter", f"label=com.docker.compose.project={ctx.project}").stdout.split()
+    """Every container of the project but `compose run` ones, newest first, as docker inspect gives them.
+    The config-hash label is one compose sets on a container it creates and never on an image: a
+    `docker run` of an image compose built carries the image's project and service labels, and a
+    throwaway lake's Spark was taken for the live one (release-verify, 2026-11-28)."""
+    ids = run("docker", "ps", "-aq", "--no-trunc", "--filter", f"label=com.docker.compose.project={ctx.project}",
+              "--filter", "label=com.docker.compose.config-hash").stdout.split()
     found = json.loads(run("docker", "inspect", *ids).stdout) if ids else []
     found = [c for c in found if (c["Config"].get("Labels") or {}).get("com.docker.compose.oneoff") != "True"]
     return sorted(found, key=lambda c: c["Created"], reverse=True)

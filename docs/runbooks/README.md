@@ -6,11 +6,15 @@ profile `hot-gold` ([ADR-057](../adr/ADR-057-clickhouse-hot-tier-paused-during-p
 runs, and [pause-and-resume-a-serving-product.md](./pause-and-resume-a-serving-product.md) is how it is paused and started.
 The v3 lake ingest pipeline is retired and archived in
 [`legacy/v3-lake-ingest/`](../../legacy/v3-lake-ingest/) with its runbooks
-([ADR-056](../adr/ADR-056-unified-data-product-platform.md)): no live crypto data reaches the lake
-until [phase 004](../plans/2026-11-26-unified-product-platform/004-kraken-trades-instruments-security-master.md)
-of the unified platform plan, and the captures keep writing to Redpanda meanwhile. What the lake
-receives since [phase 002](../plans/2026-11-26-unified-product-platform/002-run-spine-through-ecb-fx.md)
-is the file products, one DAG each: the ISO 4217 currency list, the TARGET calendar and the ECB
+([ADR-056](../adr/ADR-056-unified-data-product-platform.md)). Crypto data reaches the lake again as
+products since [phase 004](../plans/2026-11-26-unified-product-platform/004-kraken-trades-instruments-security-master.md)
+of the unified platform plan, live as the release candidate `v3.0.0-alpha.6-rc.1` since 2026-11-28:
+`kraken-trades` lands Kraken's raw topic every five minutes, `kraken-instruments` fetches Kraken's
+public instrument list hourly, the security master is built from it, and `canonical-trades` and
+`candles` from the trades.
+Binance's and Coinbase's captures still write to Redpanda only. Since
+[phase 002](../plans/2026-11-26-unified-product-platform/002-run-spine-through-ecb-fx.md) the lake also
+receives the file products, one DAG each: the ISO 4217 currency list, the TARGET calendar and the ECB
 reference rates. Runbooks record
 *how*; ADRs record *why* (`../adr/`). Every Prometheus alert annotation points at one of
 these; start from the alert that fired, or from the "when to use" column below. Day-to-day
@@ -84,9 +88,9 @@ no longer exists, do not follow them against this stack.
 | [file-source-audit-failed.md](./file-source-audit-failed.md) | A landed file failed its bronze audit, or a later file's `load` waits behind it: reading `audit_checks` and `landing_files` in Spark (no Trino principal may), a bad file versus a wrong check, resetting branch `audit` to `main` as the Spark key, rerun and verify. Written from the code at this release, **not yet run on the live stack** | `AirflowTaskFailed` (`task_id="audit"` or `"load"`); no alert specific to an audit yet |
 | [onboard-a-file-product.md](./onboard-a-file-product.md) | Adding a file product from nothing: its documents, parser and synthetic fixtures, the checks and tests, the pull request, tag, release, its two principals' passwords, deploy, the first run, its run records and catalog page, with the three products of phase 002 as the worked example. The unit steps run; **the live steps not yet run** | none, manual |
 
-### Kafka and public-API products (phase 004: built, not yet deployed)
+### Kafka and public-API products (phase 004)
 
-Written from the code on the phase 004 branch for the release that carries it (`v3.0.0-alpha.6`, not yet tagged). Each says which of its sections ran on a throwaway lake and which have not run anywhere.
+Phase 004's products run live as the release candidate `v3.0.0-alpha.6-rc.1` since 2026-11-28. The rebuild, restore and verify tools came after it, on the phase 004 exit branch, and are in no release yet. Each runbook says which of its sections ran on a throwaway lake, which on the live stack, and which nowhere.
 
 | Runbook | When to use | Triggering alert |
 |---------|-------------|------------------|
@@ -94,7 +98,9 @@ Written from the code on the phase 004 branch for the release that carries it (`
 | [onboard-a-public-api-product.md](./onboard-a-public-api-product.md) | Adding a product fetched from a public JSON endpoint, `kraken-instruments` as the example: the connector block, pagination `none`, the parser and its audits, the checks, and what the first live fetch must confirm about the venue's symbol spelling. **No live step run** | none, manual |
 | [hold-a-product.md](./hold-a-product.md) | Stopping one product's runs for an incident: `make hold PRODUCT= REASON=`, `make unhold`, the one-time `svc.operator` password file, what `resolve` prints for a held product, why no deploy unpauses it, the alerts to silence. Unit-tested; **not yet run on a stack** | `ProductStale_<dag>`, `ProductRunFailed_<dag>` while held |
 | [accept-data-loss.md](./accept-data-loss.md) | A Kafka product's `load` refused because its committed offset fell below the log start: the loud failure, the manual trigger with `{"acceptDataLoss": true, "reason": ...}`, what is recorded (`k2.kafka-gaps` cumulative, the `offset_gap` run record, the catalog page). The load proven on a throwaway lake; **the Airflow trigger not yet run** | `ProductRunFailed_<dag>`, `AirflowTaskFailed` (`task_id="load"`) |
-| [kafka-batch-blocked.md](./kafka-batch-blocked.md) | A Kafka product's batch failed its audit and blocks bronze: reading the failed checks, the clearing statement the refusal prints, and the interrupted batch that heals by itself. The failing audit proven on a throwaway lake; **not yet run on a stack** | `ProductRunFailed_<dag>`, `AirflowTaskFailed` (`task_id="audit"` or `"load"`) |
+| [kafka-batch-blocked.md](./kafka-batch-blocked.md) | A Kafka product's batch failed its audit and blocks bronze: reading the failed checks, the clearing statement the refusal prints, and the interrupted batch that heals by itself. Sections 1 and 2 induced end to end on `kraken-trades` on a throwaway lake (`scripts/chaos/bronze-failed-then-repaired.sh`, 2026-11-28); **not yet run on the live stack** | `ProductRunFailed_<dag>`, `AirflowTaskFailed` (`task_id="audit"` or `"load"`) |
+| [verify-a-kafka-product.md](./verify-a-kafka-product.md) | Proving a Kafka product read-only: `make product-verify` (every offset from the landing to bronze accounted for, each output's tag its run record's; reading a FAIL), `make parity-silver` and `make parity-ohlcv` (silver and the candles recomputed by DuckDB and compared column by column, pinned by a build's run records). `make product-verify` run live on rc.1, every check PASS; parity on a throwaway lake only, since rc.1's `tools` image has no DuckDB | none, manual check |
+| [rebuild-a-product.md](./rebuild-a-product.md) | Building a product again from what it is built from: `make rebuild PRODUCT=` under a rebuild hold (a Kafka product's bronze restaged from its landing as one batch, then `k2-dbt build --full-refresh`), the products `make restore` left for rebuild in their order, a failed or killed rebuild and `UNLOCK=1`. On a throwaway lake (`kafka-path.sh` group d, `restore-path.sh` claim 17); **not in rc.1, not yet run on the live stack**; a restage at live size unmeasured | none, manual |
 
 ### Host / operations
 
@@ -102,7 +108,7 @@ Written from the code on the phase 004 branch for the release that carries it (`
 |---------|-------------|------------------|
 | [fresh-install.md](./fresh-install.md) | Bringing the stack up from a fresh clone or after a Docker wipe: prerequisites, the measured timeline, what `docker compose ps` should show, and the capture image build race. Since phase 002: `make engine-keys`, lake-init from the release's own script, the secrets list, MinIO without host ports; **not yet run on the live stack** | none, manual check |
 | [docker-desktop-disk.md](./docker-desktop-disk.md) | Host `/` filling while `docker system df` reports far less: reclaiming space from a bloated `Docker.raw` with `fstrim`. Read the warning before touching the disk-image-size slider. Section 2: the VM disk the volumes share filling from inside | section 1 none, manual check; section 2 `DockerDiskUsageHigh`, `DockerDiskUsageCritical` |
-| [lake-backup-and-restore.md](./lake-backup-and-restore.md) | The host copy of what nothing can rebuild, and its restore: the live release's backup set (`compiled/lake/backup-set.json`: restore tables at their ref, landing prefixes, the releases root, the catalog and Airflow dumps) copied in its tools image with the read-only backup key to `runs/<UTC>/` with a `manifest.json`; `make backup`, `make backup-install`, `make backup-verify`, `make health` step (5); what it does not protect against (same disk, writable by anything running as you); the copies of the four retired tables stay under `lake/`. Written from the code at this release, **not yet run on the live stack**; **the restore is not yet drilled: phase 004's drill** | none: `make health` step (5), manual check |
+| [lake-backup-and-restore.md](./lake-backup-and-restore.md) | The host copy of what nothing can rebuild, and its restore: the live release's backup set (`compiled/lake/backup-set.json`: restore tables at their ref, landing prefixes, the releases root, the catalog and Airflow dumps) copied in its tools image with the read-only backup key to `runs/<UTC>/` with a `manifest.json`; `make backup`, `make backup-install`, `make backup-verify`, `make health` step (5); what it does not protect against (same disk, writable by anything running as you); the copies of the four retired tables stay under `lake/`. `make backup` and `make backup-verify` run live on 2026-11-27. Section 3: `make restore` (every product held, restore tables registered, landings back, rebuild tables not whole recreated, the drift check, then the products left for rebuild) and `make restore-drill` (checks, a statement, `CONFIRM=`, the damage, the restore), with the restore key; drilled on a throwaway lake (`restore-path.sh`, 2026-11-28), **not in rc.1, not yet run on the live stack**; same host only | none: `make health` step (5), manual check |
 | [docker-vm-oom-kill.md](./docker-vm-oom-kill.md) | Every container gone at once and `systemctl --user status docker-desktop` says `Result: oom-kill`: the host's out-of-memory killer ended the Docker VM. Confirm the cause, start Docker Desktop, start what did not come back, record the capture outage; then size the VM against host RAM. One occurrence, 2026-11-25: 10 min 13 s from the kill to `make health` PASS, capture off 343 s | none: no container can see host memory, manual check |
 | [pause-and-resume-a-serving-product.md](./pause-and-resume-a-serving-product.md) | Pausing the ClickHouse hot tier behind the compose profile `hot-gold`, or starting it again (`docker compose --profile hot-gold up -d clickhouse`, never a bare `up -d`): the two 7-day clocks (committed offsets, topic retention) and the hole a resume after them leaves, the consumer-group and lag checks after a resume, and why no reload from the lake can fill that hole any more. Read-only steps run 2026-11-26; the stop, remove and start rendered with `--dry-run` only | none: ADR-057 removes the ClickHouse alerts with the pause, manual check |
 | [drop-and-rebuild.md](./drop-and-rebuild.md) | Deleting a lake table, view or namespace, or a MinIO bucket: `make drop` takes a full `make backup` first (since phase 002), then copies it to `$K2_BACKUP_DIR/drop/<date>/`, compares count and bytes, then purges it through the catalog or removes the bucket; `DRY_RUN=1` lists only. What it refuses, a drop that stopped, and restoring a table or bucket from its copy (drilled 2026-11-26 on scratch objects) | none, manual check |
@@ -128,7 +134,7 @@ not follow them against this stack. A short page at each old path says what repl
 | [lake-ingest-lag.md](./lake-ingest-lag.md) | The lake ingest behind Redpanda | the connector-failure runbook of phase 002, the Kafka runbooks of phase 004 |
 | [lake-ingest-batch-audit.md](./lake-ingest-batch-audit.md) | An ingest batch that did not match the offsets it read | the Kafka connector's exactly-once resume, phase 004 |
 | [lake-audit-failed.md](./lake-audit-failed.md) | The nightly lake audit failed | the failed-audit runbook of phase 002 |
-| [lake-recovery.md](./lake-recovery.md) | Lakekeeper or MinIO down, an ingest killed mid-run, a replay, ClickHouse rebuilt from the lake | the backup, restore and rebuild-from-empty runbook of phase 004 |
+| [lake-recovery.md](./lake-recovery.md) | Lakekeeper or MinIO down, an ingest killed mid-run, a replay, ClickHouse rebuilt from the lake | [lake-backup-and-restore.md](./lake-backup-and-restore.md) section 3 (`make restore`) and [rebuild-a-product.md](./rebuild-a-product.md) (`make rebuild`), phase 004 |
 | [lake-disk-usage-high.md](./lake-disk-usage-high.md) | The two lake disk alerts | the lake metrics and alerts of phase 004; meanwhile `DockerDiskUsageHigh` and `DockerDiskUsageCritical` ([docker-desktop-disk.md](./docker-desktop-disk.md) section 2) and `df -h /` |
 | [dbt-marts.md](./dbt-marts.md) | The hourly dbt marts not rebuilt | the dbt runner and its run records, phase 002 |
 | [clickhouse-rebuild-from-lake.md](./clickhouse-rebuild-from-lake.md) | ClickHouse `gold` reloaded from the lake's gold | nothing: the lake's gold was dropped, and a resume reads Redpanda only, within 7 days ([pause-and-resume-a-serving-product.md](./pause-and-resume-a-serving-product.md)) |
@@ -162,6 +168,10 @@ Then:
   [connector-failure.md](./connector-failure.md) for `fetch`,
   [file-source-audit-failed.md](./file-source-audit-failed.md) for `load` and `audit`; any other task
   → [airflow-scheduling.md](./airflow-scheduling.md)
+- **A Kafka product's DAG** (`kraken_trades`: `ProductRunFailed_<dag>`, or `AirflowTaskFailed` on
+  `load` or `audit`) → [accept-data-loss.md](./accept-data-loss.md) when `load` says `below the log
+  start`, [kafka-batch-blocked.md](./kafka-batch-blocked.md) when `audit` failed or `load` was refused
+  behind a failed batch; then [verify-a-kafka-product.md](./verify-a-kafka-product.md)
 - **Hot tier affected** (no trades arriving, ClickHouse down), only while the `hot-gold`
   profile runs: ClickHouse is paused (ADR-057), and a stopped one is the paused state, not an
   incident → [failure-recovery.md](./failure-recovery.md)
@@ -169,11 +179,16 @@ Then:
   [failure-recovery.md](./failure-recovery.md) §5 for MinIO; for either, `docker logs --tail 100
   k2-<service>` first
 
-Until phase 004 the lake receives no crypto data and the hot tier is paused, so **Redpanda holds
-the only copy** of what the captures record: 48 h or 2 GiB per partition on the `raw.*` topics, 7 days on
-`trades.*` and `book.*` ([`docker/redpanda/init.sh`](../../docker/redpanda/init.sh)). A capture or
-broker failure is therefore the one that loses data, and it goes first. When phase 004's first
-product runs it starts at the start of the log; nothing older is recovered.
+The hot tier is paused and only Kraken's raw topic is read into the lake, so for Binance and
+Coinbase **Redpanda holds the only copy** of what the captures record: 48 h or 2 GiB per partition on
+the `raw.*` topics, 7 days on `trades.*` and `book.*`
+([`docker/redpanda/init.sh`](../../docker/redpanda/init.sh)). A Kraken record is kept once
+`kraken-trades`' landing commits it (the landing is never expired,
+[ADR-063](../adr/ADR-063-kafka-product-landing-per-product-bronze-staged-by-offset.md)); one the broker
+deletes first, while the DAG is paused, held or failing for longer than the topic keeps it, is lost,
+and the next run refuses loudly ([accept-data-loss.md](./accept-data-loss.md)). A capture or broker
+failure is therefore the one that loses data, and it goes first. `kraken-trades`' first run started at
+the log start (`startFrom: earliest-retained`); nothing older is recovered.
 
 ## Escalation
 
@@ -182,7 +197,7 @@ product runs it starts at the start of the log; nothing older is recovered.
 | Recovery not achieved within the runbook's MTTR + 30 min | Escalate to the platform owner |
 | Root cause is a code bug | Open an issue, link the runbook section that failed |
 | More than 3 occurrences in 24 h | Stop restarting; find the cause |
-| Data loss suspected | Escalate immediately. With no crypto data in the lake and the hot tier paused there is no second store to reconcile against: bound the window from the capture metrics ([capture-sequence-gaps.md](./capture-sequence-gaps.md)) and record it, as the capture runbooks' "Record the gap" says, before taking any destructive action |
+| Data loss suspected | Escalate immediately. For Binance and Coinbase there is no second store to reconcile against (the hot tier paused, nothing in the lake); for Kraken, `make product-verify PRODUCT=market-capture/kraken-trades` says whether the lake holds every offset it read ([verify-a-kafka-product.md](./verify-a-kafka-product.md)). Bound the window from the capture metrics ([capture-sequence-gaps.md](./capture-sequence-gaps.md)) and record it, as the capture runbooks' "Record the gap" says, before taking any destructive action |
 
 ## Archived v2 Kotlin runbooks
 

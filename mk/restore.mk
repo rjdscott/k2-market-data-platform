@@ -1,0 +1,13 @@
+# Owned by phase 004 steps W0-10 and W1-16: the restore of what `make backup` copied (scripts/restore.py).
+# Run from the live checkout with the stack's .env loaded (`set -a && . ./.env && set +a`), as the
+# backup runbook runs everything: the restore key, MinIO's root pair (the drill's damage alone) and
+# the directories are read from that environment by name, never printed. The proof on a throwaway
+# lake is `bash scripts/verify/restore-path.sh <release dir>`.
+
+.PHONY: restore
+restore:  ## [RUN=<stamp>] The lake back from the newest complete backup run, step by step from the live backup set. Checks first (both storage keys, the live release's own lake-init restore user and holds table, svc.operator's file, no make rebuild running, the run newest, complete and of the live set); then the DAGs not paused already paused and every DAG drained; the restore key proven against MinIO (a list and a put refused as existing, per scope) before the first write; the catalog database replayed only when Postgres says it is lost; every product held (restore, as svc.operator from the host) before a table moves, refused while a rebuild lock is open; restore tables put back with the restore key (never the root pair, never overwriting) and registered; landings back; a rebuild table not whole recreated empty. Released once catalog_drift --runs holds each audited tag to its run records, but a product with a recreated table and everything downstream: they stay held, DAG paused, until `make rebuild PRODUCT=` passes, in the printed order. Only the DAGs it paused are unpaused. Same host only: the dump needs the LAKEKEEPER_ENCRYPTION_KEY Lakekeeper already holds; a restore after host loss is NOT proven (scripts/restore.py)
+	@uv run --no-project --with trino==0.340.0 python3 scripts/restore.py run $${RUN:+--run "$$RUN"}
+
+.PHONY: restore-drill
+restore-drill:  ## CONFIRM=<live release id> Refused, saying what it destroys, without CONFIRM or unless the newest backup run can put back all it destroys (nothing committed or landed since the run, no rebuild lock), the restore key works against MinIO, and the release's own k2-dbt takes --full-refresh for what only make rebuild brings back; then pause, drain, hold, and empty the catalog database and each restore table's, landing's and rebuildable rebuild table's location in warehouses k2 and governance (MinIO's root pair from .env does the damage; a file product's bronze is spared), then `make restore`; prints each time. `make backup` first. Host loss stays unproven (scripts/restore.py)
+	@CONFIRM="$(CONFIRM)" uv run --no-project --with trino==0.340.0 python3 scripts/restore.py drill

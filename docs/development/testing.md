@@ -68,7 +68,9 @@ the one whose part a change touches.
 | `dbt-wrapper.sh` | the dbt wrapper in its own image, as the operator runs it, on a throwaway lake: a pass moves the tested tag, a failed test rolls back while a reader polling every 50 ms never sees a failed row, a killed run is reconciled, a changed or retyped column |
 | `catalog-site.sh` | offline: a trial release's catalog site, a page per product, no script, no outside link, no secret-looking text, and a planted secret fails the check; with a release and a site directory, checks that site |
 | `api-schema.sh` | every catalog document k2-api serves validates against the frozen schema, and `/v1/openapi.json` declares OpenAPI 3.1.0; `--release <dir>` checks a release with no k2-api |
-| `kafka-path.sh <release dir> a\|b\|c` | phase 004's Kafka connector, each task the release's own `connector.py`, on a throwaway lake with a Redpanda and the synthetic fixture product `market-capture.kafka-fixture` (frames from `services/capture-rust/tests/fixtures/synthetic-kraken-20s.jsonl`). Group a: one load lands every frame and stages the trades, staged plus skipped equal to landed; kills before and after the landing commit and a retry add nothing twice and leave no hole; Spark's own key; a corrupt frame fails `parses`; bronze carries the decoded envelope; an unaudited batch healed by the next run (a11) and a failed one never reset (a12). Group b: below the log start refused naming each partition; `--accept-data-loss` lands from the log start with the gap in `k2.kafka-gaps`, still there after a further run; a topic trimmed before the first run (b6). Group c: compaction skipped while `audit` holds a batch, then a `replace` per table; expiry keeps the newest connector snapshot; the next run resumes from it. On 2026-11-28: a `10 PASS, 0 FAIL`, b `5 PASS, 0 FAIL`, c `6 PASS, 0 FAIL`, before a11, a12 and b6 were added; their run is pending. Limit: a fixture product and the connector run directly, not through Airflow |
+| `kafka-path.sh <release dir> a\|b\|c\|d` | phase 004's Kafka connector, each task the release's own `connector.py`, on a throwaway lake with a Redpanda and the synthetic fixture product `market-capture.kafka-fixture` (frames from `services/capture-rust/tests/fixtures/synthetic-kraken-20s.jsonl`). Group a: one load lands every frame and stages the trades, staged plus skipped equal to landed; kills before and after the landing commit and a retry add nothing twice and leave no hole; Spark's own key; a corrupt frame fails `parses`; bronze carries the decoded envelope; an unaudited batch healed by the next run (a11) and a failed one never reset (a12). Group b: below the log start refused naming each partition; `--accept-data-loss` lands from the log start with the gap in `k2.kafka-gaps`, still there after a further run; a topic trimmed before the first run (b6). Group c: compaction skipped while `audit` holds a batch, then a `replace` per table; expiry keeps the newest connector snapshot; the next run resumes from it. Group d (`make rebuild`, on the phase 004 chain's own products on Kraken's raw topic, `scripts/rebuild.py`'s own code with Airflow and the scheduler's one-shot launcher as stand-ins): canonical-trades rebuilt by `--full-refresh` with `load_seq` after the old maximum, and candles' next build rewriting every window to the same values; a failing full refresh rolled back over an operator's hold; an open lock refused and `UNLOCK=1`; kraken-trades' bronze replaced from its release DDL and restaged from the landing as one batch, silver rebuilt to the same rows. On 2026-11-28: a `10 PASS, 0 FAIL`, b `5 PASS, 0 FAIL`, c `6 PASS, 0 FAIL`, before a11, a12 and b6 were added; no PASS line of their run is recorded; d `8 PASS, 0 FAIL`. Limit: a fixture product (groups a to c) and the connector run directly, not through Airflow |
+| `restore-path.sh <release dir>` | `make restore-drill` (`scripts/restore.py`) on a throwaway lake with a Redpanda, the run path and the Kafka chain filled by their own steps, backed up by the backup's own code, then: refusals that leave the lake as it was (an older run, a damaged copy, the drill without `CONFIRM`, after a commit since the run, a backup set naming a table the run lacks, a restore with no product held, Postgres stopped); the drill's damage and restore, every restore table back at the backup's metadata with its rows, every landing object back, kraken-trades' bronze recreated and every product downstream held for rebuild in order; the drift check clean; a second restore a no-op; `make rebuild` in the printed order back to every trade; a rebuild table missing a data file recreated; a restore table replaced by another refused. On 2026-11-28: `19 PASS, 0 FAIL in 661 s`, the drill's restore 32.0 s, 53.9 s with checks and damage (claim 10). Limit: no Airflow (`--no-airflow`) and the holds written in-network, not from the host |
+| `duckdb-landing.sh <release dir>` | DuckDB in the `tools` image built from the tree: its extensions load with no network; it reads the Kafka landing at a pinned snapshot with the `tools` key alone, writes nothing, on a network with no way out; `make parity-silver`'s and `make parity-ohlcv`'s scripts pass on tables the chain built with position deletes, and each fails on exactly the planted class (a column one too high and a trade left out; a volume off by one). On 2026-11-28: `7 PASS, 0 FAIL in 546 s`, the tools run's largest `memory.peak` 105 MiB of 2 GiB on synthetic frames |
 | `dbt-patterns.sh <release dir>` | three dbt patterns through the real wrapper on a throwaway lake, the fixture product `reference-data.pattern-lab`: (a) type-2 history from a listing as a `table` model, the first version at `1970-01-01`, the open row at `9999-12-31 23:59:59`, a rebuild equal; (b) a held table whose rows move into silver exactly once when they resolve; (c) a `warn` test that publishes and reports `degraded`; claim 12, compaction after the tests to zero delete files and an INSERT after the optimize refused. Its last run printed `10 PASS, 1 FAIL`; the failing claim is fixed since and two claims added, the rerun pending. Limit: fixture products, not phase 004's own |
 
 ## Running them
@@ -146,10 +148,18 @@ Stated plainly, because the gaps are structural rather than accidental:
 - **The produce path**, `sink.rs` has one test, that `warm_up()` fetches every subject a
   record can need. Avro encoding against a real registry and librdkafka delivery reports
   are not covered; that needs an embedded broker or a registry stub.
-- **Every alert**, the 10 capture rules are evaluated against live series, but `make chaos`
-  has never run, so no rule has been shown to fire on the fault it names and no capture
-  recovery time is measured. Three of them carry `promtool` unit tests
-  (`make check-alerts`) that pin the expression, not the recovery.
+- **Every alert**, the 10 capture rules are evaluated against live series. The capture chaos
+  scripts ran once, on 2026-08-26 ([`scripts/chaos/results/2026-08-26.tsv`](../../scripts/chaos/results/2026-08-26.tsv)):
+  `CaptureDown` and `CaptureProduceErrors` fired on the faults they name, with their recovery
+  measured; the other eight capture rules have never been shown to fire on their fault, and
+  `capture-corrupt-frame.sh` is a SKIP by design. Plan 004's six Kafka product chaos scripts ran on
+  throwaway lakes on 2026-11-28, each `0 FAIL`
+  ([`scripts/chaos/README.md`](../../scripts/chaos/README.md#the-kafka-product-scripts-plan-004)), but a
+  throwaway has no Prometheus or Airflow, so none of the per-product alerts (`ProductRunFailed_<dag>`,
+  `ProductStale_<dag>`, `ProductRunSlow_<dag>`) has been shown to fire on a fault, and none of those
+  scripts has run against the live stack. Four capture rules carry `promtool` unit tests
+  (`make check-alerts`), and the three `kraken_trades` product rules one more
+  (`make check-release-alerts`); they pin the expression, not the recovery.
 - **The ClickHouse feeds**, `make test-clickhouse` applies the `gold` DDL to a throwaway
   server and asserts on it, but the Kafka-engine feeds never read a real broker in a test.
   The hot tier is paused (ADR-057).
@@ -157,10 +167,14 @@ Stated plainly, because the gaps are structural rather than accidental:
   are covered as pure flows over a fake store and lake (`tests/test_lake_connector.py`), and a real
   Spark write by `storage-keys.sh`; no automated test runs a product's whole DAG on a lake (fetch
   to gold). The kept helpers (`offsets.py`, `wire.py`, `bars.py`, `books.py`) are covered as pure
-  code; the Kafka read returns with phase 004's connector and its tests. The v3 ingest's jobs and
+  code. The Kafka connector (`docker/lake/kafka.py`) is covered as pure code by
+  `tests/test_lake_kafka.py`, and against Spark, Iceberg and a Redpanda on throwaway lakes by
+  `kafka-path.sh` and `run-path.sh` claims 10 to 18, each task run directly, not by Airflow. The v3 ingest's jobs and
   their tests are archived in [`legacy/v3-lake-ingest/`](../../legacy/v3-lake-ingest/).
 - **End-to-end**, no automated test asserts that a trade leaving an exchange arrives in
-  a product: nothing carries it past Redpanda until phase 004
+  a product: `run-path.sh` claims 12 to 14 carry synthetic trade frames from a Redpanda topic to
+  `silver_trade`, `canonical-trades` and `candles` on a throwaway lake, but nothing joins the
+  capture's socket to that path in a test
   ([../operations/latency-budgets.md](../operations/latency-budgets.md)).
 
 ## Manual failure-mode suite
@@ -170,9 +184,12 @@ stack**, broker restart, database restart, feed-handler crash, offload failure,
 object-store outage and network partition. All six passed, worst MTTR 32 seconds. Those
 numbers belong to the Kotlin tier and have not been re-measured since it retired, and two
 of them were induced against the v2 offload, which is deleted; of those, the batch-job failure
-retired with the v3 lake too, and MinIO's lake-side recovery is unmeasured until phase 004.
+retired with the v3 lake too, and MinIO's lake-side recovery is unmeasured; phase 004's restore
+drill measured a restore of a lake whose objects are gone, on a throwaway lake only.
 The capture-tier
-equivalent is `make chaos`. The procedures are written up as a runbook so they double as
+equivalent is `make chaos`; the Kafka products' six faults are plan 004's chaos scripts, each on a
+throwaway lake of its own, with their recorded results in
+[`scripts/chaos/README.md`](../../scripts/chaos/README.md#the-kafka-product-scripts-plan-004). The procedures are written up as a runbook so they double as
 incident response:
 
 **[../runbooks/failure-recovery.md](../runbooks/failure-recovery.md)**

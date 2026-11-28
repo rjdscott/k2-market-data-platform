@@ -152,7 +152,11 @@ as it stood is in git history, and the lake recovery it pointed to is archived a
 storage fail, and so do `make backup` and `make drop`. Capture and Redpanda are unaffected. Since
 phase 002 a product DAG's task that touches storage while MinIO is down fails, and its run with it
 ([airflow-scheduling.md](./airflow-scheduling.md) section 2); the landed files and bronze `main` it had
-not yet moved are as before, so nothing published is lost.
+not yet moved are as before, so nothing published is lost. A Kafka product's run (`kraken_trades`,
+since phase 004) commits its landing in one step or not at all, so its records wait in Redpanda and
+the next run lands them from the last committed offsets, as long as the topic still holds them
+(`scripts/verify/kafka-path.sh` claim a5 proves the same for a load killed before its landing commit;
+past the topic's retention it is [accept-data-loss.md](./accept-data-loss.md)).
 
 **Detection**, manual: `make health` step (1). There is no MinIO exporter, and the lake alerts
 that would have followed retired with the v3 lake.
@@ -170,8 +174,11 @@ docker exec k2-minio curl -fsS localhost:9000/minio/health/live && echo OK
 
 **Measured**, ~5 s to restore, against the v2 offload. The hot tier gained 2 rows during a
 30-second outage, confirming ingest was never in the blast radius; that isolation is a
-property of the topology. The lake-side recovery time is phase 004's to measure, with its first
-restore drill.
+property of the topology. The lake-side recovery time with MinIO stopped is not measured on this
+stack. What phase 004 measured is the restore of a lake whose objects are gone, on a throwaway lake
+only: `make restore-drill` restored it in 32.0 s on 2026-11-28
+([lake-backup-and-restore.md](./lake-backup-and-restore.md) section 3b); no drill has run on the live
+stack.
 
 ---
 

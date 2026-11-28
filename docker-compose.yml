@@ -1124,7 +1124,7 @@ services:
     volumes:
       - *k2-releases-ro
     # The one service besides minio holding the root pair: it makes the buckets, the warehouses
-    # (whose storage credential Lakekeeper keeps) and one MinIO user per engine from the ten names
+    # (whose storage credential Lakekeeper keeps) and one MinIO user per engine from the twelve names
     # below, refusing a pair unset, equal to the root's or shared (init-lake.sh).
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER}
@@ -1139,6 +1139,8 @@ services:
       K2_BACKUP_S3_SECRET_KEY: ${K2_BACKUP_S3_SECRET_KEY:?set K2_BACKUP_S3_SECRET_KEY in .env (make engine-keys)}
       K2_TOOLS_S3_ACCESS_KEY: ${K2_TOOLS_S3_ACCESS_KEY:?set K2_TOOLS_S3_ACCESS_KEY in .env (make engine-keys)}
       K2_TOOLS_S3_SECRET_KEY: ${K2_TOOLS_S3_SECRET_KEY:?set K2_TOOLS_S3_SECRET_KEY in .env (make engine-keys)}
+      K2_RESTORE_S3_ACCESS_KEY: ${K2_RESTORE_S3_ACCESS_KEY:?set K2_RESTORE_S3_ACCESS_KEY in .env (make engine-keys)}
+      K2_RESTORE_S3_SECRET_KEY: ${K2_RESTORE_S3_SECRET_KEY:?set K2_RESTORE_S3_SECRET_KEY in .env (make engine-keys)}
       # Empty: the script reads the plan through the trino pointer. Deploy sets it to the
       # release being deployed, so a first deploy and a new warehouse read that release.
       K2_STORAGE_PLAN: ${K2_STORAGE_PLAN:-}
@@ -1490,11 +1492,14 @@ services:
       - <<: *k2-secret-file
         source: ${K2_SECRETS:-${HOME}/k2-secrets}/tls/ca.pem
         target: /run/k2-secrets/tls/ca.pem
+    # 1 CPU / 2G for DuckDB (make parity-silver, make parity-ohlcv: W1-18), which recomputes a whole
+    # landing; scripts/parity_silver.py gives DuckDB 1GB and 2 threads of it and spills past that to
+    # /tmp. Pointer swaps and k2site need a fraction; the ADR-010 Outcome says when this moves.
     deploy:
       resources:
         limits:
-          cpus: '0.25'
-          memory: 256M
+          cpus: '1.0'
+          memory: 2G
     restart: "no"
 
   # The two run one-shots (phase 002). Airflow starts them with `docker run` from the release's
@@ -1707,8 +1712,8 @@ services:
 # 40 GB). scripts/check-budget.py fails CI over it. Headroom: 7.70 CPU and
 # 18.625 GiB. With `--profile hot-gold` (clickhouse, paused by ADR-057) the
 # peak is 21.30 CPU / 37.375 GiB over 24 services; the script reports that line
-# and gates only the default, as it does for the one-shot profiles tools (17.55 /
-# 29.625 GiB), fetch (17.80 / 29.875 GiB) and build (18.30 / 30.875 GiB). The
+# and gates only the default, as it does for the one-shot profiles tools (18.30 /
+# 31.375 GiB), fetch (17.80 / 29.875 GiB) and build (18.30 / 30.875 GiB). The
 # host gives Docker 28 CPU / 49.5 GiB; 3 cores and 1.5 GiB stay outside the ceiling for the OS and the engine (ADR-045 says why that is enough).
 #
 # History: retiring the three Kotlin feed handlers (ADR-019) gave back the
@@ -1727,5 +1732,5 @@ services:
 # Target: 25 CPU / 48 GiB at the bootstrap peak (ADR-045)
 #
 # Instrument config: see config/instruments.yaml (single source of truth)
-# Last updated: 2026-11-27 (k2-api joins the default set, phase 003 W3-11, +0.5 CPU / 512M; before it k2-api built in place of its stub, phase 003 W3-5, its limits unchanged; before it alertmanager, phase 001 step S09; before it the phase 001 stubs tools, fetch, dbt-runner and k2-api behind profiles; before it lake-ddl and lake-metrics retired with the old lake ingest, ADR-056 and the ADR-010 Outcome; before it clickhouse behind the profile hot-gold, ADR-057)
+# Last updated: 2026-11-29 (tools 0.25 CPU / 256M -> 1 CPU / 2G for DuckDB, phase 004 W1-18, behind its profile; before it k2-api joins the default set, phase 003 W3-11, +0.5 CPU / 512M; before it k2-api built in place of its stub, phase 003 W3-5, its limits unchanged; before it alertmanager, phase 001 step S09; before it the phase 001 stubs tools, fetch, dbt-runner and k2-api behind profiles; before it lake-ddl and lake-metrics retired with the old lake ingest, ADR-056 and the ADR-010 Outcome; before it clickhouse behind the profile hot-gold, ADR-057)
 #############################################################################

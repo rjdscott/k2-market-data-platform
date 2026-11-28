@@ -21,7 +21,7 @@ release changes lake-init, so a rotation is three steps: this, then `make lake-i
 the live release, as deploy runs it: MinIO takes the new secret and the old one stops working), then
 the services that hold the engine's secret recreated so they read the new one, which
 `make lake-init RECREATE="<service> ..."` does through the release (HOLDERS: trino for trino,
-spark-iceberg for spark and maintenance; backup and tools are passed theirs per run). Until lake-init
+spark-iceberg for spark and maintenance; backup, restore and tools are passed theirs per run). Until lake-init
 reruns MinIO keeps the old secret, and a holder recreated first is refused. The last lines printed
 name the command. A first deploy runs lake-init itself.
 """

@@ -8,11 +8,12 @@ listing, hourly. Everything after the fetch is a file product's path:
 deploy and unpause order is [onboard-a-kafka-product.md](./onboard-a-kafka-product.md) section 4. Why
 fetches run this way: [ADR-036](../adr/ADR-036-connectors-land-verbatim-then-publish-bronze-after-audit.md).
 
-> **From the release that carries phase 004 (`v3.0.0-alpha.6`, not yet tagged or deployed).** The
-> fetch kind is unit-tested with every socket faked (`make test-connectors`, `tests/test_fetch.py`),
-> the parser on a hand-written synthetic response (`domains/market-capture/tests/`), and the product
-> built by `make test-dbt SELECTOR=candles` on a throwaway lake on 2026-11-28, on empty bronze. **No
-> fetch of the real endpoint has run**, so section 4 is a checklist for the first one, with no output.
+> **Deployed in the release candidate `v3.0.0-alpha.6-rc.1` on 2026-11-28.** The fetch kind is
+> unit-tested with every socket faked (`make test-connectors`, `tests/test_fetch.py`), the parser on a
+> hand-written synthetic response (`domains/market-capture/tests/`), and the product built by `make
+> test-dbt SELECTOR=candles` on a throwaway lake on 2026-11-28, on empty bronze. On the live stack the
+> first runs of `kraken_instruments`, fetching the real endpoint, were green on 2026-11-28. **Section 4's
+> checks of what that fetch returned are not recorded here**, so it stays a checklist with no output.
 
 **Run every command from the repo root.**
 
@@ -20,7 +21,7 @@ fetches run this way: [ADR-036](../adr/ADR-036-connectors-land-verbatim-then-pub
 |---|------|--------|----------|
 | 1 | Write the connector block and the parser | a day | not measured: a person's work |
 | 2 | Check them | < 5 min | not measured for this product |
-| 3 | Release, deploy, unpause | as a file product | not yet run |
+| 3 | Release, deploy, unpause | as a file product | done for rc.1 on the live stack, 2026-11-28; not timed |
 | 4 | Confirm the first live fetch | < 30 min | not yet run |
 
 ---
@@ -104,7 +105,7 @@ then the deploy. The new DAG is created paused; unpause it first of the phase 00
 trigger it once, since its cron is hourly ([onboard-a-kafka-product.md](./onboard-a-kafka-product.md)
 section 4 has the order and the commands).
 
-**Measured**, not yet run.
+**Measured**, done for rc.1 on the live stack, 2026-11-28, its first runs green; not timed.
 
 ---
 
@@ -147,10 +148,11 @@ failed: [file-source-audit-failed.md](./file-source-audit-failed.md).
 
 ## Failure modes / incidents
 
-None yet: nothing here has run against a stack.
+None recorded from the rc.1 deploy of 2026-11-28.
 
 ---
 
 **Last verified:** sections 1 and 2 against the documents and tests on branch
 `phase/004-005-kraken-and-enriched` on 2026-11-28 (`make test-dbt SELECTOR=candles` passing on empty
-bronze). Not yet: sections 3 and 4, and every command in them.
+bronze). Section 3 done for rc.1 on the live stack on 2026-11-28, its first runs green. Not yet:
+section 4's checks, and this page's commands each run as written.
