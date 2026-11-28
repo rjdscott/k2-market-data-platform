@@ -39,10 +39,14 @@ def release(tmp_path, *products, pipeline=None):
 
 
 class Holds:
-    """Stands in for k2runs' hold calls: `open` the open (kind, held_by) pairs, oldest first."""
-    def __init__(self, mp, log, open_=()):
+    """Stands in for k2runs' hold calls: `open` the open (kind, held_by) pairs, oldest first; `reasons`
+    a reason by kind; `others` the open holds of other products, as open_holds returns them."""
+    def __init__(self, mp, log, open_=(), reasons=None, others=None, product=KAFKA):
         self.open, self.log = list(open_), log
         self.release_error = None
+        self.reasons, self.others = dict(reasons or {}), dict(others or {})
+        mp.setattr(rebuild, "open_holds", lambda c, p: self.others.get(p, []) if p != product else
+                   [{"kind": k, "held_by": b, "held_at": "t", "reason": self.reasons.get(k, "")} for k, b in self.open])
         mp.setattr(k2runs, "held", lambda c, p: {"kind": self.open[-1][0], "held_by": self.open[-1][1], "held_at": "t"}
                    if self.open else None)
         mp.setattr(k2runs, "hold", self.hold)
@@ -112,11 +116,11 @@ class IO:
         return self.t
 
 
-def go(tmp_path, monkeypatch, product=KAFKA, open_=(), pipeline=None, **io):
+def go(tmp_path, monkeypatch, product=KAFKA, open_=(), pipeline=None, reasons=None, others=None, also=(), **io):
     log = []
-    holds = Holds(monkeypatch, log, open_)
+    holds = Holds(monkeypatch, log, open_, reasons, others, product)
     fake = IO(log, **io)
-    rel = release(tmp_path, product, pipeline=pipeline)
+    rel = release(tmp_path, product, *also, pipeline=pipeline)
     dag = json.loads((rel / "compiled" / "products" / product / "pipeline.json").read_text())["dagId"]
     return (lambda: rebuild.rebuild(None, rel, product, dag, "rob", fake, NOW)), log, holds, fake
 
@@ -173,6 +177,74 @@ def test_a_product_a_restore_holds_is_refused_before_the_lock(tmp_path, monkeypa
     with pytest.raises(rebuild.Refused, match="restore"):
         run()
     assert log == [] and holds.open == [("restore", "make restore")]
+
+
+def left(recreated=(), unpause=True):
+    return "make restore of backup run 20261128T020000Z left it for rebuild" + rebuild.AWAITING + json.dumps(
+        {"run": "20261128T020000Z", "recreated": list(recreated), "unpause": unpause})
+
+
+def test_a_product_the_restore_left_is_rebuilt_over_its_hold_which_ends_only_after_it_passes(tmp_path, monkeypatch, capsys):
+    run, log, holds, fake = go(tmp_path, monkeypatch, open_=[("restore", "make restore")], paused=True,
+                               reasons={"restore": left(["k2.kraken_trades.bronze_trade"])})
+    assert run() == 0
+    assert steps(log) == ["hold", "replace", "load", "audit", "publish", "build", "release", "release", "unpause"]
+    assert [e[1] for e in log if e[0] == "release"] == ["rebuild", "restore"] and holds.open == []
+    assert "DAG kraken_trades unpaused, as the restore found it" in capsys.readouterr().out
+
+
+def test_a_failed_rebuild_keeps_the_restore_hold(tmp_path, monkeypatch):
+    run, log, holds, _ = go(tmp_path, monkeypatch, open_=[("restore", "make restore")], paused=True,
+                            reasons={"restore": left()}, codes={"build": 1})
+    assert run() == 1 and holds.open == [("restore", "make restore")] and "unpause" not in steps(log)
+
+
+def test_a_dag_paused_before_the_restore_stays_paused_after_its_rebuild(tmp_path, monkeypatch):
+    run, log, holds, _ = go(tmp_path, monkeypatch, open_=[("restore", "make restore")], paused=True,
+                            reasons={"restore": left(unpause=False)})
+    assert run() == 0 and holds.open == [] and "unpause" not in steps(log)
+
+
+def test_a_downstream_product_waits_for_its_upstream_rebuild(tmp_path, monkeypatch):
+    # canonical-trades reads kraken-trades' silver_trade; the restore left both
+    up = [{"kind": "restore", "held_by": "make restore", "held_at": "t", "reason": left()}]
+    run, log, holds, _ = go(tmp_path, monkeypatch, product=DERIVED, also=(KAFKA,), open_=[("restore", "make restore")],
+                            reasons={"restore": left()}, others={KAFKA: up})
+    with pytest.raises(rebuild.Refused, match=f"make rebuild PRODUCT={KAFKA} first"):
+        run()
+    assert log == [] and holds.open == [("restore", "make restore")]
+
+
+def test_a_file_product_whose_bronze_the_restore_recreated_is_refused(tmp_path, monkeypatch):
+    doc = json.loads((PRODUCTS / KAFKA / "pipeline.json").read_text())
+    doc["connector"] = {"kind": "https-file"}
+    run, log, holds, _ = go(tmp_path, monkeypatch, open_=[("restore", "make restore")], pipeline=doc,
+                            reasons={"restore": left(["k2.kraken_trades.bronze_trade"])})
+    with pytest.raises(rebuild.Refused, match="a file product's bronze is its parser's"):
+        run()
+    assert log == []
+
+
+def test_open_holds_reads_every_open_hold_through_the_reader_catalog():
+    seen = []
+
+    class Cur:
+        def execute(self, sql, params):
+            seen.append((sql, params))
+
+        def fetchall(self):
+            return [("p", "restore", "r", "make restore", "t", None, None)]
+
+    class Conn:
+        def cursor(self):
+            return Cur()
+
+    [h] = rebuild.open_holds(Conn(), "p")
+    assert h["kind"] == "restore" and seen[0][1] == ["p"]
+    assert k2runs.HOLDS_READ in seen[0][0] and "released_at IS NULL" in seen[0][0] and "LIMIT" not in seen[0][0]
+    assert rebuild.awaiting({"kind": "restore", "reason": left(["a.b.c"])})["recreated"] == ["a.b.c"]
+    assert rebuild.awaiting({"kind": "restore", "reason": "make restore of backup run x"}) is None
+    assert rebuild.awaiting({"kind": "operator", "reason": left()}) is None
 
 
 FAILURES = {
@@ -404,3 +476,8 @@ def test_make_rebuild_passes_unlock_only_when_asked():
         return subprocess.run(["make", "-n", "-C", str(ROOT), "rebuild", *args], capture_output=True, text=True).stdout
     assert 'scripts/rebuild.py "market-capture/kraken-trades"' in dry("PRODUCT=market-capture/kraken-trades")
     assert "--unlock" not in dry("PRODUCT=x") and "--unlock" in dry("PRODUCT=x", "UNLOCK=1")
+
+
+def test_the_help_and_header_say_bronze_reads_no_row_until_the_restage_publishes():
+    assert "no snapshot" in (ROOT / "mk/rebuild.mk").read_text() and "readers see no row" in (ROOT / "mk/rebuild.mk").read_text()
+    assert "bronze main has\n          no snapshot" in rebuild.__doc__

@@ -17,7 +17,8 @@ first step that fails:
 2. bronze a Kafka product's only: bronze replaced empty by its release's own DDL (CREATE OR REPLACE,
           which keeps the table and its old snapshots, after its `audit` branch is dropped), then
           restaged by the product's own connector.py load, audit and publish, run as the DAG runs
-          them in the Spark container. The landing holds every record ever read and is never expired
+          them in the Spark container. From the replace until the restage's publish, bronze main has
+          no snapshot: a reader of bronze then reads no row (the product is locked, so no build does). The landing holds every record ever read and is never expired
           (ADR-063), and bronze with no staged-through offsets stages from the landing's first
           offset, so the restage is one batch of everything, audited as any batch. A load that
           stages nothing stops here: the full refresh would rebuild silver from an empty bronze. A
@@ -26,7 +27,11 @@ first step that fails:
           release's own oneshot.py, so its image, mounts, principals and limits are a DAG build's,
           under the container name `k2-dbt-runner-<dag>-rebuild`, which no DAG run uses.
 4. unlock the lock released only if step 1 placed it, and the DAG unpaused only if step 1 paused it
-          and no other hold (an operator's, a restore's) is open. Interrupted (Ctrl-C), the lock and
+          and no other hold (an operator's, a restore's) is open. A product `make restore` left for
+          rebuild (its restore hold's reason carries AWAITING) is rebuilt over that hold, once every
+          product upstream of it that the restore left is rebuilt; its full refresh passed, the restore
+          hold is released too, and the DAG unpaused if the restore paused it and no other hold is open.
+          A file product whose bronze the restore recreated is refused: its bronze is its parser's. Interrupted (Ctrl-C), the lock and
           the pause are left: a step may still run in its container, and `UNLOCK=1` ends the lock
           once `docker ps` shows no `k2-dbt-runner-<dag>-rebuild` and the Spark container no
           connector.py of the rebuild's run.
@@ -91,8 +96,52 @@ sys.exit(subprocess.run(argv, env=env, stdin=subprocess.DEVNULL).returncode)
 """
 
 
+# A restore hold's reason ends with this and a JSON object when `make restore` (scripts/restore.py)
+# left the product for this command: {"run": <backup run>, "recreated": [its tables recreated empty],
+# "unpause": <the restore paused its DAG>}. Only a passed rebuild ends such a hold.
+AWAITING = " k2.restore.rebuild="
+
+
 class Failed(Exception):
     """A step failed after the lock was placed: exit 1, its message saying what it left."""
+
+
+def open_holds(conn: Any, product: str) -> list[dict[str, Any]]:
+    """Every open hold on the product, of every kind, oldest first (k2runs.held names the newest only)."""
+    cur = conn.cursor()
+    cur.execute(f"SELECT {', '.join(k2runs.HOLD_COLUMNS)} FROM {k2runs.HOLDS_READ} h WHERE h.product_id = ? AND "
+                f"{k2runs._OPEN} ORDER BY h.held_at", [product])
+    return [dict(zip(k2runs.HOLD_COLUMNS, r)) for r in cur.fetchall()]
+
+
+def awaiting(h: dict[str, Any] | None) -> dict[str, Any] | None:
+    """What a restore hold says it left for rebuild, or None (no hold, another kind, or a restore's own lock)."""
+    if not h or h["kind"] != "restore" or AWAITING not in (h["reason"] or ""):
+        return None
+    try:
+        return dict(json.loads(h["reason"].rsplit(AWAITING, 1)[1]))
+    except ValueError:
+        return None
+
+
+def inputs(release_path: Path) -> dict[str, set[str]]:
+    """product -> the products its input ports read, from the release's compiled pipelines."""
+    out: dict[str, set[str]] = {}
+    for f in (release_path / "compiled" / "products").glob("*/pipeline.json"):
+        doc = json.loads(f.read_text())
+        out[doc["product"]] = {".".join(i["contractId"].split(".")[:2]) for i in doc.get("inputs", [])}
+    return out
+
+
+def upstream(graph: dict[str, set[str]], product: str) -> set[str]:
+    seen: set[str] = set()
+    todo = list(graph.get(product, ()))
+    while todo:
+        q = todo.pop()
+        if q not in seen:
+            seen.add(q)
+            todo += graph.get(q, ())
+    return seen
 
 
 def run_id(dag: str, now: datetime) -> str:
@@ -269,10 +318,20 @@ def rebuild(conn: Any, release_path: Path, product: str, dag: str, by: str, io: 
         [bronze] = pipeline["bronze"]  # a Kafka product has exactly one (I-1)
         table = bronze["table"]
         statements = replace_statements((release_path / bronze_ddl(table)).read_text(), table)
-    # ponytail: held() names the newest open hold only, so a restore's lock under a newer operator
-    # hold is not seen; read every open hold here if a restore and an operator hold ever overlap.
-    if (open_ := k2runs.held(conn, product)) and open_["kind"] == "restore":
-        raise Refused(f"{product} is held by a restore ({open_['held_by']} at {open_['held_at']}); rebuild after it")
+    restore_hold = next((h for h in open_holds(conn, product) if h["kind"] == "restore"), None)
+    left = awaiting(restore_hold)
+    if restore_hold and left is None:
+        raise Refused(f"{product} is held by a restore ({restore_hold['held_by']} at {restore_hold['held_at']}); rebuild after it")
+    if left is not None:
+        bronze_tables = {"k2." + b["table"].split(".", 1)[1] for b in pipeline.get("bronze", [])}
+        if not kafka and bronze_tables & set(left.get("recreated", [])):
+            raise Refused(f"{product}: the restore recreated its bronze {', '.join(sorted(bronze_tables))} empty, and a file "
+                          "product's bronze is its parser's (the fetch's): a full refresh would publish its outputs empty; it stays held")
+        graph = inputs(release_path)
+        first = sorted(q for q in upstream(graph, product) if any(awaiting(h) for h in open_holds(conn, q)))
+        if first:
+            raise Refused(f"{product} reads {', '.join(first)}, which the restore left for rebuild too: "
+                          + ", then ".join(f"make rebuild PRODUCT={q}" for q in first) + " first")
     try:
         k2runs.hold(conn, product, f"make rebuild by {by}", BY, kind=LOCK)
     except k2runs.HoldError:
@@ -303,7 +362,33 @@ def rebuild(conn: Any, release_path: Path, product: str, dag: str, by: str, io: 
     except Exception as e:
         print(f"rebuild: FAIL: {type(e).__name__}: {e}", file=sys.stderr)
         code = 1
-    return finish(conn, product, dag, by, paused_here, io) or code
+    code = finish(conn, product, dag, by, paused_here, io) or code
+    return end_restore_hold(conn, product, dag, by, left, io) if code == 0 and left is not None else code
+
+
+def end_restore_hold(conn: Any, product: str, dag: str, by: str, left: dict[str, Any], io: Any) -> int:
+    """After a passed rebuild of a product the restore left: its restore hold released, then its DAG
+    unpaused if the restore paused it and no other hold is open."""
+    try:
+        k2runs.release(conn, product, by, kind="restore")
+    except Exception as e:
+        print(f"rebuild: LOUD FAILURE: {product} is rebuilt, but the restore hold that left it is still open "
+              f"({type(e).__name__}: {e}); its runs fail in resolve until it is released", file=sys.stderr)
+        return 1
+    if other := k2runs.held(conn, product):
+        print(f"rebuild: released the restore hold on {product} (run {left.get('run')}); DAG {dag} stays paused: a {other['kind']} hold is open")
+        return 0
+    if not left.get("unpause"):
+        print(f"rebuild: released the restore hold on {product}; DAG {dag} was paused before the restore, and is left so")
+        return 0
+    try:
+        io.unpause(dag)
+    except Exception as e:
+        print(f"rebuild: released the restore hold on {product}, but DAG {dag} was NOT unpaused ({e}); "
+              f"`docker exec {hold.SCHEDULER} airflow dags unpause {dag} -y`", file=sys.stderr)
+        return 1
+    print(f"rebuild: released the restore hold on {product}; DAG {dag} unpaused, as the restore found it")
+    return 0
 
 
 def unlock(conn: Any, product: str, dag: str, by: str, io: Any) -> int:

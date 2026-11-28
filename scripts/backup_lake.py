@@ -288,12 +288,13 @@ def get(uri: str, out: Path | None = None) -> bytes:
         raise Failed(f"{uri}: cannot reach the storage ({type(e).__name__})") from None
 
 
-def ls(bucket: str, prefix: str) -> list[tuple[str, int]]:
+def ls(bucket: str, prefix: str, pair: tuple[str, str] | None = None) -> list[tuple[str, int]]:
+    """Every (key, size) under the prefix, with the backup key or `pair` (scripts/restore.py's)."""
     av, out, token = _av(), [], ""
     ns = "{http://s3.amazonaws.com/doc/2006-03-01/}"
     while True:
         q = {"list-type": "2", "prefix": prefix, **({"continuation-token": token} if token else {})}
-        status, code, body = av.s3(endpoint(), key_pair(), "GET", bucket, query=q)
+        status, code, body = av.s3(endpoint(), pair or key_pair(), "GET", bucket, query=q)
         if status != 200:
             raise Failed(f"listing s3://{bucket}/{prefix}: {av.answered(status, code, body)}")
         doc = ET.fromstring(body)
