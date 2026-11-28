@@ -8,7 +8,7 @@ from typing import Any
 import pytest
 import yaml
 
-from k2gen import model
+from k2gen import checks, model
 from k2gen.checks import access
 
 FIXTURES = Path(__file__).parent / "fixtures" / "v2"
@@ -272,3 +272,61 @@ def test_public_reader_within_full_reader_would_offer_internal_data_publicly() -
     assert codes(changed(steps)) == {"access.role-within-invalid"}
     assert codes(changed(steps[1:])) == {"access.inherit-role"}
     assert codes(changed([{"file": "contracts/access/roles.yaml", "set": "roles/full_reader/within", "value": ["public_reader"]}])) == set()
+
+
+ENRICHED = FIXTURES / "enriched"
+EUR = "contracts/market-analytics/enriched-candles/ohlcv_1d_eur.odcs.yaml"
+EUR_PRODUCT = "contracts/market-analytics/enriched-candles/product.odps.yaml"
+
+
+def enriched(*steps: dict[str, Any]) -> list[model.Finding]:
+    """Every check (`k2gen check`) over the repository's documents with fixtures/v2/enriched laid
+    over them, its coverage rows appended, then `steps`."""
+    from test_repository_documents import repository_set
+
+    documents = dict(repository_set().documents)
+    documents |= {p.relative_to(ENRICHED).as_posix(): p.read_bytes() for p in ENRICHED.rglob("*") if p.is_file()}
+    rows = [{"file": model.EXPECTATIONS, "append": "expectations",
+             "value": {"principal": "p.canary-full", "table": table, "denied": True}}
+            for table in ("market_analytics.enriched_candles.ohlcv_1d_eur", "market_analytics.enriched_candles__base.ohlcv_1d_eur")]
+    return checks.run(docset(changed([*rows, *steps], documents)), None)
+
+
+def test_the_enriched_fixture_over_three_domains_passes_every_check() -> None:
+    """Plan 005's shape: candles (delayed_reader 20 minutes on window_end), the security master's
+    type-2 instrument joined as of window_end and the ECB rates, both full_reader only, which
+    delayed_reader is within. The output delays delayed_reader 20 minutes on its window_end."""
+    assert enriched() == []
+
+
+def test_the_enriched_fixture_delayed_10_minutes_over_candles_20_fails() -> None:
+    """Plan 005's exit: an output policy weaker than its input's fails `k2gen check`."""
+    (finding,) = enriched({"file": EUR, "set": "customProperties/3/value/delayed_reader/delay/minutes", "value": 10})
+    assert finding.code == "access.inherit-delay" and finding.path == EUR
+    assert "market-analytics.candles.ohlcv_1d delays delayed_reader by 20 minutes" in finding.message
+    assert "has 10 minutes" in finding.message
+
+
+def test_the_enriched_fixture_over_an_input_offering_no_role_fails() -> None:
+    """Plan 005's exit, the role: the security master's asset offers no role today, and nothing
+    stands in for it, so an output reading it offers neither full_reader nor delayed_reader."""
+    asset = "reference-data.security-master.asset"
+    found = enriched(
+        {"file": EUR_PRODUCT, "append": "inputPorts", "value": {"name": "asset", "version": "1.0.0", "contractId": asset,
+                                                                "customProperties": [{"property": "required", "value": True},
+                                                                                     {"property": "maxLagMinutes", "value": None}]}},
+        {"file": EUR_PRODUCT, "append": "outputPorts/0/inputContracts", "value": {"id": asset, "version": "1.0.0"}})
+    assert sorted((f.code, f.message.split(" offers ")[1].split(",")[0]) for f in found) == [
+        ("access.inherit-role", "delayed_reader"), ("access.inherit-role", "full_reader")], [f.message for f in found]
+    assert all(f"its input {asset} offers neither" in f.message for f in found)
+
+
+def test_the_enriched_fixture_joins_the_type_2_instrument_only_as_of_a_time() -> None:
+    """The docs rules on the repository's own reference data: instrument keeps history, so its
+    key states its point in time; the ECB table keeps none, so its key states none."""
+    (missing,) = enriched({"file": EUR, "remove": "schema/0/properties/1/relationships/0/customProperties"})
+    assert missing.code == "docs.relationship-as-of-missing"
+    assert "reference-data.security-master.instrument.instrument_id" in missing.message
+    (unexpected,) = enriched({"file": EUR, "set": "schema/0/properties/4/relationships/0/customProperties",
+                              "value": [{"property": "asOf", "value": "known"}, {"property": "asOfColumn", "value": "window_end"}]})
+    assert unexpected.code == "docs.relationship-as-of-unexpected"

@@ -1,0 +1,48 @@
+# A fixture, never deployed (tests/test_checks_access.py lays it over the repository's documents):
+# an enriched product over three domains, shaped as plan 005's candles-eur. Its one table reads
+# market-analytics.candles.ohlcv_1d (delayed_reader 20 minutes on window_end, through_load_seq
+# masked), reference-data.security-master.instrument as at window_end (type-2, full_reader only)
+# and fx-reference.ecb-fx-rates.gold_eur_rates_daily (full_reader only).
+apiVersion: v1.1.0
+kind: DataProduct
+id: market-analytics.enriched-candles
+name: enriched-candles
+version: 1.0.0
+status: active
+domain: market-analytics
+type: consumerAligned
+description:
+  purpose: A fixture only, a daily candle's close in euros, from three domains.
+team:
+  name: analytics-team
+inputPorts:
+  - name: ohlcv_1d
+    version: 1.0.0
+    contractId: market-analytics.candles.ohlcv_1d
+    customProperties:
+      - {property: required, value: true}
+      - {property: maxLagMinutes, value: 1440}
+  - name: instrument
+    version: 1.0.0
+    contractId: reference-data.security-master.instrument
+    customProperties:
+      - {property: required, value: true}
+      - {property: maxLagMinutes, value: null}
+  - name: gold_eur_rates_daily
+    version: 1.0.0
+    contractId: fx-reference.ecb-fx-rates.gold_eur_rates_daily
+    customProperties:
+      - {property: required, value: true}
+      - {property: maxLagMinutes, value: 4320}
+outputPorts:
+  - name: ohlcv_1d_eur
+    version: 1.0.0
+    contractId: market-analytics.enriched-candles.ohlcv_1d_eur
+    inputContracts:
+      - {id: market-analytics.candles.ohlcv_1d, version: 1.0.0}
+      - {id: reference-data.security-master.instrument, version: 1.0.0}
+      - {id: fx-reference.ecb-fx-rates.gold_eur_rates_daily, version: 1.0.0}
+customProperties:
+  - property: schedule
+    value:
+      cron: "45 2 * * *"

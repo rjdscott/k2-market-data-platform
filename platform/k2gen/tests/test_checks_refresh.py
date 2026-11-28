@@ -58,6 +58,10 @@ def _retired(doc: Any) -> None:
     prop("lifecycleChange", {"since": "2026-11-01", "reason": "Replaced.", "decision": "ADR-056"})(doc)
 
 
+def _keyless(doc: Any) -> None:
+    del doc["schema"][0]["properties"][1]["relationships"]
+
+
 def _downstream() -> dict[str, bytes]:
     """station-readings, which daily-load reads, refreshing daily-load."""
     documents = edited(good(), f"{READINGS}/product.odps.yaml", prop("refresh", to(LOAD_ID)))
@@ -76,8 +80,8 @@ def _error_rule(doc: Any) -> None:
 CASES = {  # name: (code, the product file whose findings are exactly it, documents)
     "an unknown target": ("refresh.target-unresolved", LOAD, lambda: edited(
         overlay(), f"{LOAD}/product.odps.yaml", prop("refresh", to("sensor-net.nowhere")))),
-    "a retired target": ("refresh.target-unresolved", LOAD, lambda: edited(
-        overlay(), f"{READINGS}/product.odps.yaml", _retired)),
+    "a retired target": ("refresh.target-unresolved", LOAD, lambda: edited(edited(  # gold's key into it is docs.relationship-retired
+        overlay(), f"{READINGS}/product.odps.yaml", _retired), f"{LOAD}/gold_daily_load.odcs.yaml", _keyless)),
     "itself": ("refresh.target-self", LOAD, lambda: edited(
         overlay(), f"{LOAD}/product.odps.yaml", prop("refresh", to(LOAD_ID)))),
     "a target with no schedule": ("refresh.target-unscheduled", LOAD, lambda: edited(
