@@ -1,7 +1,11 @@
 """k2-dbt, the dbt wrapper: what guarantees readers see only tested data (ADR-061 parts 4 and 5).
 
-    k2-dbt build --release <id> --product <domain>.<product> --run-id <dag_id>/<run_id>
+    k2-dbt build --release <id> --product <domain>.<product> --run-id <dag_id>/<run_id> [--full-refresh]
     k2-dbt docs --release <id> --out <dir>    # the release's dbt docs site, no warehouse (docs())
+
+--full-refresh (make rebuild, scripts/rebuild.py) adds dbt's own --full-refresh to step 4's one
+invocation and changes nothing else: every step below, the publish guard and the run records are
+the same code on the same path, so a rebuilt output reaches readers only as any build's does.
 
 The frozen contract is docs/development/phase-001-interfaces.md, "Run-time contracts", "The dbt
 wrapper"; the measurements behind it are spikes (d), (f) and (g) of
@@ -217,11 +221,12 @@ class Ctx:
     outputs: tuple[Output, ...]
     inputs: tuple[Input, ...]
     started_at: datetime
+    full_refresh: bool = False  # k2-dbt build --full-refresh: dbt_argv's one difference
 
 
 def ctx_from(release: str, release_path: Path, product: str, run_id: str, pipeline: dict[str, Any],
              views: list[dict[str, Any]], tables: dict[str, tuple[str, str, str]], schemas: dict[str, Any],
-             incremental: frozenset[str] = frozenset()) -> Ctx:
+             incremental: frozenset[str] = frozenset(), full_refresh: bool = False) -> Ctx:
     """The run's context from the release's compiled pipeline.json, views.json and
     contract_schemas.json; `tables` maps each input's contract id to (input_relation, tested_ref,
     product status), from k2gen's model; `incremental` names the product's tables whose model is
@@ -268,10 +273,10 @@ def ctx_from(release: str, release_path: Path, product: str, run_id: str, pipeli
         inputs.append(Input(cid, i["relation"], bool(i["required"]), tables[cid][1], f"{k2.fence(producer)}/{table}",
                             tables[cid][2], when_absent))
     return Ctx(release, release_path, product, run_id, k2.warehouse(domain), build["selector"], writer, publisher,
-               tuple(outputs), tuple(inputs), datetime.now(timezone.utc))
+               tuple(outputs), tuple(inputs), datetime.now(timezone.utc), full_refresh)
 
 
-def load(release: str, product: str, run_id: str) -> Ctx:
+def load(release: str, product: str, run_id: str, full_refresh: bool = False) -> Ctx:
     """ctx_from over the release at /k2/releases/<release>."""
     from k2gen import docset
     if not RELEASE_ID.fullmatch(release) or not PRODUCT_ID.fullmatch(product):
@@ -286,7 +291,7 @@ def load(release: str, product: str, run_id: str) -> Ctx:
               for p in m.products for t in p.tables if t.build.kind in k2.LAKE_BUILDS}
     incremental = frozenset(t.name for p in m.products if k2.product_id(p.domain, p.name) == product for t in p.tables
                             if t.build.kind == "dbt" and k2.model_config(p.models.get(f"{t.name}.sql", "")).get("materialized") == "incremental")
-    return ctx_from(release, path, product, run_id, pipeline, views, tables, schemas, incremental)
+    return ctx_from(release, path, product, run_id, pipeline, views, tables, schemas, incremental, full_refresh)
 
 
 # ---- the core: decisions from observed state; `io` does every read and write --------------------
@@ -488,13 +493,15 @@ def warned(results: dict[str, Any] | None) -> list[str]:
 def dbt_argv(ctx: Ctx, inputs: dict[str, int | None]) -> list[str]:
     """Step 4's one invocation. An absent() input is {"absent": true}, zero rows of its columns
     (k2_input); any other input with no snapshot (an optional one, whenAbsent fail) is left out of
-    k2_inputs, so a model that reads it fails at compile (k2_input), never reads it unpinned."""
+    k2_inputs, so a model that reads it fails at compile (k2_input), never reads it unpinned. A
+    full refresh appends dbt's --full-refresh, the one difference from any other build."""
     pinned = {i.key: {"snapshot": snap(inputs[i.contract])} for i in ctx.inputs if inputs[i.contract] is not None}
     pinned |= {i.key: {"absent": True} for i in ctx.inputs if absent(i, inputs[i.contract])}
     variables = {"k2_inputs": pinned, "k2_run_id": ctx.run_id, "k2_release": ctx.release}
     return ["dbt", "build", "--selector", ctx.selector, "--vars", json.dumps(variables, sort_keys=True),
             "--project-dir", str(ctx.release_path / "compiled" / "dbt"), "--profiles-dir", str(PROFILES_DIR),
-            "--target-path", str(WORK / "target"), "--log-path", str(WORK / "logs")]
+            "--target-path", str(WORK / "target"), "--log-path", str(WORK / "logs"),
+            *(["--full-refresh"] if ctx.full_refresh else [])]
 
 
 VIEW_SETTLE_S = 2.0  # between narrowing a view and moving its tag (publish())
@@ -1089,6 +1096,7 @@ def main(argv: list[str] | None = None) -> int:
     b.add_argument("--release", required=True)
     b.add_argument("--product", required=True)
     b.add_argument("--run-id", required=True)
+    b.add_argument("--full-refresh", action="store_true")
     d = sub.add_parser("docs")
     d.add_argument("--release", required=True)
     d.add_argument("--out", required=True, type=Path)
@@ -1110,8 +1118,9 @@ def main(argv: list[str] | None = None) -> int:
         try:
             a = ap.parse_args(argv)
         except SystemExit:
-            raise Refused("usage: k2-dbt build --release <id> --product <domain>.<product> --run-id <dag_id>/<run_id>") from None
-        ctx = load(a.release, a.product, a.run_id)
+            raise Refused("usage: k2-dbt build --release <id> --product <domain>.<product> --run-id <dag_id>/<run_id> "
+                          "[--full-refresh]") from None
+        ctx = load(a.release, a.product, a.run_id, a.full_refresh)
         code, expire = run(ctx, Live(ctx, dict(os.environ)), xcom)
     except Exception as e:
         log(f"{type(e).__name__}: {e}")

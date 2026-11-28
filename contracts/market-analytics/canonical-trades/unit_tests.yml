@@ -54,3 +54,32 @@ unit_tests:
         - {venue: kraken, kafka_offset: 9, trade_id: 5, is_duplicate: false, load_seq: 3}
         - {venue: kraken, kafka_offset: 10, trade_id: 5, is_duplicate: true, load_seq: 4}
         - {venue: kraken, kafka_offset: 12, trade_id: 7, is_duplicate: false, load_seq: 5}
+
+  - name: trades_full_refresh_numbers_after_the_highest_number_already_here
+    model: canonical_trades__trades
+    description: >-
+      A full refresh (make rebuild) takes every venue row again and numbers them after the highest
+      load_seq the table held before the build replaced it, 7 here, never from 1 again: each row is
+      then past candles' watermark, at most 7, so candles' next build recomputes every window. The
+      overrides stand for the live reads: the table exists, and its highest number before the
+      replace is 7 (the model reads it with run_query as dbt renders it, before the replace).
+    overrides:
+      macros:
+        is_incremental: false
+        should_full_refresh: true
+        load_relation: true
+        run_query: {rows: [[7]]}
+    given:
+      - input: this  # the table before the replace, highest load_seq 7; only run_query reads it
+        format: sql
+        rows: |
+          select cast('kraken' as varchar) as venue, 0 as kafka_partition, cast(10 as bigint) as kafka_offset, 1 as trade_ordinal, cast(timestamp '2026-01-05 10:00:00 UTC' as timestamp(6) with time zone) as trade_ts, cast('i-aaa' as varchar) as instrument_id, cast('AAA/ZZZ' as varchar) as venue_symbol, cast(5 as bigint) as trade_id, cast('buy' as varchar) as side, cast(10 as decimal(38, 18)) as price, cast(1 as decimal(38, 18)) as quantity, false as is_duplicate, cast(7 as bigint) as load_seq
+      - input: source('kraken_trades', 'silver_trade')
+        format: sql
+        rows: |
+          select 0 as kafka_partition, cast(10 as bigint) as kafka_offset, 1 as trade_ordinal, cast(timestamp '2026-01-05 10:00:00 UTC' as timestamp(6) with time zone) as trade_ts, cast(5 as bigint) as trade_id, cast('AAA/ZZZ' as varchar) as venue_symbol, cast('i-aaa' as varchar) as instrument_id, cast('buy' as varchar) as side, cast(10 as decimal(38, 18)) as price, cast(1 as decimal(38, 18)) as quantity, false as is_duplicate
+          union all select 0, 11, 1, timestamp '2026-01-05 10:00:01 UTC', 6, 'AAA/ZZZ', 'i-aaa', 'buy', 10, 1, false
+    expect:
+      rows:
+        - {venue: kraken, kafka_offset: 10, trade_id: 5, load_seq: 8}
+        - {venue: kraken, kafka_offset: 11, trade_id: 6, load_seq: 9}

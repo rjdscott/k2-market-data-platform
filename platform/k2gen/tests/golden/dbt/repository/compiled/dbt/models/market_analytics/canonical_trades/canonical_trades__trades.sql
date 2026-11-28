@@ -14,11 +14,22 @@
 -- empty) and adds nothing.
 --
 -- load_seq numbers the rows a build writes after the highest number already here: the watermark
--- candles reads, a number that only grows, never a clock.
+-- candles reads, a number that only grows, never a clock. A full refresh (make rebuild) numbers
+-- every row after it too, so each is past every watermark candles holds and candles' next build
+-- recomputes every window with no step to remember; numbered from 1 again, every row at or below
+-- candles' watermark would never be read. The highest number is read as dbt renders this file,
+-- before the build replaces the table: the contract's table is made by CREATE OR REPLACE, then
+-- INSERT, so a read inside the SQL would find it empty. A dropped table starts from 1, as the
+-- products built on it do when a restore drops and rebuilds them with it.
 -- ponytail: the anti-join reads every key of every venue's silver and of this table on each
 -- build; read only the venue's changes since the snapshot the last build read (an incremental read
 -- k2_input would resolve from the run record) when the soak's run times say so.
 {{ config(materialized='incremental') }}
+{#- `this` is none in a unit test without a `this` input; with one, the test overrides the reads. -#}
+{%- set numbered_after = 0 -%}
+{%- if execute and not is_incremental() and this is not none and should_full_refresh() and load_relation(this) is not none -%}
+  {%- set numbered_after = run_query('select coalesce(max(load_seq), 0) from ' ~ this).rows[0][0] | int -%}
+{%- endif %}
 with venues as (
   -- one branch per venue input port; a new venue is a port and a union all here
   select
@@ -56,7 +67,7 @@ select
   price,
   quantity,
   is_duplicate,
-  {% if is_incremental() %}(select coalesce(max(load_seq), 0) from {{ this }}) + {% endif %}row_number() over (
+  {% if is_incremental() %}(select coalesce(max(load_seq), 0) from {{ this }}) + {% elif numbered_after %}{{ numbered_after }} + {% endif %}row_number() over (
     order by venue, kafka_partition, kafka_offset, trade_ordinal
   ) as load_seq
 from taken
