@@ -684,7 +684,7 @@
       "user": "pub_kraken_trades",
       "catalog": "market_capture_build",
       "schema": "kraken_trades",
-      "table": "silver_trade|silver_trade_unresolved",
+      "table": "silver_trade|silver_trade_rejected|silver_trade_unresolved",
       "privileges": [
         "SELECT",
         "OWNERSHIP"
@@ -694,7 +694,7 @@
       "user": "pub_kraken_trades",
       "catalog": "market_capture",
       "schema": "kraken_trades__base",
-      "table": "silver_trade|silver_trade\\$refs|silver_trade_unresolved|silver_trade_unresolved\\$refs",
+      "table": "silver_trade|silver_trade\\$refs|silver_trade_rejected|silver_trade_rejected\\$refs|silver_trade_unresolved|silver_trade_unresolved\\$refs",
       "privileges": [
         "SELECT",
         "GRANT_SELECT"
@@ -1011,6 +1011,15 @@
       "catalog": "market_capture",
       "schema": "kraken_trades__base",
       "table": "silver_trade\\$refs",
+      "privileges": [
+        "SELECT"
+      ]
+    },
+    {
+      "user": "svc\\.api|svc\\.catalog|svc\\.platform|svc\\.runs",
+      "catalog": "market_capture",
+      "schema": "kraken_trades__base",
+      "table": "silver_trade_rejected\\$refs",
       "privileges": [
         "SELECT"
       ]

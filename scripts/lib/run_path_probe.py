@@ -41,7 +41,7 @@ TABLES = {"bronze": ("k2", "ecb_fx_rates", "bronze_daily"), "landing_log": ("k2"
           "silver": ("fx_reference", "ecb_fx_rates__base", "silver_rates"),
           "gold": ("fx_reference", "ecb_fx_rates__base", "gold_eur_rates_daily"),
           "calendars": ("reference_data", "calendars__base", "target_days")}
-# The phase 004 chain's tables (run-path.sh claims 10 to 17), each read as its product's builder
+# The phase 004 chain's tables (run-path.sh claims 10 to 18), each read as its product's builder
 CHAIN = {"pairs": ("dbt_kraken_instruments", "lake.kraken_instruments.bronze_pairs"),
          "listing": ("dbt_kraken_instruments", "market_capture_build.kraken_instruments__base.silver_listing"),
          "venue_symbol": ("dbt_security_master", "reference_data_build.security_master__base.venue_symbol"),
@@ -49,6 +49,7 @@ CHAIN = {"pairs": ("dbt_kraken_instruments", "lake.kraken_instruments.bronze_pai
          "bronze_trade": ("dbt_kraken_trades", "lake.kraken_trades.bronze_trade"),
          "silver_trade": ("dbt_kraken_trades", "market_capture_build.kraken_trades__base.silver_trade"),
          "unresolved": ("dbt_kraken_trades", "market_capture_build.kraken_trades__base.silver_trade_unresolved"),
+         "rejected": ("dbt_kraken_trades", "market_capture_build.kraken_trades__base.silver_trade_rejected"),
          "canonical": ("dbt_canonical_trades", "market_analytics_build.canonical_trades__base.trades"),
          **{f"ohlcv_{w}": ("dbt_candles", f"market_analytics_build.candles__base.ohlcv_{w}") for w in ("1m", "5m", "1h", "1d")}}
 KT, CT, KI, SM, CA = ("market-capture.kraken-trades", "market-analytics.canonical-trades", "market-capture.kraken-instruments",
@@ -537,8 +538,8 @@ elif cmd == "claim":  # claim <name> [release ids]: one PASS or FAIL line; exit 
             (after == want, f"the records after the stopped run's started rows {after}"),
             (tagged(s, "silver") and tagged(s, "gold"), f"silver {s['silver']['refs']}, gold {s['gold']['refs']}")],
             f"{', '.join(e for e, _ in after)}; audited = main on both outputs")
-    # ---- the phase 004 chain, claims 10 to 17 (run-path.sh): chain-<label>.json, the task files, the run records
-    elif name in ("instruments", "master", "trades", "held", "candles", "idle", "paused", "venue-fail"):
+    # ---- the phase 004 chain, claims 10 to 18 (run-path.sh): chain-<label>.json, the task files, the run records
+    elif name in ("instruments", "master", "trades", "held", "candles", "idle", "paused", "venue-fail", "rejected"):
         def chain(label):
             return json.loads((RP / f"chain-{label}.json").read_text())
 
@@ -694,10 +695,10 @@ elif cmd == "claim":  # claim <name> [release ids]: one PASS or FAIL line; exit 
                 (state_of(KT, "kraken_trades/kt-2") == "degraded", f"k2runs.state through kt-2 {state_of(KT, 'kraken_trades/kt-2')!r}"),
                 (len(held_rows) == 1 == len(rows(h, "unresolved")) and not in_silver(h) and len(rows(h, "silver_trade")) == n1,
                  f"after kt-2: held {[(x['venue_symbol'], x['trade_id']) for x in rows(h, 'unresolved')]}, silver {len(rows(h, 'silver_trade'))} rows"),
-                # dbt names the test by its arguments, not the rule's name: the one k2_quality test on the
-                # held table is its one warn rule, unresolved_rows_zero (silver_trade_unresolved.odcs.yaml)
+                # the test carries its rule's name (k2gen's dbt emitter): the held table's one warn rule,
+                # unresolved_rows_zero (silver_trade_unresolved.odcs.yaml)
                 (x2.get("degraded") is True and len(x2.get("warned", [])) == 1
-                 and x2["warned"][0].startswith("test.k2.k2_quality_kraken_trades__silver_trade_unresolved_"),
+                 and x2["warned"][0].startswith("test.k2.unresolved_rows_zero."),
                  f"kt-2's XCom {x2}"),
                 (bool(degraded) and all(json.loads(x["detail"] or "{}").get("degraded") is True for x in degraded),
                  f"kt-2's audited rows {[(x['table'], x['detail']) for x in degraded]}"),
@@ -784,6 +785,41 @@ elif cmd == "claim":  # claim <name> [release ids]: one PASS or FAIL line; exit 
                 built("ct-6"), built("ca-6"), (not derived, f"changed after the failed venue build: {derived}")],
                 f"kt-5 exit 1 on release {args[2]}, failed {sorted({x for f in failed for x in f if isinstance(x, str) and x.startswith(('unit_test.', 'test.'))})}; silver_trade and the held table back on audited "
                 f"{v['silver_trade']['refs'].get('audited')}; canonical-trades and candles then build and change nothing")
+        elif name == "rejected":  # 18
+            b, r, n = chain("failed"), chain("kt-6"), chain("kt-7")
+            bad = json.loads((RP / "malformed.jsonl").read_text().splitlines()[0])  # the frame without side; the good one follows
+            want = [t["trade_id"] for t in fixture_trades("more.jsonl", "malformed.jsonl") if "side" in t]  # kt-5's, then the good frame's
+            x6, x7 = result("kt-6.build"), result("kt-7.build")
+
+            def ids(st):
+                return sorted(x["trade_id"] for x in rows(st, "silver_trade"))
+            held = rows(r, "rejected")
+            one = held[0] if len(held) == 1 else {}
+
+            def warned_rule(x):  # the build's warn tests, by the rule's name (the dbt emitter names each test by it)
+                return x.get("degraded") is True and [w.split(".")[2] for w in x.get("warned", [])] == ["rejected_frames_zero"]
+            verdict("a trade frame the model cannot type (no side) is rejected whole, with its reason; the rest publishes, degraded while it stands", [
+                (len(rows(r, "bronze_trade")) == len(rows(b, "bronze_trade")) + 2, f"bronze_trade {len(rows(b, 'bronze_trade'))} -> {len(rows(r, 'bronze_trade'))} rows"),
+                task("kt-6", "load"), task("kt-6", "audit"), task("kt-6", "publish"), built("kt-6"),
+                (set(want) <= set(ids(r)) and len(ids(r)) == len(ids(b)) + len(want) and json.loads(bad["payload"])["data"][0]["trade_id"] not in ids(r),
+                 f"silver_trade trade ids {ids(b)} -> {ids(r)}; want {want} added, the bad frame's not"),
+                (bool(one) and one["reason"] == "field_missing:side" and (one["kafka_partition"], one["kafka_offset"]) not in
+                 {(x["kafka_partition"], x["kafka_offset"]) for x in rows(r, "silver_trade")}
+                 # the payload as Trino returns varbinary, compared with bronze's own row of the key
+                 and any((x["kafka_partition"], x["kafka_offset"], x["payload"]) == (one["kafka_partition"], one["kafka_offset"], one["payload"])
+                         for x in rows(r, "bronze_trade")),
+                 f"silver_trade_rejected {held}"),
+                (rows(r, "unresolved") == [], f"silver_trade_unresolved {rows(r, 'unresolved')}"),
+                (warned_rule(x6), f"kt-6's XCom {x6}"),
+                (state_of(KT, "kraken_trades/kt-6") == "degraded", f"k2runs.state through kt-6 {state_of(KT, 'kraken_trades/kt-6')!r}"),
+                task("kt-7", "load"), ("no new records" in text("kt-7.load"), f"kt-7 load: {why('kt-7.load')}"), built("kt-7"),
+                (rows(n, "silver_trade") == rows(r, "silver_trade") and rows(n, "rejected") == held and rows(n, "unresolved") == [],
+                 f"after kt-7: silver {len(rows(r, 'silver_trade'))} -> {len(rows(n, 'silver_trade'))} rows, rejected {rows(n, 'rejected')}"),
+                (warned_rule(x7), f"kt-7's XCom {x7}"),
+                (state_of(KT, "kraken_trades/kt-7") == "degraded", f"k2runs.state through kt-7 {state_of(KT, 'kraken_trades/kt-7')!r}")],
+                f"kt-6 exit 0: silver_trade took trades {want}, the frame without side rejected at partition {one.get('kafka_partition')} "
+                f"offset {one.get('kafka_offset')} ({one.get('reason')}, its bytes bronze's), warned {[w.split('.')[2] for w in x6.get('warned', [])]}, "
+                f"degraded; kt-7 with nothing new: no row added or changed, the frame still rejected once, still degraded")
     else:
         sys.exit(f"no claim {name}")
 else:

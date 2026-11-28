@@ -11,9 +11,11 @@ every document here is schema-valid. Each rule a code in CODES:
   degraded build may start only something it depends on, never an arbitrary DAG;
 - target-chains: the target declares no refresh of its own, so the chain is one hop (the factory's
   parse refuses one too);
-- never-degraded: the product has a warn-severity dbt test, a custom dbt rule whose test's config
-  says `severity: warn` on a dbt table: only a failed one makes a build degraded (k2_dbt.py), so a
-  refresh on a product without one could never run.
+- rule-not-warn: each rule `rules` names is a warn-severity rule of the product, a custom dbt rule on
+  a dbt table whose test's config says `severity: warn`: only a failed one makes a build degraded
+  (k2_dbt.py), and the factory starts the target only when one named here warned, so a name that is
+  no such rule is a refresh that never runs (a rule another run cannot cure is left out of `rules`:
+  kraken-trades' rejected_frames_zero).
 
 Failing cases: tests/test_checks_refresh.py, each one change to the good set's refresh overlay.
 """
@@ -33,7 +35,7 @@ CODES = (
     "refresh.target-unscheduled",
     "refresh.target-not-upstream",
     "refresh.target-chains",
-    "refresh.never-degraded",
+    "refresh.rule-not-warn",
 )
 
 
@@ -51,12 +53,14 @@ def check(docs: DocumentSet, previous: DocumentSet | None) -> list[Finding]:
              for pid, d in products.items()}
     out: list[Finding] = []
     for pid, d in sorted(products.items()):
-        target = _props(d.product).get("refresh")
-        if target is None:
+        value = _props(d.product).get("refresh")
+        if value is None:
             continue
-        at, path = _prop_at(d.product, "refresh"), d.at(model.V2_PRODUCT_FILE)
-        if not _warns(d):
-            out.append(_finding("refresh.never-degraded", path, f"{at}: {pid} has no warn-severity dbt test (a custom dbt rule on a dbt table whose test's config says severity: warn), and only a failed one makes its build degraded; a refresh it can never start is refused: add the rule, or leave the property out"))
+        target, at, path = value["product"], _prop_at(d.product, "refresh"), d.at(model.V2_PRODUCT_FILE)
+        warns = _warn_rules(d)
+        for name in value["rules"]:
+            if name not in warns:
+                out.append(_finding("refresh.rule-not-warn", path, f"{at}: rules names {name}, which is not a warn-severity rule of {pid} (a custom dbt rule on a dbt table whose test's config says severity: warn; it has {', '.join(sorted(warns)) or 'none'}); only such a rule's failure starts the refresh"))
         if target == pid:
             out.append(_finding("refresh.target-self", path, f"{at}: {pid} names itself; a degraded build starts another product's DAG, one its build reads"))
             continue
@@ -69,18 +73,19 @@ def check(docs: DocumentSet, previous: DocumentSet | None) -> list[Finding]:
         if target not in _upstream(pid, feeds):
             out.append(_finding("refresh.target-not-upstream", path, f"{at}: {target} is not upstream of {pid} through its input ports ({', '.join(sorted(_upstream(pid, feeds))) or 'none'}); a degraded build may start only a product its build depends on"))
         if "refresh" in _props(t.product):
-            out.append(_finding("refresh.target-chains", path, f"{at}: {target} names its own refresh, {_props(t.product)['refresh']}; a refresh is one hop, so a target declares none"))
+            out.append(_finding("refresh.target-chains", path, f"{at}: {target} names its own refresh, {_props(t.product)['refresh']['product']}; a refresh is one hop, so a target declares none"))
     return out
 
 
-def _warns(d: Any) -> bool:
-    """A custom dbt rule on a dbt table whose one test's config says severity warn."""
+def _warn_rules(d: Any) -> set[str]:
+    """The names of the product's custom dbt rules on dbt tables whose one test's config says severity warn."""
+    out = set()
     for c in d.contracts.values():
         if _build(c) != "dbt":
             continue
         for q in c["schema"][0].get("quality", ()):
-            if q.get("type") == "custom" and q.get("engine") == "dbt":
+            if q.get("type") == "custom" and q.get("engine") == "dbt" and q.get("name"):
                 tests = (quality_test(model.quality_of(q), "dbt", []) or {}).values()
                 if any(str(((t or {}).get("config") or {}).get("severity", "")).lower() == "warn" for t in tests):
-                    return True
-    return False
+                    out.add(q["name"])
+    return out

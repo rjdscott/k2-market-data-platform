@@ -25,6 +25,7 @@
   "market_analytics.canonical_trades__base.trades": 7,
   "market_capture.kraken_instruments__base.silver_listing": 7,
   "market_capture.kraken_trades__base.silver_trade": 7,
+  "market_capture.kraken_trades__base.silver_trade_rejected": 7,
   "market_capture.kraken_trades__base.silver_trade_unresolved": 7,
   "reference_data.calendars__base.target_closing_days": 7,
   "reference_data.calendars__base.target_days": 7,

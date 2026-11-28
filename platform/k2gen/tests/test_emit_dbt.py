@@ -287,18 +287,26 @@ def test_each_quality_rule_becomes_a_test_or_is_refused() -> None:
     tables = tuple(dataclasses.replace(t, quality=rules) if t.name == "silver_readings" else t for t in station.tables)
     tree = dbt.emit(replaced(m, station.id, tables=tables))
     (silver,) = parsed(tree, "models/sensor_net/station_readings/_models.yml")["models"]
+    # each test carries its rule's name (dbt's name:), never the one dbt makes of its arguments
     assert silver["data_tests"][1:] == [
-        rules[0].implementation, {"not_null": {"column_name": "operator_note"}},
-        {"k2_quality": {"arguments": {"query": "select max(value) from ${table}", "holds": "metric_value between -90 and 60"}}},
-        {"k2_quality": {"arguments": {"query": "select count(*) from ${table}", "holds": "metric_value > 0"}}},
-        {"k2_quality": {"arguments": {"query": 'select coalesce(100.0 * sum(n - 1) / sum(n), 0) from (select count(*) as n from ${table} '
-                                               'group by "station_id") as k2_groups', "holds": "metric_value < 5"}}}]
+        {"accepted_values": {"name": "regions", **rules[0].implementation["accepted_values"]}},
+        {"not_null": {"name": "as text", "column_name": "operator_note"}},
+        {"k2_quality": {"name": "in range", "arguments": {"query": "select max(value) from ${table}", "holds": "metric_value between -90 and 60"}}},
+        {"k2_quality": {"name": "built", "arguments": {"query": "select count(*) from ${table}", "holds": "metric_value > 0"}}},
+        {"k2_quality": {"name": "unique share", "arguments": {
+            "query": 'select coalesce(100.0 * sum(n - 1) / sum(n), 0) from (select count(*) as n from ${table} '
+                     'group by "station_id") as k2_groups', "holds": "metric_value < 5"}}}]
+    unnamed = dataclasses.replace(rules[3], name=None)  # a rule with no name keeps dbt's
+    assert dbt.quality_test(unnamed, "dbt", []) == {"k2_quality": {"arguments": {"query": "select max(value) from ${table}",
+                                                                                 "holds": "metric_value between -90 and 60"}}}
     # never dropped: a form K2 does not run is refused (S05 reports it first, docs.quality-unsupported)
     for bad, why in ((model.Quality("two tests", "custom", "dbt", None, {"unique": {}, "not_null": {}}), "one data test"),
                      (model.Quality("no query", "sql", None, None, None, thresholds={"mustBe": 0}), "reads the table as"),
                      (model.Quality("audit", "custom", "k2-connector", None, "value_parses"), "bronze audit"),
-                     (model.Quality("nulls", "library", None, None, None, metric="nullValues", thresholds={"mustBe": 0}), "column rules")):
-        tables = tuple(dataclasses.replace(t, quality=(bad,)) if t.name == "silver_readings" else t for t in station.tables)
+                     (model.Quality("nulls", "library", None, None, None, metric="nullValues", thresholds={"mustBe": 0}), "column rules"),
+                     ((rules[3], dataclasses.replace(rules[4], name="in range")), "two quality rules are named")):
+        tables = tuple(dataclasses.replace(t, quality=bad if isinstance(bad, tuple) else (bad,)) if t.name == "silver_readings" else t
+                       for t in station.tables)
         with pytest.raises(ValueError, match=why):
             dbt.emit(replaced(m, station.id, tables=tables))
 
@@ -421,12 +429,30 @@ def test_dbt_parses_compiles_and_selects_the_tree(tmp_path: Path, name: str) -> 
     foreign = [sql for s, sql in compiled[False].items() if "/k2_input_relationships_" in s]
     assert len(foreign) == (1 if name == "good" else 0)  # daily-load's station_id into its input
     assert all("FOR VERSION AS OF BIGINT '42'" in sql for sql in foreign)  # the foreign-key test reads the pinned snapshot too
-    quality = [sql for s, sql in compiled[False].items() if "/k2_quality_" in s]
-    # a custom dbt rule may name k2_quality itself, as a warn rule must (kraken-trades' unresolved_rows_zero)
+    # each rule's test carries the rule's name; a custom dbt rule may name k2_quality itself, as a
+    # warn rule must (kraken-trades' unresolved_rows_zero)
+    tests = [n for n in manifest["nodes"].values() if n["resource_type"] == "test"]
+    for p, t in built:
+        attached = f"model.k2.{model.dbt_model(p.name, t.name)}"
+        for q in t.quality:
+            if q.name and dbt.quality_test(q, "dbt", [c.name for c in t.columns]):
+                assert [n["name"] for n in tests if n["attached_node"] == attached and n["name"] == q.name] == [q.name], (attached, q.name)
+    if name == "repository":
+        (held,) = [n for n in tests if n["attached_node"] == "model.k2.kraken_trades__silver_trade_unresolved"
+                   and n["test_metadata"]["name"] == "k2_quality"]
+        assert held["name"] == "unresolved_rows_zero" and held["unique_id"].startswith("test.k2.unresolved_rows_zero."), held["unique_id"]
+        # the rejected frames' rule counts the table's rows and warns, so a rejected frame degrades the build
+        (rejected,) = [n for n in tests if n["attached_node"] == "model.k2.kraken_trades__silver_trade_rejected"
+                       and n["test_metadata"]["name"] == "k2_quality"]
+        assert (rejected["name"], rejected["config"]["severity"], rejected["test_metadata"]["kwargs"]["query"]) == (
+            "rejected_frames_zero", "warn", "select count(*) from ${table}"), rejected
+    quality = [n for n in tests if n["test_metadata"]["name"] == "k2_quality"]
     rules = sum(1 for p, t in built for q in t.quality
                 if q.type in ("sql", "library") or (q.type == "custom" and q.engine == "dbt" and "k2_quality" in str(q.implementation)))
     assert len(quality) == rules and (rules or name == "repository"), "the good set's silver_readings has sql and library rules"
-    assert not [sql for sql in quality if "${table}" in sql or "metric_value" not in sql]  # ${table} is the model's relation
+    for n in quality:  # ${table} is the model's relation (two rules of one name in one file share a compiled path)
+        sql = compiled[False][f"compiled/k2/{n['original_file_path']}/{n['path']}"]
+        assert "${table}" not in sql and "metric_value" in sql, sql
 
     for p in m.products:
         if not any(t.build.kind == "dbt" for t in p.tables) and not p.seeds:

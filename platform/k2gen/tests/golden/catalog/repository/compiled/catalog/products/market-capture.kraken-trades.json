@@ -7,8 +7,8 @@
   "type": "sourceAligned",
   "owner": "capture-team",
   "purpose": "Every trade Kraken's WebSocket v2 trade channel sent the capture: the frames exactly as read (bronze_trade), and one typed row per trade and delivery (silver_trade) with the instrument its symbol names, every delivery kept and a repeat of a trade id flagged, never dropped.",
-  "limitations": "Only frames the capture received are here; a capture outage is a hole in time, not in offsets, and the offset checks cannot see it. A trade whose symbol the security master does not resolve at the trade's time is held in silver_trade_unresolved, owner-only, and missing from silver_trade until the master resolves it; the audit unresolved_rows_zero then warns and the product shows degraded. Every delivery is a row: a reader counting trades filters is_duplicate false. The venue's terms of reuse are not yet recorded here: the owner confirms them before any grant outside the owning team (k2gen check refuses such a grant while no terms are recorded).",
-  "usage": "Read market_capture.kraken_trades.silver_trade, one row per trade and delivery keyed by (kafka_partition, kafka_offset, trade_ordinal, trade_ts); is_duplicate false keeps each trade once, its first delivery by offset. bronze_trade and silver_trade_unresolved are the owning team's.",
+  "limitations": "Only frames the capture received are here; a capture outage is a hole in time, not in offsets, and the offset checks cannot see it. A trade whose symbol the security master does not resolve at the trade's time is held in silver_trade_unresolved, owner-only, and missing from silver_trade until the master resolves it; the audit unresolved_rows_zero then warns and the product shows degraded. A frame the model cannot type (not JSON, no data array, a trade lacking a field or holding one that does not cast) is missing from silver_trade whole and kept in silver_trade_rejected, owner-only, with its reason and bytes; rejected_frames_zero warns and the product shows degraded on every build while it stands, until a release whose model types it builds. Every delivery is a row: a reader counting trades filters is_duplicate false. The venue's terms of reuse are not yet recorded here: the owner confirms them before any grant outside the owning team (k2gen check refuses such a grant while no terms are recorded).",
+  "usage": "Read market_capture.kraken_trades.silver_trade, one row per trade and delivery keyed by (kafka_partition, kafka_offset, trade_ordinal, trade_ts); is_duplicate false keeps each trade once, its first delivery by offset. bronze_trade, silver_trade_unresolved and silver_trade_rejected are the owning team's.",
   "issued": "2026-01-01T00:00:00Z",
   "periodicity": "*/5 * * * *",
   "productFile": "documents/contracts/market-capture/kraken-trades/product.odps.yaml",
@@ -153,7 +153,7 @@
       "contractFile": "documents/contracts/market-capture/kraken-trades/silver_trade.odcs.yaml",
       "layer": "silver",
       "version": "1.0.0",
-      "purpose": "One typed row per trade and delivery: each element of a bronze trade frame's data array, its symbol resolved to the security master's instrument at the trade's time. A trade the venue sent twice is two rows, the later one flagged is_duplicate. A frame is here only once every trade in it resolves; until then it is held in silver_trade_unresolved.",
+      "purpose": "One typed row per trade and delivery: each element of a bronze trade frame's data array, its symbol resolved to the security master's instrument at the trade's time. A trade the venue sent twice is two rows, the later one flagged is_duplicate. A frame is here only once every trade in it resolves; until then it is held in silver_trade_unresolved. A frame the model cannot type is never here, whole: it is in silver_trade_rejected with its reason.",
       "columns": [
         {
           "name": "kafka_partition",
@@ -303,6 +303,66 @@
       "dbtDocs": "dbt-docs/#!/model/model.k2.kraken_trades__silver_trade"
     },
     {
+      "contractId": "market-capture.kraken-trades.silver_trade_rejected",
+      "relation": "market_capture.kraken_trades.silver_trade_rejected",
+      "build": "dbt",
+      "testedRef": "audited",
+      "contractFile": "documents/contracts/market-capture/kraken-trades/silver_trade_rejected.odcs.yaml",
+      "layer": "silver",
+      "version": "1.0.0",
+      "purpose": "The rejected frames: every bronze trade frame that is not in silver_trade because the model cannot type it, with the reason and the frame's bytes. One trade that cannot be typed rejects its whole frame, as one unresolved symbol holds it, so a frame is in silver_trade whole or not at all. A rejected frame is neither in silver_trade nor in silver_trade_unresolved, and is never taken in automatically: its bytes do not change, so it stays here until a release whose model types it builds. Rebuilt on every build, so a frame leaves it on the build that takes it in.",
+      "columns": [
+        {
+          "name": "kafka_partition",
+          "type": "integer",
+          "required": true,
+          "primaryKey": true,
+          "description": "The topic partition of the frame; with kafka_offset, its lineage to bronze_trade, the landing and the topic.",
+          "primaryKeyPosition": 1
+        },
+        {
+          "name": "kafka_offset",
+          "type": "bigint",
+          "required": true,
+          "primaryKey": true,
+          "description": "The frame's offset in its partition.",
+          "primaryKeyPosition": 2
+        },
+        {
+          "name": "kafka_timestamp",
+          "type": "timestamp(6) with time zone",
+          "required": false,
+          "primaryKey": false,
+          "description": "The record's Kafka timestamp, as bronze_trade holds it."
+        },
+        {
+          "name": "reason",
+          "type": "varchar",
+          "required": true,
+          "primaryKey": false,
+          "description": "Why the frame cannot be typed, the first that holds, the frame's own before its trades' by ordinal: payload_not_json; no_trade_array (a trade frame whose data is missing or not an array); field_missing:type (the frame's type); for a trade, field_missing:<field> (timestamp, trade_id, symbol, side, price or qty absent, null or not a scalar), field_not_timestamp:timestamp (not an ISO 8601 time) or field_not_numeric:<field> (trade_id not a bigint, price or qty not a decimal(38,18)). Each is decided under try(), so deciding it never fails the build."
+        },
+        {
+          "name": "payload",
+          "type": "varbinary",
+          "required": false,
+          "primaryKey": false,
+          "description": "The frame byte for byte as bronze_trade holds it, the venue's frame as sent; bronze data, so the table is the owning team's."
+        }
+      ],
+      "retentionDays": null,
+      "quality": [
+        {
+          "name": "rejected_frames_zero",
+          "type": "custom",
+          "description": "No frame is rejected. A rejected one warns on every build while it stands: the build still publishes the rest and the run is degraded, since silver_trade lacks the frame's trades."
+        }
+      ],
+      "roles": [],
+      "readers": [],
+      "dbtDocs": "dbt-docs/#!/model/model.k2.kraken_trades__silver_trade_rejected"
+    },
+    {
       "contractId": "market-capture.kraken-trades.silver_trade_unresolved",
       "relation": "market_capture.kraken_trades.silver_trade_unresolved",
       "build": "dbt",
@@ -310,7 +370,7 @@
       "contractFile": "documents/contracts/market-capture/kraken-trades/silver_trade_unresolved.odcs.yaml",
       "layer": "silver",
       "version": "1.0.0",
-      "purpose": "The held trades: every trade of a bronze trade frame that is not in silver_trade, because a trade in it has a symbol the security master resolves to nothing at the trade's time. Rebuilt on every build, so a frame leaves it on the build that moves it into silver_trade.",
+      "purpose": "The held trades: every trade of a bronze trade frame that is not in silver_trade, because a trade in it has a symbol the security master resolves to nothing at the trade's time. Rebuilt on every build, so a frame leaves it on the build that moves it into silver_trade. A frame the model cannot type is not held but rejected (silver_trade_rejected), even if a symbol in it resolves to nothing too: a held frame is one the master alone can release.",
       "columns": [
         {
           "name": "kafka_partition",
@@ -446,6 +506,11 @@
         "relation": "market_capture.kraken_trades.silver_trade"
       },
       {
+        "id": "market-capture.kraken-trades.silver_trade_rejected",
+        "product": "market-capture.kraken-trades",
+        "relation": "market_capture.kraken_trades.silver_trade_rejected"
+      },
+      {
         "id": "market-capture.kraken-trades.silver_trade_unresolved",
         "product": "market-capture.kraken-trades",
         "relation": "market_capture.kraken_trades.silver_trade_unresolved"
@@ -467,6 +532,14 @@
       {
         "from": "market-capture.kraken-trades.silver_trade",
         "to": "market-capture.kraken-trades.silver_trade_unresolved"
+      },
+      {
+        "from": "market-capture.kraken-trades.bronze_trade",
+        "to": "market-capture.kraken-trades.silver_trade_rejected"
+      },
+      {
+        "from": "market-capture.kraken-trades.silver_trade",
+        "to": "market-capture.kraken-trades.silver_trade_rejected"
       }
     ]
   },

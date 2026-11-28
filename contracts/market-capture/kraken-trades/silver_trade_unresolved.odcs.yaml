@@ -8,7 +8,9 @@ description:
   purpose: >-
     The held trades: every trade of a bronze trade frame that is not in silver_trade, because a
     trade in it has a symbol the security master resolves to nothing at the trade's time. Rebuilt
-    on every build, so a frame leaves it on the build that moves it into silver_trade.
+    on every build, so a frame leaves it on the build that moves it into silver_trade. A frame the
+    model cannot type is not held but rejected (silver_trade_rejected), even if a symbol in it
+    resolves to nothing too: a held frame is one the master alone can release.
 team:
   name: capture-team
 schema:

@@ -9,7 +9,8 @@ description:
     One typed row per trade and delivery: each element of a bronze trade frame's data array, its
     symbol resolved to the security master's instrument at the trade's time. A trade the venue
     sent twice is two rows, the later one flagged is_duplicate. A frame is here only once every
-    trade in it resolves; until then it is held in silver_trade_unresolved.
+    trade in it resolves; until then it is held in silver_trade_unresolved. A frame the model
+    cannot type is never here, whole: it is in silver_trade_rejected with its reason.
 team:
   name: capture-team
 schema:

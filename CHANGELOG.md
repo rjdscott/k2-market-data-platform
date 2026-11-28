@@ -53,8 +53,9 @@ each named below.
   - Each input port states `whenAbsent`: `fail` for a consumer built as a `table` model (zero rows
     would rebuild it empty), `empty` for `canonical-trades`' optional venue, which then shows
     `partial`.
-  - A degraded `kraken-trades` build starts one `kraken-instruments` run, by the product property
-    `refresh`, one hop, never waiting for it.
+  - A `kraken-trades` build degraded by `unresolved_rows_zero` starts one `kraken-instruments` run, by
+    the product property `refresh` (`{product, rules}`), one hop, never waiting for it, at most once
+    an hour: the venue's public API allows a few calls an hour.
   - A dbt output is compacted inside the wrapper after its tests, once it holds 12 delete files or 48
     small files beyond one per partition; a Kafka product's landing and bronze are compacted once a
     day in the product's own DAG with the Spark key, skipped while bronze's `audit` holds a batch.
@@ -124,6 +125,11 @@ Found by the phase's reviews before any release:
 - An input a model reads but does not declare is refused (A1); a topic belongs to one product of its
   owning domain (A2); terms are checked upstream (A3); the role order names declared roles with no
   cycle (A6).
+- A Kraken trade frame `silver_trade` cannot type (not JSON, no data array, a field missing or not of
+  its type) no longer fails every later build at a NOT NULL column: it is kept whole, with its reason
+  and bytes, in the owner-only `silver_trade_rejected`, its warn rule `rejected_frames_zero` degrades
+  the build and the rest publishes; and a quality rule's dbt test now carries the rule's name, so
+  `warned` and `dq_test_results` say `unresolved_rows_zero`, not dbt's argument-made id.
 
 ### Known and open
 

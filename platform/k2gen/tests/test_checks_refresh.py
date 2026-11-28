@@ -42,9 +42,14 @@ def warn(doc: Any) -> None:
     doc["schema"][0].setdefault("quality", []).append(WARN)
 
 
+def to(target: str, *rules: str) -> dict[str, Any]:
+    """A refresh value: the target, started by these warn rules (rows_present unless named)."""
+    return {"product": target, "rules": list(rules or ("rows_present",))}
+
+
 def overlay() -> dict[str, bytes]:
-    """daily-load, which reads station-readings, refreshes it, and can be degraded."""
-    documents = edited(good(), f"{LOAD}/product.odps.yaml", prop("refresh", READINGS_ID))
+    """daily-load, which reads station-readings, refreshes it on its warn rule rows_present."""
+    documents = edited(good(), f"{LOAD}/product.odps.yaml", prop("refresh", to(READINGS_ID)))
     return edited(documents, f"{LOAD}/gold_daily_load.odcs.yaml", warn)
 
 
@@ -55,27 +60,36 @@ def _retired(doc: Any) -> None:
 
 def _downstream() -> dict[str, bytes]:
     """station-readings, which daily-load reads, refreshing daily-load."""
-    documents = edited(good(), f"{READINGS}/product.odps.yaml", prop("refresh", LOAD_ID))
+    documents = edited(good(), f"{READINGS}/product.odps.yaml", prop("refresh", to(LOAD_ID)))
     return edited(documents, f"{READINGS}/silver_readings.odcs.yaml", warn)
 
 
 def _chained() -> dict[str, bytes]:
-    return edited(overlay(), f"{READINGS}/product.odps.yaml", prop("refresh", LOAD_ID))
+    return edited(overlay(), f"{READINGS}/product.odps.yaml", prop("refresh", to(LOAD_ID)))
+
+
+def _error_rule(doc: Any) -> None:
+    """rows_present at the default severity, error: its failure fails the build, never degrades it."""
+    doc["schema"][0]["quality"] = [{**WARN, "implementation": {"k2_quality": {"arguments": WARN["implementation"]["k2_quality"]["arguments"]}}}]
 
 
 CASES = {  # name: (code, the product file whose findings are exactly it, documents)
     "an unknown target": ("refresh.target-unresolved", LOAD, lambda: edited(
-        overlay(), f"{LOAD}/product.odps.yaml", prop("refresh", "sensor-net.nowhere"))),
+        overlay(), f"{LOAD}/product.odps.yaml", prop("refresh", to("sensor-net.nowhere")))),
     "a retired target": ("refresh.target-unresolved", LOAD, lambda: edited(
         overlay(), f"{READINGS}/product.odps.yaml", _retired)),
     "itself": ("refresh.target-self", LOAD, lambda: edited(
-        overlay(), f"{LOAD}/product.odps.yaml", prop("refresh", LOAD_ID))),
+        overlay(), f"{LOAD}/product.odps.yaml", prop("refresh", to(LOAD_ID)))),
     "a target with no schedule": ("refresh.target-unscheduled", LOAD, lambda: edited(
         overlay(), f"{READINGS}/product.odps.yaml", prop("schedule", None))),
     "a downstream target": ("refresh.target-not-upstream", READINGS, _downstream),
     "a target with its own refresh": ("refresh.target-chains", LOAD, _chained),
-    "a product with no warn rule": ("refresh.never-degraded", LOAD, lambda: edited(
-        good(), f"{LOAD}/product.odps.yaml", prop("refresh", READINGS_ID))),
+    "a product with no warn rule": ("refresh.rule-not-warn", LOAD, lambda: edited(
+        good(), f"{LOAD}/product.odps.yaml", prop("refresh", to(READINGS_ID)))),
+    "a rule the product does not have": ("refresh.rule-not-warn", LOAD, lambda: edited(
+        overlay(), f"{LOAD}/product.odps.yaml", prop("refresh", to(READINGS_ID, "rows_present", "rows_absent")))),
+    "a rule of error severity": ("refresh.rule-not-warn", LOAD, lambda: edited(
+        overlay(), f"{LOAD}/gold_daily_load.odcs.yaml", _error_rule)),
 }
 
 
@@ -88,7 +102,7 @@ def test_the_overlay_has_no_finding_and_compiles_its_refresh() -> None:
     assert run(documents) == []
     m = model.load(docset(documents))
     (p,) = [p for p in m.products if p.id == LOAD_ID]
-    assert pipeline.product_pipeline(m, p)["refresh"] == READINGS_ID
+    assert pipeline.product_pipeline(m, p)["refresh"] == {"product": READINGS_ID, "rules": ["rows_present"]}
 
 
 @pytest.mark.parametrize("name", CASES)
@@ -110,4 +124,5 @@ def test_kraken_trades_refreshes_instruments_through_the_security_master() -> No
     m = model.load(docs)
     (trades,) = [p for p in m.products if p.id == "market-capture.kraken-trades"]
     assert "market-capture.kraken-instruments" not in {port.contract_id.rsplit(".", 1)[0] for port in trades.input_ports}
-    assert pipeline.product_pipeline(m, trades)["refresh"] == "market-capture.kraken-instruments"
+    # only the rule a listing can cure: a malformed frame (rejected_frames_zero) starts no instruments run
+    assert pipeline.product_pipeline(m, trades)["refresh"] == {"product": "market-capture.kraken-instruments", "rules": ["unresolved_rows_zero"]}

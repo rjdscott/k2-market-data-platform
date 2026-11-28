@@ -215,7 +215,9 @@ def quality_test(q: Quality, build: str, columns: Sequence[str]) -> dict[str, An
     custom, engine dbt: its implementation, one dbt data test (a mapping, or its YAML text).
     sql: k2_quality over its query. library: k2_quality over the metric's query, rowCount (rows)
     or duplicateValues (arguments.properties; rows or percent). Every must* threshold of ODCS v3.2.0
-    is supported, with numbers; a string or other value is not."""
+    is supported, with numbers; a string or other value is not. A rule with a name gives the test
+    that name (dbt's `name:`), so dbt's node, the wrapper's `warned` and dq_test_results.test_name
+    call it what its contract does; a rule with none keeps the name dbt makes of its arguments."""
     if q.type == "text":
         return None
     if q.type == "custom" and q.engine == "k2-connector":
@@ -228,12 +230,23 @@ def quality_test(q: Quality, build: str, columns: Sequence[str]) -> dict[str, An
         entry = k2.parse("implementation", q.implementation.encode()) if isinstance(q.implementation, str) else q.implementation
         if q.engine != "dbt" or not isinstance(entry, dict) or len(entry) != 1:
             raise ValueError("a dbt implementation is one data test, {<test>: {...}}")
-        return dict(entry)
-    return {"k2_quality": {"arguments": {"query": _query(q, columns), "holds": _holds(q.thresholds)}}}
+        ((test, body),) = entry.items()
+    else:
+        test, body = "k2_quality", {"arguments": {"query": _query(q, columns), "holds": _holds(q.thresholds)}}
+    if not q.name:
+        return {test: body}
+    body = {} if body is None else body  # `not_null:` with nothing under it
+    if not isinstance(body, dict):
+        raise ValueError(f"a dbt implementation's {test} takes a mapping, which holds the rule's name")
+    return {test: {"name": q.name, **{k: v for k, v in body.items() if k != "name"}}}
 
 
 def _quality_tests(t: Table) -> Iterator[Any]:
-    """Each ODCS quality rule of a dbt table that a dbt test carries (quality_test)."""
+    """Each ODCS quality rule of a dbt table that a dbt test carries (quality_test). Two rules of one
+    table with the same name are refused: dbt names the test by it, and refuses the pair itself."""
+    names = [q.name for q in t.quality if q.name]
+    if len(names) != len(set(names)):
+        raise ValueError(f"{t.path}: two quality rules are named {sorted({n for n in names if names.count(n) > 1})}; a rule's name is its test's, once per table")
     for q in t.quality:
         try:
             test = quality_test(q, t.build.kind, [c.name for c in t.columns])

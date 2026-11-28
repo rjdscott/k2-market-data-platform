@@ -159,6 +159,8 @@ expectations:
   - {principal: p.canary-full, table: market_capture.kraken_trades__base.silver_trade, denied: true}  # no grant yet: nobody holds a role on it
   - {principal: p.canary-full, table: market_capture.kraken_trades.silver_trade_unresolved, denied: true}  # no grant yet: nobody holds a role on it
   - {principal: p.canary-full, table: market_capture.kraken_trades__base.silver_trade_unresolved, denied: true}  # no grant yet: nobody holds a role on it
+  - {principal: p.canary-full, table: market_capture.kraken_trades.silver_trade_rejected, denied: true}  # no grant yet: nobody holds a role on it
+  - {principal: p.canary-full, table: market_capture.kraken_trades__base.silver_trade_rejected, denied: true}  # no grant yet: nobody holds a role on it
   - {principal: p.canary-full, table: reference_data.security_master.asset, denied: true}  # no grant yet: nobody holds a role on it
   - {principal: p.canary-full, table: reference_data.security_master__base.asset, denied: true}  # no grant yet: nobody holds a role on it
   - {principal: p.canary-full, table: reference_data.security_master.instrument, denied: true}  # no grant yet: nobody holds a role on it
@@ -189,6 +191,8 @@ expectations:
   - {principal: svc.partner-dashboard, table: "market_capture.kraken_trades__base.silver_trade$files", denied: true}  # bounds of rows under 20 minutes old
   - {principal: svc.partner-dashboard, table: market_capture.kraken_trades.silver_trade_unresolved, denied: true}  # the held table offers no role
   - {principal: svc.partner-dashboard, table: market_capture.kraken_trades__base.silver_trade_unresolved, denied: true}  # nor its base
+  - {principal: svc.partner-dashboard, table: market_capture.kraken_trades.silver_trade_rejected, denied: true}  # the rejected frames, bronze's bytes, offer no role
+  - {principal: svc.partner-dashboard, table: market_capture.kraken_trades__base.silver_trade_rejected, denied: true}  # nor their base
   - {principal: svc.partner-dashboard, table: lake.kraken_trades.bronze_trade, denied: true}  # bronze, which offers no role
   - {principal: svc.partner-dashboard, table: lake.kraken_trades.landing, denied: true}  # the product's landing
 
@@ -206,6 +210,7 @@ expectations:
   - {principal: pub_kraken_trades, sql: "CREATE OR REPLACE VIEW market_capture_build.kraken_instruments.silver_listing AS SELECT 1 x", expect: denied}  # another product's view, in its own build catalog
   - {principal: dbt_canonical_trades, sql: "SELECT count(*) FROM market_capture.kraken_trades__base.silver_trade", expect: ok}  # its input port
   - {principal: dbt_canonical_trades, table: market_capture.kraken_trades__base.silver_trade_unresolved, denied: true}  # never the held table
+  - {principal: dbt_canonical_trades, table: market_capture.kraken_trades__base.silver_trade_rejected, denied: true}  # nor the rejected frames
   - {principal: dbt_canonical_trades, table: lake.kraken_trades.bronze_trade, denied: true}  # nor its input's bronze
   - {principal: dbt_canonical_trades, table: lake.kraken_trades.landing, denied: true}  # nor its landing
   - {principal: dbt_canonical_trades, sql: "CREATE TABLE market_analytics_build.candles__base.planted AS SELECT 1 x", expect: denied}  # another product's base, in the build catalog they share

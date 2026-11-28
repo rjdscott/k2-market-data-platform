@@ -202,6 +202,18 @@
       "relation": "market_capture.kraken_trades.silver_trade"
     },
     {
+      "base": "market_capture.kraken_trades__base.silver_trade_rejected",
+      "columns": [
+        "kafka_partition",
+        "kafka_offset",
+        "kafka_timestamp",
+        "reason",
+        "payload"
+      ],
+      "owner": "pub_kraken_trades",
+      "relation": "market_capture.kraken_trades.silver_trade_rejected"
+    },
+    {
       "base": "market_capture.kraken_trades__base.silver_trade_unresolved",
       "columns": [
         "kafka_partition",

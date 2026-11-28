@@ -2,8 +2,8 @@
 # the platform read it. silver_trade offers full_reader and delayed_reader (its contract: trade_ts
 # delayed 20 minutes, conn_id and conn_msg_seq masked) for the reader plan 004 names,
 # svc.partner-dashboard as delayed_reader, and for the products built on it to offer them
-# (access.inherit-role). bronze_trade (access.connector-role) and the held silver_trade_unresolved
-# offer no role. That grant waits for the owner: svc.partner-dashboard is platform-team's, outside
+# (access.inherit-role). bronze_trade (access.connector-role), the held silver_trade_unresolved and
+# silver_trade_rejected, which holds bronze's bytes, offer no role. That grant waits for the owner: svc.partner-dashboard is platform-team's, outside
 # capture-team, so k2gen check refuses it (docs.terms-missing) until product.odps.yaml records
 # Kraken's terms in its terms property; its denied rows are in tests/access/expectations.yaml now,
 # and its read row comes with the grant.

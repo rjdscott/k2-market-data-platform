@@ -83,7 +83,7 @@
         }
       }
     },
-    "refresh": {"description": "The product property refresh: the product whose DAG the factory's refresh task starts, once per run id and never waited on, when build's result says degraded: true (W1-6, docs/development/phase-001-interfaces.md, Holds). Absent: no refresh task. An upstream product of this one through its input ports, with a schedule and no refresh of its own (k2gen check refresh.*).", "type": "string", "pattern": "^[a-z][a-z0-9]*(-[a-z0-9]+)*\\.[a-z][a-z0-9]*(-[a-z0-9]+)*$"},
+    "refresh": {"description": "The product property refresh: product, the product whose DAG the factory's refresh task starts, at most once per target per hour and never waited on, when build's result says degraded: true and its warned list names a rule in rules (W1-6, docs/development/phase-001-interfaces.md, Holds). Absent: no refresh task. product is upstream of this one through its input ports, with a schedule and no refresh of its own; each of rules is a warn-severity rule of this product (k2gen check refresh.*).", "type": "object", "required": ["product", "rules"], "additionalProperties": false, "properties": {"product": {"type": "string", "pattern": "^[a-z][a-z0-9]*(-[a-z0-9]+)*\\.[a-z][a-z0-9]*(-[a-z0-9]+)*$"}, "rules": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"}}}},
     "maintain": {
       "description": "The product's daily maintenance task, staggered by the compiler; it expires each table's snapshots by compiled/lake/retention.json.",
       "type": "object",

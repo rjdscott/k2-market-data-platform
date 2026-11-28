@@ -1020,7 +1020,7 @@ class Product:
     seeds: Mapping[str, bytes]  # path under seeds/ -> bytes, each declared by the `seeds` property
     support: tuple[Support, ...] = ()  # ODPS support
     links: tuple[Link, ...] = ()  # ODPS authoritativeDefinitions, the licence's included
-    refresh: str | None = None  # the `refresh` property: the product a degraded build starts (W1-6, checks/refresh.py)
+    refresh: Mapping[str, Any] | None = None  # the `refresh` property, {product, rules}: the product a build degraded by one of rules starts (W1-6, checks/refresh.py)
 
 
 @dataclass(frozen=True)

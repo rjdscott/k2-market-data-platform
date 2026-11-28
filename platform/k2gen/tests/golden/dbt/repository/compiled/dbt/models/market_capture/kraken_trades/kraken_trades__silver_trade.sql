@@ -5,7 +5,11 @@
 -- venue_symbol version valid at the trade's time (type-2, half-open [valid_from, valid_to), the
 -- first version opening at 1970-01-01 so a trade before the first fetch still resolves).
 -- A frame comes in only when every trade in it resolves; one that does not stays out and is held
--- in silver_trade_unresolved, so the rest of the venue publishes.
+-- in silver_trade_unresolved, so the rest of the venue publishes. A frame the model cannot type (a
+-- payload that is not JSON, no data array, a trade lacking a field or holding one that does not
+-- cast) stays out the same way, whole, and silver_trade_rejected records it with its reason: each
+-- field is typed under try() or try_cast, so a bad frame is a null here, never an error that
+-- would roll the build back and, re-read by every later build, stop the venue.
 --
 -- Incremental, which frames a build reads: every bronze frame no silver row comes from yet, an
 -- anti-join on (kafka_partition, kafka_offset). Offsets are the watermark, never a wall clock, and
@@ -23,7 +27,9 @@
 -- be older than a delivery of the same trade already published, which then becomes the duplicate.
 -- ponytail: the anti-join reads every key of bronze and of silver on each build, two integer
 -- columns; bound it below by the oldest offset not yet here per partition when the soak's run
--- times say so. A frame holding no trade (a subscribe acknowledgement) is re-read every build.
+-- times say so. A frame holding no trade (a subscribe acknowledgement) is re-read every build, and
+-- so is a rejected one: this model reads no other table of its product (silver_trade_rejected is
+-- built from it), so it types the frame again and leaves it out, a parse per standing frame.
 {{ config(materialized='incremental') }}
 with frames as (
   select
@@ -32,7 +38,7 @@ with frames as (
     b.recv_ts_ns,
     b.conn_id,
     b.conn_msg_seq,
-    json_parse(from_utf8(b.payload)) as frame
+    try(json_parse(from_utf8(b.payload))) as frame
   from {{ source('kraken_trades', 'bronze_trade') }} as b
   {% if is_incremental() %}
   where not exists (
@@ -47,20 +53,21 @@ trades as (
     f.kafka_partition,
     f.kafka_offset,
     cast(t.ordinal as integer) as trade_ordinal,
-    cast(at_timezone(from_iso8601_timestamp_nanos(json_extract_scalar(t.trade, '$.timestamp')), 'UTC') as timestamp(6) with time zone) as trade_ts,
-    cast(json_extract(t.trade, '$.trade_id') as bigint) as trade_id,
+    -- each typed under try: a field missing or not of its type is null, and its frame stays out
+    try(cast(at_timezone(from_iso8601_timestamp_nanos(json_extract_scalar(t.trade, '$.timestamp')), 'UTC') as timestamp(6) with time zone)) as trade_ts,
+    try_cast(json_extract(t.trade, '$.trade_id') as bigint) as trade_id,
     json_extract_scalar(t.trade, '$.symbol') as venue_symbol,
     json_extract_scalar(t.trade, '$.side') as side,
     -- JSON to DECIMAL reads the number's digits, never a double, so nothing is rounded
-    cast(json_extract(t.trade, '$.price') as decimal(38, 18)) as price,
-    cast(json_extract(t.trade, '$.qty') as decimal(38, 18)) as quantity,
+    try_cast(json_extract(t.trade, '$.price') as decimal(38, 18)) as price,
+    try_cast(json_extract(t.trade, '$.qty') as decimal(38, 18)) as quantity,
     json_extract_scalar(t.trade, '$.ord_type') as order_type,
     json_extract_scalar(f.frame, '$.type') as frame_type,
     cast(from_unixtime_nanos(f.recv_ts_ns - f.recv_ts_ns % 1000) as timestamp(6) with time zone) as received_at,
     f.conn_id,
     f.conn_msg_seq
   from frames as f
-  cross join unnest(cast(json_extract(f.frame, '$.data') as array(json))) with ordinality as t (trade, ordinal)
+  cross join unnest(try(cast(json_extract(f.frame, '$.data') as array(json)))) with ordinality as t (trade, ordinal)
   where json_extract_scalar(f.frame, '$.channel') = 'trade'
 ),
 
@@ -68,7 +75,11 @@ resolved as (
   select
     t.*,
     v.instrument_id,
-    bool_and(v.instrument_id is not null) over (partition by t.kafka_partition, t.kafka_offset) as frame_resolves
+    bool_and(v.instrument_id is not null) over (partition by t.kafka_partition, t.kafka_offset) as frame_resolves,
+    bool_and(
+      t.trade_ts is not null and t.trade_id is not null and t.venue_symbol is not null and t.side is not null
+      and t.price is not null and t.quantity is not null and t.frame_type is not null
+    ) over (partition by t.kafka_partition, t.kafka_offset) as frame_types
   from trades as t
   left join {{ k2_input('security_master', 'venue_symbol') }} as v
     on v.venue = 'kraken'
@@ -84,7 +95,7 @@ arrived as (
     true as is_new,
     cast(null as boolean) as was_duplicate
   from resolved
-  where frame_resolves
+  where frame_resolves and frame_types
 ),
 
 deliveries as (
