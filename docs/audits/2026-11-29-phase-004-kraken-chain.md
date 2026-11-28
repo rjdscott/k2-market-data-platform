@@ -146,9 +146,10 @@ not yet).
 
 ## This file's own gates
 
-Run at this file's commit, with no container (Docker hidden from `PATH`, so gates (c) and (c2), the
-Prometheus rules this change does not touch, print their skip note): `bash scripts/check-docs.sh`, every
-other gate PASS and exit 0.
+Run on this file's branch, with no container (Docker hidden from `PATH`, so gates (c) and (c2), the
+Prometheus rules this change does not touch, print their skip note): `bash scripts/check-docs.sh`, gates
+(a), (b), (d), (d2), (e), (f), (h), (i) and (j) PASS, (g) WARN only on Mermaid lines that predate this
+change, exit 0. Its first run failed gate (j) on a runbook's `ISO 8601`, fixed before this file was final.
 
 ## Resolutions
 
