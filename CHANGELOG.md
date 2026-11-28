@@ -111,6 +111,9 @@ each named below.
   drift.
 - `docs.terms-missing` holds a grant outside the owning team to terms on every product upstream, not
   only the product granted.
+- The currency master's `currency` and the security master's `asset` offer `full_reader`, held by
+  nobody (both products 1.1.0); SIX's terms for the ISO 4217 lists are not established, so no terms
+  are recorded, and a grant outside the owning team on either product, or on one downstream, is refused.
 - Principal kind `partner`, another organisation's service whose credential the platform never holds:
   `svc.partner-dashboard` is one; it holds only the reader roles its grants give, a grant to it always
   needs terms, the live access suite skips its rows by kind, and `make password TO_FILE=1` refuses it.

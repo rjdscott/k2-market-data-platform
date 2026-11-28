@@ -8,7 +8,7 @@ apiVersion: v1.1.0
 kind: DataProduct
 id: reference-data.security-master
 name: security-master
-version: 1.0.0
+version: 1.1.0
 status: active
 domain: reference-data
 type: sourceAligned
@@ -85,7 +85,7 @@ outputPorts:
       - id: reference-data.security-master.venue_symbol_claim
         version: 1.0.0
   - name: asset
-    version: 1.0.0
+    version: 1.1.0
     contractId: reference-data.security-master.asset
     inputContracts:
       - id: reference-data.security-master.instrument

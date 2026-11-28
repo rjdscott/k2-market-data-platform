@@ -106,12 +106,12 @@
       "allow": "read-only"
     },
     {
-      "group": "calendars__full_reader|security_master__full_reader",
+      "group": "calendars__full_reader|currency_master__full_reader|security_master__full_reader",
       "catalog": "reference_data",
       "allow": "read-only"
     },
     {
-      "group": "access_canary__delayed_reader|access_canary__full_reader|access_canary__public_reader|calendars__full_reader|candles__delayed_reader|candles__full_reader|canonical_trades__delayed_reader|canonical_trades__full_reader|ecb_fx_rates__full_reader|kraken_instruments__full_reader|kraken_trades__delayed_reader|kraken_trades__full_reader|security_master__full_reader",
+      "group": "access_canary__delayed_reader|access_canary__full_reader|access_canary__public_reader|calendars__full_reader|candles__delayed_reader|candles__full_reader|canonical_trades__delayed_reader|canonical_trades__full_reader|currency_master__full_reader|ecb_fx_rates__full_reader|kraken_instruments__full_reader|kraken_trades__delayed_reader|kraken_trades__full_reader|security_master__full_reader",
       "catalog": "system",
       "allow": "read-only"
     },
@@ -306,7 +306,7 @@
       ]
     },
     {
-      "group": "access_canary__delayed_reader|access_canary__full_reader|access_canary__public_reader|calendars__full_reader|candles__delayed_reader|candles__full_reader|canonical_trades__delayed_reader|canonical_trades__full_reader|ecb_fx_rates__full_reader|kraken_instruments__full_reader|kraken_trades__delayed_reader|kraken_trades__full_reader|security_master__full_reader",
+      "group": "access_canary__delayed_reader|access_canary__full_reader|access_canary__public_reader|calendars__full_reader|candles__delayed_reader|candles__full_reader|canonical_trades__delayed_reader|canonical_trades__full_reader|currency_master__full_reader|ecb_fx_rates__full_reader|kraken_instruments__full_reader|kraken_trades__delayed_reader|kraken_trades__full_reader|security_master__full_reader",
       "catalog": "system",
       "schema": "jdbc",
       "table": "attributes|catalogs|columns|procedure_columns|procedures|pseudo_columns|schemas|super_tables|super_types|table_types|tables|types|udts",
@@ -315,7 +315,7 @@
       ]
     },
     {
-      "group": "access_canary__delayed_reader|access_canary__full_reader|access_canary__public_reader|calendars__full_reader|candles__delayed_reader|candles__full_reader|canonical_trades__delayed_reader|canonical_trades__full_reader|ecb_fx_rates__full_reader|kraken_instruments__full_reader|kraken_trades__delayed_reader|kraken_trades__full_reader|security_master__full_reader",
+      "group": "access_canary__delayed_reader|access_canary__full_reader|access_canary__public_reader|calendars__full_reader|candles__delayed_reader|candles__full_reader|canonical_trades__delayed_reader|canonical_trades__full_reader|currency_master__full_reader|ecb_fx_rates__full_reader|kraken_instruments__full_reader|kraken_trades__delayed_reader|kraken_trades__full_reader|security_master__full_reader",
       "catalog": "system",
       "schema": "metadata",
       "table": "analyze_properties|catalogs|column_properties|materialized_view_properties|materialized_views|schema_properties|table_comments|table_properties",
@@ -1329,6 +1329,24 @@
       "catalog": "reference_data",
       "schema": "calendars",
       "table": "target_days",
+      "privileges": [
+        "SELECT"
+      ]
+    },
+    {
+      "group": "currency_master__full_reader",
+      "catalog": "reference_data",
+      "schema": "currency_master",
+      "table": "currency",
+      "privileges": [
+        "SELECT"
+      ]
+    },
+    {
+      "group": "security_master__full_reader",
+      "catalog": "reference_data",
+      "schema": "security_master",
+      "table": "asset",
       "privileges": [
         "SELECT"
       ]

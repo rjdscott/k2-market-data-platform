@@ -1,6 +1,6 @@
-# instrument and venue_symbol offer full_reader: the platform's own derivation of a public
-# listing. Nobody holds it yet: a grant outside reference-data-team waits for the owner, and for
-# the venue's terms on kraken-instruments (ADR-055 part 5). asset offers no role while its input
-# currency-master's currency offers none (access.inherit-role). venue_symbol_claim and
-# venue_symbol_held offer no role: owner-only.
+# instrument, venue_symbol and asset offer full_reader: the platform's own derivation of a public
+# listing and, for asset, of the currency master. Nobody holds it yet: a grant outside
+# reference-data-team waits for the owner, for the venue's terms on kraken-instruments, and for
+# the publisher's terms on currency-master, which are not established (ADR-055 part 5).
+# venue_symbol_claim and venue_symbol_held offer no role: owner-only.
 grants: []

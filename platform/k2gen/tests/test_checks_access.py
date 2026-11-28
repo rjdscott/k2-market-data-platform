@@ -228,13 +228,25 @@ def test_an_expression_k2gen_cannot_read_stands_for_every_input_port() -> None:
         assert any("which k2gen cannot read" in f.message for f in found), hidden
 
 
-def test_the_reviewers_exploit_on_the_security_master_is_refused() -> None:
-    """instrument offers full_reader; currency offers no role and is an input port of the product,
-    not of instrument's output port. Read through k2_input, k2gen check passed it before the fix."""
+CURRENCY = "contracts/reference-data/currency-master/currency.odcs.yaml"
+ASSET = "contracts/reference-data/security-master/asset.odcs.yaml"
+
+
+def _no_currency_role() -> dict[str, bytes]:
+    """The repository's documents as they were before the owner's decision of 2026-11-28, currency
+    and asset offering no role: currency is the security master's one input port that could."""
     from test_repository_documents import repository_set
 
+    assert access.check(repository_set(), None) == []
+    return changed([{"file": CURRENCY, "remove": "roles"}, {"file": ASSET, "remove": "roles"}], repository_set().documents)
+
+
+def test_the_reviewers_exploit_on_the_security_master_is_refused() -> None:
+    """instrument offers full_reader; currency, offering no role here, is an input port of the
+    product, not of instrument's output port. Read through k2_input, k2gen check passed it before
+    the fix."""
     path = "contracts/reference-data/security-master/models/instrument.sql"
-    repo = repository_set().documents
+    repo = _no_currency_role()
     assert access.check(docset(dict(repo)), None) == []
     sql = repo[path].decode().replace("  where held_reason is null\n", "  where held_reason is null\n    and base_asset in "
                                       "(select code from {{ k2_input('currency_master', 'currency') }})\n", 1)
@@ -246,10 +258,8 @@ def test_the_reviewers_exploit_on_the_security_master_is_refused() -> None:
 def test_a_sibling_reached_by_ref_passes_its_reads_on() -> None:
     """The same read in venue_symbol_claim reaches every model that refs it: each is refused, and
     the two offering full_reader meet currency's floor; asset declares currency, so it passes."""
-    from test_repository_documents import repository_set
-
     path = "contracts/reference-data/security-master/models/venue_symbol_claim.sql"
-    repo = repository_set().documents
+    repo = _no_currency_role()
     sql = repo[path].decode().replace("  from {{ ref('security_master__code_exceptions') }}\n", "  from {{ ref("
                                       "'security_master__code_exceptions') }}\n  union all\n  select 'kraken', upper(code), "
                                       "upper(code) from {{ k2_input('currency_master', 'currency') }}\n", 1)
@@ -308,10 +318,12 @@ def test_the_enriched_fixture_delayed_10_minutes_over_candles_20_fails() -> None
 
 
 def test_the_enriched_fixture_over_an_input_offering_no_role_fails() -> None:
-    """Plan 005's exit, the role: the security master's asset offers no role today, and nothing
-    stands in for it, so an output reading it offers neither full_reader nor delayed_reader."""
+    """Plan 005's exit, the role: with the security master's asset offering no role (it offers
+    full_reader since 2026-11-28), nothing stands in for it, so an output reading it offers neither
+    full_reader nor delayed_reader."""
     asset = "reference-data.security-master.asset"
     found = enriched(
+        {"file": ASSET, "remove": "roles"},
         {"file": EUR_PRODUCT, "append": "inputPorts", "value": {"name": "asset", "version": "1.0.0", "contractId": asset,
                                                                 "customProperties": [{"property": "required", "value": True},
                                                                                      {"property": "maxLagMinutes", "value": None}]}},

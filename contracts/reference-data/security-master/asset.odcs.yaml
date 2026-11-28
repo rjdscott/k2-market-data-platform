@@ -2,7 +2,7 @@ apiVersion: v3.2.0
 kind: DataContract
 id: reference-data.security-master.asset
 name: asset
-version: 1.0.0
+version: 1.1.0
 domain: reference-data
 description:
   purpose: >-
@@ -42,6 +42,9 @@ schema:
         query: "select count(*) from ${table} where kind <> 'fiat' and kind <> 'stablecoin' and kind <> 'crypto'"
         mustBe: 0
         description: Every asset is fiat, stablecoin or crypto.
+roles:
+  - role: full_reader  # offered, held by nobody yet (grants.yaml)
+    access: read
 customProperties:
   - property: layer
     value: gold
