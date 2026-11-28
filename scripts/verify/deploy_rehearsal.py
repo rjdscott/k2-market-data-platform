@@ -354,19 +354,28 @@ def real_secrets(skip: tuple[str, ...] = ()) -> None:
     `make password TO_FILE=1`; the canary's people by principal-secret.py's own locked write.
     `skip`: principals of a product the scratch tree does not hold yet (its password comes with it)."""
     sh("bash", str(CLONE / "scripts/tls.sh"), "init", env=env())
-    ids = sorted(set(ps.known()[0]) - set(skip))  # principal-secret.py's own: the declared ones, and each dbt product's builder and publisher
+    known = ps.known()  # principal-secret.py's own: the declared ones, each dbt product's builder and publisher, the partners
+    ids = sorted(set(known[0]) - set(skip))
     for pid in ids:
-        if pid.startswith("p."):
-            secret = secrets.token_urlsafe(32)
-            hashed = f"$2y${bcrypt.hashpw(secret.encode(), bcrypt.gensalt(ps.BCRYPT_COST)).decode().removeprefix('$2b$')}"
-            with ps.locked(SECRETS / ps.PASSWORD_DB) as db:  # principal-secret.py's slot writer, whole file checked
-                users = ps.entries(ps.read(db))
-                ps.write_db(db, "".join(f"{u}:{h}\n" for u, h in {**users, pid: hashed}.items()))
-            with ps.locked(SECRETS / model.password_file(pid)) as f:
-                ps.write(f, secret)
-        else:
-            make("password", f"PRINCIPAL={pid}", "TO_FILE=1")
+        password(pid, known[3])
     print(f"rehearsal: secrets by scripts/tls.sh and principal-secret.py for {len(ids)} principals")
+
+
+def password(pid: str, partners: set[str]) -> None:
+    """A service principal's by `make password TO_FILE=1`. A person's or a partner's, which principal-secret.py
+    prints once to a terminal, written here by its own locked writes: its password.db line, and for a person
+    the file live access-verify reads; a partner's rows are skipped live, so it has no file."""
+    if not pid.startswith("p.") and pid not in partners:
+        make("password", f"PRINCIPAL={pid}", "TO_FILE=1")
+        return
+    secret = secrets.token_urlsafe(32)
+    hashed = f"$2y${bcrypt.hashpw(secret.encode(), bcrypt.gensalt(ps.BCRYPT_COST)).decode().removeprefix('$2b$')}"
+    with ps.locked(SECRETS / ps.PASSWORD_DB) as db:  # principal-secret.py's slot writer, whole file checked
+        users = ps.entries(ps.read(db))
+        ps.write_db(db, "".join(f"{u}:{h}\n" for u, h in {**users, pid: hashed}.items()))
+    if pid.startswith("p."):
+        with ps.locked(SECRETS / model.password_file(pid)) as f:
+            ps.write(f, secret)
 
 
 def dotenv() -> None:
@@ -824,8 +833,9 @@ def phase004() -> None:
         for d in old.values():  # the operator's unpause of each DAG, as live has them
             sh("docker", "exec", SCHED, "airflow", "dags", "unpause", d, "-y")
         code_at(None)
+        partners = ps.known()[3]
         for pid in newer:  # the operator's step before deploying new principals (preflight requires them)
-            make("password", f"PRINCIPAL={pid}", "TO_FILE=1")
+            password(pid, partners)
         target = cut("v0.0.1-rehearsal.11", "R11: this checkout's code and documents: the holds, Kafka and public-API "
                      "connector products, derived products, svc.operator")
         new = dag_ids(target)
