@@ -1,6 +1,6 @@
 # dbt labs
 
-Three labs on the ECB products (`contracts/fx-reference/ecb-fx-rates/`), for someone who knows SQL
+Five labs, three on the ECB products (`contracts/fx-reference/ecb-fx-rates/`) and two on the Kraken trades and the security master, for someone who knows SQL
 and data engineering and is learning dbt on this platform. Each takes about 30 minutes at a
 keyboard. They teach what you need to review a dbt pull request here: what a model is, what the
 platform generates around it, and what happens when its tests fail. The review checklist those
@@ -20,7 +20,12 @@ behaves points at a file in this repository that shows it.
 | [2. An incremental merge with a unit test](lab-2-an-incremental-merge-with-a-unit-test.md) | compile `silver_rates` both ways, read why its key holds the partition column, write a unit test | the merge cannot insert a key twice, and a unit test pins the logic on synthetic rows | no; running the unit test is named for a merge point |
 | [3. A failing test that rolls back](lab-3-a-failing-test-that-rolls-back.md) | follow the wrapper through a failed build; run its unit tests; read the planted failure in its end-to-end proof | readers never see rows whose tests failed | no; the end-to-end proof is named for a merge point |
 
-Do them in order: lab 2 uses the compiled tree from lab 1, and lab 3 assumes both.
+| [4. UNNEST WITH ORDINALITY and window flags](lab-4-unnest-with-ordinality-and-window-flags.md) | read `silver_trade` from one websocket frame to one row per trade; follow the typing under `try`, the duplicate flag, and the held and rejected tables | a frame is in exactly one of silver, held or rejected, and a bad frame never fails the build | no; the build step is named for a merge point |
+| [5. Type-2 history from listings](lab-5-type-2-history-from-listings.md) | read the security master's claims, held claims, `instrument` and `venue_symbol`; work a delisting by hand; see why no dbt snapshot | a trade finds the one version in force at its time, and a rebuild reproduces the history | no; the build step is named for a merge point |
+
+Do them in order: lab 2 uses the compiled tree from lab 1, and lab 3 assumes both. Labs 4 and 5 use
+the same compile step as lab 1, and lab 4 reads `venue_symbol`, which lab 5 builds, so read lab 5's
+step 4 if lab 4's join is unclear.
 
 **"Run at a merge point"** marks a command that starts containers (a throwaway Trino and lake).
 The labs never ask you to start one; what such a command prints is quoted from the script that
