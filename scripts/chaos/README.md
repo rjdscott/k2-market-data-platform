@@ -54,8 +54,8 @@ The four `lake-*.sh` scripts were never run, and they retired with the old lake 
 they faulted ([ADR-056](../../docs/adr/ADR-056-unified-data-product-platform.md)). They
 are archived in [`legacy/v3-lake-ingest/scripts/chaos/`](../../legacy/v3-lake-ingest/scripts/chaos/);
 the ingest pause they called (`pause_lake_ingest` and its helpers) left `lib.sh` with them
-and is in that file's git history. `make chaos` prints a SKIP line in their place until
-phase 004 brings fault scripts for the new lake products.
+and is in that file's git history. The new lake products' faults are the run-path and Kafka
+product scripts below, each on a throwaway lake of its own, never in `make chaos`.
 
 ---
 

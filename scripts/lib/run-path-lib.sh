@@ -252,6 +252,9 @@ trades() {  # trades <run> [release]: kraken-trades' DAG, load, audit, publish, 
 rp_chain() {  # the chain's first cycle, each product ending in its claim (run-path.sh claims 10 to 12)
   listing ki-1 listing-1.json; build "$ID" "$KI" ki-1; probe chain-state ki-1
   claim instruments "$ID"
+  # security-master reads currency-master too, built on its empty bronze (on run-path.sh's lake claim 9
+  # built it already, and this build adds nothing)
+  build "$ID" reference-data.currency-master cm-1
   build "$ID" "$SM" sm-1; probe chain-state sm-1
   claim master "$ID"
   kseed "$RP/frames.jsonl"; trades kt-1; probe chain-state kt-1
