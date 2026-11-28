@@ -10,7 +10,7 @@
 # from services/capture-rust/tests/fixtures/synthetic-kraken-20s.jsonl (1185 frames, 3 trades),
 # and its 20 heartbeat lines alone for a batch of control frames.
 #
-#   bash scripts/verify/kafka-path.sh <release dir> [a|b|c]   # KEEP=1 keeps the scratch directory
+#   bash scripts/verify/kafka-path.sh <release dir> [a|b|c|d]   # KEEP=1 keeps the scratch directory
 #
 # <release dir> is the one run-path.sh takes (rp_start's checks); the lake runs on the fixture's
 # release. A kill is the driver SIGKILLed inside the task by scripts/lib/kafka_path_probe.py's
@@ -66,6 +66,31 @@
 #     the newest connector snapshot of each table and the chain to it survive, older ones go
 #   5 the next run resumes from that snapshot's offsets: no re-land, no restage, no hole
 #   6 the continuity check passes after it
+# group d (W1-15, make rebuild): the phase 004 chain's products on Kraken's raw topic (run-path-lib.sh's
+# chain steps), then scripts/rebuild.py's own rebuild() run from the host against this lake
+# (kafka_path_probe.py rebuild, which says what is real and what is faked: Airflow and the
+# scheduler's oneshot.py are; the holds, Spark, the wrapper and the lake are not), and a release of
+# this tree whose canonical-trades writes one row of the chain's twice (its k2_unique_key data test
+# catches it; its unit tests pass)
+#   1 canonical-trades rebuilt: k2-dbt build --full-refresh through the wrapper, every row again, the
+#     same keys and columns, load_seq numbered in key order after the old maximum
+#   2 the next candles build rewrites every window of 1m, 5m, 1h and 1d (through_load_seq the new
+#     maximum), each value as before, count and volume the rows' own: no row skipped, none doubled
+#   3 a full refresh whose data test fails after it replaced the table, over an operator's hold, its
+#     DAG paused before: exit 1, the wrapper rolls main back across the replace, the audited tag
+#     unmoved, main back on it, every row as before; the rebuild's lock released, the
+#     operator's hold left open, the DAG never unpaused
+#   4 a rebuild lock already open (a killed rebuild's): exit 2 before any pause or build, the lock
+#     left open; UNLOCK=1 (unlock()) ends it
+#   5 kraken-trades: Spark's CREATE OR REPLACE TABLE from the release DDL (no AS SELECT, after the
+#     audit branch is dropped) leaves bronze with no main and no audit, its history and columns
+#     kept, the landing untouched
+#   6 the restage, one batch of the whole landing: bronze main the same keys, envelope and payload
+#     as before, its audit (accounting, parses, keys_unique) passed, through-offsets the landing's,
+#     nothing re-landed; silver_trade rebuilt by --full-refresh to the same rows
+#   7 canonical-trades and candles then build and change nothing
+#   8 each rebuild that placed its lock held it while its build ran (what the DAG's resolve reads)
+#     and released it, and paused and unpaused its DAG
 # Spark task wall times go to <rp>/times and are printed as INFO lines.
 #
 # One container job (run-path-lib.sh's guards); a killed run leaves the lake to
@@ -74,7 +99,7 @@ set -uo pipefail
 # shellcheck source=scripts/lib/run-path-lib.sh
 . "$(dirname "$0")/../lib/run-path-lib.sh"
 GROUP=${2:-a}
-case $GROUP in a) N=12 ;; b) N=6 ;; c) N=6 ;; *) echo "kafka-path: no group $GROUP (a, b or c)" >&2; exit 2 ;; esac
+case $GROUP in a) N=12 ;; b) N=6 ;; c) N=6 ;; d) N=8 ;; *) echo "kafka-path: no group $GROUP (a, b, c or d)" >&2; exit 2 ;; esac
 rp_start kafka-path "${1:-}" "$N"
 FX=platform/k2gen/tests/fixtures/kafka-fixture
 KF=market-capture.kafka-fixture DAG=kafka_fixture
@@ -100,6 +125,22 @@ PY
 )" kf
 REL=$W/kf/releases/$IDF ID=$IDF IDF=
 export K2_THROWAWAY_REDPANDA=1 K2_THROWAWAY_TOPIC=$KTOPIC
+if [ "$GROUP" = d ]; then
+  # claim d3's release: this tree with canonical-trades writing one BTC/USD row twice. Its unit tests (AAA/ZZZ rows
+  # only) pass, so the full refresh replaces the table and its k2_unique_key data test fails on the chain's rows
+  rp_fail_release "$(cat <<'PY'
+import sys
+from pathlib import Path
+p = Path(sys.argv[1]) / "contracts/market-analytics/canonical-trades/models/trades.sql"
+sql = p.read_text()
+assert sql.endswith("\nfrom taken\n") and sql.count("\nfrom taken\n") == 1, "trades.sql no longer ends 'from taken': move the plant"
+p.write_text(sql.removesuffix("from taken\n") + "from (select * from taken union all (select * from taken where venue_symbol = 'BTC/USD' limit 1)) as taken\n")
+PY
+)" ctfail
+  IDC=$IDF IDF= RP_MORE=ctfail
+  unset K2_THROWAWAY_TOPIC  # kraken-trades reads Kraken's raw topic, the throwaway's default
+  rp_image
+fi
 rp_lake
 FULL=$REPO/services/capture-rust/tests/fixtures/synthetic-kraken-20s.jsonl
 grep -F '\"channel\":\"heartbeat\"' "$FULL" > "$W/heartbeats.jsonl"  # derived at run time from the synthetic fixture, never committed
@@ -122,7 +163,7 @@ kkill() {  # kkill <before|after> <run>: the run's load, its driver killed befor
   echo "$P: $2 load killed $1 its landing commit, exit $(cat "$RP/$2.kill.rc")"
 }
 facts() {
-  docker exec -i "$SPARK" python3 - facts "/k2/releases/$ID" "$KF" < "$PROBE" 2> "$RP/facts-$1.err" | tail -1 > "$RP/facts-$1.json"
+  docker exec -i "$SPARK" python3 - facts "/k2/releases/$ID" "${FP:-$KF}" < "$PROBE" 2> "$RP/facts-$1.err" | tail -1 > "$RP/facts-$1.json"
   [ -s "$RP/facts-$1.json" ] || echo "$P: facts $1 failed: $(grep -v '^\s' "$RP/facts-$1.err" | tail -2)"
 }
 
@@ -145,6 +186,28 @@ mtask() {  # mtask <run> <maintain|compact>: factory.SparkTask's maintain argv f
   echo "$run.$t $(cat "$RP/$run.$t.rc") $(awk "BEGIN {printf \"%.1f\", $(date +%s.%N) - $t0}")" >> "$RP/times"
   echo "$P: $run.$t exit $(cat "$RP/$run.$t.rc")"
 }
+
+if [ "$GROUP" = d ]; then
+  rb() {  # rb <scenario> <release id> <product>: make rebuild's own code against this lake
+    P=$P NET=$NET IMAGE=$IMAGE STATE=$STATE S=$S python3 "$PROBE" rebuild "$1" "$RP" "$2" "$3" > "$RP/rebuild-$1.out" 2> "$RP/rebuild-$1.err"
+    echo $? > "$RP/rebuild-$1.rc"
+    echo "$P: rebuild $1 ($3 on $2): $(tail -1 "$RP/rebuild-$1.out" | cut -c1-120)"
+  }
+  rp_chain_files
+  # security-master reads currency-master too: built here on its empty bronze, as run-path.sh claim 9 builds it
+  listing ki-1 listing-1.json; build "$ID" "$KI" ki-1; build "$ID" reference-data.currency-master cm-1; build "$ID" "$SM" sm-1
+  kseed "$RP/frames.jsonl"; trades kt-1; build "$ID" "$CT" ct-1; build "$ID" "$CA" ca-1
+  kseed "$RP/more.jsonl"; trades kt-2; build "$ID" "$CT" ct-2; build "$ID" "$CA" ca-2
+  probe chain-state d0; FP=$KT facts d0
+  rb ct "$ID" "$CT"; probe chain-state d1                               # 1
+  build "$ID" "$CA" ca-3; probe chain-state d2                          # 2
+  rb fail "$IDC" "$CT"; probe chain-state d3                            # 3
+  rb locked "$ID" "$CT"                                                 # 4
+  rb kt "$ID" "$KT"; FP=$KT facts d4; probe chain-state d4              # 5, 6
+  build "$ID" "$CT" ct-4; build "$ID" "$CA" ca-4; probe chain-state d5  # 7
+  timings; claims rebuild-ct rebuild-candles rebuild-fail rebuild-locked rebuild-replace rebuild-restage rebuild-downstream rebuild-holds
+  finish
+fi
 
 if [ "$GROUP" = c ]; then
   seed "$FULL"; run c1
