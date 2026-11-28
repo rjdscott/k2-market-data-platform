@@ -812,7 +812,10 @@ parity checks (`make parity-silver`, `make parity-ohlcv`, step W1-18) run DuckDB
 and spills past that to `/tmp`, and Python, the CSV it writes and the Iceberg, Avro and httpfs
 extensions' code need the rest. At 256M the extensions alone leave nothing to work in. The figure is
 an engineering bound, not a measurement: the first live `make parity-silver` (W2-28) measures its
-peak (`docker stats`), and the limit moves if that peak passes 75% of 2G or the run is killed. No
+peak (`docker stats`), and the limit moves if that peak passes 75% of 2G or the run is killed. On a
+throwaway lake (`bash scripts/verify/duckdb-landing.sh`, 2026-11-29) the largest cgroup `memory.peak` of a
+parity run was 105 MiB over 1,189 landing rows: the fixed cost of Python, DuckDB and its extensions, not a
+sizing. No
 default-profile limit changes, so the gated peak and its headroom are unchanged; only the `tools`
 line moves. `python3 scripts/check-budget.py`:
 
@@ -823,7 +826,7 @@ bootstrap build        24 services   18.30 CPU   30.875 GiB
 bootstrap fetch        24 services   17.80 CPU   29.875 GiB
 bootstrap hot-gold     24 services   21.30 CPU   37.375 GiB
 bootstrap tools        24 services   18.30 CPU   31.375 GiB
-PASS: bootstrap default within 25 CPU / 48 GiB; limits, pins and loopback ports hold across 8 Dockerfiles and 112 scripts and workflows
+PASS: bootstrap default within 25 CPU / 48 GiB; limits, pins and loopback ports hold across 8 Dockerfiles and 122 scripts and workflows
 ```
 
 Headroom at the gated peak: 7.70 CPU and 18.625 GiB. The summary comment at the end of
