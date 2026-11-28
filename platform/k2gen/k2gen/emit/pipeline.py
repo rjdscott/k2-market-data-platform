@@ -71,7 +71,7 @@ _CA = next(s.mount for s in SECRET_FILES if s.path == "tls/ca.pem")
 # only. dbt-runner's env is the wrapper's, exactly; a connector's own credential names
 # (authHeaderEnv, credentialsEnv, keyFileEnv) stay in its pipeline.json, passed to its fetch only.
 ONESHOT_KINDS: dict[str, dict[str, Any]] = {
-    "tools": {"cpus": "0.25", "memory": "256M", "networks": ["k2-net", "k2-catalog"], "env": ["K2_RELEASE"],
+    "tools": {"cpus": "1.0", "memory": "2G", "networks": ["k2-net", "k2-catalog"], "env": ["K2_RELEASE"],
               "secrets": [_CA]},
     "dbt-runner": {"cpus": "0.5", "memory": "768M", "networks": ["k2-catalog"],
                    "env": ["K2_TRINO_HOST", "K2_TRINO_INTERNAL_PORT", "K2_TRINO_USER", "K2_PUB_USER", "K2_RUNS_USER",
