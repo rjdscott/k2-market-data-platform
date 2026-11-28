@@ -200,7 +200,7 @@ parity-ohlcv:  ## SKIP until phase 004: OHLCV parity over the old pipeline's tab
 parity-bars:  ## SKIP until phase 004: event-bar parity over the old pipeline's tables, retired
 	@echo "SKIP parity-bars: the pinned lake tables were dropped with the old lake ingest (legacy/v3-lake-ingest/); returns in phase 004"
 
-chaos:  ## Inject each capture failure, wait for its alert, measure recovery (LOCAL ONLY - breaks the running stack; the lake faults SKIP until phase 004)
+chaos:  ## Inject each capture failure, wait for its alert, measure recovery (LOCAL ONLY - breaks the running stack; the lake faults run apart, on throwaway lakes)
 	@echo "chaos: breaks the running stack and drops real market data - public feeds do not replay it."
 	@echo "       Maintainer-run, never CI (docs/research/2026-08-26-v3-requirements-clarification.md Q3)."
 	scripts/chaos/capture-kill.sh        --exchange kraken
@@ -209,7 +209,7 @@ chaos:  ## Inject each capture failure, wait for its alert, measure recovery (LO
 	scripts/chaos/capture-queue-full.sh  --exchange kraken
 	scripts/chaos/redpanda-stop.sh       --exchange kraken
 	scripts/chaos/capture-corrupt-frame.sh
-	@echo "SKIP the four lake faults: archived with the old lake ingest (legacy/v3-lake-ingest/scripts/chaos/); returns in phase 004"
+	@echo "the lake faults are not here: each runs alone on a throwaway lake with a release (scripts/chaos/README.md)"
 	@echo "results: scripts/chaos/results/$$(date -u +%F).tsv"
 	@echo "copy the measured recovery times into docs/architecture/16-failure-modes.md by hand, with the date"
 
