@@ -81,7 +81,6 @@ CANARY = "contracts/governance/access-canary"
 EVENTS, PRODUCT = f"{CANARY}/events.odcs.yaml", f"{CANARY}/product.odps.yaml"
 MODEL_SQL, EXPECT = f"{CANARY}/models/events.sql", "tests/access/expectations.yaml"
 VIEW = "governance.access_canary.events"
-RUN_RECORD = "governance_build.run_records.run_record"
 # A dbt-only product nothing reads: R1 is cut without it and section 7b brings it back, so one release
 # of the chain ADDS a product (its builder and publisher unknown to the live rules until the swap).
 ADDED, ADDED_VIEW = "contracts/governance/quality-results", "governance.quality_results.test_results"
@@ -399,9 +398,11 @@ def lake_setup(release: str, network: str) -> None:
 
 def publish(release: str) -> str:
     """The canary published as phase 002's wrapper will: S20's stage, as the builder, the tag commit
-    and the publisher, in a tools container on the catalog's network. Stage also creates the run-record
-    table, which the deploy has already made empty, so it is dropped first (no run writes it before 002)."""
-    q("svc.platform", f"DROP TABLE IF EXISTS {RUN_RECORD}")
+    and the publisher, in a tools container on the catalog's network. Stage also creates the platform tables
+    (the run record and the holds), which the deploy has already made empty, so they are dropped first."""
+    for f in (ROOT / release / "compiled/lake/ddl/trino").glob("*.sql"):  # <warehouse>.<namespace>.<table>.sql
+        w, ns, t = f.stem.split(".")
+        q("svc.platform", f"DROP TABLE IF EXISTS {w}_build.{ns}.{t}")
     WORK.mkdir(exist_ok=True)
     lake_env = _load("lake_env", REPO / "scripts/lib/lake_env.py")  # the one writer of env.json
     plan = json.loads((ROOT / release / model.STORAGE_PLAN).read_text())
@@ -478,24 +479,33 @@ def result(release: str, kind: str) -> dict[str, Any]:
 # --- the deploy chain ----------------------------------------------------------------------
 
 
-# The emitters before the review of S12 made the reader view fail closed (ba78445): R1 is cut with them,
-# so the chain crosses from the old view shape to the guarded one, and back, with a reader polling.
-OLD_SHAPE = {f"platform/k2gen/k2gen/emit/{m}.py": "355fa43" for m in ("lake", "trino_rules", "api")}  # api imports rules
+# R1 was cut with the emitters before the review of S12 made the reader view fail closed (355fa43), so the
+# chain crossed from the old view shape to the guarded one. Retired on 2026-11-28: those emitters make no holds
+# table, so this checkout's access suite fails 21 rows on such a release, and every live release since
+# alpha.3 has the guarded shape. The chain now holds the guarded shape across a rollback and back.
 
 
-def emitters(old: bool) -> None:
-    for path, ref in OLD_SHAPE.items():
-        (CLONE / path).write_text(sh("git", "-C", str(REPO), "show", f"{ref}:{path}").stdout if old else (REPO / path).read_text())
+def marker_finding(out: subprocess.CompletedProcess[str], release: str) -> bool:
+    """FINDING (2026-11-28): stage builds security master's venue_symbol_held from a one-row placeholder whose
+    held_reason is null, so its tag holds no row, nothing can be planted, and the marker's `hidden > 0` fails:
+    preflight refuses every release of this checkout's documents (exit 2). Recorded as a FAIL; then the scratch
+    tree's marker, which deploy runs from the checkout, accepts an empty tag so the checks after it can run."""
+    if "fails the tested-data marker check" not in out.stderr:
+        return False
+    check(f"release time: the tested-data marker passes, unpatched, for {release}", False,
+          " | ".join(x for x in result(release, "marker").get("lines", []) if x.startswith("FAIL"))[:300])
+    edit("scripts/verify/tested-data-marker.sh", "hidden > 0 and",
+         "(hidden > 0 or trino.ok(pub, f\"SELECT count(*) FROM ({at_tag})\")[0][0] == 0) and", 1)
+    return True
 
 
 def rehearse() -> int:
     scratch_repo(COMPOSE.replace("STANDIN_IMAGE", ALPINE_A).replace("SPARK_IMAGE", SPARK))
-    emitters(old=True)
     added(False)
     dotenv()
     real_secrets(skip=ADDED_PRINCIPALS)
     t0 = time.monotonic()
-    r1 = cut("v0.0.1-rehearsal.1", "R1: the repository's own documents but quality-results, the reader view in its old shape")
+    r1 = cut("v0.0.1-rehearsal.1", "R1: the repository's own documents but quality-results")
     check("make release compiles R1 at a scratch tag", (ROOT / r1 / "manifest.json").is_file(), f"{r1} in {time.monotonic() - t0:.0f} s")
     compose("up", "-d", "--wait", "prefect-db", "minio", "lakekeeper", "spark-iceberg", "capture-binance", "redpanda")  # running already, as live
     lake_setup(r1, f"{PROJECT}_k2-catalog")
@@ -504,6 +514,8 @@ def rehearse() -> int:
     # 1. a first deploy that fails, then the first deploy (its preflight runs the release-time suites)
     t0 = time.monotonic()
     out = make("deploy", f"RELEASE={r1}", fault="verify-mismatch", check=False)
+    if marker_finding(out, r1):
+        out = make("deploy", f"RELEASE={r1}", fault="verify-mismatch", check=False)
     check("a first deploy that fails verification exits 3 (nothing to go back to)", code(out) == 3,
           f"exit {code(out)} in {time.monotonic() - t0:.0f} s")
     access = result(r1, "access-release")
@@ -547,8 +559,7 @@ def rehearse() -> int:
     edit(EXPECT, 'mustAppear: {where: "id IN (1, 2, 4)", minRows: 3}', 'mustAppear: {where: "id IN (1, 4)", minRows: 2}')  # 2 is 21 min old
     bump("1.0.0", "2.0.0")
     prom_rules(2)
-    emitters(old=False)
-    r2 = cut("v0.0.1-rehearsal.2", "R2: a policy change, rules only, and the reader view in its guarded shape")
+    r2 = cut("v0.0.1-rehearsal.2", "R2: a policy change, rules only")
     shape = Poller()
     shape.start()
     before = started()
@@ -589,7 +600,7 @@ def rehearse() -> int:
     again = make("deploy", f"RELEASE={r2}", check=False)
     shape.stop.set()
     shape.join()
-    check("the view's shape crosses old to guarded, back by make rollback, and forward: no error, no note, ever",
+    check("the view's guarded shape after R2, back to R1 by make rollback, and forward: no error, no note, ever",
           guarded and code(back) == 0 and code(again) == 0 and not shape.leaks and not shape.errors and shape.polls > 50,
           f"guarded after R2: {guarded}; {shape.polls} polls, {shape.errors} errors, shapes {shape.shapes}; "
           + "; ".join(x.strip()[:120] for x in (back.stderr + again.stderr).splitlines() if "shape" in x))
@@ -640,7 +651,7 @@ def rehearse() -> int:
     # 7. a SIGKILL after each step, then a rerun, alternating R3 and R5, the reader still polling
     steps = ("preflight", "images", "plan", "drain", "ddl", "views-narrow", "canary", "swap", "recreate", "rules-loaded",
              "ddl-late", "views-widen", "verify", "done")
-    if FAST:  # no R3 to R5, R2 live: two kills, back to R1 (the old view shape) and forward, a reader polling
+    if FAST:  # no R3 to R5, R2 live: two kills, back to R1 and forward, a reader polling
         steps, r3, r5, poller = ("swap", "recreate"), r1, r2, Poller()
         poller.start()
     target, other, bad = r3, r5, []
@@ -834,15 +845,7 @@ def phase004() -> None:
 
         # b. verify forced to fail: back to R10; the holds table and the new namespaces LEFT, not drift
         out = make("deploy", f"RELEASE={target}", fault="verify-mismatch", check=False)
-        marker = result(target, "marker")
-        check("10: R11's release-time tested-data marker passes at preflight", "fails the tested-data marker check" not in out.stderr,
-              " | ".join(x for x in marker.get("lines", []) if x.startswith("FAIL"))[:300])
-        if "fails the tested-data marker check" in out.stderr:
-            # FINDING (2026-11-28): stage builds venue_symbol_held from a one-row placeholder whose held_reason is null, so
-            # its tag holds no row, nothing can be planted, and `hidden > 0` fails: the scratch tree's marker accepts an
-            # empty tag so the checks below run; every check after this one ran under that patch
-            edit("scripts/verify/tested-data-marker.sh", "hidden > 0 and",
-                 "(hidden > 0 or trino.ok(pub, f\"SELECT count(*) FROM ({at_tag})\")[0][0] == 0) and", 1)
+        if marker_finding(out, target):  # code_at(None) brought this checkout's marker back
             out = make("deploy", f"RELEASE={target}", fault="verify-mismatch", check=False)
         ok = any(r["release"] == target and r["step"] == "preflight" and r["outcome"] == "ok" for r in records())
         check("10b: with every file present preflight passes; verify forced to fail rolls back to R10, exit 1, the drained DAGs unpaused",
@@ -962,6 +965,7 @@ def main() -> int:
                 if p.is_dir() and not p.is_symlink():
                     p.chmod(0o700)
             shutil.rmtree(BASE, ignore_errors=True)
+            sh("docker", "network", "rm", f"{PROJECT}_k2-egress", check=False)  # deploy creates it, so compose down leaves it
             left = sh("docker", "ps", "-aq", "--filter", f"label=com.docker.compose.project={PROJECT}").stdout.split()
             print(f"rehearsal: removed {BASE}; containers left: {len(left)}")
 
