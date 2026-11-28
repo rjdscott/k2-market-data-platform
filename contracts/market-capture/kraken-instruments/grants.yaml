@@ -1,0 +1,6 @@
+# Owner-only until the venue's terms are recorded: nobody holds a role, so only the owning team and
+# the platform read it. silver_listing offers full_reader only so that the security master, built
+# on it, may offer it to its readers (access.inherit-role); a grant here still waits for the terms
+# (ADR-055 part 5). The security master reads silver_listing as an input port, through its tested
+# tag, which needs no grant. bronze_pairs offers no role (access.connector-role).
+grants: []

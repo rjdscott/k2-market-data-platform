@@ -27,6 +27,7 @@ Numbered chapters, in reading order. Start at [00](00-start-here.md).
 | 20 | [The target: a data product platform](20-target-data-product-platform.md) | the TARGET decided on 2026-11-26, not what runs: ethos, twelve diagrams, worked examples, distance from today |
 | 21 | [Releases and deploy](21-releases-and-deploy.md) | how documents become a running system: the tag's document set, checks, emitters, the sealed release and its run code, the pointers each service reads, the drain, verification, rollback, and the ECB product's path from file to reader |
 | 22 | [Access and identity](22-access-and-identity.md) | who can see what and why it holds: passwords over TLS, default-deny rules, named policies, the reader view over the tested tag, the catalog fence, storage keys per engine, the REST API k2-api, the catalog site, known limits |
+| 23 | [What runs, and crypto as products](23-crypto-as-products.md) | TARGET text, built on the phase 004 branch and not yet deployed: the five Kraken and derived products and how they chain, where each engine and key acts, what each reader role sees, `complete`, `partial` and `degraded`, holds |
 | A1 | [Technology stack](A1-technology-stack.md) | versions and the ADR behind each |
 
 Decisions live in [`../adr/`](../adr/README.md), and the labels and terms they use

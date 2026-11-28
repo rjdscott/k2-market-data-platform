@@ -1,0 +1,135 @@
+# promtool unit test for a compiled release's compiled/prometheus/product-alerts.yml
+# (platform/k2gen/k2gen/emit/alerts.py, I-5), for one product of contracts/: kraken_trades
+# (*/5 * * * *, timeoutMinutes 10, bronze and silver: severity warning; stale window 15m,
+# slow above 480 s). A container job, so never run by `make test-k2gen`. From the repo root,
+# with REL the release directory `bash scripts/verify/ci-validate.sh <fresh out dir>` prints last:
+#
+#   docker run --rm --entrypoint sh \
+#     -v "$REL/compiled/prometheus/product-alerts.yml:/p/product-alerts.yml:ro" \
+#     -v "$PWD/platform/k2gen/tests/promtool/product-alerts_test.yml:/p/product-alerts_test.yml:ro" \
+#     prom/prometheus:v3.2.0 -c 'promtool check rules /p/product-alerts.yml && promtool test rules /p/product-alerts_test.yml'
+#
+# Series are what the airflow-statsd exporter serves: Airflow's dagrun.duration timers as summaries
+# (_sum in seconds, _count), and the ti.running gauge; a counter exists only from its first
+# increment. At a 1m interval the value at position i is the value at minute i; `_` is no sample.
+
+rule_files:
+  - product-alerts.yml
+
+evaluation_interval: 30s
+
+tests:
+  # ── ProductRunFailed: the first failure is a new series at 1 ─────────────
+  # A run failed at minute 11, and one failed by its dagrun_timeout (no run_type tag): one alert
+  # for the DAG. It clears 15 minutes on. Another DAG's failure is not this one's.
+  - interval: 1m
+    input_series:
+      - series: 'airflow_dagrun_duration_failed_count{dag_id="kraken_trades",run_type="scheduled"}'
+        values: '_x10 1x40'
+      - series: 'airflow_dagrun_duration_failed_count{dag_id="kraken_trades"}'
+        values: '_x10 1x40'
+      - series: 'airflow_dagrun_duration_failed_count{dag_id="candles",run_type="scheduled"}'
+        values: '_x10 1x40'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: ProductRunFailed_kraken_trades
+        exp_alerts: []
+      - eval_time: 12m
+        alertname: ProductRunFailed_kraken_trades
+        exp_alerts:
+          - exp_labels: &kraken
+              severity: warning
+              product: market-capture.kraken-trades
+              dag_id: kraken_trades
+              domain: market-capture
+            exp_annotations:
+              summary: "market-capture.kraken-trades: a run of DAG kraken_trades failed"
+              description: "A run of kraken_trades ended failed within the last 15m; its task log says which task failed and why."
+              runbook: docs/runbooks/airflow-scheduling.md
+      - eval_time: 35m
+        alertname: ProductRunFailed_kraken_trades
+        exp_alerts: []
+
+  # ── ProductStale: silence after the last success ─────────────────────────
+  # Successes at minutes 6 and 12, then none: no increase in 15m from minute 26, firing after the
+  # 2m `for`.
+  - interval: 1m
+    input_series:
+      - series: 'airflow_dagrun_duration_success_count{dag_id="kraken_trades",run_type="scheduled"}'
+        values: '1x5 2x5 3x40'
+    alert_rule_test:
+      - eval_time: 24m
+        alertname: ProductStale_kraken_trades
+        exp_alerts: []
+      - eval_time: 30m
+        alertname: ProductStale_kraken_trades
+        exp_alerts:
+          - exp_labels: *kraken
+            exp_annotations: &stale
+              summary: "market-capture.kraken-trades: no successful run in 15m"
+              description: "No run of kraken_trades (*/5 * * * *, UTC) has succeeded in 15m and no maintain or compact task is running: the DAG is paused, held, failing or not being scheduled."
+              runbook: docs/runbooks/airflow-scheduling.md
+
+  # The same silence while maintain runs (minutes 20 to 40): muted, then firing once it is over.
+  - interval: 1m
+    input_series:
+      - series: 'airflow_dagrun_duration_success_count{dag_id="kraken_trades",run_type="scheduled"}'
+        values: '1x5 2x5 3x40'
+      - series: 'airflow_ti_running{dag_id="kraken_trades",task_id="maintain",queue="default"}'
+        values: '_x19 1x20 0x20'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: ProductStale_kraken_trades
+        exp_alerts: []
+      - eval_time: 45m
+        alertname: ProductStale_kraken_trades
+        exp_alerts:
+          - exp_labels: *kraken
+            exp_annotations: *stale
+
+  # Never succeeded (a DAG still paused, or none since the exporter started): stale.
+  - interval: 1m
+    input_series:
+      - series: 'up{job="airflow-statsd"}'
+        values: '1x20'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: ProductStale_kraken_trades
+        exp_alerts:
+          - exp_labels: *kraken
+            exp_annotations: *stale
+
+  # The first success since the exporter started is a new series at 1: not stale.
+  - interval: 1m
+    input_series:
+      - series: 'airflow_dagrun_duration_success_count{dag_id="kraken_trades",run_type="scheduled"}'
+        values: '_x5 1x15'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: ProductStale_kraken_trades
+        exp_alerts: []
+
+  # ── ProductRunSlow: a long run ───────────────────────────────────────────
+  # A 60 s run ends at minute 6 and a 540 s one at minute 12: only the second is over 480 s, and
+  # the alert clears once no run has ended within the 5m interval.
+  - interval: 1m
+    input_series:
+      - series: 'airflow_dagrun_duration_success_count{dag_id="kraken_trades",run_type="scheduled"}'
+        values: '100x5 101x5 102x30'
+      - series: 'airflow_dagrun_duration_success_sum{dag_id="kraken_trades",run_type="scheduled"}'
+        values: '6000x5 6060x5 6600x30'
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: ProductRunSlow_kraken_trades
+        exp_alerts: []
+      - eval_time: 14m
+        alertname: ProductRunSlow_kraken_trades
+        exp_alerts:
+          - exp_labels: *kraken
+            exp_annotations:
+              summary: "market-capture.kraken-trades: runs of DAG kraken_trades near its 10-minute timeout"
+              description: "The runs of kraken_trades that succeeded in the last 5m took on average over 480 s, 80% of its 10-minute timeout."
+              runbook: docs/runbooks/airflow-scheduling.md
+      - eval_time: 20m
+        alertname: ProductRunSlow_kraken_trades
+        exp_alerts: []

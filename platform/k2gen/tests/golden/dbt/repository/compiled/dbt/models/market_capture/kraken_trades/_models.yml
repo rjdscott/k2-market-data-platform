@@ -1,0 +1,323 @@
+# Compiled by k2gen (platform/k2gen/k2gen/emit/dbt.py) from the release's documents. Never edit it: change the documents.
+version: 2
+models:
+- name: kraken_trades__silver_trade
+  description: 'One typed row per trade and delivery: each element of a bronze trade frame''s data array, its symbol resolved
+    to the security master''s instrument at the trade''s time. A trade the venue sent twice is two rows, the later one flagged
+    is_duplicate. A frame is here only once every trade in it resolves; until then it is held in silver_trade_unresolved.
+    A frame the model cannot type is never here, whole: it is in silver_trade_rejected with its reason.'
+  config:
+    alias: silver_trade
+    properties:
+      partitioning: ARRAY['day(trade_ts)']
+    unique_key:
+    - kafka_partition
+    - kafka_offset
+    - trade_ordinal
+    - trade_ts
+    meta:
+      k2:
+        contract: market-capture.kraken-trades.silver_trade
+        reader: market_capture.kraken_trades.silver_trade
+  columns:
+  - name: kafka_partition
+    description: The topic partition of the frame; with kafka_offset, the row's lineage to bronze_trade, the landing and the
+      topic.
+    data_type: integer
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  - name: kafka_offset
+    description: The frame's offset in its partition.
+    data_type: bigint
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  - name: trade_ordinal
+    description: The trade's position in the frame's data array, from 1 (UNNEST ... WITH ORDINALITY).
+    data_type: integer
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  - name: trade_ts
+    description: The venue's timestamp of the trade (timestamp), in UTC to the microsecond. The partition source (day), so
+      it is in the key, as an incremental merge's unique key holds every partition source column; the first three key columns
+      alone are already unique.
+    data_type: timestamp(6) with time zone
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  - name: trade_id
+    description: The venue's trade id (trade_id), sequential per symbol.
+    data_type: bigint
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  - name: venue_symbol
+    description: The symbol as the venue spells it (symbol), the security master's venue_symbol.
+    data_type: varchar
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  - name: instrument_id
+    description: The security master's instrument the symbol named at trade_ts, from the version valid then.
+    data_type: varchar
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  - name: side
+    description: The taker's side as the venue sends it, buy or sell.
+    data_type: varchar
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  - name: price
+    description: 'The price in the quote asset, the venue''s JSON number cast exactly to a decimal: twenty integer and eighteen
+      fractional digits, the precision of the listing''s tick_size, so a price is compared with its tick exactly and nothing
+      the venue sends is rounded.'
+    data_type: decimal(38,18)
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  - name: quantity
+    description: The quantity in the base asset (qty), cast exactly as price is; the listing's order_min has the same precision.
+    data_type: decimal(38,18)
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  - name: order_type
+    description: The taker order's type as the venue sends it (ord_type), market or limit.
+    data_type: varchar
+  - name: frame_type
+    description: 'The frame''s type: snapshot, the recent trades the venue sends on subscribing, or update, trades as they
+      happen. A snapshot repeats trades an earlier connection delivered, which is_duplicate then flags.'
+    data_type: varchar
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  - name: is_duplicate
+    description: 'True when an earlier delivery of the same trade_id for the same venue_symbol is in this table: the first
+      delivery by (kafka_partition, kafka_offset, trade_ordinal) is the original, every later one is flagged and kept.'
+    data_type: boolean
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  - name: received_at
+    description: When the capture received the frame (the envelope's recv_ts_ns), in UTC, truncated to the microsecond.
+    data_type: timestamp(6) with time zone
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  - name: conn_id
+    description: The capture's websocket connection that received the frame.
+    data_type: varchar
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  - name: conn_msg_seq
+    description: The frame's number within that connection, from the envelope.
+    data_type: bigint
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  data_tests:
+  - k2_unique_key:
+      arguments:
+        columns:
+        - kafka_partition
+        - kafka_offset
+        - trade_ordinal
+        - trade_ts
+- name: kraken_trades__silver_trade_rejected
+  description: 'The rejected frames: every bronze trade frame that is not in silver_trade because the model cannot type it,
+    with the reason and the frame''s bytes. One trade that cannot be typed rejects its whole frame, as one unresolved symbol
+    holds it, so a frame is in silver_trade whole or not at all. A rejected frame is neither in silver_trade nor in silver_trade_unresolved,
+    and is never taken in automatically: its bytes do not change, so it stays here until a release whose model types it builds.
+    Rebuilt on every build, so a frame leaves it on the build that takes it in.'
+  config:
+    alias: silver_trade_rejected
+    meta:
+      k2:
+        contract: market-capture.kraken-trades.silver_trade_rejected
+        reader: market_capture.kraken_trades.silver_trade_rejected
+  columns:
+  - name: kafka_partition
+    description: The topic partition of the frame; with kafka_offset, its lineage to bronze_trade, the landing and the topic.
+    data_type: integer
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  - name: kafka_offset
+    description: The frame's offset in its partition.
+    data_type: bigint
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  - name: kafka_timestamp
+    description: The record's Kafka timestamp, as bronze_trade holds it.
+    data_type: timestamp(6) with time zone
+  - name: reason
+    description: 'Why the frame cannot be typed, the first that holds, the frame''s own before its trades'' by ordinal: payload_not_json;
+      no_trade_array (a trade frame whose data is missing or not an array); field_missing:type (the frame''s type); for a
+      trade, field_missing:<field> (timestamp, trade_id, symbol, side, price or qty absent, null or not a scalar), field_not_timestamp:timestamp
+      (not an ISO 8601 time) or field_not_numeric:<field> (trade_id not a bigint, price or qty not a decimal(38,18)). Each
+      is decided under try(), so deciding it never fails the build.'
+    data_type: varchar
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  - name: payload
+    description: The frame byte for byte as bronze_trade holds it, the venue's frame as sent; bronze data, so the table is
+      the owning team's.
+    data_type: varbinary
+  data_tests:
+  - k2_unique_key:
+      arguments:
+        columns:
+        - kafka_partition
+        - kafka_offset
+  - k2_quality:
+      name: rejected_frames_zero
+      arguments:
+        query: select count(*) from ${table}
+        holds: metric_value = 0
+      config:
+        severity: warn
+- name: kraken_trades__silver_trade_unresolved
+  description: 'The held trades: every trade of a bronze trade frame that is not in silver_trade, because a trade in it has
+    a symbol the security master resolves to nothing at the trade''s time. Rebuilt on every build, so a frame leaves it on
+    the build that moves it into silver_trade. A frame the model cannot type is not held but rejected (silver_trade_rejected),
+    even if a symbol in it resolves to nothing too: a held frame is one the master alone can release.'
+  config:
+    alias: silver_trade_unresolved
+    meta:
+      k2:
+        contract: market-capture.kraken-trades.silver_trade_unresolved
+        reader: market_capture.kraken_trades.silver_trade_unresolved
+  columns:
+  - name: kafka_partition
+    description: The topic partition of the frame.
+    data_type: integer
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  - name: kafka_offset
+    description: The frame's offset in its partition.
+    data_type: bigint
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  - name: trade_ordinal
+    description: The trade's position in the frame's data array, from 1.
+    data_type: integer
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  - name: trade_ts
+    description: The venue's timestamp of the trade, in UTC to the microsecond; the time the symbol must resolve at.
+    data_type: timestamp(6) with time zone
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  - name: trade_id
+    description: The venue's trade id.
+    data_type: bigint
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  - name: venue_symbol
+    description: The symbol as the venue spells it.
+    data_type: varchar
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  - name: side
+    description: The taker's side as the venue sends it.
+    data_type: varchar
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  - name: price
+    description: The price, cast exactly as in silver_trade.
+    data_type: decimal(38,18)
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  - name: quantity
+    description: The quantity, cast exactly as in silver_trade.
+    data_type: decimal(38,18)
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  - name: order_type
+    description: The taker order's type as the venue sends it.
+    data_type: varchar
+  - name: frame_type
+    description: The frame's type, snapshot or update.
+    data_type: varchar
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  - name: received_at
+    description: When the capture received the frame, in UTC, truncated to the microsecond.
+    data_type: timestamp(6) with time zone
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  - name: conn_id
+    description: The capture's websocket connection that received the frame.
+    data_type: varchar
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  - name: conn_msg_seq
+    description: The frame's number within that connection.
+    data_type: bigint
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  data_tests:
+  - k2_unique_key:
+      arguments:
+        columns:
+        - kafka_partition
+        - kafka_offset
+        - trade_ordinal
+  - k2_quality:
+      name: unresolved_rows_zero
+      arguments:
+        query: select count(*) from ${table}
+        holds: metric_value = 0
+      config:
+        severity: warn

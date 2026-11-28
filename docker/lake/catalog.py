@@ -59,7 +59,7 @@ def current_snapshot_id(spark, table: str):
     return rows[0][0] if rows else None
 
 
-def broker_offsets(spark, topic_list: list, at_timestamp_ms: int = 0) -> tuple:
+def broker_offsets(spark, topic_list: list, at_timestamp_ms: int = 0, brokers: str | None = None) -> tuple:
     """`(earliest, latest, until)` as the broker reports them, per partition.
 
     Each is `{topic: {partition: offset}}`; `until` is None unless
@@ -81,7 +81,7 @@ def broker_offsets(spark, topic_list: list, at_timestamp_ms: int = 0) -> tuple:
     jvm = spark._jvm
     admin_pkg = jvm.org.apache.kafka.clients.admin
     props = jvm.java.util.Properties()
-    props.put("bootstrap.servers", KAFKA_BROKERS)
+    props.put("bootstrap.servers", brokers or KAFKA_BROKERS)
     admin = admin_pkg.AdminClient.create(props)
     try:
         names = jvm.java.util.ArrayList()
@@ -142,7 +142,7 @@ class UnresolvableSchema(Exception):
     """The registry does not serve this schema id."""
 
 
-def fetch_schema(schema_id: int) -> str:
+def fetch_schema(schema_id: int, registry: str | None = None) -> str:
     """The registered Avro schema for `schema_id`, as a JSON string.
 
     By id, not by subject: a payload names its own writer schema and that is the
@@ -150,7 +150,7 @@ def fetch_schema(schema_id: int) -> str:
     instead would decode last week's records against this week's schema and
     succeed at it, which is the silent-corruption path Avro's id exists to close.
     """
-    url = "{}/schemas/ids/{}".format(SCHEMA_REGISTRY_URL.rstrip("/"), schema_id)
+    url = "{}/schemas/ids/{}".format((registry or SCHEMA_REGISTRY_URL).rstrip("/"), schema_id)
     try:
         with urllib.request.urlopen(url, timeout=15) as response:  # noqa: S310 - fixed internal host
             return json.load(response)["schema"]
@@ -159,5 +159,9 @@ def fetch_schema(schema_id: int) -> str:
         # registry has never held. Raising it as its own type is what let the
         # old decode stage skip that id and record it, instead of dying on
         # every cycle for as long as the record stayed in its never-expired
-        # archive.
+        # archive. Any other status (a 5xx, a 401) says nothing about the id:
+        # it is raised as it is and fails the task before anything is staged,
+        # never staged as frames nobody could decode (review finding D3).
+        if exc.code != 404:
+            raise
         raise UnresolvableSchema(f"schema id {schema_id}: {exc}") from exc

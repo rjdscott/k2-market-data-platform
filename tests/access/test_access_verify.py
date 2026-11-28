@@ -249,11 +249,13 @@ def test_an_extra_namespace_is_named(drift):
 LIVE = r"""
 import hashlib, json, sys
 from pathlib import Path
+from types import SimpleNamespace
 sys.path.insert(0, "scripts")
 import access_verify as av
 from k2gen import model
 good = Path("platform/k2gen/tests/fixtures/v2/good")
 docs = {p.relative_to(good).as_posix(): p.read_bytes() for p in sorted(good.rglob("*")) if p.is_file()}
+docs["contracts/access/principals.yaml"] += b"  - id: svc.partner-x\n    kind: partner\n    owner: insight-team\n"
 prov = model.Provenance("git", "v0.0.0-test", "0" * 40, "t <t@example.org>", "2026-11-27T00:00:00Z", model.set_sha256(docs),
                         tuple(model.DocumentProvenance(p, hashlib.sha256(d).hexdigest(), "0" * 40, None) for p, d in docs.items()))
 m = model.load(model.DocumentSet(docs, prov))
@@ -273,9 +275,14 @@ legs = {
     "the drift row": model.DriftExpectation("catalog", "clean"),
     "a storage-key row": model.StorageKeyExpectation("tools", "k2-landing", "read", "allowed"),
     "a service's REST row": model.DeniedExpectation("svc.api", "system.runtime.queries", ("sql", "rest")),
+    "a partner's statement": model.StatementExpectation("svc.partner-x", "SELECT 1", "denied", {}),
+    "the operator's statement": model.StatementExpectation("svc.operator", "SELECT 1", "ok", {}),
 }
+env = {"trino": "https://t:8443", "apiKeys": "/nonexistent"}
 print(json.dumps({"skips": {k: av.live_skip(e, m) for k, e in rows.items()},
-                  "legs": {k: av.legs(e, m, "live", {"trino": "https://t:8443", "apiKeys": "/nonexistent"}) for k, e in legs.items()}}))
+                  "legs": {k: av.legs(e, m, "live", env) for k, e in legs.items()},
+                  "release": {k: av.legs(legs[k], m, "release", env) for k in ("a person's statement", "a partner's statement")},
+                  "principals": sorted(av.live_principals(SimpleNamespace(products=m.products, principals=m.principals, expectations=tuple(legs.values()))))}))
 """
 
 
@@ -297,6 +304,14 @@ def test_the_live_scope_runs_only_platform_held_passwords_on_the_canary():
     # A REST leg with no key file on live is a skip of that leg alone, naming the command; its SQL leg runs.
     (sql, _), (rest, why) = legs["a service's REST row"]
     assert (sql, rest) == ("sql", "rest") and legs["a service's REST row"][0][1] is None and "make api-key PRINCIPAL=svc.api" in why
+    # A partner's service holds its own credential, as a person does: skipped live by its kind (av.partners),
+    # with the person's reason, and run at release time, where the throwaway lake makes every principal's password.
+    # The operator's host-held login is the platform's: it runs live, so deploy's preflight asks its file.
+    assert legs["a partner's statement"] == [["row", "svc.partner-x's password is its owner's, not the platform's; "
+                                              "its row ran on the throwaway lake at release time"]]
+    assert got["release"] == {"a person's statement": [["row", None]], "a partner's statement": [["row", None]]}
+    assert legs["the operator's statement"] == [["row", None]]
+    assert got["principals"] == ["svc.api", "svc.operator"]  # never the person's, nor the partner's
 
 
 def test_the_lake_env_json_is_read_as_the_lake_writes_it(tmp_path, monkeypatch):
@@ -786,6 +801,48 @@ def test_anything_else_a_left_release_did_not_declare_is_still_drift(drift, stat
     assert any(named in x for x in found["differences"]), found
 
 
+def platform_tables(**change) -> tuple[dict, dict]:
+    """The live release declares namespace run_records with run_record alone; the catalog holds the holds
+    table too, which a release attempted since (I-8's first deploy, rolled back) created at its ddl."""
+    want = {**WANT, "namespaces": {"governance": {"c", "c__base", "run_records"}},
+            "tables": {**WANT["tables"], ("governance", "run_records"): {"run_record"}}, **change}
+    state = catalog()
+    state["governance"]["run_records"] = {"tables": {"run_record": table(tag=None), "holds": table(tag=None)}, "views": {}}
+    return want, state
+
+
+HOLDS9 = {"id": "v9-000000000009", "namespaces": {("governance", "run_records")},
+          "tables": {("governance", "run_records", "run_record"), ("governance", "run_records", "holds")}, "views": {}}
+
+
+def test_a_platform_table_a_release_since_added_is_left_while_no_live_rule_reaches_it(drift):
+    want, state = platform_tables(reached=lambda w, ns, t: t == "run_record")
+    found = drift(state, want=want, left=[HOLDS9])
+    assert found["differences"] == [] and [x.split(":")[0] for x in found["left"]] == ["LEFT table governance.run_records.holds"]
+    assert "no table rule of the live release grants a privilege on it" in found["left"][0]
+    reached, _ = platform_tables(reached=lambda w, ns, t: True)  # a live rule names it: DRIFT, whoever declared it
+    assert any("governance.run_records.holds" in x and "a rule of the live release reaches it" in x
+               for x in drift(state, want=reached, left=[HOLDS9])["differences"])
+    unknown, _ = platform_tables()  # no rules read: never LEFT
+    assert any("DRIFT table governance.run_records.holds" in x for x in drift(state, want=unknown, left=[HOLDS9])["differences"])
+    assert any("DRIFT table governance.run_records.holds" in x for x in drift(state, want=want)["differences"])  # no --left-by
+
+
+def test_rule_reach_reads_the_releases_own_rules_and_catalogs(tmp_path):
+    (tmp_path / "compiled/trino/etc/catalog").mkdir(parents=True)
+    for c, w in (("governance", "governance"), ("governance_build", "governance"), ("lake", "k2")):
+        (tmp_path / f"compiled/trino/etc/catalog/{c}.properties").write_text(f"# x\niceberg.rest-catalog.warehouse={w}\n")
+    rules = [{"user": "svc\\.platform", "catalog": "governance_build", "schema": "run_records", "table": "run_record", "privileges": ["SELECT"]},
+             {"user": "dbt_c", "catalog": "governance_build", "schema": "c__base", "privileges": ["SELECT", "OWNERSHIP"]},
+             {"user": "svc\\.platform", "catalog": "system", "privileges": ["SELECT"]},
+             {"user": ".*", "privileges": []}]
+    (tmp_path / "compiled/trino/rules.json").write_text(json.dumps({"tables": rules}))
+    reached = cd.rule_reach(tmp_path)
+    assert reached("governance", "run_records", "run_record") and not reached("governance", "run_records", "holds")
+    assert reached("governance", "c__base", "anything")  # a builder's rule covers its whole base namespace
+    assert not reached("k2", "run_records", "run_record")  # another warehouse's catalogs
+
+
 def test_a_namespace_no_release_declares_is_drift_with_left_by_given(drift):
     state = left_behind()
     state["governance"]["z"] = {"tables": {}, "views": {}}
@@ -796,3 +853,70 @@ def test_left_by_defaults_to_the_environment_for_the_live_suites_drift_row(drift
     monkeypatch.setattr(cd, "left_by", lambda path: LEFT8 if str(path) == "/k2/releases/v8-000000000008" else pytest.fail(path))
     monkeypatch.setenv(cd.LEFT_ENV, "/k2/releases/v8-000000000008")
     assert drift(left_behind())["differences"] == []  # what access_verify's `{drift: catalog}` row calls
+
+
+def test_staging_makes_a_model_after_the_siblings_its_sql_refs():
+    """CI, 2026-11-28: security-master's instrument reads venue_symbol_claim by ref() and was staged
+    first, in contract order, so its CREATE TABLE AS found no table."""
+    from types import SimpleNamespace as T
+    tables = [T(name="instrument"), T(name="venue_symbol"), T(name="venue_symbol_claim"), T(name="asset")]
+    names = {f"p__{t.name}": t.name for t in tables} | {"p__seed": "seed"}
+    sql = {"instrument": "select * from {{ ref('p__venue_symbol_claim') }}",
+           "venue_symbol": "select * from {{ ref('p__venue_symbol_claim') }} join {{ ref('p__instrument') }} using (k)",
+           "venue_symbol_claim": "select * from {{ ref('p__seed') }}", "asset": "select 1"}
+    got = [t.name for t in av.ref_order(tables, sql, names)]
+    assert got == ["venue_symbol_claim", "asset", "instrument", "venue_symbol"]
+    # no refs: contract order kept; a cycle: contract order, never a hang
+    assert [t.name for t in av.ref_order(tables, {t.name: "select 1" for t in tables}, names)] == [t.name for t in tables]
+    loop = {"instrument": "{{ ref('p__venue_symbol') }}", "venue_symbol": "{{ ref('p__instrument') }}", "venue_symbol_claim": "", "asset": ""}
+    assert sorted(t.name for t in av.ref_order(tables, loop, names)) == sorted(t.name for t in tables)
+
+
+# ---- the tested-data marker's plant (scripts/verify/tested-data-marker.sh, step 3) ---------------
+
+EMPTY = ("reference-data.security-master.venue_symbol_held", "market-capture.kraken-trades.silver_trade_unresolved",
+         "market-capture.kraken-trades.silver_trade_rejected")  # held or rejected: empty in their normal state
+READ = "governance.access-canary.events"  # an output with readers, and rows at its tag
+PLANT = r"""
+import json, sys
+sys.path.insert(0, "scripts")
+import access_verify as av
+from k2gen import model
+docs = {}
+for root in model.DOCUMENT_ROOTS:
+    base = model.REPO / root
+    docs |= {p.relative_to(model.REPO).as_posix(): p.read_bytes() for p in (sorted(base.rglob("*")) if root.endswith("/") else [base]) if p.is_file()}
+prov = model.Provenance("git", "working-tree", "0" * 40, "t", "1970-01-01T00:00:00Z", model.set_sha256(docs), ())
+tables = {t.contract_id: t for p in model.load(model.DocumentSet(docs, prov)).products for t in p.tables}
+print(json.dumps({cid: {"columns": [[c.name, c.physical_type] for c in tables[cid].columns], "key": av.key_column(tables[cid]).name,
+                        "sql": av.untested(tables[cid], '"tagged"', 1_000_000)} for cid in sys.argv[1:]}))
+"""
+
+
+def test_the_marker_plants_a_row_past_every_tag_the_held_and_rejected_tables_empty_one_included():
+    """Deploy rehearsal, 2026-11-28: the marker planted only copies of the tagged rows, so security master's
+    venue_symbol_held, empty at its tag as a held table normally is, got none, its `hidden > 0` failed and
+    preflight refused the release. The plant now adds one placeholder row of the contract's columns, whatever
+    the tag holds; an output with rows still gets every tagged row again, each key moved off the tag's."""
+    import duckdb
+
+    out = subprocess.run(["uv", "run", "--project", "platform/k2gen", "--locked", "-q", "python", "-c", PLANT, *EMPTY, READ],
+                         cwd=ROOT, capture_output=True, text=True, timeout=300)
+    assert out.returncode == 0, out.stderr
+    got = json.loads(out.stdout.strip().splitlines()[-1])
+    assert "av.untested(t, " in (ROOT / "scripts/verify/tested-data-marker.sh").read_text()  # the marker plants by it
+
+    def duck(text: str) -> str:  # DuckDB spells Trino's timestamp(6) with time zone without its precision
+        return text.replace("timestamp(6) with time zone", "timestamptz")
+
+    for cid, plant in got.items():
+        db = duckdb.connect()
+        db.execute(f"CREATE TABLE tagged ({', '.join(f'{json.dumps(n)} {duck(ty)}' for n, ty in plant['columns'])})")
+        key = [n for n, _ in plant["columns"]].index(plant["key"])
+        rows = db.execute(duck(plant["sql"])).fetchall()
+        assert len(rows) == 1, f"{cid}: an empty tag gets one planted row, got {rows}"
+        assert rows[0][key] is not None and all(v is None for i, v in enumerate(rows[0]) if i != key), f"{cid}: {rows}"
+        if cid == READ:  # the tag's rows planted again, every key moved off a tagged one
+            db.execute("INSERT INTO tagged (id) VALUES (1), (2)")
+            rows = db.execute(duck(plant["sql"])).fetchall()
+            assert len(rows) == 3 and not {r[key] for r in rows} & {1, 2}, rows

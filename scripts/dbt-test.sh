@@ -26,12 +26,18 @@
 #      unit test with the var set (the fixture's CTE, no clause), a var without the
 #      key (it parses, as another product's model must, and fails to compile), and a
 #      snapshot that is null, a string, a float or a boolean (each a compiler error at
-#      parse, never a guessed id). No warehouse: a unit test's SQL is only
+#      parse, never a guessed id); an absent input, {"absent": true} (zero rows of every
+#      column the source declares, each cast to its own type), the same in a unit test (the
+#      fixture's CTE), and an absent entry in any other form (a compiler error at parse).
+#      No warehouse: a unit test's SQL is only
 #      rendered when dbt sends it, so it is read from dbt's log of the one statement
 #      it tried before the refused connection; the step refuses to run at all if
-#      anything listens on the profile's port.
+#      anything listens on the profile's port. Then k2_as_of's (dbt/macros/k2_as_of.sql, step I-6),
+#      in dbt/tests/k2_as_of/: each mode's predicate and k2_known_to's window compiled and compared,
+#      each bad argument a compiler error at parse, the boundary unit tests parsed.
 #
 #   make test-dbt              # locally
+#   make test-dbt SELECTOR=x   # one selector and the products its inputs name, transitively
 #   CI job "dbt (marts)" runs the same script.
 set -euo pipefail
 cd "$(dirname "$0")/../dbt"
@@ -89,26 +95,68 @@ for entry in '{"snapshot": null}' '{}' '{"snapshot": "42"}' '{"snapshot": 4.2}' 
   fi
   grep -qF 'k2_input: k2_inputs entry up/events has no integer snapshot' <<< "$out" || fail "snapshot $entry: $out"
 done
-echo "ok k2_input: pinned, unpinned, a unit test with the var set, a var without the key, and $n snapshots that are not integers (dbt/tests/k2_input/)"
+absent='{"k2_inputs": {"up/events": {"absent": true}}}'
+k2i absent compile -q --vars "$absent"
+grep -qxF 'from (select cast(null as bigint) as "id", cast(null as bigint) as "amount", cast(null as decimal(18,8)) as "price", cast(null as timestamp(6) with time zone) as "seen_at" where false)' \
+  "$tmp/absent/$model" || fail "absent: $(tail -1 "$tmp/absent/$model")"
+k2i absent-unit test -q --select test_type:unit --vars "$absent" >/dev/null 2>&1 || true  # refused connection: exits 1
+grep -q 'Connection refused' "$tmp/absent-unit/dbt.log" || fail "absent unit test: did not stop at the refused connection"
+grep -qx 'from __dbt__cte__up__events' "$tmp/absent-unit/dbt.log" \
+  || fail "absent unit test: $(grep -m1 'from ' "$tmp/absent-unit/dbt.log")"
+m=0
+for entry in '{"absent": false}' '{"absent": "true"}' '{"absent": true, "snapshot": 42}'; do
+  m=$((m + 1))
+  if out=$(k2i "absent-bad$m" parse --vars "{\"k2_inputs\": {\"up/events\": $entry}}" 2>&1); then
+    fail "absent $entry: parse passed"
+  fi
+  grep -qF 'k2_input: k2_inputs entry up/events is absent only as {"absent": true}' <<< "$out" || fail "absent $entry: $out"
+done
+echo "ok k2_input: pinned, unpinned, a unit test with the var set, a var without the key, $n snapshots that are not integers, absent (zero typed rows; a unit test's CTE) and $m absent entries of another form (dbt/tests/k2_input/)"
+
+# k2_as_of's render cases (dbt/macros/k2_as_of.sql, step I-6), in dbt/tests/k2_as_of/ (symlinks to
+# the macros shipped): each mode's predicate and k2_known_to's window, rendered and compared, then
+# each bad argument a compiler error at parse. Its unit tests, every boundary on invented rows, run
+# where a warehouse listens; here they parse.
+k2a() {  # k2a <out dir> <dbt command> [args]: as k2i, the k2_as_of project
+  local out=$1; shift
+  uv run --locked dbt "$@" --project-dir tests/k2_as_of --profiles-dir . --no-partial-parse \
+    --target-path "$tmp/$out" --log-path "$tmp/$out"
+}
+k2a as-of compile -q
+for want in \
+  'instrument_as_of:  and (i.valid_from <= f.fact_time and f.fact_time < i.valid_to)' \
+  'instrument_as_of:  and (k.recorded_at <= f.fact_time and f.fact_time < k.known_to)' \
+  "instrument_as_of:  select h.*, coalesce(lead(recorded_at) over (partition by venue, instrument_id order by recorded_at, valid_from), timestamp '9999-12-31 23:59:59 UTC') as known_to" \
+  'rate_as_of:left join history as v on v.currency = c.currency and (v.valid_from <= c.window_end and c.window_end < v.valid_to)' \
+  'rate_as_of:left join known as k on k.currency = c.currency and (k.recorded_at <= c.window_end and c.window_end < k.known_to)'; do
+  f="$tmp/as-of/compiled/k2_as_of_test/models/${want%%:*}.sql"
+  grep -qxF "${want#*:}" "$f" || { echo "FAIL k2_as_of ${want%%:*}: no line ${want#*:}"; cat "$f"; exit 1; }
+done
+a=0
+for case in 'mode|"as_at"|k2_as_of: mode is' 'mode|null|k2_as_of: mode is' 'target_alias|""|k2_as_of: target_alias is' \
+    'target_alias|null|k2_as_of: target_alias is' 'target_alias|"i.x"|k2_as_of: target_alias is' \
+    'fact_time|"i.recorded_at + interval '"'1'"' hour"|k2_as_of: fact_time is' 'fact_time|"\"i\".\"recorded_at\""|k2_as_of: fact_time is' \
+    'fact_time|"(select 1)"|k2_as_of: fact_time is' 'keys|"venue"|k2_known_to: keys is' 'keys|[]|k2_known_to: keys is' \
+    'keys|["venue, instrument_id"]|k2_known_to: keys is'; do
+  a=$((a + 1))
+  IFS='|' read -r var value message <<< "$case"
+  if out=$(k2a "as-of-bad$a" parse --vars "{\"$var\": $value}" 2>&1); then
+    echo "FAIL k2_as_of $var=$value: parse passed"; exit 1
+  fi
+  grep -qF "$message" <<< "$out" || { echo "FAIL k2_as_of $var=$value: $out"; exit 1; }
+done
+echo "ok k2_as_of: both modes and k2_known_to rendered as frozen, $a bad arguments each a compiler error, the boundary unit tests parsed (dbt/tests/k2_as_of/)"
 
 rel=$(bash ../scripts/verify/ci-validate.sh "$tmp/ci" 2>"$tmp/ci.log" | tail -1) || { cat "$tmp/ci.log"; exit 1; }
+# Every selector, each after the products its input ports name (scripts/dbt_order.py); with SELECTOR,
+# that one and its inputs only. An unknown one fails here, before any container starts.
+order=$(python3 ../scripts/dbt_order.py "$rel" "${SELECTOR:-}") || exit 1
+echo "dbt-test: building in order: $order"
 bash ../scripts/lib/throwaway-lake.sh up "$P" "$rel"
 state=$(bash ../scripts/lib/throwaway-lake.sh state "$P")
 uv_image=$(sed -n 's/^UV_IMAGE=//p' ../scripts/lib/throwaway-lake.sh)  # the lake's tools pin, not a second one
 release=$(basename "$rel") built=0 failed=()
 mkdir -p "$HOME/.cache/k2-dbt-test-uv"  # uv's download cache across runs; the venv is per run
-# Every selector, each after the products its input ports name (compiled/products/*/pipeline.json).
-order=$(python3 - "$rel" $(sed -n 's/^- name: //p' "$rel/compiled/dbt/selectors.yml") <<'PY'
-import json, sys
-from graphlib import TopologicalSorter
-from pathlib import Path
-pipes = [json.loads(f.read_text()) for f in Path(sys.argv[1], "compiled/products").glob("*/pipeline.json")]
-selector = {d["product"]: d["build"]["selector"] for d in pipes if d.get("build", {}).get("selector") in sys.argv[2:]}
-deps = {selector[d["product"]]: {selector[c] for i in d.get("inputs", []) if (c := i["contractId"].rsplit(".", 1)[0]) in selector}
-        for d in pipes if d["product"] in selector}
-print(" ".join(TopologicalSorter(deps).static_order()))
-PY
-)
 for sel in $order; do
   run_id="dbt-test/$P-$sel" out=$state/dbt-$sel
   mkdir -p "$out"

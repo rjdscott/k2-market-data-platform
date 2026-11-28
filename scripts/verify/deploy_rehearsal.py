@@ -27,7 +27,9 @@ stand-in's new image recreating only it; a forced mismatch restoring R-1, images
 `make rollback`, also with Trino stopped; a release dropping a masked column, a reader polling every 50 ms throughout; a SIGKILL
 after each step, then a rerun; a release adding a product R1 was cut without (quality-results), first
 with a forced mismatch (exit 1, its namespaces LEFT, a plant beside them still DRIFT), then for real
-(FAST too); two deploys at once; the backup-set refusal (review M4) on a real table.
+(FAST too); two deploys at once; the backup-set refusal (review M4) on a real table; then, on a fresh lake, the
+first deploy of phase 004 (section 10, FAST too): LIVE_TAG's code and documents deployed by its own deploy.py, then
+this checkout's release over it (the holds table, new connector kinds and products) with a scheduler stand-in.
 The cutover run starts from TODAY's shape (Trino on HTTP from the checkout's etc, Lakekeeper on the
 shared network with a host port, a stand-in capture), follows docs/runbooks/first-cutover-to-releases.md,
 measures each service's downtime, proves the capture untouched, then rolls the whole cutover back.
@@ -79,7 +81,6 @@ CANARY = "contracts/governance/access-canary"
 EVENTS, PRODUCT = f"{CANARY}/events.odcs.yaml", f"{CANARY}/product.odps.yaml"
 MODEL_SQL, EXPECT = f"{CANARY}/models/events.sql", "tests/access/expectations.yaml"
 VIEW = "governance.access_canary.events"
-RUN_RECORD = "governance_build.run_records.run_record"
 # A dbt-only product nothing reads: R1 is cut without it and section 7b brings it back, so one release
 # of the chain ADDS a product (its builder and publisher unknown to the live rules until the swap).
 ADDED, ADDED_VIEW = "contracts/governance/quality-results", "governance.quality_results.test_results"
@@ -201,6 +202,13 @@ services:
     networks: [k2-net]
     restart: unless-stopped
     deploy: {resources: {limits: {cpus: '0.1', memory: 32M}}}
+  redpanda:  # a stand-in broker: a Kafka product's brokers and registry name a service of the stack on
+    # spark-iceberg's network (k2gen's connectors.host-outside-stack); nothing here loads from it
+    image: alpine@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc
+    command: ["sleep", "infinity"]
+    networks: [k2-net]
+    restart: unless-stopped
+    deploy: {resources: {limits: {cpus: '0.1', memory: 32M}}}
   tools:
     profiles: ["tools"]
     build: {context: ., dockerfile: docker/tools/Dockerfile}
@@ -213,7 +221,8 @@ configs:
   prom:
     content: |
       global: {evaluation_interval: 5s}
-      rule_files: [/k2/releases/pointers/prometheus/documents/domains/rehearsal/rules/*.yml]
+      rule_files: [/k2/releases/pointers/prometheus/documents/domains/rehearsal/rules/*.yml,
+                   /k2/releases/pointers/prometheus/compiled/prometheus/*.yml]  # docker/prometheus/prometheus.yml's glob
 """
 ALPINE_A = "alpine@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc"  # alpine:3.20, local
 ALPINE_B = "alpine:3"  # pinned by make release to its local digest; another image id than A
@@ -308,7 +317,18 @@ def prom_rules(n: int) -> None:
 # --- the scratch repository, its secrets and its lake -------------------------------------
 
 
-def scratch_repo(compose_text: str) -> None:
+def code_at(ref: str | None) -> None:
+    """The scratch tree's CODE as this checkout has it (None), or as the repository had it at tag `ref`."""
+    for rel in CODE:
+        dst = CLONE / rel
+        if dst.is_dir():
+            shutil.rmtree(dst)
+        elif dst.exists():
+            dst.unlink()
+    if ref:
+        tar = subprocess.run(["git", "-C", str(REPO), "archive", ref, *CODE], capture_output=True, check=True).stdout
+        subprocess.run(["tar", "-x", "-C", str(CLONE)], input=tar, check=True)
+        return
     for rel in CODE:
         src, dst = REPO / rel, CLONE / rel
         if src.is_dir():
@@ -316,6 +336,10 @@ def scratch_repo(compose_text: str) -> None:
         else:
             dst.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(src, dst)
+
+
+def scratch_repo(compose_text: str) -> None:
+    code_at(None)
     (CLONE / "Makefile").write_text("include mk/*.mk\n")
     (CLONE / "docker-compose.yml").write_text(compose_text)
     prom_rules(1)
@@ -330,19 +354,28 @@ def real_secrets(skip: tuple[str, ...] = ()) -> None:
     `make password TO_FILE=1`; the canary's people by principal-secret.py's own locked write.
     `skip`: principals of a product the scratch tree does not hold yet (its password comes with it)."""
     sh("bash", str(CLONE / "scripts/tls.sh"), "init", env=env())
-    ids = sorted(set(ps.known()[0]) - set(skip))  # principal-secret.py's own: the declared ones, and each dbt product's builder and publisher
+    known = ps.known()  # principal-secret.py's own: the declared ones, each dbt product's builder and publisher, the partners
+    ids = sorted(set(known[0]) - set(skip))
     for pid in ids:
-        if pid.startswith("p."):
-            secret = secrets.token_urlsafe(32)
-            hashed = f"$2y${bcrypt.hashpw(secret.encode(), bcrypt.gensalt(ps.BCRYPT_COST)).decode().removeprefix('$2b$')}"
-            with ps.locked(SECRETS / ps.PASSWORD_DB) as db:  # principal-secret.py's slot writer, whole file checked
-                users = ps.entries(ps.read(db))
-                ps.write_db(db, "".join(f"{u}:{h}\n" for u, h in {**users, pid: hashed}.items()))
-            with ps.locked(SECRETS / model.password_file(pid)) as f:
-                ps.write(f, secret)
-        else:
-            make("password", f"PRINCIPAL={pid}", "TO_FILE=1")
+        password(pid, known[3])
     print(f"rehearsal: secrets by scripts/tls.sh and principal-secret.py for {len(ids)} principals")
+
+
+def password(pid: str, partners: set[str]) -> None:
+    """A service principal's by `make password TO_FILE=1`. A person's or a partner's, which principal-secret.py
+    prints once to a terminal, written here by its own locked writes: its password.db line, and for a person
+    the file live access-verify reads; a partner's rows are skipped live, so it has no file."""
+    if not pid.startswith("p.") and pid not in partners:
+        make("password", f"PRINCIPAL={pid}", "TO_FILE=1")
+        return
+    secret = secrets.token_urlsafe(32)
+    hashed = f"$2y${bcrypt.hashpw(secret.encode(), bcrypt.gensalt(ps.BCRYPT_COST)).decode().removeprefix('$2b$')}"
+    with ps.locked(SECRETS / ps.PASSWORD_DB) as db:  # principal-secret.py's slot writer, whole file checked
+        users = ps.entries(ps.read(db))
+        ps.write_db(db, "".join(f"{u}:{h}\n" for u, h in {**users, pid: hashed}.items()))
+    if pid.startswith("p."):
+        with ps.locked(SECRETS / model.password_file(pid)) as f:
+            ps.write(f, secret)
 
 
 def dotenv() -> None:
@@ -374,9 +407,11 @@ def lake_setup(release: str, network: str) -> None:
 
 def publish(release: str) -> str:
     """The canary published as phase 002's wrapper will: S20's stage, as the builder, the tag commit
-    and the publisher, in a tools container on the catalog's network. Stage also creates the run-record
-    table, which the deploy has already made empty, so it is dropped first (no run writes it before 002)."""
-    q("svc.platform", f"DROP TABLE IF EXISTS {RUN_RECORD}")
+    and the publisher, in a tools container on the catalog's network. Stage also creates the platform tables
+    (the run record and the holds), which the deploy has already made empty, so they are dropped first."""
+    for f in (ROOT / release / "compiled/lake/ddl/trino").glob("*.sql"):  # <warehouse>.<namespace>.<table>.sql
+        w, ns, t = f.stem.split(".")
+        q("svc.platform", f"DROP TABLE IF EXISTS {w}_build.{ns}.{t}")
     WORK.mkdir(exist_ok=True)
     lake_env = _load("lake_env", REPO / "scripts/lib/lake_env.py")  # the one writer of env.json
     plan = json.loads((ROOT / release / model.STORAGE_PLAN).read_text())
@@ -453,26 +488,21 @@ def result(release: str, kind: str) -> dict[str, Any]:
 # --- the deploy chain ----------------------------------------------------------------------
 
 
-# The emitters before the review of S12 made the reader view fail closed (ba78445): R1 is cut with them,
-# so the chain crosses from the old view shape to the guarded one, and back, with a reader polling.
-OLD_SHAPE = {f"platform/k2gen/k2gen/emit/{m}.py": "355fa43" for m in ("lake", "trino_rules", "api")}  # api imports rules
-
-
-def emitters(old: bool) -> None:
-    for path, ref in OLD_SHAPE.items():
-        (CLONE / path).write_text(sh("git", "-C", str(REPO), "show", f"{ref}:{path}").stdout if old else (REPO / path).read_text())
+# R1 was cut with the emitters before the review of S12 made the reader view fail closed (355fa43), so the
+# chain crossed from the old view shape to the guarded one. Retired on 2026-11-28: those emitters make no holds
+# table, so this checkout's access suite fails 21 rows on such a release, and every live release since
+# alpha.3 has the guarded shape. The chain now holds the guarded shape across a rollback and back.
 
 
 def rehearse() -> int:
     scratch_repo(COMPOSE.replace("STANDIN_IMAGE", ALPINE_A).replace("SPARK_IMAGE", SPARK))
-    emitters(old=True)
     added(False)
     dotenv()
     real_secrets(skip=ADDED_PRINCIPALS)
     t0 = time.monotonic()
-    r1 = cut("v0.0.1-rehearsal.1", "R1: the repository's own documents but quality-results, the reader view in its old shape")
+    r1 = cut("v0.0.1-rehearsal.1", "R1: the repository's own documents but quality-results")
     check("make release compiles R1 at a scratch tag", (ROOT / r1 / "manifest.json").is_file(), f"{r1} in {time.monotonic() - t0:.0f} s")
-    compose("up", "-d", "--wait", "prefect-db", "minio", "lakekeeper", "spark-iceberg", "capture-binance")  # running already, as live
+    compose("up", "-d", "--wait", "prefect-db", "minio", "lakekeeper", "spark-iceberg", "capture-binance", "redpanda")  # running already, as live
     lake_setup(r1, f"{PROJECT}_k2-catalog")
     capture = started()["capture-binance"]
 
@@ -522,8 +552,7 @@ def rehearse() -> int:
     edit(EXPECT, 'mustAppear: {where: "id IN (1, 2, 4)", minRows: 3}', 'mustAppear: {where: "id IN (1, 4)", minRows: 2}')  # 2 is 21 min old
     bump("1.0.0", "2.0.0")
     prom_rules(2)
-    emitters(old=False)
-    r2 = cut("v0.0.1-rehearsal.2", "R2: a policy change, rules only, and the reader view in its guarded shape")
+    r2 = cut("v0.0.1-rehearsal.2", "R2: a policy change, rules only")
     shape = Poller()
     shape.start()
     before = started()
@@ -564,7 +593,7 @@ def rehearse() -> int:
     again = make("deploy", f"RELEASE={r2}", check=False)
     shape.stop.set()
     shape.join()
-    check("the view's shape crosses old to guarded, back by make rollback, and forward: no error, no note, ever",
+    check("the view's guarded shape after R2, back to R1 by make rollback, and forward: no error, no note, ever",
           guarded and code(back) == 0 and code(again) == 0 and not shape.leaks and not shape.errors and shape.polls > 50,
           f"guarded after R2: {guarded}; {shape.polls} polls, {shape.errors} errors, shapes {shape.shapes}; "
           + "; ".join(x.strip()[:120] for x in (back.stderr + again.stderr).splitlines() if "shape" in x))
@@ -615,7 +644,7 @@ def rehearse() -> int:
     # 7. a SIGKILL after each step, then a rerun, alternating R3 and R5, the reader still polling
     steps = ("preflight", "images", "plan", "drain", "ddl", "views-narrow", "canary", "swap", "recreate", "rules-loaded",
              "ddl-late", "views-widen", "verify", "done")
-    if FAST:  # no R3 to R5, R2 live: two kills, back to R1 (the old view shape) and forward, a reader polling
+    if FAST:  # no R3 to R5, R2 live: two kills, back to R1 and forward, a reader polling
         steps, r3, r5, poller = ("swap", "recreate"), r1, r2, Poller()
         poller.start()
     target, other, bad = r3, r5, []
@@ -687,7 +716,187 @@ def rehearse() -> int:
               code(out6) == 0 and code(out7) == 2 and "make drop TARGET" in out7.stderr and live_release() == r6,
               next((x.strip()[:220] for x in out7.stderr.splitlines() if "REFUSED" in x), ""))
     check("the stand-in capture was never restarted by any of it", started()["capture-binance"] == capture)
+    phase004()
     return summary()
+
+
+# --- 10. the first deploy of phase 004 -------------------------------------------------------
+# What is live (LIVE_TAG, pointers/trino on 2026-11-28): its code and documents, deployed by its own deploy.py.
+# Over it, this checkout's code and documents as the operator will deploy them: a second platform table (the
+# holds), a Kafka and a public-API connector product, derived products (security master, canonical trades,
+# candles) and svc.operator. A fresh lake: the chain above has deployed this checkout's documents already.
+LIVE_TAG = "v3.0.0-alpha.5.1"
+HELD = "fx-reference.ecb-fx-rates"  # a product of both releases, held as svc.operator across the deploy
+SCHED = f"{PROJECT}-airflow-scheduler"
+# The scheduler stand-in: the Airflow 3.3.2 CLI calls deploy.py's airflow() makes (dags list, list-runs, pause,
+# unpause; never a running task), over the DAGs of the release pointers/airflow names, each created paused as
+# the factory's are; its state in /state. It is no scheduler: nothing runs, so a drain never waits.
+FAKE_AIRFLOW = '''#!/usr/bin/env python3
+import json, pathlib, sys
+state = pathlib.Path("/state/dags.json")
+s = json.loads(state.read_text()) if state.exists() else {"paused": [], "seen": []}
+dags = [e["dagId"] for e in json.loads(pathlib.Path("/rel/pointers/airflow/compiled/airflow/dags.json").read_text())["dags"]]
+for d in dags:
+    if d not in s["seen"]:
+        s["seen"].append(d)
+        s["paused"].append(d)
+a = sys.argv[1:]
+with open("/state/calls.log", "a") as f:
+    f.write(" ".join(a) + "\\n")
+if a[:2] == ["dags", "list"]:
+    print(json.dumps([{"dag_id": d, "is_paused": str(d in s["paused"])} for d in dags]))
+elif a[:2] == ["dags", "list-runs"]:
+    print("[]")
+elif a[:2] in (["dags", "pause"], ["dags", "unpause"]) and len(a) > 2 and a[2] in s["seen"]:
+    s["paused"] = sorted(set(s["paused"]) - {a[2]}) + ([a[2]] if a[1] == "pause" else [])
+    print(f"Dag: {a[2]}, paused: {a[1] == 'pause'}")
+else:
+    sys.exit(f"scheduler stand-in: {' '.join(a)}: not a call deploy.py makes")
+state.write_text(json.dumps(s))
+'''
+# scripts/hold.py's own main, its SCHEDULER (the live container's name) pointed at the stand-in: never the live one.
+HOLD_PY = ("import sys; sys.path.insert(0, sys.argv[1]); import hold; hold.SCHEDULER = sys.argv[2]; "
+           "sys.exit(hold.main(sys.argv[3:]))")
+
+
+def dag_ids(rid: str) -> dict[str, str]:
+    return {e["product"]: e["dagId"] for e in json.loads((ROOT / rid / model.DAGS).read_text())["dags"]}
+
+
+def namespaces(rid: str) -> set[str]:
+    plan = json.loads((ROOT / rid / model.STORAGE_PLAN).read_text())
+    return {f"{w['name']}.{ns}" for w in plan["warehouses"] for ns in w["namespaces"]}
+
+
+def paused() -> set[str]:
+    p = BASE / "airflow-state/dags.json"
+    return set(json.loads(p.read_text())["paused"]) if p.exists() else set()
+
+
+def scheduler_up(rid: str) -> None:
+    """The stand-in, labelled as the project's airflow-scheduler (deploy finds it so), the releases root at /rel
+    so verify's pointer check passes it by, no network."""
+    cli, state = BASE / "airflow-cli/airflow", BASE / "airflow-state"
+    cli.parent.mkdir()
+    state.mkdir()
+    cli.write_text(FAKE_AIRFLOW)
+    cli.chmod(0o755)
+    tools = json.loads((ROOT / rid / "manifest.json").read_text())["images"]["tools"]
+    sh("docker", "run", "-d", "--name", SCHED, "--label", f"com.docker.compose.project={PROJECT}",
+       "--label", "com.docker.compose.service=airflow-scheduler", "--network", "none", "--memory", "64m", "--cpus", "0.1",
+       "--user", f"{os.getuid()}:{os.getgid()}", "-v", f"{ROOT}:/rel:ro", "-v", f"{state}:/state",
+       "-v", f"{cli}:/usr/local/bin/airflow:ro", "--entrypoint", "sleep", tools, "infinity")
+
+
+def phase004() -> None:
+    global ROOT
+    compose("--profile", "tools", "down", "-v", "--remove-orphans")  # a fresh lake, as live has none of this chain's
+    ROOT = BASE / "releases-004"
+    ROOT.mkdir()
+    code_at(LIVE_TAG)
+    (CLONE / "docker-compose.yml").write_text(COMPOSE.replace("STANDIN_IMAGE", ALPINE_A).replace("SPARK_IMAGE", SPARK))
+    base = cut("v0.0.1-rehearsal.10", f"R10: {LIVE_TAG}'s code and documents, what is live")
+    # The secrets live has: this checkout's principals are unknown to it (STALE to its principals-status, which
+    # its preflight runs), so they go by its own command and come back below by the operator's make password.
+    status = make("principals-status", check=False)
+    newer = list(dict.fromkeys(re.findall(r"make principal-remove PRINCIPAL=(\S+)", status.stdout + status.stderr)))
+    for pid in newer:
+        make("principal-remove", f"PRINCIPAL={pid}")
+    compose("up", "-d", "--wait", "prefect-db", "minio", "lakekeeper", "spark-iceberg", "capture-binance", "redpanda")
+    lake_setup(base, f"{PROJECT}_k2-catalog")
+    capture = started()["capture-binance"]
+    out = make("deploy", f"RELEASE={base}", check=False)
+    check(f"10: R10, {LIVE_TAG} as live has it, deployed by its own deploy.py on a fresh lake", code(out) == 0 and live_release() == base,
+          f"exit {code(out)}")
+    if code(out) != 0:
+        print(out.stderr[-6000:])
+        return
+    scheduler_up(base)
+    try:
+        old = dag_ids(base)
+        for d in old.values():  # the operator's unpause of each DAG, as live has them
+            sh("docker", "exec", SCHED, "airflow", "dags", "unpause", d, "-y")
+        code_at(None)
+        partners = ps.known()[3]
+        for pid in newer:  # the operator's step before deploying new principals (preflight requires them)
+            password(pid, partners)
+        target = cut("v0.0.1-rehearsal.11", "R11: this checkout's code and documents: the holds, Kafka and public-API "
+                     "connector products, derived products, svc.operator")
+        new = dag_ids(target)
+        added_dags = sorted(set(new.values()) - set(old.values()))
+        added_ns = sorted(namespaces(target) - namespaces(base))
+
+        # a. preflight demands svc.operator's password file, the holds' writer the live suite logs in as
+        pw = SECRETS / model.password_file("svc.operator")
+        pw.rename(pw.with_name("svc.operator.aside"))
+        out = make("deploy", f"RELEASE={target}", check=False)
+        pw.with_name("svc.operator.aside").rename(pw)
+        steps = {r["step"] for r in records() if r["release"] == target}
+        check("10a: without svc.operator's password file preflight refuses (exit 2) before any change, naming it and its make line",
+              code(out) == 2 and "principals/svc.operator.password (make password PRINCIPAL=svc.operator TO_FILE=1)" in out.stderr
+              and steps <= {"preflight"} and live_release() == base,
+              next((x.strip()[:220] for x in out.stderr.splitlines() if "svc.operator" in x), ""))
+
+        # b. verify forced to fail: back to R10; the holds table and the new namespaces LEFT, not drift
+        out = make("deploy", f"RELEASE={target}", fault="verify-mismatch", check=False)
+        marker = result(target, "marker")
+        check("10: R11's release-time tested-data marker passes at preflight", marker.get("exit") == 0,
+              " | ".join(x for x in marker.get("lines", []) if x.startswith("FAIL"))[:300]
+              or f"{sum(1 for x in marker.get('lines', []) if x.startswith('PASS'))} PASS")
+        ok = any(r["release"] == target and r["step"] == "preflight" and r["outcome"] == "ok" for r in records())
+        check("10b: with every file present preflight passes; verify forced to fail rolls back to R10, exit 1, the drained DAGs unpaused",
+              ok and code(out) == 1 and live_release() == base and not paused() & set(old.values()),
+              f"exit {code(out)}; " + next((x.strip()[:200] for x in out.stderr.splitlines() if "drain" in x), ""))
+        out = make("release-verify", check=False)
+        left = [x.strip() for x in out.stderr.splitlines() if x.strip().startswith("LEFT ")]
+        want = ["LEFT table governance.run_records.holds:", *(f"LEFT namespace {n}:" for n in added_ns)]
+        check("10b: release-verify on R10 exits 0, the holds table and each new namespace a LEFT line, not drift",
+              code(out) == 0 and all(any(x.startswith(w) for x in left) for w in want),
+              f"{len(left)} LEFT for {len(want)} wanted; missing {[w for w in want if not any(x.startswith(w) for x in left)]}; "
+              + next((x.strip()[:220] for x in out.stderr.splitlines() if "DRIFT" in x), ""))
+
+        # e. a kill at ddl-late (R11's rules loaded, its holds table made), then make rollback
+        killed = make("deploy", f"RELEASE={target}", fault="kill:ddl-late", check=False)
+        back = make("rollback", check=False)
+        verified = make("release-verify", check=False)
+        check("10e: a kill at ddl-late, then make rollback: exit 0, R10 live and verified, the DAGs deploy paused unpaused",
+              "K2_DEPLOY_FAULT=kill:ddl-late" in killed.stderr and code(killed) is None and code(back) == 0
+              and live_release() == base and code(verified) == 0 and not paused() & set(old.values()),
+              f"rollback {code(back)}, release-verify {code(verified)}, paused {sorted(paused() & set(old.values()))}")
+
+        # c and d. killed at ddl-late again; the operator holds a product meanwhile, by scripts/hold.py as svc.operator
+        # under R11's rules; the rerun converges, resume reads the hold and keeps that DAG paused
+        killed = make("deploy", f"RELEASE={target}", fault="kill:ddl-late", check=False)
+        held = sh("uv", "run", "--no-project", "-q", "--with", "trino==0.340.0", "python3", "-c", HOLD_PY, str(REPO / "scripts"),
+                  SCHED, "hold", HELD, "rehearsal: held across a deploy", env=env(), check=False)
+        check("10d: scripts/hold.py holds a product as svc.operator while the deploy is down, R11's rules loaded",
+              code(killed) is None and held.returncode == 0, (held.stdout + held.stderr).strip()[-220:])
+        out = make("deploy", f"RELEASE={target}", check=False)
+        check("10c: the same release deployed again: exit 0, the plan names the new DAGs, R11 live and verified",
+              code(out) == 0 and live_release() == target and f"never paused or unpaused by deploy: {', '.join(added_dags)}" in out.stderr,
+              f"exit {code(out)}; new DAGs {added_dags}")
+        check("10c: verify names the new DAGs, created paused, on its idle line",
+              f"paused in Airflow and not held, so idle: {', '.join(added_dags)};" in out.stderr,
+              next((x.strip()[:220] for x in out.stderr.splitlines() if "idle" in x), ""))
+        line = next((x.strip() for x in out.stderr.splitlines() if "kept paused, held:" in x), "")
+        check("10d: resume reads the hold under R11 and keeps that DAG paused with its line, unpauses the rest, exit 0",
+              code(out) == 0 and old[HELD] in line and paused() & set(old.values()) == {old[HELD]},
+              f"{line[:220]}; paused {sorted(paused() & set(old.values()))}")
+        out = make("release-verify", check=False)
+        check("10c: make release-verify on R11 passes, drift clean", code(out) == 0 and live_release() == target and "catalog drift check clean" in out.stderr,
+              next((x.strip()[:220] for x in out.stderr.splitlines() if "DRIFT" in x or "FAILED" in x), ""))
+
+        # f. Prometheus's pointer serves R11's compiled alert rules, and Prometheus loaded them
+        served = ROOT / "pointers/prometheus/compiled/prometheus/product-alerts.yml"
+        glob = re.findall(r'"(/k2/releases/pointers/prometheus/compiled/[^"]+)"', (REPO / "docker/prometheus/prometheus.yml").read_text())
+        groups = prom_group()
+        check("10f: the pointer Prometheus globs serves R11's product-alerts.yml, and Prometheus loaded its product groups",
+              served.is_file() and served.read_bytes() == (ROOT / target / "compiled/prometheus/product-alerts.yml").read_bytes()
+              and any(Path(str(served).replace(str(ROOT), "/k2/releases")).match(g) for g in glob) and "product:" in groups,
+              f"glob {glob}; groups {groups[:160]}")
+        check("10: the stand-in capture was never restarted by any of it", started()["capture-binance"] == capture)
+    finally:
+        sh("docker", "rm", "-f", SCHED, check=False)
 
 
 ADDED_ROWS: list[str] = []  # (the line after them, then its access rows), while the product is out
@@ -752,6 +961,7 @@ def main() -> int:
                 if p.is_dir() and not p.is_symlink():
                     p.chmod(0o700)
             shutil.rmtree(BASE, ignore_errors=True)
+            sh("docker", "network", "rm", f"{PROJECT}_k2-egress", check=False)  # deploy creates it, so compose down leaves it
             left = sh("docker", "ps", "-aq", "--filter", f"label=com.docker.compose.project={PROJECT}").stdout.split()
             print(f"rehearsal: removed {BASE}; containers left: {len(left)}")
 

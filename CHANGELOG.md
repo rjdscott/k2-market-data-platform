@@ -13,6 +13,149 @@ layouts and commands, without notice. `3.0.0` is reserved for the release gate t
 
 ## [Unreleased]
 
+Phase 004 of the unified product platform plan, "Kraken trades, instruments and the security master",
+as built on branch `phase/004-005-kraken-and-enriched`. **Nothing here is deployed**: no release carries
+it yet, and the stack runs `3.0.0-alpha.5.1`. Its proofs so far are unit suites and throwaway lakes,
+each named below.
+
+### Decided
+
+- A Kafka product lands every record of its offset range in a landing of its own, then stages bronze
+  from it by offset with the envelope decoded (ADR-063, **Proposed**, for the owner's acceptance). It
+  would narrow ADR-021's shared archive and keeps ADR-022 and ADR-047.
+- Owner's decisions of 2026-11-28: the Kafka landing is never expired (plan 004's option (a)), its
+  growth reported by the soak and decided at the 3.0 gate; `LAKEKEEPER_ENCRYPTION_KEY` stays in `.env`
+  for now, so the first restore drill does not prove a host loss; the nightly backup timer is not
+  installed yet; the independent review's thirteen findings on the build breakdown are all accepted.
+- Defaults taken in the build, each with its reason (departures from the plan's text):
+  - The landing holds every record of the range, control frames included, and the `stream = trade`
+    filter runs at bronze staging: the offset checks of phase 001 hold only over an unbroken range,
+    and the frozen landing has no column for a skipped record (plan 004 said "the kept records").
+  - Bronze carries the decoded `RawMessage` envelope, by name, beside the offset key and lineage:
+    Trino has no SQL function that decodes Avro, so silver could not read it out of the bytes.
+  - The connector's `envelope.contract` names `bronze_trade`, not a separate `raw_message` contract as
+    the frozen I-1 section says: the schema has no build kind for a contract with no lake table.
+  - A paused Kafka product resumed after its position left the log fails loudly like any other run
+    below the log start, never a silent jump to the log start (plan 004 said it "resumes at the log
+    start"): a silent jump is the unrecorded hole ADR-022 exists to prevent.
+  - Every DAG is created paused, whatever its status: a release's new Kafka product would otherwise
+    read its whole retained backlog under the deploy that adds it. The operator unpauses after `make
+    release-verify`; an existing DAG keeps its state.
+  - The holds have one writer, `svc.operator`, whose password file only the host holds, not
+    `svc.runs` as the breakdown proposed: `svc.runs`'s password is in every dbt-runner one-shot and
+    the scheduler, so its holder could forge or end a hold (review A4).
+  - The role order: a role may be `within` others; `delayed_reader` is within `full_reader`, so
+    `silver_trade` offers `delayed_reader` over the security master, which offers `full_reader` only
+    and has no event time to delay; `public_reader` is within none (review A6).
+  - `silver_trade`'s `delayed_reader` masks `kafka_offset` and `received_at` as well as `conn_id` and
+    `conn_msg_seq` (plan 004 named the last two): a row is delayed by its trade time, so every column
+    that counts or dates deliveries would show the last 20 minutes' activity on old rows.
+  - Each input port states `whenAbsent`: `fail` for a consumer built as a `table` model (zero rows
+    would rebuild it empty), `empty` for `canonical-trades`' optional venue, which then shows
+    `partial`.
+  - A `kraken-trades` build degraded by `unresolved_rows_zero` starts one `kraken-instruments` run, by
+    the product property `refresh` (`{product, rules}`), one hop, never waiting for it, at most once
+    an hour: the venue's public API allows a few calls an hour.
+  - A dbt output is compacted inside the wrapper after its tests, once it holds 12 delete files or 48
+    small files beyond one per partition; a Kafka product's landing and bronze are compacted once a
+    day in the product's own DAG with the Spark key, skipped while bronze's `audit` holds a batch.
+  - `maxOffsetsPerPartition: 150000` and the ten-minute timeouts are engineering bounds, stated as
+    such in the documents, until the first measured runs set them.
+
+### Added
+
+- The Kafka connector (`docker/lake/kafka.py`): plan from the landing's newest connector snapshot,
+  land every record by one commit that requires `main` unmoved, stage bronze by offset past its
+  through-offset, audit (`accounting`, `parses`, `keys_unique`) and publish; below the log start
+  refused, an accept-data-loss run resuming at the log start with the loss in `k2.kafka-gaps`,
+  cumulative. Proven on throwaway lakes by `scripts/verify/kafka-path.sh`, groups a, b and c (10, 5
+  and 6 PASS, 0 FAIL on 2026-11-28).
+- The public-API connector: the `public-api` fetch kind under the existing address guard, and its
+  landing, audit and publish through the file connector.
+- Five products: `market-capture/kraken-trades` (landing, `bronze_trade`, `silver_trade`, the held
+  `silver_trade_unresolved`), `market-capture/kraken-instruments` (Kraken's `AssetPairs`, hourly, into
+  `silver_listing`), `reference-data/security-master` (`asset`, type-2 `instrument` and
+  `venue_symbol`, the claims and the held spellings, two hand-written seeds the owner reviews),
+  `market-analytics/canonical-trades` (a union over its venue ports, Kraken the only one) and
+  `market-analytics/candles` at 1m, 5m, 1h and 1d. `make test-dbt SELECTOR=candles` built all six in
+  order with every test passing, on empty bronze.
+- The operator hold: the platform's second table, `governance_build.run_records.holds`, append-only;
+  `make hold PRODUCT= REASON=` and `make unhold` (`scripts/hold.py`); `resolve` refuses a held
+  product's run; the principal `svc.operator`.
+- Per-product alert rules compiled into each release (`compiled/prometheus/product-alerts.yml`):
+  `ProductRunFailed_<dag>`, `ProductStale_<dag>`, `ProductRunSlow_<dag>`, with a promtool test file
+  for `kraken_trades` (`platform/k2gen/tests/promtool/`).
+- The wrapper reports a degraded build (a failed `warn` test), each input's `lagMinutes` and state,
+  reads an absent optional input as zero rows per its port, and compacts after its tests; the one
+  write it accepts on the tested snapshot is this run's own `replace` reading as many rows.
+- `k2runs.state`: `complete`, `partial: <inputs>` or `degraded`, shown on the catalog page with the
+  offset gaps an accept-data-loss run gave up.
+- `maintain` for a Kafka product: whole-table offset continuity, expiry that keeps the newest
+  connector snapshot, orphan cleanup with a 24-hour floor, and the compaction pass.
+- k2gen checks: `connectors.*` (bronze shape, envelope, topic ownership, stack hosts, pagination,
+  auth, url host), `refresh.*`, `access.role-within-invalid`, `access.input-undeclared`,
+  `docs.empty-input-into-table`; `contracts/domains.yaml` lists each domain's topics.
+- `make test-dbt SELECTOR=<name>` builds one product and the products its inputs name.
+- `scripts/verify/dbt-patterns.sh` (type-2 from listings, a held table taken back, a `warn` test,
+  compaction after the tests) and `scripts/verify/delete-files.sh` (each dbt output's delete files
+  against a bound of 24, for the soak; not yet run).
+- The principal `svc.partner-dashboard`, declared with no role, and the access rows for the new
+  products and the holds table in `tests/access/expectations.yaml`.
+- ADR-063, runbooks for onboarding a Kafka product and a public-API product, holding a product,
+  accepting data loss and a blocked Kafka batch; architecture chapter 23, as target text.
+
+### Changed
+
+- Deploy never unpauses a held product's DAG, names the DAGs a release adds and never pauses or
+  unpauses them; the drift check reports a platform table a rolled-back release added as LEFT, not
+  drift.
+- `docs.terms-missing` holds a grant outside the owning team to terms on every product upstream, not
+  only the product granted.
+- The currency master's `currency` and the security master's `asset` offer `full_reader`, held by
+  nobody (both products 1.1.0); SIX's terms for the ISO 4217 lists are not established, so no terms
+  are recorded, and a grant outside the owning team on either product, or on one downstream, is refused.
+- Principal kind `partner`, another organisation's service whose credential the platform never holds:
+  `svc.partner-dashboard` is one; it holds only the reader roles its grants give, a grant to it always
+  needs terms, the live access suite skips its rows by kind, and `make password TO_FILE=1` refuses it.
+- A delayed reader never sees a delivery or build counter.
+
+### Fixed
+
+Found by the phase's reviews before any release:
+
+- A partition bronze never staged starts at the landing's first offset, never 0, so a first run on a
+  trimmed topic no longer plans rows that were never there (D1).
+- A Kafka batch killed before its audit or publish is restaged by the next run (D2); only a registry
+  404 makes a schema id unresolvable, and `parses` compares what bronze staged (D3); two loads at once
+  land a range once (D4).
+- An input a model reads but does not declare is refused (A1); a topic belongs to one product of its
+  owning domain (A2); terms are checked upstream (A3); the role order names declared roles with no
+  cycle (A6).
+- A grant to a partner over terms that say `redistribution: forbidden`, on the product or upstream, is refused (`docs.terms-forbid-redistribution`); the check read only whether terms were recorded.
+- A Kraken trade frame `silver_trade` cannot type (not JSON, no data array, a field missing or not of
+  its type) no longer fails every later build at a NOT NULL column: it is kept whole, with its reason
+  and bytes, in the owner-only `silver_trade_rejected`, its warn rule `rejected_frames_zero` degrades
+  the build and the rest publishes; and a quality rule's dbt test now carries the rule's name, so
+  `warned` and `dq_test_results` say `unresolved_rows_zero`, not dbt's argument-made id.
+
+### Known and open
+
+- Not deployed: no live deploy, no first run on the stack, no `make hold` or `make unhold` against a
+  stack, no accept-data-loss run through Airflow, no deploy rehearsal with a second platform table.
+- `scripts/verify/kafka-path.sh` claims a11, a12 and b6 and `scripts/verify/dbt-patterns.sh`'s fixed
+  and added claims are pending their rerun (its last run printed `10 PASS, 1 FAIL`); the widened
+  `run-path.sh` (the chain with rows) is in progress.
+- Kraken's terms of reuse are not recorded, so no grant on any phase 004 product: `svc.partner-dashboard`
+  holds no role, and the delayed role on the new tables is unexercised until a grant.
+- A product's `degraded` and `partial` states are not alertable in Prometheus (no series carries them);
+  they show on the catalog page only. The catalog page does not show holds.
+- `make product-verify`, `make rebuild`, `make restore`, `make restore-drill`, `make parity-silver`, the
+  re-pinned `make parity-ohlcv`, the restore drill and plan 004's chaos scripts are not built yet.
+- The 48-hour soak has not started, so the chain's run times and the landing's growth on disk are not
+  measured.
+- dbt labs 4 (`UNNEST WITH ORDINALITY` and window flags) and 5 (type-2 history from listings) are not
+  written.
+
 ## [3.0.0-alpha.5.1] - 2026-11-27
 
 ### Fixed

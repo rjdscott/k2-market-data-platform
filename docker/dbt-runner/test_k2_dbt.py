@@ -19,8 +19,12 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
-sys.path[:0] = [str(Path(__file__).parent), str(ROOT / "platform" / "k2gen"), str(ROOT / "scripts" / "verify")]
+sys.path[:0] = [str(Path(__file__).parent), str(ROOT / "platform" / "k2gen"), str(ROOT / "scripts" / "verify"),
+                str(ROOT / "platform" / "runs")]
 import k2_dbt as w  # noqa: E402
+
+w.VIEW_SETTLE_S = 0  # no test waits out the settle; one asserts its place
+import k2runs  # noqa: E402
 from k2gen import model as k2  # noqa: E402
 from k2gen.emit import lake  # noqa: E402
 
@@ -36,10 +40,10 @@ INPUT = w.Input("fx.ecb-fx.rates", "fx.ecb_fx__base.rates", True, "audited", "ec
 UUID = "0123abcd-0000-4000-8000-000000000000"
 
 
-def ctx(run="access_canary/r1", inputs=(INPUT,), outputs=((OUT, VIEW),)):
+def ctx(run="access_canary/r1", inputs=(INPUT,), outputs=((OUT, VIEW),), incremental=False):
     return w.Ctx(RELEASE, Path(f"/k2/releases/{RELEASE}"), "governance.access-canary", run, "governance", "access_canary",
-                 "dbt_access_canary", "pub_access_canary", tuple(w.Output(r, v, ("region",)) for r, v in outputs), tuple(inputs),
-                 datetime.now(timezone.utc))
+                 "dbt_access_canary", "pub_access_canary", tuple(w.Output(r, v, ("region",), (), incremental) for r, v in outputs),
+                 tuple(inputs), datetime.now(timezone.utc))
 
 
 class Crash(BaseException):
@@ -79,6 +83,15 @@ class Fake:
         self.orphans: list[str] = []  # the builder's queries an earlier run left running
         self.kills: list[str] = []
         self.unkillable = False
+        self.input_at = datetime.now(timezone.utc) - timedelta(minutes=30)  # every input's audited commit
+        self.commit_reads: list[tuple[str, int]] = []
+        self.extra_results: list[dict] = []  # more of dbt's run_results, a warn among them
+        self.file_counts: dict[str, dict] = {}  # each table's `$files` counts at main, as Live.files gives them
+        self.optimized: list[tuple[str, str]] = []  # (table, client tag) of each optimize
+        self.optimize_error: str | None = None  # Trino refuses the optimize
+        self.optimize_commits = True  # an optimize with nothing to rewrite commits nothing
+        self.compaction: dict = {}  # overrides of the optimize's snapshot: a forged one
+        self.after_optimize = None
 
     # -- set-up
     def seed(self, rel=OUT, cols=V1, tagged=True, record=True):
@@ -92,10 +105,12 @@ class Fake:
             self.views[v.relation] = {c: cols[c] for c in v.columns if c in cols}
         return sid
 
-    def _snap(self, rel, cols, passed, query_id=None):
+    def _snap(self, rel, cols, passed, query_id=None, **summary):
         sid = next(self.ids)
-        self.meta[sid] = {"committed_at": datetime.now(timezone.utc), "query_id": query_id}
         t = self.tables.setdefault(rel, {"snaps": {}, "schema": None, "main": None, "tag": None})
+        self.meta[sid] = {"committed_at": datetime.now(timezone.utc), "query_id": query_id, "parent": t["main"],
+                          "operation": "append", "records": "12", "position_deletes": "2", "equality_deletes": "0",
+                          "data_files": "3", "delete_files": "2", **summary}
         t["snaps"][sid] = (dict(cols), passed)
         t["schema"], t["main"] = dict(cols), sid
         return sid
@@ -143,6 +158,34 @@ class Fake:
 
     def running(self):
         return sorted(self.orphans)
+
+    def files(self, rel, partitioned):
+        assert partitioned  # every output of ctx() is partitioned by region
+        return dict(self.file_counts.get(rel, {"data": 1, "small": 1, "partitions": 1, "deletes": 0}))
+
+    def optimize(self, rel, tag):
+        """Trino's optimize: one `replace` of main under the statement's client tag, the rows a
+        position delete hid dropped, every delete file gone; `compaction` forges its snapshot."""
+        self.optimized.append((rel, tag))
+        if self.optimize_error:
+            raise RuntimeError(self.optimize_error)
+        qid = self.query(tag)
+        if self.optimize_commits:
+            t = self.tables[rel]
+            cols, passed = t["snaps"][t["main"]]
+            m = self.meta[t["main"]]
+            rows = str(int(m["records"]) - int(m["position_deletes"]))
+            self._snap(rel, cols, passed, **{"query_id": qid, "operation": "replace", "records": rows, "position_deletes": "0",
+                                             "data_files": "1", "delete_files": "0", **self.compaction})
+            self.file_counts[rel] = {"data": 1, "small": 1, "partitions": 1, "deletes": 0}
+            self.check()
+        if self.after_optimize:
+            self.after_optimize(self)
+        return qid
+
+    def committed(self, rel, sid):
+        self.commit_reads.append((rel, sid))
+        return self.input_at
 
     def kill(self, query_id):
         self.kills.append(query_id)
@@ -211,6 +254,7 @@ class Fake:
             if self.rows:
                 self._snap(rel, cols, self.dbt_code == 0, insert)
             results.append({"status": self.dbt_status, "adapter_response": {"query_id": insert} if self.report_queries else {}})
+        results += self.extra_results
         self._snap("governance_build.access_canary__base.dq_test_results", {"run_id": "varchar"}, True)  # the results hook
         self.check()
         if self.after_dbt:
@@ -264,7 +308,9 @@ def events(fake, run=None):
 def test_a_pass_pins_each_input_runs_one_build_and_records_started():
     fake = Fake()
     s0 = fake.seed()
-    code, expire = w.run(ctx(), fake)
+    c = ctx()
+    fake.input_at = c.started_at - timedelta(minutes=30)
+    code, expire = w.run(c, fake)
     assert (code, expire) == (0, [])
     (argv,) = fake.dbt_calls
     assert argv[:4] == ["dbt", "build", "--selector", "access_canary"]
@@ -273,7 +319,8 @@ def test_a_pass_pins_each_input_runs_one_build_and_records_started():
     started = [r for r in fake.records if r["event"] == "started"]
     assert [(r["table_name"], r["snapshot_before"]) for r in started] == [(OUT, s0)]
     assert started[0]["inputs"] == [{"contractId": INPUT.contract, "relation": INPUT.relation, "snapshot": 7,
-                                     "state": "active", "lagMinutes": None}]
+                                     "state": "active", "lagMinutes": 30.0}]
+    assert fake.commit_reads == [(INPUT.relation, 7)]  # once per input, not per output
 
 
 def test_a_required_input_never_tested_exits_4_before_anything_is_written():
@@ -291,6 +338,66 @@ def test_an_optional_input_never_tested_is_left_out_of_k2_inputs():
     optional = dataclasses.replace(INPUT, required=False)
     assert w.run(ctx(inputs=(optional,)), fake)[0] == 0
     assert json.loads(fake.dbt_calls[0][fake.dbt_calls[0].index("--vars") + 1])["k2_inputs"] == {}
+
+
+def k2_inputs(fake):
+    return json.loads(fake.dbt_calls[0][fake.dbt_calls[0].index("--vars") + 1])["k2_inputs"]
+
+
+# ---- W0-7: an optional input read empty when absent ---------------------------------------------
+
+@pytest.mark.parametrize("when_absent", ["empty", "emptyIntoTable"])
+@pytest.mark.parametrize("state,refs", [("paused", {"audited": ("TAG", 7)}), ("active", {})])  # paused, or never tested
+def test_an_input_read_empty_when_absent_is_passed_absent_and_recorded_with_no_snapshot(state, refs, when_absent):
+    fake = Fake()
+    fake.seed()
+    fake.inputs[INPUT.relation] = [refs]
+    port = dataclasses.replace(INPUT, required=False, state=state, when_absent=when_absent)
+    assert w.run(ctx(inputs=(port,)), fake)[0] == 0
+    assert k2_inputs(fake) == {"ecb_fx/rates": {"absent": True}}
+    (started,) = [r for r in fake.records if r["event"] == "started"]
+    assert started["inputs"] == [{"contractId": INPUT.contract, "relation": INPUT.relation, "snapshot": None,
+                                  "state": state, "lagMinutes": None}]
+
+
+@pytest.mark.parametrize("when_absent", ["fail", "empty"])
+def test_a_present_input_is_pinned_as_before_whatever_its_port_says(when_absent):
+    fake = Fake()
+    fake.seed()
+    port = dataclasses.replace(INPUT, required=False, when_absent=when_absent)
+    assert w.run(ctx(inputs=(port,)), fake)[0] == 0
+    assert k2_inputs(fake) == {"ecb_fx/rates": {"snapshot": 7}}
+    assert [r["inputs"][0]["snapshot"] for r in fake.records if r["event"] == "started"] == [7]
+
+
+def test_a_paused_input_whose_port_says_fail_is_read_at_its_tested_snapshot():
+    fake = Fake()
+    fake.seed()
+    port = dataclasses.replace(INPUT, required=False, state="paused")
+    assert w.run(ctx(inputs=(port,)), fake)[0] == 0
+    assert k2_inputs(fake) == {"ecb_fx/rates": {"snapshot": 7}}
+
+
+def test_a_required_input_never_tested_exits_4_whatever_its_port_says():
+    fake = Fake()
+    fake.seed()
+    fake.inputs[INPUT.relation] = [{}]
+    assert w.run(ctx(inputs=(dataclasses.replace(INPUT, when_absent="empty"),)), fake) == (4, [])
+    assert fake.dbt_calls == []
+
+
+def test_when_absent_is_read_from_the_pipeline_fail_when_left_out_and_refused_when_unknown():
+    tables = {INPUT.contract: (INPUT.relation, "audited", "paused")}
+    port = {"contractId": INPUT.contract, "relation": INPUT.relation, "required": False, "maxLagMinutes": None}
+
+    def read(**extra):
+        pipeline = {**PIPELINE, "inputs": [{**port, **extra}]}
+        return w.ctx_from(RELEASE, Path("/r"), "governance.access-canary", "access_canary/r1", pipeline, VIEWS, tables, SCHEMAS).inputs
+
+    assert read() == (dataclasses.replace(INPUT, required=False, state="paused"),)  # a release compiled before W0-7
+    assert read(whenAbsent="empty")[0].when_absent == "empty"
+    with pytest.raises(w.Refused):
+        read(whenAbsent="skip")
 
 
 def test_the_second_read_catches_a_tag_that_moved_and_resolution_restarts():
@@ -434,7 +541,7 @@ def test_a_pass_moves_every_outputs_tag_in_one_compare_and_set_commit():
     assert fake.violations == []
 
 
-def test_a_schema_change_narrows_before_the_tag_and_widens_after_it():
+def test_a_schema_change_narrows_then_settles_before_the_tag_and_widens_after_it(monkeypatch):
     fake = Fake()
     fake.seed()
     fake.build[OUT] = V2
@@ -443,8 +550,10 @@ def test_a_schema_change_narrows_before_the_tag_and_widens_after_it():
     real_sql, real_commit = fake.sql, fake.commit
     fake.sql = lambda role, s: (order.append(re.findall(r'SELECT (.+?) FROM', s)[0]), real_sql(role, s))[1]
     fake.commit = lambda wh, ch: (order.append("commit"), real_commit(wh, ch))[1]
+    monkeypatch.setattr(w, "VIEW_SETTLE_S", 0.25)
+    monkeypatch.setattr(w.time, "sleep", lambda s: order.append(f"settle {s}"))
     assert w.run(ctx(), fake)[0] == 0
-    assert order == ["dbt", '"id", "region"', "commit", '"id", "region", "amount"']
+    assert order == ["dbt", '"id", "region"', "settle 0.25", "commit", '"id", "region", "amount"']
     assert fake.views[VIEW.relation] == V2 and fake.violations == []
 
 
@@ -758,6 +867,311 @@ def test_a_snapshot_id_from_a_run_record_is_parsed_never_spliced():
     assert w.run(ctx(), fake) == (3, []) and fake.statements == []
 
 
+# ---- W1-7: each input's lag, a degraded publish ---------------------------------------------------
+
+def warn(name):
+    return {"unique_id": name, "status": "warn", "adapter_response": {}}
+
+
+def state(fake):
+    """k2runs.state over the fake's records, in the order written."""
+    return k2runs.state([{**r, "recorded_at": n} for n, r in enumerate(fake.records)])
+
+
+def test_a_pass_with_a_warn_publishes_degraded_in_the_xcom_and_every_audited_row():
+    fake = Fake(views=(VIEW, VIEW2))
+    fake.seed(OUT), fake.seed(OUT2)
+    fake.extra_results = [warn(f"test.k2.held_rows_zero_{n}." + "x" * 300) for n in range(7)]
+    xcom = {}
+    assert w.run(ctx(outputs=((OUT, VIEW), (OUT2, VIEW2))), fake, xcom) == (0, [])
+    names = [f"test.k2.held_rows_zero_{n}." + "x" * 300 for n in range(5)]
+    assert xcom == {"degraded": True, "warned": [n[:w.WARNED_CHARS] for n in names]}
+    audited = [r for r in fake.records if r["run_id"] == "access_canary/r1" and r["event"] == "audited"]
+    assert [r["table_name"] for r in audited] == [OUT, OUT2]
+    for r in audited:
+        assert json.loads(r["detail"]) == xcom and len(r["detail"]) <= 1000  # k2runs.record keeps 1000
+    assert not [r for r in fake.records if r["event"] == "started" and "detail" in r]
+    assert state(fake) == "degraded"
+    assert fake.tables[OUT]["tag"] == fake.tables[OUT]["main"] and fake.violations == []  # published as before
+
+
+def test_a_pass_with_no_warn_writes_what_it_wrote_before(monkeypatch, capsys):
+    fake = Fake()
+    fake.seed()
+    fake.extra_results = [{"unique_id": "test.k2.ok", "status": "pass"}, {"unique_id": "model.k2.m", "status": "success"}]
+    monkeypatch.setattr(w, "load", lambda *a: ctx())
+    monkeypatch.setattr(w, "Live", lambda c, env: fake)
+    assert w.main(["build", "--release", RELEASE, "--product", "governance.access-canary", "--run-id", "access_canary/r1"]) == 0
+    assert capsys.readouterr().out.splitlines()[-1] == '{"exit":0,"expire":[]}'
+    (audited,) = [r for r in fake.records if r["run_id"] == "access_canary/r1" and r["event"] == "audited"]
+    assert set(audited) == {"run_id", "product_id", "release_id", "task", "started_at", "event", "table_name",
+                            "snapshot_before", "snapshot_after", "dbt_invocation_id"}  # no detail, as before
+    assert state(fake) == "complete"
+
+
+@pytest.mark.parametrize("code,status,exit_code", [(1, "fail", 1), (2, "error", 2)])
+def test_a_failure_beside_a_warn_rolls_back_and_is_never_degraded(code, status, exit_code):
+    fake = Fake()
+    s0 = fake.seed()
+    fake.dbt_code, fake.dbt_status = code, status
+    fake.extra_results = [warn("test.k2.held_rows_zero")]
+    xcom = {}
+    assert w.run(ctx(), fake, xcom)[0] == exit_code
+    assert xcom == {} and fake.tables[OUT]["main"] == s0 and fake.tables[OUT]["tag"] == s0
+    assert events(fake, "access_canary/r1") == [("started", OUT), ("rolled_back", OUT)]
+    assert not [r for r in fake.records if "degraded" in str(r.get("detail"))]
+    statuses = [warn("test.k2.w"), *({"unique_id": f"test.k2.{s}", "status": s} for s in ("fail", "error", "pass", "skipped"))]
+    assert w.warned({"results": statuses}) == ["test.k2.w"] and w.warned(None) == []  # only warn is a warn
+
+
+def test_a_publish_refused_after_a_warn_is_not_degraded():
+    fake = Fake()
+    fake.seed()
+    fake.build[OUT], fake.commit_status = V2, 409
+    fake.extra_results = [warn("test.k2.held_rows_zero")]
+    xcom = {}
+    assert w.run(ctx(), fake, xcom)[0] == 3 and xcom == {}  # nothing published, nothing degraded
+
+
+def test_each_inputs_lag_is_the_run_start_minus_its_audited_commit_never_below_zero():
+    c = ctx()
+    fake = Fake()
+    fake.seed()
+    fake.input_at = c.started_at - timedelta(minutes=90, seconds=30)
+    assert w.run(c, fake)[0] == 0
+    assert [r["inputs"][0]["lagMinutes"] for r in fake.records if r["event"] == "started"] == [90.5]
+    fake.input_at = c.started_at + timedelta(minutes=5)  # published after this run started
+    assert w.run(dataclasses.replace(c, run_id="access_canary/r2"), fake)[0] == 0
+    assert [r["inputs"][0]["lagMinutes"] for r in fake.records if r["event"] == "started"][-1] == 0.0
+    assert w.lag(c.started_at, None) is None
+
+
+def test_an_optional_input_with_no_snapshot_keeps_lag_null_and_reads_no_commit_time():
+    fake = Fake()
+    fake.seed()
+    fake.inputs[INPUT.relation] = [{}]
+    assert w.run(ctx(inputs=(dataclasses.replace(INPUT, required=False),)), fake)[0] == 0
+    (started,) = [r for r in fake.records if r["event"] == "started"]
+    assert started["inputs"][0]["snapshot"] is None and started["inputs"][0]["lagMinutes"] is None
+    assert fake.commit_reads == []
+
+
+def test_the_commit_time_is_the_snapshots_own_or_before_a_compaction_its_parents():
+    def s(sid, ms, op="append", parent=None):
+        return {"snapshot-id": sid, "timestamp-ms": ms, "summary": {"operation": op}, "parent-snapshot-id": parent}
+    meta = {"snapshots": [s(1, 60_000), s(2, 120_000, "replace", 1), s(3, 180_000, "replace", 2), s(4, 240_000, "overwrite", 3),
+                          s(5, 300_000, "replace", 99), s(6, 360_000, "replace", 7), s(7, 420_000, "replace", 6)]}
+    at = lambda sid: w.commit_time(meta, sid, OUT).timestamp()  # noqa: E731
+    assert w.commit_time(meta, 1, OUT) == datetime(1970, 1, 1, 0, 1, tzinfo=timezone.utc)
+    assert (at(3), at(2), at(4)) == (60, 60, 240)  # compactions walk back to the data; a new write is its own
+    assert at(5) == 300  # its parent expired: its own time
+    assert at(6) in (360, 420)  # a parent cycle ends
+    for bad in (None, {}, meta):
+        with pytest.raises(w.Refused):
+            w.commit_time(bad, 8, OUT)
+
+
+def test_the_live_commit_time_reads_the_inputs_own_warehouse(monkeypatch):
+    opened, read = [], []
+
+    class Catalog:
+        def __init__(self, uri, warehouse):
+            opened.append(warehouse)
+
+        def table(self, ns, t):
+            read.append((ns, t))
+            return {"snapshots": [{"snapshot-id": 7, "timestamp-ms": 1_000}]}
+    monkeypatch.setattr(w.catalog_drift, "Catalog", Catalog)
+    live = object.__new__(w.Live)
+    live.ctx, live.uri, live.catalogs = ctx(), "http://lakekeeper:8181/catalog", {}
+    for rel in ("lake.kraken_trades.bronze", "fx.ecb_fx__base.rates", "fx.ecb_fx__base.rates"):
+        assert live.committed(rel, 7) == datetime(1970, 1, 1, 0, 0, 1, tzinfo=timezone.utc)
+    assert opened == ["k2", "fx"] and read == [("kraken_trades", "bronze"), ("ecb_fx__base", "rates"), ("ecb_fx__base", "rates")]
+    with pytest.raises(w.Refused):
+        live.committed('fx.a"b.c', 7)
+
+
+# ---- W0-9: compaction after the tests, the one write accepted on top of the tested snapshot -------
+
+DUE = {"data": 13, "small": 13, "partitions": 1, "deletes": w.COMPACT_DELETE_FILES}
+
+
+def compacting():
+    """A tagged output whose files make the next build compact it; `tested` collects main after dbt."""
+    fake = Fake()
+    fake.seed()
+    fake.file_counts[OUT] = dict(DUE)
+    fake.tested = []
+    fake.after_dbt = lambda f: f.tested.append(f.tables[OUT]["main"])
+    return fake
+
+
+def audited_row(fake, run="access_canary/r1"):
+    (row,) = [r for r in fake.records if r["run_id"] == run and r["event"] == "audited"]
+    return row
+
+
+def test_this_runs_compaction_of_the_tested_snapshot_is_what_the_tag_moves_to_and_reconcile_keeps_it():
+    fake = compacting()
+    s0, xcom = fake.tables[OUT]["tag"], {}
+    assert w.run(ctx(incremental=True), fake, xcom) == (0, [])
+    t, (tested,) = fake.tables[OUT], fake.tested
+    main = t["main"]
+    assert t["tag"] == main != tested and fake.meta[main]["operation"] == "replace" and fake.meta[main]["parent"] == tested
+    assert fake.optimized == [(OUT, fake.tags[-1])] and fake.meta[main]["query_id"] in fake.tagged(fake.tags[-1])
+    (changes,) = fake.commits  # the existing compare-and-set, on the compaction
+    assert changes[0]["requirements"] == [{"type": "assert-ref-snapshot-id", "ref": "main", "snapshot-id": main},
+                                          {"type": "assert-ref-snapshot-id", "ref": "audited", "snapshot-id": s0}]
+    report = {"files": [3, 1], "deleteFiles": [2, 0]}
+    assert xcom == {"compacted": [{"table": OUT, **report}]}
+    row = audited_row(fake)
+    assert row["snapshot_after"] == main and json.loads(row["detail"]) == {"compacted": report}
+    assert state(fake) == "complete" and fake.violations == []
+    n, m = len(fake.statements), len(fake.records)
+    w.reconcile(ctx(run="access_canary/r2", incremental=True), fake)  # the next build's reconcile changes nothing
+    assert (len(fake.statements), len(fake.records), fake.tables[OUT]["main"]) == (n, m, main)
+
+
+@pytest.mark.parametrize("forged", [
+    {"parent": 999}, {"parent": None},  # on another snapshot than the tested one
+    {"operation": "append"}, {"operation": "overwrite"}, {"operation": "delete"},  # rows written, not files rewritten
+    {"records": "9"}, {"position_deletes": "1"},  # a row lost or gained
+    {"equality_deletes": "1"}, {"records": None},  # rows no summary counts
+    {"query_id": ORPHAN}, {"query_id": None}])  # another statement's commit
+def test_any_other_snapshot_on_top_of_the_tested_one_is_refused_rolled_back_and_never_tagged(forged):
+    fake = compacting()
+    s0, xcom = fake.tables[OUT]["tag"], {}
+    fake.compaction = forged
+    assert w.run(ctx(incremental=True), fake, xcom)[0] == 3 and xcom == {}
+    (tested,) = fake.tested
+    assert ("builder", f"ALTER TABLE {k2.quote_relation(OUT)} EXECUTE rollback_to_snapshot({tested})") in fake.statements
+    assert fake.tables[OUT]["main"] == tested and fake.tables[OUT]["tag"] == s0 and fake.commits == []
+    assert "audited" not in [e for e, _ in events(fake, "access_canary/r1")] and fake.leaks() == []
+    fake.compaction, fake.after_dbt = {}, None
+    assert w.run(ctx(run="access_canary/r2", incremental=True), fake) == (0, [])  # reconciled, then published
+    assert fake.drift()["differences"] == [] and fake.violations == []
+
+
+def test_a_write_under_the_runs_own_client_tag_after_the_compaction_is_refused_and_rolled_back():
+    # finding 5: built_here passes any commit by a statement carrying the run's client tag; after the
+    # tests only the run's own compaction is, and an append on top of it under the same tag is not
+    fake = compacting()
+    s0 = fake.tables[OUT]["tag"]
+    fake.after_optimize = lambda f: f._snap(OUT, V1, False, f.query(f.tags[-1]))
+    assert w.run(ctx(incremental=True), fake)[0] == 3
+    assert fake.tables[OUT]["main"] == fake.tested[0] and fake.tables[OUT]["tag"] == s0 and fake.commits == [] and fake.leaks() == []
+
+
+def refuse_files(rel, partitioned):
+    raise RuntimeError("Column 'partition' cannot be resolved")
+
+
+@pytest.mark.parametrize("how,why", [("refused", "RuntimeError: Access Denied: Cannot execute table procedure OPTIMIZE"),
+                                     ("nothing", "optimize rewrote nothing"),
+                                     ("files", "RuntimeError: Column 'partition' cannot be resolved")])
+def test_an_optimize_that_fails_or_commits_nothing_publishes_the_tested_snapshot_and_says_why(how, why):
+    fake = compacting()
+    if how == "refused":
+        fake.optimize_error = why.removeprefix("RuntimeError: ")
+    elif how == "nothing":
+        fake.optimize_commits = False
+    else:
+        fake.files = refuse_files
+    xcom = {}
+    assert w.run(ctx(incremental=True), fake, xcom) == (0, [])
+    assert fake.tables[OUT]["tag"] == fake.tables[OUT]["main"] == fake.tested[0]
+    assert xcom == {"compactionSkipped": [{"table": OUT, "why": why[:w.COMPACTION_WHY_CHARS]}]}
+    assert json.loads(audited_row(fake)["detail"]) == {"compactionSkipped": why[:w.COMPACTION_WHY_CHARS]}
+    assert fake.violations == []
+
+
+def test_a_table_model_is_never_compacted_whatever_its_files():
+    fake = compacting()
+    fake.file_counts[OUT] = {"data": 500, "small": 500, "partitions": 1, "deletes": 500}
+    xcom = {}
+    assert w.run(ctx(), fake, xcom) == (0, []) and xcom == {} and fake.optimized == []
+    assert "detail" not in audited_row(fake)
+
+
+S, D = w.COMPACT_SMALL_FILES, w.COMPACT_DELETE_FILES
+
+
+@pytest.mark.parametrize("files,due", [
+    ({"data": 1, "small": 1, "partitions": 1, "deletes": 0}, False),
+    ({"data": S, "small": S, "partitions": 1, "deletes": D - 1}, False),  # one under each
+    ({"data": S + 1, "small": S + 1, "partitions": 1, "deletes": 0}, True),
+    ({"data": 2, "small": 2, "partitions": 1, "deletes": D}, True),
+    ({"data": 400, "small": 20 + S - 1, "partitions": 20, "deletes": 0}, False),  # a file a day, a day's builds short
+    ({"data": 400, "small": 20 + S, "partitions": 20, "deletes": 0}, True)])
+def test_compaction_is_due_only_at_its_thresholds_and_a_skip_records_nothing(files, due):
+    assert (w.needs_compaction(files) is not None) == due
+    fake = Fake()
+    fake.seed()
+    fake.file_counts[OUT] = files
+    xcom = {}
+    assert w.run(ctx(incremental=True), fake, xcom) == (0, [])
+    assert bool(fake.optimized) == due and set(xcom) == ({"compacted"} if due else set())
+    assert ("detail" in audited_row(fake)) == due
+
+
+def test_a_degraded_publish_beside_a_skipped_compaction_keeps_its_detail_whole():
+    fake = compacting()
+    fake.optimize_error = "Access Denied: " + "x" * 500
+    fake.extra_results = [warn(f"test.k2.held_rows_zero_{n}." + "x" * 300) for n in range(7)]
+    assert w.run(ctx(incremental=True), fake)[0] == 0
+    detail = audited_row(fake)["detail"]
+    assert len(detail) <= 1000 and json.loads(detail)["degraded"] is True  # k2runs.record keeps 1000
+    assert len(json.loads(detail)["compactionSkipped"]) == w.COMPACTION_WHY_CHARS and state(fake) == "degraded"
+
+
+def test_a_crash_between_the_compaction_and_the_tag_commit_leaves_the_tag_and_the_next_run_publishes():
+    fake = compacting()
+    s0 = fake.tables[OUT]["tag"]
+    fake.crash = "narrow"
+    with pytest.raises(Crash):
+        w.run(ctx(incremental=True), fake)
+    assert fake.tables[OUT]["tag"] == s0 and fake.violations == []
+    fake.crash = None
+    assert w.run(ctx(run="access_canary/r2", incremental=True), fake) == (0, [])
+    t = fake.tables[OUT]
+    assert t["tag"] == t["main"] and fake.drift()["differences"] == [] and fake.violations == []
+
+
+def test_only_an_output_whose_model_is_incremental_is_compacted():
+    marked = w.ctx_from(RELEASE, Path("/r"), "governance.access-canary", "access_canary/r1", PIPELINE, VIEWS, {}, SCHEMAS,
+                        frozenset({"events"}))
+    assert marked.outputs[0].incremental and not ctx_from().outputs[0].incremental
+
+
+def test_the_live_compaction_reads_files_and_snapshots_and_optimizes_under_the_runs_tag():
+    live = object.__new__(w.Live)
+    live.ctx, asked = ctx(), []
+    rows = {"$files": [(5, 4, 2, 3)], "$snapshots": [("t", "q", 7, "replace", "10", "0", "0", "1", "0")]}
+    live.query = lambda role, sql, params=None: (asked.append((role, sql)), ([r for k, r in rows.items() if k in sql][0], []))[1]
+    assert live.files(OUT, True) == {"data": 5, "small": 4, "partitions": 2, "deletes": 3}
+    assert live.files(OUT, False)["partitions"] == 2
+    assert '"partition"' in asked[0][1] and "THEN 1 END" in asked[1][1] and k2.quote_relation(OUT + "$files") in asked[0][1]
+    assert live.snapshot(OUT, 8) == {"committed_at": "t", "query_id": "q", "parent": 7, "operation": "replace", "records": "10",
+                                     "position_deletes": "0", "equality_deletes": "0", "data_files": "1", "delete_files": "0"}
+    assert {r for r, _ in asked} == {"builder"}
+    sent = []
+
+    class Cursor:
+        query_id = "20261128_000000_00001_optim"
+
+        def execute(self, sql):
+            sent.append(sql)
+
+        def fetchall(self):
+            return [[1]]
+    live.connect = lambda role, client_tags=None: (sent.append((role, client_tags)), types.SimpleNamespace(cursor=Cursor))[1]
+    tag = "k2-dbt-" + "c" * 32
+    assert live.optimize(OUT, tag) == Cursor.query_id
+    assert sent == [("builder", [tag]), f"ALTER TABLE {k2.quote_relation(OUT)} EXECUTE optimize(file_size_threshold => '64MB')"]
+    Cursor.query_id = "x' OR 1=1"
+    assert live.optimize(OUT, tag) is None  # an id no commit can be held to
+
+
 # ---- trust boundaries --------------------------------------------------------------------------
 
 @pytest.mark.parametrize("bad", ["a.b", 'a.b.c"; DROP TABLE x --', "A.b.c", "a.b.c$refs", "a.b." + "x" * 64, "a..c", None])
@@ -842,7 +1256,7 @@ def test_the_xcom_is_the_last_stdout_line_on_every_exit_path(monkeypatch, capsys
     monkeypatch.setattr(w, "Live", lambda c, env: None)
     for code in (0, 1, 2, 3, 4):
         expire = [{"table": OUT, "ids": [5]}] if code in (1, 2) else []
-        monkeypatch.setattr(w, "run", lambda c, io, code=code, expire=expire: (code, expire))
+        monkeypatch.setattr(w, "run", lambda c, io, xcom, code=code, expire=expire: (code, expire))
         assert w.main(["build", "--release", RELEASE, "--product", "governance.access-canary", "--run-id", "x/y"]) == code
         assert last() == {"exit": code, "expire": expire}
 

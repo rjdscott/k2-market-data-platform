@@ -1,0 +1,2 @@
+# Owner-only: a fixture of scripts/verify/dbt-patterns.sh, never deployed.
+grants: []

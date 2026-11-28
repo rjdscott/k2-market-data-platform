@@ -161,6 +161,14 @@ k2-dbt build --release <id> --product <domain>.<product> --run-id <dag_id>/<run_
 - Its vars to dbt: `k2_inputs`, `{"<fence>/<table>": {"snapshot": <integer id>}}` for every input
   (`dbt/macros/k2_input.sql` refuses a missing, null or non-integer id at parse), and
   `k2_run_id`, which the results hook writes on every test row beside dbt's `invocation_id`.
+  Added 2026-11-28 (step W0-7): an entry may instead be `{"absent": true}`, which `k2_input`
+  renders as zero rows of the source's declared columns, each cast to its contract type. The
+  wrapper passes it only for an optional input whose port says `whenAbsent: empty` (or
+  `emptyIntoTable`), while that input is `paused` in the release or was never audited, and
+  records it with `snapshot` and `lagMinutes` null and its `state`, so the product is `partial`.
+  The default, `whenAbsent: fail`, is the rule above unchanged. `k2gen check` refuses `empty` in
+  a product with a model that is not incremental (`docs.empty-input-into-table`), since the zero
+  rows would rebuild it and publish it empty.
 - Steps: (1) reconcile: the catalog drift check; an unfinished run's outputs restored to their
   tag (no tag: `DROP TABLE`), `reconciled`; a tag ahead of the records gets its `audited` row; the
   view rule of step 6 rerun until each view equals C ∩ the tagged schema. (2) Resolve every input
@@ -224,3 +232,581 @@ For the wrapper above, step (6)'s two view statements are `emit/lake.view_update
 with `old` and `new` the tagged and tested snapshots' columns mapped to their types. The table
 above holds for `trino/password.db` with one addition: each line sits in a fixed 128-byte slot,
 rewritten by one aligned write in place, so a reader never sees a torn line.
+
+## Run-record additions, 2026-11-28 (phases 004 and 005, step I-3)
+
+Additions only: no column, enum value or key was renamed or removed, and a record written before
+this section still validates against `contracts/schema/run-record.schema.json`.
+
+- **Event `offset_gap`.** A load run with accept-data-loss writes one `offset_gap` row (task `load`)
+  for the offsets it gave up. Its `detail` is JSON text shaped by `#/$defs/offsetGapDetail`: `partitions`
+  (each `partition`, `fromOffset`, `toOffset`) and the operator's `reason`. `k2runs.EVENTS`, the schema
+  enum and the `event` column's comment list it. The table gains no column.
+- **The `lagMinutes` rule.** An input's `lagMinutes` is the run's start time minus the audited commit
+  time of the snapshot it read, never below 0; null when the input was never audited. Stated in the
+  schema's description of `inputs[].lagMinutes`.
+- **The product state.** `#/$defs/productState` fixes the allowed forms of a derived product's
+  completeness: `complete`, `partial: <contract ids of the inputs missing or late>` (comma and space
+  separated) or `degraded`. It is computed from the newest run's inputs (`k2runs.state`, a later step), not
+  stored in a column: the A6 columns are frozen, so a stored form would move them.
+- **The `holds` table is not yet created.** The operator hold (columns `product_id`, `reason`,
+  `held_by`, `held_at`, `released_at`, in the governance build catalog) needs the lake emitter,
+  deploy, the drift check, the access expectations and the backup set to learn a second table, which this
+  step does not touch; the step that writes `scripts/hold.py` owns it.
+
+## A Kafka product's pipeline, 2026-11-28 (phases 004 and 005, step I-1)
+
+Frozen against `docker/lake/kafka.py` as merged with W0-1 and W0-2; where the build breakdown and
+the code differed, the code won and the line says so. Additions only, but for one departure from
+plan 004 and one replaced plan sentence, each stated below. `model.SNAPSHOT_SUMMARY_KEYS` keeps its
+four keys (a file connector's commits; `connector.py` zips them in order and
+`tests/test_lake_connector.py` holds the two equal), so the Kafka keys are its sibling,
+`model.KAFKA_SUMMARY_KEYS`.
+
+**Snapshot summary keys.** `tests/test_frozen_interfaces.py` reads every `k2.*` key `kafka.py`
+names, as a literal or through `offsets.py` and `connector.py`, and fails unless they are exactly
+these. A renamed key orphans every earlier snapshot as a resume point (ADR-022).
+
+| Commit | Key | Value |
+|---|---|---|
+| every Kafka connector commit | `k2.job` | `connector` (`model.KAFKA_JOB`), what the resume walk and expiry look for |
+| | `k2.run-id`, `k2.release`, `k2.batch-id` | the run, its release, and the batch id, which is the run id |
+| landing | `k2.kafka-offsets` | end offsets, exclusive, `{topic: {partition: offset}}`, every partition read before carried forward |
+| | `k2.kafka-starts` | the batch's first offset per partition |
+| | `k2.kafka-gaps` | only when the run accepted a loss: `{topic: {partition: [committed, log start]}}`, the offsets lost being committed to log start minus 1 |
+| bronze | `k2.kafka-offsets` | the landing offsets bronze has staged through, exclusive: the landing's end offsets at the snapshot read, so trailing skipped records advance it and `max(kafka_offset) + 1` is not it |
+| | `k2.src-snapshot-id` | the landing snapshot the stage read |
+| | `k2.kafka-skipped` | the landing rows the filter skipped, per partition |
+
+2026-11-28 (W0-4b): `k2.kafka-gaps` is cumulative. Every landing commit after the first accepted loss
+carries every loss accepted so far, `{topic: {partition: [[committed, log start], ...]}}`, sorted and
+merged where they meet, so expiring the commit that accepted a loss never drops its record; it is
+absent until a loss is accepted.
+
+The code over the breakdown: `k2.job` is on every Kafka connector commit only; a file connector's
+commits carry `model.SNAPSHOT_SUMMARY_KEYS` and no `k2.job`, and a Kafka commit has no
+`k2.source-sha256`.
+
+**What the landing holds: a departure from plan 004.** Plan 004 says the landing table "holds the
+kept records byte for byte". Frozen instead: `lake.<fence>.landing` holds every record of the
+planned range, trade and control frames alike, `record_key` and `record_value` as read and never
+decoded; the connector's `filter` (`stream` in `[trade]` for `kraken-trades`) runs at bronze
+staging. The reason is the frozen landing columns (`model.PLATFORM_TABLES["landing"]`), which have
+no place for a skipped record, and the offset checks reused from phase 001, which hold only over an
+unbroken range: `offsets.batch_audit` passes a partition only if `end - start` rows landed at
+`start..end - 1`, and `offsets.offset_gaps` calls it intact only if `max - min + 1` equals its row
+count, so a landing without its control frames fails both at the first one, and skipped counts kept
+only in summaries would go with the snapshots that carry them. Bronze accounting: per partition the
+stage reads the landing rows from bronze's through-offset to the landing's end offset, at one
+landing snapshot and never from the topic, and kept plus skipped must equal the rows read or
+nothing stages. The descriptions of `kafkaConnector` and its `filter` in `k2-v2.schema.json` still
+say the filter decides what lands; the next step to edit that file's descriptions brings them to
+this.
+
+2026-11-28 (review finding D1): a partition bronze has no through-offset for (the product's first
+stage, or a partition added since) starts at the landing's first offset in it, its minimum
+`kafka_offset` read from the landing's rows, never at 0. The landing lands from the log start
+(`startFrom: earliest-retained`), so a range from 0 planned rows that were never there and the first
+audit on a trimmed topic failed for good. The rows are the source because they are never expired;
+the landing commit whose `k2.kafka-starts` recorded that start may be. The audit's accounting plans
+from the same start, and Retention's "stages again from offset 0" reads "from the landing's first
+offset".
+
+2026-11-28 (review finding D4): the landing commit is no plain append to `main`, which Iceberg
+retries on a newer head, so two loads at once landed one range twice. It is written on the
+landing's branch `land`, set first to `main` as the plan read it (a landing with no `main`: made
+again, empty), and made `main`'s head by one Iceberg REST commit requiring `main` to be that
+snapshot and `land` the commit, as `connector.publish` moves bronze, and only if the commit's
+parent is that snapshot. The loser of a race, or a load whose landing a compaction moved under
+it, exits 2 having landed nothing, and the next run plans from what landed. The landing's refs
+are `main` and `land`.
+
+**Bronze.** A Kafka product has one bronze table (`kafka.py` stages into exactly one), staged from the landing
+by offset, never by run id, so a retry, or a kill between the landing commit and the stage, stages
+nothing twice and leaves no hole. Its columns are exactly the landing's nine, by name and type, as
+`stage_rows` selects them from the landing row: the key `(kafka_partition, kafka_offset)`, primary
+key positions 1 and 2, which is also each row's lineage to the landing and the topic; the source's
+values `kafka_timestamp`, `record_key` and `record_value`; and the lineage columns `batch_id`,
+`landed_at`, `run_id` and `release_id`, those of the landing batch that landed the record. The run
+that staged it is the bronze commit's `k2.batch-id` and `k2.run-id`. A column decoded from the
+envelope would be computed at stage; adding one changes this interface.
+
+2026-11-28 (the envelope decoded at stage): this replaces the columns above and the `values` in
+"What k2gen compiles" below. Trino has no SQL function that decodes Avro, so silver could not read
+the envelope out of `record_value`; bronze therefore carries it decoded, written by Spark at stage,
+which decodes it already for the filter. The landing is unchanged: every record, its bytes as read.
+Bronze's columns, in order: `kafka_partition` integer, `kafka_offset` bigint, `kafka_timestamp`, then
+`schema_id` integer (the frame's Confluent writer schema id), then the envelope's top-level fields by
+name and type as the product's bronze contract declares them (for `RawMessage`: `exchange`,
+`stream`, `symbol`, `recv_ts_ns` bigint, `conn_id`, `conn_msg_seq` bigint, `payload` varbinary, the
+venue frame as sent), then `batch_id`, `landed_at`, `run_id` and `release_id`. `record_key` and
+`record_value` are not in bronze: the landing holds them, and bronze is rebuilt from it. The key
+stays `(kafka_partition, kafka_offset)`; the compiled `values` are `kafka_timestamp`, `schema_id` and
+the envelope columns. Each frame is decoded with the writer schema its id names, fetched from the
+registry by id, so a writer schema with a field added still reads; each column is written by name
+from the decoded record, and one the record lacks, or holds as a type that does not read as the
+column's (equal, or Avro's `int` to `bigint` and `float` to `double`), is written null and fails the
+batch in the audit's `parses`, which reads each staged frame again from the landing and names the
+column. `schema_id` and the envelope columns are never `required`: a frame unframed, of an id that
+is no `RawMessage`, or whose body does not read, is staged with them null and fails `parses`.
+k2gen's `connectors.kafka-bronze-shape` and `pipeline.schema.json` hold this shape.
+
+2026-11-28 (review finding D3): an id is unresolvable only when the registry answers 404 for it;
+any other registry error fails the task, exit 1, before the stage writes or the audit records
+anything. `parses` also compares each staged row with the frame's decode from the landing: a frame
+whose bronze columns are not what its decode projects (null where the decode is not, as when the
+registry answered 404 at the stage and serves the id since) fails the batch, naming partition,
+offset and the columns.
+
+2026-11-28 (review finding D2): a kill between the stage and the audit leaves no stuck batch either.
+A stage that finds another run's batch unpublished on `audit` resets `audit` to `main` and stages
+the range again from `main`'s through-offsets, with whatever landed since, when that batch has no
+`audit_checks` row at its snapshot (never audited) or its newest audit passed every check (never
+published); it is refused, naming the failed checks and the `REPLACE BRANCH` (no `main`: `DROP
+BRANCH`) that clears it, when its newest audit failed or lacks a check, or no Kafka stage wrote the
+head. A batch that failed its audit is never reset. The file kinds keep their rule: any other
+batch blocks.
+
+**The envelope contract.** The capture's `RawMessage` (`schemas/avro/raw-message.avsc`, subject
+`market.crypto.v3.raw.<exchange>-value`) is declared by `market-capture` as the table contract
+`contracts/market-capture/kraken-trades/raw_message.odcs.yaml`, id
+`market-capture.kraken-trades.raw_message`, which the connector's `envelope.contract` names. Its
+seven fields are the Avro schema's, by name; the Avro file stays the schema the registry serves.
+W2-1 writes it. Two things are not settled today: nothing in k2gen checks that `envelope.contract`
+resolves, and `k2-v2.schema.json#/$defs/build` has no kind for a contract that is no lake table but
+the paused hot tier's `serving`.
+
+**Accepting data loss.** The Airflow trigger `conf` of the product's own DAG, so per product by
+construction:
+
+```json
+{"acceptDataLoss": true, "reason": "<why the operator accepts the loss>"}
+```
+
+Both keys or neither: `acceptDataLoss` the JSON boolean `true`, and `reason` a non-empty string,
+carried verbatim into `offsetGapDetail.reason`. No `conf`, or `{}`, is a normal run. The factory
+refuses, before `load`, a `conf` with any other key, a flag that is not `true`, a flag without a
+reason or a reason without the flag, so a misspelt key never runs as a normal run. It passes
+`--accept-data-loss` to `connector.py load` and to no other task; the reason never reaches the
+connector.
+
+The `offset_gap` run record (I-3): one row, task `load`, `table_name` the landing, `detail` the JSON
+text of `run-record.schema.json#/$defs/offsetGapDetail`, one `partitions` entry per element of
+load's result `offsetGaps` (`{topic, partition, committed, logStart, lost}`): `partition`,
+`fromOffset` its `committed`, `toOffset` its `logStart - 1`. It is written when the landing commit
+carrying `k2.kafka-gaps` was made, which load's result shows as exit 0, or as a result carrying
+bronze's `table` (the stage runs only after that commit, so a stage refused after it still lost
+the range). A run whose plan finds nothing below the log start is a normal run and writes no
+`offset_gap`. The summary is the durable record: a load that dies after its landing commit and
+before printing its result leaves the gap there alone, and nothing yet reconciles the two. A gap
+whose resumed range is empty commits a landing snapshot of no rows; W0-4b proves Spark makes that
+commit.
+
+**Below the log start, and a paused product.** A start below the broker's log start is refused at
+plan time, before Spark reads: load exits 2, nothing lands, and the message names every such
+partition with its committed offset, the log start and the records gone. Only an accept-data-loss
+run moves past it: those partitions resume at the log start, the gap committed in the landing's
+summary and reported as `offset_gap`. A paused product lands and stages nothing (load exits 0, and
+an accept-data-loss run on it records nothing). Resumed, its first run plans from its committed end
+offsets like any run: still in the log, it continues with no loss; fallen below the log start
+during the pause, it is the case above and fails loudly until an accept-data-loss run. This
+replaces plan 004's "A paused product lands nothing and resumes at the log start": a silent jump
+to the log start is the unrecorded hole ADR-022 exists to prevent. The header of `kafka.py` says
+the first run after a resume "is an accept-data-loss run"; the code refuses it unless the run is
+given the flag, and the code is what is frozen.
+
+**The watermark a derived product reads from a Kafka input** is the bronze commit's
+through-offsets: `k2.kafka-offsets` of the newest connector snapshot in the lineage of the snapshot
+the build read, per partition, end exclusive; the build selects rows by `(kafka_partition,
+kafka_offset)` against it and keeps the offsets themselves, never a snapshot id. Offsets only
+advance (`offsets.merge_committed`), a compaction or expiry commit carries no `k2.job` of
+`connector` and moves no row's offset, and the value needs no old snapshot to be evaluated, so it is
+monotonic across compaction and survives expiry. Landing time is neither: `landed_at` is a driver's
+wall clock, which can step back between runs, and a snapshot's commit time moves forward on every
+compaction. For the same reason a Kafka input's `lagMinutes` (I-3) is taken from that connector
+snapshot's commit time, its audited commit, never from a compaction snapshot after it.
+
+**Retention.** A Kafka product's landing is never expired (owner, 2026-11-28): `maintain.py`'s
+`LANDING_DAYS` is the file landings' rule alone. Snapshot expiry runs on the landing and on bronze
+by `compiled/lake/retention.json` and never removes the newest connector snapshot of either: it is
+the landing's resume point and bronze's staged-through point, and without it the next run lands
+again from the log start, or stages again from offset 0, duplicating both. W1-9 builds it and W0-4c
+proves the resume after a compaction and an expiry.
+
+2026-11-28 (W0-4c, `bash scripts/verify/kafka-path.sh <release> c`, on the throwaway, each pass
+`maintain.py` as the factory's task runs it): `--compact` is skipped, its reason in the result,
+while bronze's `audit` holds an unpublished batch, which then publishes; with 53 small files on each
+table (seeded by 50 runs, `COMPACT_MIN_FILES` unchanged) it writes one `replace` snapshot per table
+carrying `k2.job` `maintenance` and no `k2.kafka-offsets`, every row as before. The default pass's
+continuity check, expiry and `remove_orphan_files` run, deleting no live file: the listing the
+maintenance key makes serves `s3://`, so Iceberg 1.8.1's own listing through Hadoop's FileSystem is
+never needed. Expiry with every snapshot past retention keeps, on each table, main's head and the
+newest connector snapshot under it (`retain_last` 2); the next run starts at that snapshot's end
+offsets and lands and stages each record once. Iceberg's `remove_orphan_files` itself refuses an
+`older_than` under 24 hours before now, the same floor as `ORPHAN_FLOOR`.
+
+**What k2gen compiles for a Kafka product (W1-2).** In `pipeline.json`: `connector` as the product
+file declares it (`kind` `kafka`, `brokers`, `registry`, `topic`, `envelope` `{format, contract}`,
+`filter` `{field, in}` when it filters, `payload`, `startFrom`, `maxOffsetsPerPartition`);
+`landing` `{table: lake.<fence>.landing}` (compiled today); `bronze`, exactly one entry: `table`
+`lake.<fence>.bronze_<name>`, `key` `["kafka_partition", "kafka_offset"]`, `values`
+`["kafka_timestamp", "record_key", "record_value"]` (today's `_bronze` leaves out only
+`source_file_sha256`, so it would list the four lineage columns as values), `decimal` `[]`,
+`patterns` `{}`, `audits` the contract's `k2-connector` checks, `branch` `audit`, `checks`
+`lake.<fence>.audit_checks`; and the DAG's tasks with no `fetch` (compiled today). k2gen refuses a
+Kafka product with more than one connector table, or one whose columns are not the landing's with
+that key, and `pipeline.schema.json` gains the matching rule for `kind` `kafka` with its test
+(its descriptions state it now; a rule there today would fail the emitter test that compiles a
+Kafka connector over a fetch-kind fixture's bronze). The landing goes in the backup set as
+`restore`, with no row expiry. The accept-data-loss `conf` is run time and is never compiled.
+
+## Holds, 2026-11-28 (phases 004 and 005, step I-7)
+
+Additive: the run record, its rules and its file are unchanged. The `holds` table is the platform's
+second Trino table, `governance_build.run_records.holds`, in the run record's namespace, its DDL
+frozen in `platform/runs/holds.sql` (`model.HOLDS_SQL`). `model.PLATFORM_SQL` lists both files; the
+lake emitter copies each byte for byte to `compiled/lake/ddl/trino/governance.run_records.<table>.sql`
+when the `governance` domain is declared, and a contract whose build is `platform` is still refused,
+since the platform's tables come from those files alone. `tests/test_frozen_interfaces.py` holds the
+columns, their descriptions and `k2runs.HOLD_COLUMNS` to each other. The namespace `run_records` was
+reserved already (`model.RESERVED_PRODUCT_NAMES`), so no name is newly reserved.
+
+| Column | Type | Meaning |
+|---|---|---|
+| `product_id` | varchar | the product held, `<domain>.<product>` |
+| `kind` | varchar | `operator` (`make hold`), `rebuild` (`make rebuild`'s lock) or `restore` (`make restore`'s) |
+| `reason` | varchar | the holder's reason, at most 1000 characters |
+| `held_by` | varchar | who took it: the operator's name, or the make target for a lock |
+| `held_at` | timestamp(6) with time zone | when it was taken; with `product_id` and `kind`, the hold's key |
+| `released_at` | timestamp(6) with time zone | null on the hold row; set on the release row |
+| `released_by` | varchar | null on the hold row; who ended it |
+
+**Append-only: a release is a second row, never an update.** The writer holds SELECT and INSERT and
+nothing else, as it does on the run record, so no row of either table can change or go; an UPDATE
+would need the UPDATE privilege on the table the page reads, and an Iceberg row update writes
+delete files a reader then merges. A hold is the row with `released_at` null; its release copies
+that row's `product_id`, `kind`, `reason`, `held_by` and `held_at` and sets `released_at` and
+`released_by`. A hold is open while no release row carries its `(product_id, kind, held_at)`. One
+open hold per product and kind, so an operator hold and a restore's lock are apart: the end of a
+restore never ends an operator's hold, and `make unhold` never ends a lock.
+
+**Rules** (`emit/trino_rules.py`), default deny kept, three rules per platform table and no other:
+svc.platform SELECT and OWNERSHIP through `governance_build` (it creates the table at deploy, and
+deploy reads it, below); svc.runs SELECT and INSERT there (`make hold` and the locks write, a DAG's
+`resolve` reads); svc.catalog SELECT through `governance`, for the page. No principal holds DELETE or
+UPDATE on it, and no reader group reaches it.
+
+2026-11-28 (review A4): this replaces the writer above. svc.runs's password is in every dbt-runner
+one-shot and the scheduler, and Trino enforces only who may INSERT, so its holder could forge or end
+a hold; and SELECT through `governance_build` is the right to roll the table back (spike (e)), which
+ends a hold with no row written. The holds' one writer is now `svc.operator` (`model.HOLDS_WRITER`,
+declared in `contracts/access/principals.yaml`), the operator's own login from the host: INSERT
+through `governance_build` and nothing else there. Every read of the holds goes through the reader
+catalog, read-only at the connector (`k2runs.HOLDS_READ`, `governance.run_records.holds`), the
+writes' own `NOT EXISTS` conditions included: SELECT there for svc.operator, svc.runs (`resolve`),
+svc.platform (deploy's resume) and svc.catalog. svc.platform keeps SELECT and OWNERSHIP through
+`governance_build` as the table's creator; OWNERSHIP lets it drop and recreate the table, and
+SELECT there lets it roll it back, so a hold is as safe as svc.platform's password, which only the
+host holds. `scripts/hold.py` connects as svc.operator from
+`${K2_SECRETS}/principals/svc.operator.password`, which the operator makes once with
+`make password PRINCIPAL=svc.operator TO_FILE=1`, and refuses without it; no compose service and no
+one-shot kind is given it (`tests/test_hold.py`). The one container that sees it is deploy's own
+live access one-shot, which the operator starts from the host and which mounts `principals/`
+read-only whole, svc.platform's included, for the live rows; those rows log in as svc.operator, so
+a deploy whose live suite runs needs the file, though its preflight does not ask for it (deploy
+writes no hold). The run record's rules are unchanged.
+
+**Backup and retention.** In the backup set as `restore` at `main`, and in `retention.json` at the
+run records' 7 days of snapshots; no row is ever expired.
+
+**The client** (`platform/runs/k2runs.py`, as svc.runs): `hold(conn, product, reason, by,
+kind="operator")` inserts the hold row only while no hold of that kind is open (one statement,
+`INSERT ... SELECT ... WHERE NOT EXISTS`), else `HoldError`; `release(conn, product, by,
+kind="operator")` inserts the release row copied from the open hold of that kind, else `HoldError`;
+`held(conn, product)` returns the newest open hold of any kind as a dict, or None. The conditional
+insert is not a mutex: two writers in one instant can both pass it, since Iceberg appends do not
+conflict; one operator per host is assumed.
+
+**What honours a hold.**
+
+- `resolve` has no Trino identity of its own: it runs inside the Airflow task and reads only the
+  pointer. Having pinned the release, it loads `k2runs` from it, as `record` does, connects as
+  svc.runs (whose password Airflow mounts for `record`) and calls `held(product)`. A hold fails the
+  run in `resolve` with `AirflowFailException`, naming the kind, reason, holder and time; a read that
+  fails fails `resolve` too, so a hold is never skipped because the table was unreachable. `record`
+  then skips, as it does after any failed `resolve`.
+- `make hold` also pauses the DAG (W1-11), so a held product normally starts no run; `resolve` is
+  the guard for a manual trigger, a run already queued and the locks.
+- No deploy unpauses or overrides a hold. Deploy unpauses only the DAGs it paused itself
+  (`deploy-paused.json`), and from W1-12 skips any whose product `held` returns, read as
+  svc.platform; deploy holds no INSERT, so it cannot end one.
+- `make rebuild PRODUCT=` takes a `rebuild` hold on its product before it restages bronze and
+  releases it after `k2-dbt build --full-refresh`; the product's own runs fail in `resolve` meanwhile.
+- `make restore` holds every DAG of the live release's `dags.json` with a `restore` hold, and pauses
+  each, before it touches a table, and releases each only after the tags equal the run records. The
+  holds table is itself in the backup set, so the holds are written after it is put back.
+
+**W1-6's trigger: a degraded build of `kraken-trades` starts a `kraken-instruments` run.** The
+factory adds one task, `refresh`, downstream of `build` (all_success: a degraded build publishes,
+so `build` succeeds), to a DAG whose `pipeline.json` names a refresh target. It is Airflow's own
+`TriggerDagRunOperator` (the standard provider in the Airflow 3 image), whose `execute` raises
+`AirflowSkipException` unless `build`'s XCom `result` carries `"degraded": true` (W1-7's wrapper
+result). Bounded so it cannot loop: `trigger_run_id` is `refresh__<this run's run_id>`, with
+`skip_when_already_exists`, `retries=0` and no `wait_for_completion`, so one degraded run starts at
+most one target run; the target is one of the product's own input ports' products, and k2gen
+refuses a refresh target that itself declares one, so the chain is one hop. A held or paused target
+gets the run queued, and `resolve` fails it while held. Where `pipeline.json` gets the target, and
+the contract field it comes from, is W1-6's, with `make test-airflow`.
+
+2026-11-28, the field: the product property `refresh`, value a product id, compiles to
+`pipeline.json`'s top-level `"refresh"` (optional in `pipeline.schema.json`). `k2gen check
+refresh.*` (`platform/k2gen/k2gen/checks/refresh.py`) holds it: the target is a product of the set,
+not retired, not the product itself, scheduled, upstream of the product through its input ports
+directly or through other products (`kraken-instruments` feeds `kraken-trades` through the security
+master, so a target is never a product the build does not read), naming no refresh of its own; and
+the product has a warn-severity dbt test, the only thing that makes a build degraded.
+`kraken-trades` declares `refresh: market-capture.kraken-instruments`.
+
+2026-11-28, bounded: the value is `{product, rules}`, the target and the warn-severity rules of the
+product whose failure the target's run can cure; `kraken-trades` declares `{product:
+market-capture.kraken-instruments, rules: [unresolved_rows_zero]}`, not `rejected_frames_zero`,
+since a new listing cannot make a malformed frame typeable. `pipeline.json`'s `refresh` is the same
+object. `refresh.never-degraded` became `refresh.rule-not-warn`: each name is a warn-severity rule
+of the product. The factory triggers only when `build`'s `warned` (`test.<project>.<rule>.<hash>`,
+each test named by its rule) names one of them, and `trigger_run_id` is `refresh__<YYYYMMDDTHH>`,
+the triggering run's hour in UTC (`run_after`), so a target starts at most once an hour whatever
+the cadence: the target fetches a public API whose owner allows a few calls an hour.
+
+## The role order, 2026-11-28 (phases 004 and 005)
+
+A10 gains one optional field, additively: a role in `contracts/access/roles.yaml` may list the roles
+it is `within` (roles whose holders see no less), schema `k2-v2.schema.json#/$defs/roles`. The
+repository declares one pair, `delayed_reader` within `full_reader`. `access.inherit-role` then lets
+an output offer a role over an input that offers, instead, a role it is declared within, and holds
+the output to that role's policy on the input (delay, mask, row scope, as for the role itself). No
+chain is followed, a role within none is comparable only to itself (`public_reader`), and an input
+offering no role still blocks every role. Why: `silver_trade` of `kraken-trades` offers
+`delayed_reader` (plan 004) over `security-master`, reference data with no event time to delay,
+which offers `full_reader` alone (ADR-056 part 8: an enriched product is never less restricted
+than its inputs).
+
+## Per-product alerts, 2026-11-28 (phases 004 and 005, step I-5)
+
+Additive: one compiled file, one rule glob. Built by W1-17 in `platform/k2gen/k2gen/emit/alerts.py`.
+
+- **The file.** `compiled/prometheus/product-alerts.yml`, from the model alone: one group
+  `product:<product id>` per product with a schedule, none for a product without one. Prometheus
+  reads it through its pointer, `/k2/releases/pointers/prometheus/compiled/prometheus/*.yml`
+  (`docker/prometheus/prometheus.yml` `rule_files`, between the run code's rules and the
+  pre-phase-002 glob), reread on the SIGHUP deploy sends at each swap; `need_of` gives it nothing.
+- **The rules,** each labelled `product`, `dag_id`, `domain` and `severity`, annotated with a
+  summary, a description and `runbook: docs/runbooks/airflow-scheduling.md`:
+  `ProductRunFailed_<dag>`, a run of the DAG ended failed in the last 15 minutes (a pulse, as
+  `AirflowTaskFailed`); `ProductStale_<dag>`, no successful run within the stale window, for 2
+  minutes; `ProductRunSlow_<dag>`, the runs that succeeded within the last schedule interval took on
+  average more than 80% of `timeoutMinutes` (of the interval when the schedule has no timeout),
+  always `warning`. Severity of the other two: `critical` when one of the product's tables is
+  `gold` or `mart` (what readers query), else `warning`.
+- **The interval** is the largest gap between two firings of the cron over a week: `*/5` gives 5,
+  hourly 60, daily 1440, `30 15 * * 1-5` 4320 (Friday to Monday). A cron with a day-of-month or
+  month field is refused at compile. The stale window is three intervals, and never less than
+  one interval plus `timeoutMinutes`.
+- **What Prometheus reads,** Airflow's statsd through the airflow-statsd exporter, the only per-DAG
+  series today: `airflow_dagrun_duration_{success,failed}_{sum,count}`, Airflow's run-end timer,
+  labels `dag_id` and `run_type` (`dag_id` alone on a run failed by its `dagrun_timeout`), in
+  seconds (ADR-034 measured its quantiles live; `docker/grafana/dashboards/k2-airflow.json` reads
+  `_sum` and `_count`); and `airflow_ti_running{dag_id,task_id,queue}`, the scheduler's gauge of
+  running tries, the one name `docker/airflow/statsd-mapping.yml` maps. Each rule also reads a
+  series new within its window, as `airflow-alerts.yml` does; a series absent for the stale window
+  is stale (a DAG still paused since its creation, or no success since the exporter started).
+- **Freshness skips a product while it maintains** two ways. `maintain`, and `compact` after it in
+  a Kafka product's DAG, run inside the product's own run, which `dagrun_timeout` bounds: a stale
+  window of at least one interval plus the timeout outlasts any pass that does not fail the run.
+  And `ProductStale` is muted while `airflow_ti_running{task_id=~"maintain|compact"} > 0`, which also
+  covers a product with no timeout; its 2-minute `for` spans the end of the pass to the success.
+- **Not alertable from Prometheus today, so not built:** a product's `degraded` and `partial:
+  <inputs>` states and an audit's unresolved rows (plan 004: "unresolved rows = 0 alerts, marks the
+  page degraded"). They live in the run records (`k2runs.state`), which the catalog page reads as
+  `svc.catalog`; no Prometheus series carries them. The cheapest honest path, a later step: the
+  `record` task, which runs on every outcome and already holds the run's state, sends one statsd
+  gauge per product and state through the same exporter (a mapping with a ttl), and this emitter
+  adds a rule on it. Plan 004's alert for a degraded product stays an open item of the phase's
+  exit mapping, and so do the per-product dashboards.
+- **Ceilings.** A held product's runs fail at `resolve`, so its `ProductRunFailed` fires at each
+  run while held (silence it in Alertmanager). After an exporter restart, `increase()` near zero
+  can read the slow mean low, never high. One N for every product: a weekly one is stale after
+  three weeks.
+- **Deploy.** `prometheus.yml` is a file bind mount from the checkout, and deploy recreates only
+  the services whose compose definition or image differs (`release.changed_services`), so the
+  release that brings this glob needs `docker compose up -d --force-recreate --no-deps prometheus`
+  once by hand; a SIGHUP rereads the file the container started with.
+- **Proof** (a container job): `platform/k2gen/tests/promtool/product-alerts_test.yml`, for
+  `kraken_trades`, runs beside a scratch release's compiled file with `promtool check rules` and
+  `promtool test rules` (the commands are in its header).
+
+## The access review's fixes, 2026-11-28 (phases 004 and 005)
+
+2026-11-28, what an output derives from (finding A1): the inputs every `access.inherit-*` rule runs
+over are the output port's `inputContracts`, as before, plus every `k2_input` target its model
+reads, a sibling's through the product's own `ref()` chain included
+(`k2gen.checks.sql.model_reads`). A model expression the lint cannot name (a variable, a macro,
+`api.Relation.create`, a `k2_input` with arguments that are not literals) stands for every input
+port of the product, all that Trino lets its builder read. An input read and not declared for that
+output is `access.input-undeclared`, on the product file, naming the model, the input and the
+chain; one declared and never read stays no finding.
+
+2026-11-28, a Kafka topic's one reader (finding A2): a domain in `contracts/domains.yaml` may list
+the Kafka `topics` its capture writes (additive, `k2-v2.schema.json#/$defs/domains`);
+`market-capture` lists the nine `market.crypto.v3.{raw,trades,book}.<venue>` topics
+`docker/redpanda/init.sh` creates. A kafka product's topic must be one its own domain lists
+(`connectors.topic-not-owned`), a topic is read by one product of the set and listed by one domain
+(`connectors.topic-claimed-twice`, naming both). Nothing already declared could carry it: the
+envelope contract is the reading product's own bronze, and the compose file names no domain. The
+declaration sits in the file the platform team owns (`.github/CODEOWNERS`), not in a product's
+directory. Redpanda has no ACLs and every load shares the Spark key and network, so this is a
+compile-time rule; what stops a product the documents do not describe is the review of its
+contract.
+
+2026-11-28, terms upstream (finding A3): `docs.terms-missing` now holds a grant outside the owning
+team to terms on the product and on every product upstream of it through input ports, directly or
+through others, since a derived product passes its inputs' data on. An upstream product is exempt
+only when everything it holds was written on the platform: no connector, no input port, every table
+built by dbt (from seeds the schema records synthetic, or SQL alone). The calendars product is one,
+so `ecb-fx-rates`'s grant passes over it; the exemption on the product itself is unchanged (a grant
+within the owning team needs no terms). No phase 004 product grants anyone yet; a grant on
+`candles` outside its team would be refused until `canonical-trades`, `kraken-trades`,
+`security-master`, `kraken-instruments`, `currency-master` and `candles` record terms.
+
+2026-11-28, the role order checked (finding A6): each `within` entry of
+`contracts/access/roles.yaml` names a declared role, never the role itself, with no cycle, and
+`public_reader` is within none (`access.role-within-invalid`). The forbidden direction is the one
+that leaks: `public_reader` within `full_reader` would let an output offer data to holders who may
+take it off the platform over an input that offered it only inside. An internal role within
+`public_reader` is allowed: the output is held to that role's policy on the public input, and
+nothing leaves.
+
+2026-11-28, principal kind `partner` (owner's decision): `contracts/access/principals.yaml` may
+declare `kind: partner` (additive, `k2-v2.schema.json#/$defs/principals`, `model.PrincipalKind`),
+another organisation's service under a `svc.` id, whose credential the platform never holds.
+`svc.partner-dashboard` is one, its id kept. A partner's id matches none of the platform's patterns
+(`access.principal-collides`; `emit/trino_rules.py` refuses it too), so it holds only the reader
+roles its grants give; a grant to it is outside every team, so `docs.terms-missing` applies, upstream
+included; the live access suite skips its rows by kind (`access_verify.partners`), so deploy's
+preflight asks no password file for it; `make password TO_FILE=1` refuses it. The compiled rules and
+groups do not change: a partner is a reader by its grants, as a person is.
+
+2026-11-28, the terms' value read: `docs.terms-forbid-redistribution` refuses a grant to a partner
+when the product's terms, or those of any product upstream of it through input ports, say
+`redistribution: forbidden`; a recorded `forbidden` holds on an upstream product the terms rule
+exempts too. A partner passes the data on to another organisation, which `forbidden` excludes
+(`k2-v2.schema.json`, `terms.redistribution`: "whether the data may be passed on beyond the
+platform's readers"). A grant to another team of the organisation keeps the data among the
+platform's readers, so `forbidden` does not refuse it; the owner may decide otherwise. No product of
+the repository records `forbidden`, so the compiled rules and groups do not change.
+
+## Point in time, 2026-11-28 (phases 004 and 005, step I-6)
+
+Frozen as the owner decided on 2026-11-28, before phase 005 builds; step W3-1 built the macro in
+[`dbt/macros/k2_as_of.sql`](../../dbt/macros/k2_as_of.sql), whose header is the contract.
+
+- **The signature.** `k2_as_of(fact_time, target_alias, mode)` renders a join predicate and nothing
+  else, over an alias the model has already bound: the model reads the history with `k2_input`
+  and aliases it, so the history is pinned at its tested snapshot and the macro reads no relation.
+  The arguments are string literals: `fact_time` a column, `<alias>.<column>` or `<column>`,
+  unquoted (a time computed from others is a column of a CTE first); `target_alias` an unquoted
+  identifier; `mode` `'valid'` or `'known'`. Anything else is a compiler error at parse, and
+  `sql.as-of` in `k2gen check`.
+- **History** is half-open, `[valid_from, valid_to)` (ADR-030): the open row's `valid_to` is
+  `9999-12-31 23:59:59 UTC`, a first version opens at `1970-01-01 00:00:00 UTC`, and neither is
+  ever null. Exactly one version holds at any instant, and a fact exactly on `valid_from` picks
+  the new version.
+- **`mode='valid'`** renders `(<alias>.valid_from <= <fact_time> and <fact_time> < <alias>.valid_to)`:
+  the version true at the fact's time, as the history now states it.
+- **`mode='known'`** renders `(<alias>.recorded_at <= <fact_time> and <fact_time> < <alias>.known_to)`:
+  the newest version known at the fact's time, so nothing recorded later is looked ahead to.
+  `[recorded_at, known_to)` is each version's interval in knowledge time. `known_to` is no
+  contract's column: `k2_known_to(keys)`, the second macro of the same file, renders it as
+  `coalesce(lead(recorded_at) over (partition by <keys> order by recorded_at, valid_from), timestamp '9999-12-31 23:59:59 UTC')`,
+  selected beside the history's columns in a CTE that the alias then names; `keys` is the
+  history's key without `valid_from`. Two versions recorded the same instant are ordered by
+  `valid_from`, so the earlier one's interval is empty and the later one is known. An alias without
+  `known_to` fails the build at Trino; the predicate never matches two versions of one key.
+- **Rejected for `known`**, each in a way the chosen form is not: the predicate
+  `recorded_at <= fact_time` with a newest-per-key window after the join (each fact joins every row
+  known before it, every earlier fixing of its currency on a daily table, and a model that forgets
+  the window fans out into duplicate rows with no error); a correlated `NOT EXISTS` for a newer
+  known row (the relation and the key columns as two more arguments, the history read twice, and a
+  correlated subquery with an inequality whose plan on Trino nobody here has measured); a stored
+  `known_to` in each history contract (a schema change of every history product for what one
+  window computes). The chosen form keeps the three arguments, computes one window over the small
+  history, and joins it by range on the key.
+- **A daily fixing read as a history** (step W3-6): `ecb-fx-rates.gold_eur_rates_daily` has no
+  `valid_from`, so `candles-eur` maps it in a CTE, `valid_from` the start of `rate_date` in UTC,
+  `valid_to` the next `rate_date`'s, `recorded_at` its `rate_available_at`; the pattern is
+  [`dbt/tests/k2_as_of/models/rate_as_of.sql`](../../dbt/tests/k2_as_of/models/rate_as_of.sql). A
+  10:00 UTC candle then gets that day's fixing by valid time and the previous day's by knowledge
+  time, since the day's is published at 16:00 Frankfurt time.
+- **The lint.** `checks/sql.py` folds a `k2_as_of` or `k2_known_to` with valid arguments as
+  rendering no relation, so `sql.model_reads` does not count it opaque and `checks.access` does not
+  widen the model's reads to every input port. It refuses (`sql.as-of`) bad arguments, an alias the
+  model's SQL binds nowhere (after FROM, JOIN or a comma, as a CTE name or a subquery's alias), and
+  an alias bound straight to a `k2_input` whose contract lacks `valid_from` and `valid_to` (mode
+  valid) or at all (mode known). An alias bound to a CTE, a subquery or the product's own table is
+  accepted: the lint does not follow a CTE's columns, and Trino refuses a missing one at build.
+  Following them would need the lint to resolve each CTE's select list, which it does not parse.
+- **The cases.** [`dbt/tests/k2_as_of/`](../../dbt/tests/k2_as_of/) is a project of its own beside
+  `k2_input`'s, with symlinks to both macros. `scripts/dbt-test.sh` step 4 compiles it with no
+  warehouse and compares each mode's predicate and the window line by line, then makes each bad
+  argument fail at parse. Its unit tests, on invented rows, hold every boundary: exactly on
+  `valid_from` the new version, the instant before the old, a fact before the first fetch in the
+  `1970-01-01` version and known to nobody, the open row to `9999-12-31 23:59:59` and nothing at
+  that instant itself, two versions recorded the same instant, and the 10:00 UTC candle whose valid
+  and known rates differ. They run where a warehouse listens.
+- **Relationships** (step W3-2's check, the section below): a relationship's target is a declared input port
+  of the referring product, its table's contract among the product's `inputPorts`, so every
+  relationship test runs through `k2_input` and a reference the build never reads is refused; a
+  target table with `valid_from` requires `asOf`, `valid` or `known`, the mode the model's
+  `k2_as_of` uses for it, and `asOfColumn`, the column its `fact_time` names (the section below).
+- **Inheritance** (step W3-3's check, the section below), as plan 005 states it: no output policy is weaker
+  than an input's; a `delay` column is never earlier than the input's, a masked input column stays
+  masked or is dropped, a registered transform is as strict as any input's.
+- **An optional input that is absent.** On `candles-eur` only the `ecb-fx-rates` port declares
+  `whenAbsent: empty`, so a paused ECB gives `rate_missing` rows and a `partial` product; its other
+  input ports keep the default, `fail`.
+
+## Relationships and inheritance, 2026-11-28 (phases 004 and 005, steps W3-2 and W3-3)
+
+2026-11-28, a relationship's rules (owner's decisions): a column's `relationships` entry is valid
+only when its target product is in the set (`docs.reference-unresolved`) and not retired
+(`docs.relationship-retired`), the target table and column exist
+(`docs.relationship-column-unknown`), both columns have one physical type
+(`docs.relationship-type-mismatch`), and the target table is an input port of the referring
+product, whatever its build (`docs.foreign-key-not-read`; before, a dbt table only, and its own
+tables passed too): the key's test then runs in the product's own build through `k2_input` at the
+tested snapshot, and the `access.inherit-*` rules run over the target. A target that keeps history
+(a `valid_from` column, ADR-030) needs the relationship's point in time, two custom properties
+(additive, `k2-v2.schema.json#/$defs/relationshipProperty`): `asOf`, `valid` or `known`, and
+`asOfColumn`, the referring table's column the join is as of
+(`docs.relationship-as-of-missing` without either). That column is a
+`timestamp(6) with time zone`, `valid_from`'s type, since any other compares in a time zone the
+reader sets (`docs.relationship-as-of-column`). A target without history takes neither
+(`docs.relationship-as-of-unexpected`). The form, on `candles-eur`'s `instrument_id`:
+
+```yaml
+relationships:
+  - type: foreignKey
+    to: reference-data/security-master/instrument.odcs.yaml#/schema/instrument/properties/instrument_id
+    customProperties:
+      - {property: asOf, value: valid}
+      - {property: asOfColumn, value: window_end}
+```
+
+The compiled catalog document carries each key as a column's `references` and the product's
+`joinKeys`, with `asOf`; `asOfColumn` is not in it yet (`catalog-product.schema.json`).
+
+2026-11-28, inheritance over an enriched product (W3-3): the `access.inherit-*` rules are
+unchanged. `platform/k2gen/tests/fixtures/v2/enriched/` is plan 005's exit fixture, a product over
+three domains shaped as `candles-eur`, laid over the repository's documents: `k2gen check` passes
+it, fails it with `access.inherit-delay` when its `delayed_reader` delay is 10 minutes over
+candles' 20, and with `access.inherit-role` when it also reads `security-master.asset`, which
+offers no role (`tests/test_checks_access.py`, `test_the_enriched_fixture_*`).

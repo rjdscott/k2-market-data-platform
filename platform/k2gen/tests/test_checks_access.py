@@ -8,7 +8,7 @@ from typing import Any
 import pytest
 import yaml
 
-from k2gen import model
+from k2gen import checks, model
 from k2gen.checks import access
 
 FIXTURES = Path(__file__).parent / "fixtures" / "v2"
@@ -18,7 +18,7 @@ CODES = {"principal-duplicate", "principal-collides", "role-undeclared", "policy
          "role-requirement-unmet", "grant-unknown-principal", "grant-unknown-role", "grant-role-not-offered", "grant-two-roles",
          "grant-to-platform", "inherit-role", "inherit-delay", "inherit-mask", "inherit-row-scope", "inherit-undeclared",
          "expectation-missing", "expectation-weak", "expectation-unknown-principal", "delay-type", "row-scope-unpartitioned",
-         "connector-role"}
+         "connector-role", "input-undeclared", "role-within-invalid"}
 SILVER = "contracts/sensor-net/station-readings/silver_readings.odcs.yaml"
 GOLD = "contracts/ops-insight/daily-load/gold_daily_load.odcs.yaml"
 
@@ -47,10 +47,13 @@ def change(doc: Any, step: dict[str, Any]) -> None:
         del node[key]
 
 
-def changed(steps: list[dict[str, Any]]) -> dict[str, bytes]:
-    documents = good()
+def changed(steps: list[dict[str, Any]], documents: dict[str, bytes] | None = None) -> dict[str, bytes]:
+    documents = good() if documents is None else dict(documents)
     parsed: dict[str, Any] = {}
     for step in steps:
+        if "text" in step:  # a model's SQL, written whole
+            documents[step["file"]] = step["text"].encode()
+            continue
         doc = parsed.setdefault(step["file"], model.parse(step["file"], documents[step["file"]]))
         change(doc, step)
     for path, doc in parsed.items():
@@ -142,6 +145,22 @@ def test_a_masked_input_column_may_reach_the_output_masked() -> None:
     assert codes(changed(steps)) == set()
 
 
+def test_an_output_may_offer_a_role_within_one_its_input_offers() -> None:
+    """roles.yaml declares delayed_reader within full_reader: an output may offer it over an input
+    offering full_reader alone with no policy (reference data, with no event time to delay), its
+    delay on a column of its own. Without the declaration the same documents fail: the order is
+    read, never inferred. The other way, and over an input offering nothing, cases.yaml fails."""
+    full_only = [{"file": SILVER, "remove": "roles/1"}, {"file": SILVER, "remove": "customProperties/6"},
+                 {"file": "contracts/sensor-net/station-readings/grants.yaml", "set": "grants/1/role", "value": "full_reader"},
+                 {"file": GOLD, "append": "roles", "value": {"role": "delayed_reader", "access": "read"}},
+                 {"file": GOLD, "append": "customProperties", "value": {"property": "policies", "value": {
+                     "delayed_reader": {"delay": {"column": "load_date", "minutes": 20}}}}},
+                 {"file": GOLD, "set": "schema/0/properties/0/physicalType", "value": "timestamp(6) with time zone"}]
+    assert codes(changed(full_only)) == set()
+    undeclared = [*full_only, {"file": "contracts/access/roles.yaml", "remove": "roles/delayed_reader/within"}]
+    assert codes(changed(undeclared)) == {"access.inherit-role"}
+
+
 def test_inputs_are_every_input_port_when_the_output_port_lists_none() -> None:
     # without inputContracts the gold table still derives from silver, through the input port
     steps = [{"file": "contracts/ops-insight/daily-load/product.odps.yaml", "remove": "outputPorts/0/inputContracts"},
@@ -172,3 +191,154 @@ def test_a_sibling_in_input_contracts_is_followed_to_what_it_derives_from() -> N
     assert access._inputs(product, {"id": "d.p.gold"}) == ["d.other.x"]
     doc["outputPorts"][0] = port("d.p.silver", "d.p.gold")  # a cycle of siblings ends, deriving from nothing
     assert access._inputs(product, {"id": "d.p.gold"}) == []
+
+
+DAILY = "contracts/ops-insight/daily-load/product.odps.yaml"
+GOLD_SQL = "contracts/ops-insight/daily-load/models/gold_daily_load.sql"
+BRONZE_PORT = {"file": DAILY, "append": "inputPorts",
+               "value": {"name": "bronze_readings", "version": "1.0.0", "contractId": "sensor-net.station-readings.bronze_readings"}}
+
+
+def _gold(where: str) -> dict[str, str]:
+    return {"file": GOLD_SQL, "text": "{{ config(materialized='table') }}\nselect cast(read_at as date) as load_date, station_id, "
+            "count(*) as readings, cast(avg(value) as decimal(12, 3)) as mean_value\nfrom {{ k2_input('station_readings', "
+            f"'silver_readings') }}}}\nwhere {where}\ngroup by 1, 2\n"}
+
+
+def test_a_model_reading_an_input_its_port_omits_is_refused_and_held_to_it() -> None:
+    """A1 of the 2026-11-28 review, its exploit: gold's port lists silver alone, and its model reads
+    bronze, an input port of its product offering no role, through k2_input. Read from the port's
+    list, every inherit-* rule skipped bronze; now it is refused, and full_reader meets bronze's
+    floor. Declared as a port and never read, bronze is no finding."""
+    assert codes(changed([BRONZE_PORT])) == set()
+    exploit = [BRONZE_PORT, _gold("station_id in (select station_id from {{ k2_input('station_readings', 'bronze_readings') }})")]
+    found = access.check(docset(changed(exploit)), None)
+    assert {f.code for f in found} == {"access.input-undeclared", "access.inherit-role"}, [f.message for f in found]
+    (undeclared,) = [f for f in found if f.code == "access.input-undeclared"]
+    assert undeclared.path == DAILY
+    assert "models/gold_daily_load.sql: k2_input('station_readings', 'bronze_readings')" in undeclared.message
+
+
+def test_an_expression_k2gen_cannot_read_stands_for_every_input_port() -> None:
+    for hidden in ("{% set f = k2_input %}station_id in (select station_id from {{ f('station_readings', 'bronze_readings') }})",
+                   "station_id in (select station_id from {{ k2_input('station_' ~ 'readings', 'bronze_readings') }})",
+                   "station_id in (select station_id from {{ api.Relation.create(schema='station_readings__base') }})"):
+        found = access.check(docset(changed([BRONZE_PORT, _gold(hidden)])), None)
+        assert {f.code for f in found} == {"access.input-undeclared", "access.inherit-role"}, hidden
+        assert any("which k2gen cannot read" in f.message for f in found), hidden
+
+
+CURRENCY = "contracts/reference-data/currency-master/currency.odcs.yaml"
+ASSET = "contracts/reference-data/security-master/asset.odcs.yaml"
+
+
+def _no_currency_role() -> dict[str, bytes]:
+    """The repository's documents as they were before the owner's decision of 2026-11-28, currency
+    and asset offering no role: currency is the security master's one input port that could."""
+    from test_repository_documents import repository_set
+
+    assert access.check(repository_set(), None) == []
+    return changed([{"file": CURRENCY, "remove": "roles"}, {"file": ASSET, "remove": "roles"}], repository_set().documents)
+
+
+def test_the_reviewers_exploit_on_the_security_master_is_refused() -> None:
+    """instrument offers full_reader; currency, offering no role here, is an input port of the
+    product, not of instrument's output port. Read through k2_input, k2gen check passed it before
+    the fix."""
+    path = "contracts/reference-data/security-master/models/instrument.sql"
+    repo = _no_currency_role()
+    assert access.check(docset(dict(repo)), None) == []
+    sql = repo[path].decode().replace("  where held_reason is null\n", "  where held_reason is null\n    and base_asset in "
+                                      "(select code from {{ k2_input('currency_master', 'currency') }})\n", 1)
+    found = access.check(docset({**repo, path: sql.encode()}), None)
+    assert sorted(f.code for f in found) == ["access.inherit-role", "access.input-undeclared"], [f.message for f in found]
+    assert all(f.message.startswith("reference-data.security-master.instrument") for f in found)
+
+
+def test_a_sibling_reached_by_ref_passes_its_reads_on() -> None:
+    """The same read in venue_symbol_claim reaches every model that refs it: each is refused, and
+    the two offering full_reader meet currency's floor; asset declares currency, so it passes."""
+    path = "contracts/reference-data/security-master/models/venue_symbol_claim.sql"
+    repo = _no_currency_role()
+    sql = repo[path].decode().replace("  from {{ ref('security_master__code_exceptions') }}\n", "  from {{ ref("
+                                      "'security_master__code_exceptions') }}\n  union all\n  select 'kraken', upper(code), "
+                                      "upper(code) from {{ k2_input('currency_master', 'currency') }}\n", 1)
+    found = access.check(docset({**repo, path: sql.encode()}), None)
+    ids = "reference-data.security-master."
+    assert sorted((f.code, f.message.split("'s model")[0].split(" offers")[0]) for f in found) == [
+        ("access.inherit-role", ids + "instrument"), ("access.inherit-role", ids + "venue_symbol"),
+        *(("access.input-undeclared", ids + t) for t in ("instrument", "venue_symbol", "venue_symbol_claim", "venue_symbol_held"))]
+    (chain,) = [f.message for f in found if f.code == "access.input-undeclared" and f.message.startswith(ids + "instrument")]
+    assert ("models/instrument.sql: ref('security_master__venue_symbol_claim') -> models/venue_symbol_claim.sql: "
+            "k2_input('currency_master', 'currency')") in chain
+
+
+def test_public_reader_within_full_reader_would_offer_internal_data_publicly() -> None:
+    """Why A6 forbids the one direction: declared, gold could offer public_reader over silver,
+    which offers no public_reader, and only the order check stops it; the other direction, an
+    internal role within public_reader, is no finding."""
+    steps = [{"file": "contracts/access/roles.yaml", "set": "roles/public_reader/within", "value": ["full_reader"]},
+             {"file": GOLD, "append": "roles", "value": {"role": "public_reader", "access": "read"}}]
+    assert codes(changed(steps)) == {"access.role-within-invalid"}
+    assert codes(changed(steps[1:])) == {"access.inherit-role"}
+    assert codes(changed([{"file": "contracts/access/roles.yaml", "set": "roles/full_reader/within", "value": ["public_reader"]}])) == set()
+
+
+ENRICHED = FIXTURES / "enriched"
+EUR = "contracts/market-analytics/enriched-candles/ohlcv_1d_eur.odcs.yaml"
+EUR_PRODUCT = "contracts/market-analytics/enriched-candles/product.odps.yaml"
+
+
+def enriched(*steps: dict[str, Any]) -> list[model.Finding]:
+    """Every check (`k2gen check`) over the repository's documents with fixtures/v2/enriched laid
+    over them, its coverage rows appended, then `steps`."""
+    from test_repository_documents import repository_set
+
+    documents = dict(repository_set().documents)
+    documents |= {p.relative_to(ENRICHED).as_posix(): p.read_bytes() for p in ENRICHED.rglob("*") if p.is_file()}
+    rows = [{"file": model.EXPECTATIONS, "append": "expectations",
+             "value": {"principal": "p.canary-full", "table": table, "denied": True}}
+            for table in ("market_analytics.enriched_candles.ohlcv_1d_eur", "market_analytics.enriched_candles__base.ohlcv_1d_eur")]
+    return checks.run(docset(changed([*rows, *steps], documents)), None)
+
+
+def test_the_enriched_fixture_over_three_domains_passes_every_check() -> None:
+    """Plan 005's shape: candles (delayed_reader 20 minutes on window_end), the security master's
+    type-2 instrument joined as of window_end and the ECB rates, both full_reader only, which
+    delayed_reader is within. The output delays delayed_reader 20 minutes on its window_end."""
+    assert enriched() == []
+
+
+def test_the_enriched_fixture_delayed_10_minutes_over_candles_20_fails() -> None:
+    """Plan 005's exit: an output policy weaker than its input's fails `k2gen check`."""
+    (finding,) = enriched({"file": EUR, "set": "customProperties/3/value/delayed_reader/delay/minutes", "value": 10})
+    assert finding.code == "access.inherit-delay" and finding.path == EUR
+    assert "market-analytics.candles.ohlcv_1d delays delayed_reader by 20 minutes" in finding.message
+    assert "has 10 minutes" in finding.message
+
+
+def test_the_enriched_fixture_over_an_input_offering_no_role_fails() -> None:
+    """Plan 005's exit, the role: with the security master's asset offering no role (it offers
+    full_reader since 2026-11-28), nothing stands in for it, so an output reading it offers neither
+    full_reader nor delayed_reader."""
+    asset = "reference-data.security-master.asset"
+    found = enriched(
+        {"file": ASSET, "remove": "roles"},
+        {"file": EUR_PRODUCT, "append": "inputPorts", "value": {"name": "asset", "version": "1.0.0", "contractId": asset,
+                                                                "customProperties": [{"property": "required", "value": True},
+                                                                                     {"property": "maxLagMinutes", "value": None}]}},
+        {"file": EUR_PRODUCT, "append": "outputPorts/0/inputContracts", "value": {"id": asset, "version": "1.0.0"}})
+    assert sorted((f.code, f.message.split(" offers ")[1].split(",")[0]) for f in found) == [
+        ("access.inherit-role", "delayed_reader"), ("access.inherit-role", "full_reader")], [f.message for f in found]
+    assert all(f"its input {asset} offers neither" in f.message for f in found)
+
+
+def test_the_enriched_fixture_joins_the_type_2_instrument_only_as_of_a_time() -> None:
+    """The docs rules on the repository's own reference data: instrument keeps history, so its
+    key states its point in time; the ECB table keeps none, so its key states none."""
+    (missing,) = enriched({"file": EUR, "remove": "schema/0/properties/1/relationships/0/customProperties"})
+    assert missing.code == "docs.relationship-as-of-missing"
+    assert "reference-data.security-master.instrument.instrument_id" in missing.message
+    (unexpected,) = enriched({"file": EUR, "set": "schema/0/properties/4/relationships/0/customProperties",
+                              "value": [{"property": "asOf", "value": "known"}, {"property": "asOfColumn", "value": "window_end"}]})
+    assert unexpected.code == "docs.relationship-as-of-unexpected"

@@ -286,9 +286,11 @@ loads it, so every load can be re-run and audited from the same bytes. For the R
 that role was played by `raw.messages` until the old ingest retired. In the target each product
 owns its landing: a file or API response lands at
 `k2-landing/<domain>/<product>/<YYYY-MM-DD>/<sha256>.<ext>` by a [conditional write](#conditional-write),
-with a row in the product's `landing_files` table, and a topic product lands the records it keeps
-in its own landing table. The P4 plan's versioned, locked bucket was tested and does not stop an
-overwrite, so the conditional write is the guarantee. Decided, not built yet.
+with a row in the product's `landing_files` table, and a topic product lands every record of the
+offset range it read in its own landing table ([Kafka landing](#kafka-landing-through-offset-and-accepted-loss)).
+The P4 plan's versioned, locked bucket was tested and does not stop an overwrite, so the conditional
+write is the guarantee. The file kind runs since phase 002; the topic kind is built on the phase 004
+branch and not yet deployed.
 Where: [ADR-036](ADR-036-connectors-land-verbatim-then-publish-bronze-after-audit.md) part 4.
 
 ### Conditional write
@@ -1076,6 +1078,19 @@ File and API kinds run in a one-shot fetch container whose download is limited t
 declared hosts.
 Where: [ADR-056](ADR-056-unified-data-product-platform.md) part 3,
 [ADR-036](ADR-036-connectors-land-verbatim-then-publish-bronze-after-audit.md).
+
+### Kafka landing, through-offset and accepted loss
+
+A Kafka product's **landing** is its own Iceberg table, `lake.<fence>.landing`, holding every record of
+each offset range it read from its topic, trade and control frames alike, byte for byte, with the end
+offsets in the same commit's summary (`k2.kafka-offsets`). Bronze is staged from it, never from the
+topic: per partition, every landing row after bronze's **through-offset**, the landing end offset bronze
+has staged up to, which bronze's own commits record. The filter (keep `stream = trade`) runs there, so
+the landing stays an unbroken run of offsets the checks can prove whole. An **accepted loss** is a range
+the broker deleted before it was read, given up by an operator's accept-data-loss run and recorded on
+every later landing commit (`k2.kafka-gaps`, cumulative) and as an `offset_gap` run record.
+Where: [ADR-063](ADR-063-kafka-product-landing-per-product-bronze-staged-by-offset.md) (Proposed);
+`docker/lake/kafka.py`. Built on the phase 004 branch, not yet deployed.
 
 ### Fetch container and host allow-list
 

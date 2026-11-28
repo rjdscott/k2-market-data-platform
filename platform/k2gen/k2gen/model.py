@@ -132,7 +132,7 @@ def ddl_path(engine: DdlEngine, warehouse: str, namespace: str, table: str) -> s
     by S15 and applied by deploy (S19) when `needs.ddl` names `<warehouse>.<namespace>.<table>`.
     spark: tables in warehouse k2 (landing_files, audit_checks, landing, bronze_*), whose
     Trino catalog is read-only; trino: platform tables, through `<domain>_build` (the run
-    records, copied from RUN_RECORD_SQL). dbt builds its own tables; views are VIEWS."""
+    records and the holds, each copied from its file in PLATFORM_SQL). dbt builds its own tables; views are VIEWS."""
     return f"compiled/lake/ddl/{engine}/{warehouse}.{namespace}.{table}.sql"
 
 
@@ -248,14 +248,36 @@ LINEAGE_COLUMN = "source_file_sha256"  # every fetch-kind bronze table's landed-
 AUDIT_BRANCH = "audit"  # bronze write-audit-publish branch (Spark)
 AUDITED_TAG = "audited"  # the tested-data marker on dbt and code outputs (ADR-061)
 BASE_SUFFIX = "__base"  # <fence>__base: the namespace a build writes into (ADR-061)
-SNAPSHOT_SUMMARY_KEYS = ("k2.run-id", "k2.release", "k2.batch-id", "k2.source-sha256")
+SNAPSHOT_SUMMARY_KEYS = ("k2.run-id", "k2.release", "k2.batch-id", "k2.source-sha256")  # a file connector's every commit, in connector.summary's order
+# A kafka connector's commits (I-1, 2026-11-28; docker/lake/kafka.py, which writes exactly these:
+# tests/test_frozen_interfaces.py reads its literals). Every one carries "every", k2.job being
+# KAFKA_JOB and k2.batch-id the run id; landing commits add "landing" (k2.kafka-offsets the end
+# offsets, exclusive; k2.kafka-gaps only when the run accepted a loss); bronze commits add "bronze"
+# (k2.kafka-offsets the landing offsets staged through, exclusive, trailing skipped records
+# included). A renamed key orphans every earlier snapshot as a resume point (ADR-022).
+KAFKA_JOB = "connector"
+KAFKA_SUMMARY_KEYS = {
+    "every": ("k2.job", "k2.run-id", "k2.release", "k2.batch-id"),
+    "landing": ("k2.kafka-offsets", "k2.kafka-starts", "k2.kafka-gaps"),
+    "bronze": ("k2.src-snapshot-id", "k2.kafka-offsets", "k2.kafka-skipped"),
+}
 DBT_PROJECT = "k2"  # the compiled dbt project's name (S17), so node ids are model.k2.<name>
 RUN_RECORD_SQL = REPO / "platform" / "runs" / "run_record.sql"  # S15 emits it as ddl_path("trino", ...)
+HOLDS_SQL = REPO / "platform" / "runs" / "holds.sql"  # I-7: the operator hold and the rebuild and restore locks
+# The platform's own Trino tables, each a frozen CREATE TABLE in one file, all in the run records'
+# namespace of the governance build catalog: emit/lake.py copies each byte for byte (S15) and
+# emit/trino_rules.py gives each three rules: svc.platform creates it; its one writer appends
+# (svc.runs the run record, HOLDS_WRITER the holds); its readers read it through the reader catalog.
+PLATFORM_SQL = (RUN_RECORD_SQL, HOLDS_SQL)
+# The holds' one writer (review A4): the operator's own login, used from the host alone (make hold,
+# make unhold, the rebuild and restore locks), its password file mounted into no container, so no
+# DAG, one-shot or dbt model, which hold svc.runs's, can end or forge a hold.
+HOLDS_WRITER = "svc.operator"
 
 # Principals matched by pattern in Trino's rules and resource groups (A8, ADR-061, the gate):
 # - pipeline principals run in resource group `pipeline` and alone may set STATISTICS_PROPERTY,
 #   by statement or by session header;
-# - build-catalog principals alone reach a <domain>_build catalog;
+# - build-catalog principals alone reach a <domain>_build catalog (HOLDS_WRITER only to INSERT into the holds);
 # - READER_CATALOG_ALL get catalog access `all` on every reader catalog, which Trino's
 #   definer-view owner check demands; the read-only connector still refuses them every write;
 # - READER_NAMESPACE_OWNERS alone hold a privilege in a dbt or code product's reader namespace,
@@ -264,7 +286,7 @@ RUN_RECORD_SQL = REPO / "platform" / "runs" / "run_record.sql"  # S15 emits it a
 # - REFS_READERS, and each product's publisher (SELECT and GRANT_SELECT on exactly `<t>$refs`, for
 #   its views' guard), alone read `t$refs`; svc.api reads it and no other metadata of a base.
 PIPELINE_PRINCIPALS = (r"dbt_.*", r"pub_.*", r"svc\.runs", r"svc\.platform", r"svc\.catalog")
-BUILD_CATALOG_PRINCIPALS = (r"dbt_.*", r"pub_.*", r"svc\.runs", r"svc\.platform")
+BUILD_CATALOG_PRINCIPALS = (r"dbt_.*", r"pub_.*", r"svc\.runs", r"svc\.platform", r"svc\.operator")
 READER_CATALOG_ALL = (r"pub_.*",)
 READER_NAMESPACE_OWNERS = (r"pub_.*",)
 STATISTICS_PROPERTY = "statistics_enabled"
@@ -302,8 +324,9 @@ TEMPLATE = r"^(?:[^{}]|\{\{ds\}\})*$"
 
 # A product's fence names lake namespaces; these are the old layer namespaces and the
 # platform's own (A5).
-# `run_records` holds the run-record table (platform/runs/run_record.sql): a product whose fence
-# took that namespace would own the platform's run history (review of S15, H1).
+# `run_records` holds the platform's tables (model.PLATFORM_SQL: the run record and the holds): a
+# product whose fence took that namespace would own the platform's run history and its holds
+# (review of S15, H1). A product or table named `holds` takes no platform namespace, so is free.
 RESERVED_PRODUCT_NAMES = frozenset({"raw", "bronze", "silver", "gold", "audit", "scratch", "dq", "runs", "run_records"})
 # A domain's fence is its reader catalog and warehouse, and <fence>_build its writer
 # catalog; its name is also a directory beside contracts/access/ and contracts/schema/. A Trino
@@ -697,7 +720,9 @@ Backup = Literal["restore", "rebuild"]
 TimeMeaning = Literal["event", "publication", "valid", "known"]
 AsOf = Literal["valid", "known"]
 ConnectorKind = Literal["kafka", "public-api", "https-file", "s3-file", "sftp", "ftp"]
-PrincipalKind = Literal["person", "service"]
+# partner: another organisation's service (svc.*): its credential is never the platform's, and it holds
+# only the reader roles grants give it (checks.access, access.principal-collides).
+PrincipalKind = Literal["person", "service", "partner"]
 PolicyKind = Literal["delay", "mask", "rowScope"]
 Severity = Literal["error", "warning"]
 Ref = Literal["main", "audited"]
@@ -765,6 +790,7 @@ class InputPort:
     contract_id: str
     required: bool  # the port's `required` property; true when absent
     max_lag_minutes: int | None
+    when_absent: Literal["fail", "empty", "emptyIntoTable"] = "fail"  # the port's `whenAbsent` property; k2_input reads it
 
 
 @dataclass(frozen=True)
@@ -996,6 +1022,7 @@ class Product:
     seeds: Mapping[str, bytes]  # path under seeds/ -> bytes, each declared by the `seeds` property
     support: tuple[Support, ...] = ()  # ODPS support
     links: tuple[Link, ...] = ()  # ODPS authoritativeDefinitions, the licence's included
+    refresh: Mapping[str, Any] | None = None  # the `refresh` property, {product, rules}: the product a build degraded by one of rules starts (W1-6, checks/refresh.py)
 
 
 @dataclass(frozen=True)
@@ -1367,7 +1394,8 @@ def _product(pdir: str, parsed: Mapping[str, Any], documents: Mapping[str, bytes
     inputs = []
     for i, port in enumerate(doc.get("inputPorts", ())):
         pp = _props(port.get("customProperties"), f"{path}#/inputPorts/{i}/customProperties", errors)
-        inputs.append(InputPort(port["name"], port["version"], port["contractId"], pp.get("required", True), pp.get("maxLagMinutes")))
+        inputs.append(InputPort(port["name"], port["version"], port["contractId"], pp.get("required", True), pp.get("maxLagMinutes"),
+                                pp.get("whenAbsent", "fail")))
     outputs = []
     for i, port in enumerate(doc["outputPorts"]):
         serves = _props(port.get("customProperties"), f"{path}#/outputPorts/{i}/customProperties", errors).get("serves")
@@ -1406,6 +1434,7 @@ def _product(pdir: str, parsed: Mapping[str, Any], documents: Mapping[str, bytes
                 for f, data in sorted(files.items()) if f.startswith("models/") and f.endswith(".sql")},
         unit_tests=unit_tests,
         seeds={s: files[f"seeds/{s}"] for s in sorted(declared & present)},
+        refresh=props.get("refresh"),
         support=tuple(Support(s["channel"], s["url"], s.get("tool"), s.get("scope"), s.get("description"))
                       for s in doc.get("support", ())),
         links=tuple(Link(d["type"], d["url"], d.get("description")) for d in doc.get("authoritativeDefinitions", ())))

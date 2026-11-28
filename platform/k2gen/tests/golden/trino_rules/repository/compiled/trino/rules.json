@@ -16,27 +16,37 @@
       "allow": "all"
     },
     {
-      "user": "dbt_access_canary|dbt_quality_results|pub_access_canary|pub_quality_results|svc\\.platform|svc\\.runs",
+      "user": "dbt_access_canary|dbt_quality_results|pub_access_canary|pub_quality_results|svc\\.operator|svc\\.platform|svc\\.runs",
       "catalog": "governance_build",
       "allow": "all"
     },
     {
-      "user": "svc\\.platform",
+      "user": "pub_candles|pub_canonical_trades",
+      "catalog": "market_analytics",
+      "allow": "all"
+    },
+    {
+      "user": "dbt_candles|dbt_canonical_trades|pub_candles|pub_canonical_trades|svc\\.platform",
       "catalog": "market_analytics_build",
       "allow": "all"
     },
     {
-      "user": "svc\\.platform",
+      "user": "pub_kraken_instruments|pub_kraken_trades",
+      "catalog": "market_capture",
+      "allow": "all"
+    },
+    {
+      "user": "dbt_kraken_instruments|dbt_kraken_trades|pub_kraken_instruments|pub_kraken_trades|svc\\.platform",
       "catalog": "market_capture_build",
       "allow": "all"
     },
     {
-      "user": "pub_calendars|pub_currency_master",
+      "user": "pub_calendars|pub_currency_master|pub_security_master",
       "catalog": "reference_data",
       "allow": "all"
     },
     {
-      "user": "dbt_calendars|dbt_currency_master|pub_calendars|pub_currency_master|svc\\.platform",
+      "user": "dbt_calendars|dbt_currency_master|dbt_security_master|pub_calendars|pub_currency_master|pub_security_master|svc\\.platform",
       "catalog": "reference_data_build",
       "allow": "all"
     },
@@ -46,32 +56,32 @@
       "allow": "read-only"
     },
     {
-      "user": "dbt_quality_results|svc\\.api|svc\\.catalog|svc\\.platform|svc\\.runs",
+      "user": "dbt_quality_results|svc\\.api|svc\\.catalog|svc\\.operator|svc\\.platform|svc\\.runs",
       "catalog": "governance",
       "allow": "read-only"
     },
     {
-      "user": "dbt_currency_master|dbt_ecb_fx_rates|svc\\.api|svc\\.catalog|svc\\.platform|svc\\.runs",
+      "user": "dbt_currency_master|dbt_ecb_fx_rates|dbt_kraken_instruments|dbt_kraken_trades|svc\\.api|svc\\.catalog|svc\\.platform|svc\\.runs",
       "catalog": "lake",
       "allow": "read-only"
     },
     {
-      "user": "svc\\.platform",
+      "user": "dbt_candles|dbt_quality_results|svc\\.api|svc\\.catalog|svc\\.platform|svc\\.runs",
       "catalog": "market_analytics",
       "allow": "read-only"
     },
     {
-      "user": "svc\\.platform",
+      "user": "dbt_canonical_trades|dbt_quality_results|dbt_security_master|svc\\.api|svc\\.catalog|svc\\.platform|svc\\.runs",
       "catalog": "market_capture",
       "allow": "read-only"
     },
     {
-      "user": "dbt_ecb_fx_rates|dbt_quality_results|svc\\.api|svc\\.catalog|svc\\.platform|svc\\.runs",
+      "user": "dbt_ecb_fx_rates|dbt_kraken_trades|dbt_quality_results|dbt_security_master|svc\\.api|svc\\.catalog|svc\\.platform|svc\\.runs",
       "catalog": "reference_data",
       "allow": "read-only"
     },
     {
-      "user": "dbt_access_canary|dbt_calendars|dbt_currency_master|dbt_ecb_fx_rates|dbt_quality_results|svc\\.platform",
+      "user": "dbt_access_canary|dbt_calendars|dbt_candles|dbt_canonical_trades|dbt_currency_master|dbt_ecb_fx_rates|dbt_kraken_instruments|dbt_kraken_trades|dbt_quality_results|dbt_security_master|svc\\.platform",
       "catalog": "system",
       "allow": "read-only"
     },
@@ -86,12 +96,22 @@
       "allow": "read-only"
     },
     {
-      "group": "calendars__full_reader",
+      "group": "candles__delayed_reader|candles__full_reader|canonical_trades__delayed_reader|canonical_trades__full_reader",
+      "catalog": "market_analytics",
+      "allow": "read-only"
+    },
+    {
+      "group": "kraken_instruments__full_reader|kraken_trades__delayed_reader|kraken_trades__full_reader",
+      "catalog": "market_capture",
+      "allow": "read-only"
+    },
+    {
+      "group": "calendars__full_reader|currency_master__full_reader|security_master__full_reader",
       "catalog": "reference_data",
       "allow": "read-only"
     },
     {
-      "group": "access_canary__delayed_reader|access_canary__full_reader|access_canary__public_reader|calendars__full_reader|ecb_fx_rates__full_reader",
+      "group": "access_canary__delayed_reader|access_canary__full_reader|access_canary__public_reader|calendars__full_reader|candles__delayed_reader|candles__full_reader|canonical_trades__delayed_reader|canonical_trades__full_reader|currency_master__full_reader|ecb_fx_rates__full_reader|kraken_instruments__full_reader|kraken_trades__delayed_reader|kraken_trades__full_reader|security_master__full_reader",
       "catalog": "system",
       "allow": "read-only"
     },
@@ -138,6 +158,54 @@
       "owner": true
     },
     {
+      "user": "dbt_candles",
+      "catalog": "market_analytics_build",
+      "schema": "candles__base",
+      "owner": true
+    },
+    {
+      "user": "pub_candles",
+      "catalog": "market_analytics_build",
+      "schema": "candles",
+      "owner": true
+    },
+    {
+      "user": "dbt_canonical_trades",
+      "catalog": "market_analytics_build",
+      "schema": "canonical_trades__base",
+      "owner": true
+    },
+    {
+      "user": "pub_canonical_trades",
+      "catalog": "market_analytics_build",
+      "schema": "canonical_trades",
+      "owner": true
+    },
+    {
+      "user": "dbt_kraken_instruments",
+      "catalog": "market_capture_build",
+      "schema": "kraken_instruments__base",
+      "owner": true
+    },
+    {
+      "user": "pub_kraken_instruments",
+      "catalog": "market_capture_build",
+      "schema": "kraken_instruments",
+      "owner": true
+    },
+    {
+      "user": "dbt_kraken_trades",
+      "catalog": "market_capture_build",
+      "schema": "kraken_trades__base",
+      "owner": true
+    },
+    {
+      "user": "pub_kraken_trades",
+      "catalog": "market_capture_build",
+      "schema": "kraken_trades",
+      "owner": true
+    },
+    {
       "user": "dbt_calendars",
       "catalog": "reference_data_build",
       "schema": "calendars__base",
@@ -159,6 +227,18 @@
       "user": "pub_currency_master",
       "catalog": "reference_data_build",
       "schema": "currency_master",
+      "owner": true
+    },
+    {
+      "user": "dbt_security_master",
+      "catalog": "reference_data_build",
+      "schema": "security_master__base",
+      "owner": true
+    },
+    {
+      "user": "pub_security_master",
+      "catalog": "reference_data_build",
+      "schema": "security_master",
       "owner": true
     },
     {
@@ -194,14 +274,30 @@
     },
     {
       "user": "svc\\.platform",
-      "catalog": "reference_data_build",
-      "schema": "calendars__base|currency_master__base",
+      "catalog": "market_analytics_build",
+      "schema": "candles__base|canonical_trades__base",
       "privileges": [
         "SELECT"
       ]
     },
     {
-      "user": "dbt_access_canary|dbt_calendars|dbt_currency_master|dbt_ecb_fx_rates|dbt_quality_results",
+      "user": "svc\\.platform",
+      "catalog": "market_capture_build",
+      "schema": "kraken_instruments__base|kraken_trades__base",
+      "privileges": [
+        "SELECT"
+      ]
+    },
+    {
+      "user": "svc\\.platform",
+      "catalog": "reference_data_build",
+      "schema": "calendars__base|currency_master__base|security_master__base",
+      "privileges": [
+        "SELECT"
+      ]
+    },
+    {
+      "user": "dbt_access_canary|dbt_calendars|dbt_candles|dbt_canonical_trades|dbt_currency_master|dbt_ecb_fx_rates|dbt_kraken_instruments|dbt_kraken_trades|dbt_quality_results|dbt_security_master",
       "catalog": "system",
       "schema": "metadata",
       "table": "analyze_properties|catalogs|column_properties|materialized_view_properties|materialized_views|schema_properties|table_comments|table_properties",
@@ -210,7 +306,7 @@
       ]
     },
     {
-      "group": "access_canary__delayed_reader|access_canary__full_reader|access_canary__public_reader|calendars__full_reader|ecb_fx_rates__full_reader",
+      "group": "access_canary__delayed_reader|access_canary__full_reader|access_canary__public_reader|calendars__full_reader|candles__delayed_reader|candles__full_reader|canonical_trades__delayed_reader|canonical_trades__full_reader|currency_master__full_reader|ecb_fx_rates__full_reader|kraken_instruments__full_reader|kraken_trades__delayed_reader|kraken_trades__full_reader|security_master__full_reader",
       "catalog": "system",
       "schema": "jdbc",
       "table": "attributes|catalogs|columns|procedure_columns|procedures|pseudo_columns|schemas|super_tables|super_types|table_types|tables|types|udts",
@@ -219,7 +315,7 @@
       ]
     },
     {
-      "group": "access_canary__delayed_reader|access_canary__full_reader|access_canary__public_reader|calendars__full_reader|ecb_fx_rates__full_reader",
+      "group": "access_canary__delayed_reader|access_canary__full_reader|access_canary__public_reader|calendars__full_reader|candles__delayed_reader|candles__full_reader|canonical_trades__delayed_reader|canonical_trades__full_reader|currency_master__full_reader|ecb_fx_rates__full_reader|kraken_instruments__full_reader|kraken_trades__delayed_reader|kraken_trades__full_reader|security_master__full_reader",
       "catalog": "system",
       "schema": "metadata",
       "table": "analyze_properties|catalogs|column_properties|materialized_view_properties|materialized_views|schema_properties|table_comments|table_properties",
@@ -350,6 +446,42 @@
     },
     {
       "user": "dbt_quality_results",
+      "catalog": "market_analytics",
+      "schema": "candles__base",
+      "table": "dq_test_results",
+      "privileges": [
+        "SELECT"
+      ]
+    },
+    {
+      "user": "dbt_quality_results",
+      "catalog": "market_analytics",
+      "schema": "canonical_trades__base",
+      "table": "dq_test_results",
+      "privileges": [
+        "SELECT"
+      ]
+    },
+    {
+      "user": "dbt_quality_results",
+      "catalog": "market_capture",
+      "schema": "kraken_instruments__base",
+      "table": "dq_test_results",
+      "privileges": [
+        "SELECT"
+      ]
+    },
+    {
+      "user": "dbt_quality_results",
+      "catalog": "market_capture",
+      "schema": "kraken_trades__base",
+      "table": "dq_test_results",
+      "privileges": [
+        "SELECT"
+      ]
+    },
+    {
+      "user": "dbt_quality_results",
       "catalog": "reference_data",
       "schema": "calendars__base",
       "table": "dq_test_results",
@@ -361,6 +493,15 @@
       "user": "dbt_quality_results",
       "catalog": "reference_data",
       "schema": "currency_master__base",
+      "table": "dq_test_results",
+      "privileges": [
+        "SELECT"
+      ]
+    },
+    {
+      "user": "dbt_quality_results",
+      "catalog": "reference_data",
+      "schema": "security_master__base",
       "table": "dq_test_results",
       "privileges": [
         "SELECT"
@@ -381,6 +522,179 @@
       "catalog": "governance",
       "schema": "quality_results__base",
       "table": "test_results|test_results\\$refs",
+      "privileges": [
+        "SELECT",
+        "GRANT_SELECT"
+      ]
+    },
+    {
+      "user": "dbt_candles",
+      "catalog": "market_analytics_build",
+      "schema": "candles__base",
+      "privileges": [
+        "SELECT",
+        "INSERT",
+        "DELETE",
+        "UPDATE",
+        "OWNERSHIP"
+      ]
+    },
+    {
+      "user": "dbt_candles",
+      "catalog": "market_analytics",
+      "schema": "canonical_trades__base",
+      "table": "trades",
+      "privileges": [
+        "SELECT"
+      ]
+    },
+    {
+      "user": "pub_candles",
+      "catalog": "market_analytics_build",
+      "schema": "candles",
+      "table": "ohlcv_1d|ohlcv_1h|ohlcv_1m|ohlcv_5m",
+      "privileges": [
+        "SELECT",
+        "OWNERSHIP"
+      ]
+    },
+    {
+      "user": "pub_candles",
+      "catalog": "market_analytics",
+      "schema": "candles__base",
+      "table": "ohlcv_1d|ohlcv_1d\\$refs|ohlcv_1h|ohlcv_1h\\$refs|ohlcv_1m|ohlcv_1m\\$refs|ohlcv_5m|ohlcv_5m\\$refs",
+      "privileges": [
+        "SELECT",
+        "GRANT_SELECT"
+      ]
+    },
+    {
+      "user": "dbt_canonical_trades",
+      "catalog": "market_analytics_build",
+      "schema": "canonical_trades__base",
+      "privileges": [
+        "SELECT",
+        "INSERT",
+        "DELETE",
+        "UPDATE",
+        "OWNERSHIP"
+      ]
+    },
+    {
+      "user": "dbt_canonical_trades",
+      "catalog": "market_capture",
+      "schema": "kraken_trades__base",
+      "table": "silver_trade",
+      "privileges": [
+        "SELECT"
+      ]
+    },
+    {
+      "user": "pub_canonical_trades",
+      "catalog": "market_analytics_build",
+      "schema": "canonical_trades",
+      "table": "trades",
+      "privileges": [
+        "SELECT",
+        "OWNERSHIP"
+      ]
+    },
+    {
+      "user": "pub_canonical_trades",
+      "catalog": "market_analytics",
+      "schema": "canonical_trades__base",
+      "table": "trades|trades\\$refs",
+      "privileges": [
+        "SELECT",
+        "GRANT_SELECT"
+      ]
+    },
+    {
+      "user": "dbt_kraken_instruments",
+      "catalog": "market_capture_build",
+      "schema": "kraken_instruments__base",
+      "privileges": [
+        "SELECT",
+        "INSERT",
+        "DELETE",
+        "UPDATE",
+        "OWNERSHIP"
+      ]
+    },
+    {
+      "user": "dbt_kraken_instruments",
+      "catalog": "lake",
+      "schema": "kraken_instruments",
+      "table": "bronze_pairs",
+      "privileges": [
+        "SELECT"
+      ]
+    },
+    {
+      "user": "pub_kraken_instruments",
+      "catalog": "market_capture_build",
+      "schema": "kraken_instruments",
+      "table": "silver_listing",
+      "privileges": [
+        "SELECT",
+        "OWNERSHIP"
+      ]
+    },
+    {
+      "user": "pub_kraken_instruments",
+      "catalog": "market_capture",
+      "schema": "kraken_instruments__base",
+      "table": "silver_listing|silver_listing\\$refs",
+      "privileges": [
+        "SELECT",
+        "GRANT_SELECT"
+      ]
+    },
+    {
+      "user": "dbt_kraken_trades",
+      "catalog": "market_capture_build",
+      "schema": "kraken_trades__base",
+      "privileges": [
+        "SELECT",
+        "INSERT",
+        "DELETE",
+        "UPDATE",
+        "OWNERSHIP"
+      ]
+    },
+    {
+      "user": "dbt_kraken_trades",
+      "catalog": "lake",
+      "schema": "kraken_trades",
+      "table": "bronze_trade",
+      "privileges": [
+        "SELECT"
+      ]
+    },
+    {
+      "user": "dbt_kraken_trades",
+      "catalog": "reference_data",
+      "schema": "security_master__base",
+      "table": "venue_symbol",
+      "privileges": [
+        "SELECT"
+      ]
+    },
+    {
+      "user": "pub_kraken_trades",
+      "catalog": "market_capture_build",
+      "schema": "kraken_trades",
+      "table": "silver_trade|silver_trade_rejected|silver_trade_unresolved",
+      "privileges": [
+        "SELECT",
+        "OWNERSHIP"
+      ]
+    },
+    {
+      "user": "pub_kraken_trades",
+      "catalog": "market_capture",
+      "schema": "kraken_trades__base",
+      "table": "silver_trade|silver_trade\\$refs|silver_trade_rejected|silver_trade_rejected\\$refs|silver_trade_unresolved|silver_trade_unresolved\\$refs",
       "privileges": [
         "SELECT",
         "GRANT_SELECT"
@@ -460,6 +774,56 @@
       ]
     },
     {
+      "user": "dbt_security_master",
+      "catalog": "reference_data_build",
+      "schema": "security_master__base",
+      "privileges": [
+        "SELECT",
+        "INSERT",
+        "DELETE",
+        "UPDATE",
+        "OWNERSHIP"
+      ]
+    },
+    {
+      "user": "dbt_security_master",
+      "catalog": "market_capture",
+      "schema": "kraken_instruments__base",
+      "table": "silver_listing",
+      "privileges": [
+        "SELECT"
+      ]
+    },
+    {
+      "user": "dbt_security_master",
+      "catalog": "reference_data",
+      "schema": "currency_master__base",
+      "table": "currency",
+      "privileges": [
+        "SELECT"
+      ]
+    },
+    {
+      "user": "pub_security_master",
+      "catalog": "reference_data_build",
+      "schema": "security_master",
+      "table": "asset|instrument|venue_symbol|venue_symbol_claim|venue_symbol_held",
+      "privileges": [
+        "SELECT",
+        "OWNERSHIP"
+      ]
+    },
+    {
+      "user": "pub_security_master",
+      "catalog": "reference_data",
+      "schema": "security_master__base",
+      "table": "asset|asset\\$refs|instrument|instrument\\$refs|venue_symbol|venue_symbol\\$refs|venue_symbol_claim|venue_symbol_claim\\$refs|venue_symbol_held|venue_symbol_held\\$refs",
+      "privileges": [
+        "SELECT",
+        "GRANT_SELECT"
+      ]
+    },
+    {
       "user": "svc\\.platform",
       "catalog": "governance_build",
       "schema": "run_records",
@@ -484,6 +848,34 @@
       "catalog": "governance",
       "schema": "run_records",
       "table": "run_record",
+      "privileges": [
+        "SELECT"
+      ]
+    },
+    {
+      "user": "svc\\.platform",
+      "catalog": "governance_build",
+      "schema": "run_records",
+      "table": "holds",
+      "privileges": [
+        "SELECT",
+        "OWNERSHIP"
+      ]
+    },
+    {
+      "user": "svc\\.operator",
+      "catalog": "governance_build",
+      "schema": "run_records",
+      "table": "holds",
+      "privileges": [
+        "INSERT"
+      ]
+    },
+    {
+      "user": "svc\\.catalog|svc\\.operator|svc\\.platform|svc\\.runs",
+      "catalog": "governance",
+      "schema": "run_records",
+      "table": "holds",
       "privileges": [
         "SELECT"
       ]
@@ -544,6 +936,105 @@
     },
     {
       "user": "svc\\.api|svc\\.catalog|svc\\.platform|svc\\.runs",
+      "catalog": "market_analytics",
+      "schema": "candles__base",
+      "table": "ohlcv_1d\\$refs",
+      "privileges": [
+        "SELECT"
+      ]
+    },
+    {
+      "user": "svc\\.api|svc\\.catalog|svc\\.platform|svc\\.runs",
+      "catalog": "market_analytics",
+      "schema": "candles__base",
+      "table": "ohlcv_1h\\$refs",
+      "privileges": [
+        "SELECT"
+      ]
+    },
+    {
+      "user": "svc\\.api|svc\\.catalog|svc\\.platform|svc\\.runs",
+      "catalog": "market_analytics",
+      "schema": "candles__base",
+      "table": "ohlcv_1m\\$refs",
+      "privileges": [
+        "SELECT"
+      ]
+    },
+    {
+      "user": "svc\\.api|svc\\.catalog|svc\\.platform|svc\\.runs",
+      "catalog": "market_analytics",
+      "schema": "candles__base",
+      "table": "ohlcv_5m\\$refs",
+      "privileges": [
+        "SELECT"
+      ]
+    },
+    {
+      "user": "svc\\.api|svc\\.catalog|svc\\.platform|svc\\.runs",
+      "catalog": "market_analytics",
+      "schema": "canonical_trades__base",
+      "table": "trades\\$refs",
+      "privileges": [
+        "SELECT"
+      ]
+    },
+    {
+      "user": "svc\\.api|svc\\.catalog|svc\\.platform|svc\\.runs",
+      "catalog": "lake",
+      "schema": "kraken_instruments",
+      "table": "bronze_pairs\\$refs",
+      "privileges": [
+        "SELECT"
+      ]
+    },
+    {
+      "user": "svc\\.api|svc\\.catalog|svc\\.platform|svc\\.runs",
+      "catalog": "market_capture",
+      "schema": "kraken_instruments__base",
+      "table": "silver_listing\\$refs",
+      "privileges": [
+        "SELECT"
+      ]
+    },
+    {
+      "user": "svc\\.api|svc\\.catalog|svc\\.platform|svc\\.runs",
+      "catalog": "lake",
+      "schema": "kraken_trades",
+      "table": "bronze_trade\\$refs",
+      "privileges": [
+        "SELECT"
+      ]
+    },
+    {
+      "user": "svc\\.api|svc\\.catalog|svc\\.platform|svc\\.runs",
+      "catalog": "market_capture",
+      "schema": "kraken_trades__base",
+      "table": "silver_trade\\$refs",
+      "privileges": [
+        "SELECT"
+      ]
+    },
+    {
+      "user": "svc\\.api|svc\\.catalog|svc\\.platform|svc\\.runs",
+      "catalog": "market_capture",
+      "schema": "kraken_trades__base",
+      "table": "silver_trade_rejected\\$refs",
+      "privileges": [
+        "SELECT"
+      ]
+    },
+    {
+      "user": "svc\\.api|svc\\.catalog|svc\\.platform|svc\\.runs",
+      "catalog": "market_capture",
+      "schema": "kraken_trades__base",
+      "table": "silver_trade_unresolved\\$refs",
+      "privileges": [
+        "SELECT"
+      ]
+    },
+    {
+      "user": "svc\\.api|svc\\.catalog|svc\\.platform|svc\\.runs",
       "catalog": "reference_data",
       "schema": "calendars__base",
       "table": "target_days\\$refs",
@@ -565,6 +1056,51 @@
       "catalog": "reference_data",
       "schema": "currency_master__base",
       "table": "currency\\$refs",
+      "privileges": [
+        "SELECT"
+      ]
+    },
+    {
+      "user": "svc\\.api|svc\\.catalog|svc\\.platform|svc\\.runs",
+      "catalog": "reference_data",
+      "schema": "security_master__base",
+      "table": "asset\\$refs",
+      "privileges": [
+        "SELECT"
+      ]
+    },
+    {
+      "user": "svc\\.api|svc\\.catalog|svc\\.platform|svc\\.runs",
+      "catalog": "reference_data",
+      "schema": "security_master__base",
+      "table": "instrument\\$refs",
+      "privileges": [
+        "SELECT"
+      ]
+    },
+    {
+      "user": "svc\\.api|svc\\.catalog|svc\\.platform|svc\\.runs",
+      "catalog": "reference_data",
+      "schema": "security_master__base",
+      "table": "venue_symbol\\$refs",
+      "privileges": [
+        "SELECT"
+      ]
+    },
+    {
+      "user": "svc\\.api|svc\\.catalog|svc\\.platform|svc\\.runs",
+      "catalog": "reference_data",
+      "schema": "security_master__base",
+      "table": "venue_symbol_claim\\$refs",
+      "privileges": [
+        "SELECT"
+      ]
+    },
+    {
+      "user": "svc\\.api|svc\\.catalog|svc\\.platform|svc\\.runs",
+      "catalog": "reference_data",
+      "schema": "security_master__base",
+      "table": "venue_symbol_held\\$refs",
       "privileges": [
         "SELECT"
       ]
@@ -614,6 +1150,181 @@
       "filter": "(\"region\" IN ('north'))"
     },
     {
+      "group": "candles__delayed_reader",
+      "catalog": "market_analytics",
+      "schema": "candles",
+      "table": "ohlcv_1d",
+      "privileges": [
+        "SELECT"
+      ],
+      "filter": "(\"window_end\" < current_timestamp - INTERVAL '20' MINUTE)",
+      "columns": [
+        {
+          "name": "through_load_seq",
+          "mask": "CAST(NULL AS bigint)"
+        }
+      ]
+    },
+    {
+      "group": "candles__full_reader",
+      "catalog": "market_analytics",
+      "schema": "candles",
+      "table": "ohlcv_1d",
+      "privileges": [
+        "SELECT"
+      ]
+    },
+    {
+      "group": "candles__delayed_reader",
+      "catalog": "market_analytics",
+      "schema": "candles",
+      "table": "ohlcv_1h",
+      "privileges": [
+        "SELECT"
+      ],
+      "filter": "(\"window_end\" < current_timestamp - INTERVAL '20' MINUTE)",
+      "columns": [
+        {
+          "name": "through_load_seq",
+          "mask": "CAST(NULL AS bigint)"
+        }
+      ]
+    },
+    {
+      "group": "candles__full_reader",
+      "catalog": "market_analytics",
+      "schema": "candles",
+      "table": "ohlcv_1h",
+      "privileges": [
+        "SELECT"
+      ]
+    },
+    {
+      "group": "candles__delayed_reader",
+      "catalog": "market_analytics",
+      "schema": "candles",
+      "table": "ohlcv_1m",
+      "privileges": [
+        "SELECT"
+      ],
+      "filter": "(\"window_end\" < current_timestamp - INTERVAL '20' MINUTE)",
+      "columns": [
+        {
+          "name": "through_load_seq",
+          "mask": "CAST(NULL AS bigint)"
+        }
+      ]
+    },
+    {
+      "group": "candles__full_reader",
+      "catalog": "market_analytics",
+      "schema": "candles",
+      "table": "ohlcv_1m",
+      "privileges": [
+        "SELECT"
+      ]
+    },
+    {
+      "group": "candles__delayed_reader",
+      "catalog": "market_analytics",
+      "schema": "candles",
+      "table": "ohlcv_5m",
+      "privileges": [
+        "SELECT"
+      ],
+      "filter": "(\"window_end\" < current_timestamp - INTERVAL '20' MINUTE)",
+      "columns": [
+        {
+          "name": "through_load_seq",
+          "mask": "CAST(NULL AS bigint)"
+        }
+      ]
+    },
+    {
+      "group": "candles__full_reader",
+      "catalog": "market_analytics",
+      "schema": "candles",
+      "table": "ohlcv_5m",
+      "privileges": [
+        "SELECT"
+      ]
+    },
+    {
+      "group": "canonical_trades__delayed_reader",
+      "catalog": "market_analytics",
+      "schema": "canonical_trades",
+      "table": "trades",
+      "privileges": [
+        "SELECT"
+      ],
+      "filter": "(\"trade_ts\" < current_timestamp - INTERVAL '20' MINUTE)",
+      "columns": [
+        {
+          "name": "kafka_offset",
+          "mask": "CAST(NULL AS bigint)"
+        },
+        {
+          "name": "load_seq",
+          "mask": "CAST(NULL AS bigint)"
+        }
+      ]
+    },
+    {
+      "group": "canonical_trades__full_reader",
+      "catalog": "market_analytics",
+      "schema": "canonical_trades",
+      "table": "trades",
+      "privileges": [
+        "SELECT"
+      ]
+    },
+    {
+      "group": "kraken_instruments__full_reader",
+      "catalog": "market_capture",
+      "schema": "kraken_instruments",
+      "table": "silver_listing",
+      "privileges": [
+        "SELECT"
+      ]
+    },
+    {
+      "group": "kraken_trades__delayed_reader",
+      "catalog": "market_capture",
+      "schema": "kraken_trades",
+      "table": "silver_trade",
+      "privileges": [
+        "SELECT"
+      ],
+      "filter": "(\"trade_ts\" < current_timestamp - INTERVAL '20' MINUTE)",
+      "columns": [
+        {
+          "name": "conn_id",
+          "mask": "CAST(NULL AS varchar)"
+        },
+        {
+          "name": "conn_msg_seq",
+          "mask": "CAST(NULL AS bigint)"
+        },
+        {
+          "name": "kafka_offset",
+          "mask": "CAST(NULL AS bigint)"
+        },
+        {
+          "name": "received_at",
+          "mask": "CAST(NULL AS timestamp(6) with time zone)"
+        }
+      ]
+    },
+    {
+      "group": "kraken_trades__full_reader",
+      "catalog": "market_capture",
+      "schema": "kraken_trades",
+      "table": "silver_trade",
+      "privileges": [
+        "SELECT"
+      ]
+    },
+    {
       "group": "calendars__full_reader",
       "catalog": "reference_data",
       "schema": "calendars",
@@ -621,11 +1332,47 @@
       "privileges": [
         "SELECT"
       ]
+    },
+    {
+      "group": "currency_master__full_reader",
+      "catalog": "reference_data",
+      "schema": "currency_master",
+      "table": "currency",
+      "privileges": [
+        "SELECT"
+      ]
+    },
+    {
+      "group": "security_master__full_reader",
+      "catalog": "reference_data",
+      "schema": "security_master",
+      "table": "asset",
+      "privileges": [
+        "SELECT"
+      ]
+    },
+    {
+      "group": "security_master__full_reader",
+      "catalog": "reference_data",
+      "schema": "security_master",
+      "table": "instrument",
+      "privileges": [
+        "SELECT"
+      ]
+    },
+    {
+      "group": "security_master__full_reader",
+      "catalog": "reference_data",
+      "schema": "security_master",
+      "table": "venue_symbol",
+      "privileges": [
+        "SELECT"
+      ]
     }
   ],
   "system_session_properties": [
     {
-      "user": "dbt_access_canary|dbt_calendars|dbt_currency_master|dbt_ecb_fx_rates|dbt_quality_results|pub_access_canary|pub_calendars|pub_currency_master|pub_ecb_fx_rates|pub_quality_results|svc\\.catalog|svc\\.platform|svc\\.runs",
+      "user": "dbt_access_canary|dbt_calendars|dbt_candles|dbt_canonical_trades|dbt_currency_master|dbt_ecb_fx_rates|dbt_kraken_instruments|dbt_kraken_trades|dbt_quality_results|dbt_security_master|pub_access_canary|pub_calendars|pub_candles|pub_canonical_trades|pub_currency_master|pub_ecb_fx_rates|pub_kraken_instruments|pub_kraken_trades|pub_quality_results|pub_security_master|svc\\.catalog|svc\\.platform|svc\\.runs",
       "allow": true
     }
   ],
@@ -635,7 +1382,7 @@
       "allow": true
     },
     {
-      "user": "dbt_access_canary|dbt_calendars|dbt_currency_master|dbt_ecb_fx_rates|dbt_quality_results|pub_access_canary|pub_calendars|pub_currency_master|pub_ecb_fx_rates|pub_quality_results|svc\\.catalog|svc\\.runs",
+      "user": "dbt_access_canary|dbt_calendars|dbt_candles|dbt_canonical_trades|dbt_currency_master|dbt_ecb_fx_rates|dbt_kraken_instruments|dbt_kraken_trades|dbt_quality_results|dbt_security_master|pub_access_canary|pub_calendars|pub_candles|pub_canonical_trades|pub_currency_master|pub_ecb_fx_rates|pub_kraken_instruments|pub_kraken_trades|pub_quality_results|pub_security_master|svc\\.catalog|svc\\.runs",
       "property": "statistics_enabled",
       "allow": true
     }
@@ -650,7 +1397,7 @@
       ]
     },
     {
-      "user": "dbt_access_canary|dbt_calendars|dbt_currency_master|dbt_ecb_fx_rates|dbt_quality_results|k2_release_000000000000|p\\.analyst\\-a|p\\.canary\\-delayed|p\\.canary\\-full|p\\.canary\\-scoped|pub_access_canary|pub_calendars|pub_currency_master|pub_ecb_fx_rates|pub_quality_results|svc\\.api|svc\\.catalog|svc\\.runs",
+      "user": "dbt_access_canary|dbt_calendars|dbt_candles|dbt_canonical_trades|dbt_currency_master|dbt_ecb_fx_rates|dbt_kraken_instruments|dbt_kraken_trades|dbt_quality_results|dbt_security_master|k2_release_000000000000|p\\.analyst\\-a|p\\.canary\\-delayed|p\\.canary\\-full|p\\.canary\\-scoped|pub_access_canary|pub_calendars|pub_candles|pub_canonical_trades|pub_currency_master|pub_ecb_fx_rates|pub_kraken_instruments|pub_kraken_trades|pub_quality_results|pub_security_master|svc\\.api|svc\\.catalog|svc\\.operator|svc\\.partner\\-dashboard|svc\\.runs",
       "allow": [
         "execute"
       ]

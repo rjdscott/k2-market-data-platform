@@ -185,7 +185,7 @@ def _reader(d: Domain) -> str:
 def _writer(d: Domain) -> str:
     return _iceberg(f"""\
 # Domain {d.name} ({d.owner}): its writer catalog over warehouse {warehouse(d.name)}, which
-# only builders, publishers, svc.runs and svc.platform reach (rules.json).
+# only builders, publishers, svc.runs, svc.operator (the holds) and svc.platform reach (rules.json).
 """, warehouse(d.name), WRITER)
 
 

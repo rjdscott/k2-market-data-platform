@@ -1,0 +1,6 @@
+# instrument, venue_symbol and asset offer full_reader: the platform's own derivation of a public
+# listing and, for asset, of the currency master. Nobody holds it yet: a grant outside
+# reference-data-team waits for the owner, for the venue's terms on kraken-instruments, and for
+# the publisher's terms on currency-master, which are not established (ADR-055 part 5).
+# venue_symbol_claim and venue_symbol_held offer no role: owner-only.
+grants: []

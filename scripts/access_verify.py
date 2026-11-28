@@ -42,14 +42,14 @@ Where the endpoint and each principal's password come from:
   each password ${K2_SECRETS:-$HOME/k2-secrets}/principals/<id>.password. No row impersonates
   anyone and no verification principal exists: a principal that may become consumers would be a
   key to every consumer's rows. Live runs only the rows whose principal's password the platform
-  holds, a service principal (svc.*, dbt_*, pub_*) or a grantee of the access canary only (it
-  exists to be tested; platform_held, which scripts/principal-secret.py's TO_FILE=1 obeys too),
+  holds, a service principal (svc.*, dbt_*, pub_*; never a partner's, partners) or a grantee of
+  the access canary only (it exists to be tested; platform_held, which scripts/principal-secret.py's TO_FILE=1 obeys too),
   and only when every product the row names is the canary, so a loosened
   rule can damage nothing real. Every other row is a SKIP naming the throwaway run at release
   time, where generated passwords stand in for the consumers'. A planted-view row is a SKIP (it
   would write the live catalog), and so is the drift row unless the catalog API answers at
   $K2_CATALOG_URI (it does only from inside k2-catalog). An eligible principal with no password
-  file fails its row.
+  file fails its row; deploy's preflight refuses before that, naming each file (live_principals).
 
 stage (throwaway lake only) makes the lake the release describes, as its build and deploy would:
 every namespace of the storage plan by REST; Spark's tables checked present (the lake made them);
@@ -548,15 +548,21 @@ def unknown(e: Any, m: Any) -> str | None:
     return None
 
 
+def partners(m: Any) -> set[str]:
+    """The declared partners (`kind: partner`): another organisation's services, whose credential
+    is theirs and never the platform's, although their id is a service's (svc.*)."""
+    return {p.id for p in m.principals if p.kind == "partner"}
+
+
 def platform_held(m: Any) -> set[str]:
-    """The test principals: granted a role on the access canary and on no other product. Their
-    password is the platform's (principals/<id>.password, scripts/principal-secret.py TO_FILE=1),
-    so the live suite can log in as them; anyone granted on a real product holds their own."""
+    """The test principals: granted a role on the access canary and on no other product, never a
+    partner. Their password is the platform's (principals/<id>.password, scripts/principal-secret.py
+    TO_FILE=1), so the live suite can log in as them; anyone granted on a real product holds their own."""
     granted: dict[str, set[str]] = {}
     for p in m.products:
         for g in p.grants:
             granted.setdefault(g.principal, set()).add(p.id)
-    return {who for who, products in granted.items() if products == {CANARY_PRODUCT}}
+    return {who for who, products in granted.items() if products == {CANARY_PRODUCT}} - partners(m)
 
 
 def live_skip(e: Any, m: Any) -> str | None:
@@ -568,7 +574,7 @@ def live_skip(e: Any, m: Any) -> str | None:
         return "it plants a view, which would write the live catalog; it ran on the throwaway lake at release time"
     who = e.principal
     service = re.fullmatch(r"(svc\.|dbt_|pub_).+", who)
-    if not service and who not in platform_held(m):
+    if who in partners(m) or (not service and who not in platform_held(m)):
         return f"{who}'s password is its owner's, not the platform's; its row ran on the throwaway lake at release time"
     named = set(re.findall(r"[a-z0-9_]+", json.dumps(asdict(e))))
     others = sorted(p.id for p in m.products if p.id != CANARY_PRODUCT
@@ -576,6 +582,13 @@ def live_skip(e: Any, m: Any) -> str | None:
     if others:
         return f"it names {', '.join(others)}, not the canary, and a live run risks nothing real"
     return None
+
+
+def live_principals(m: Any) -> set[str]:
+    """Each principal the live suite logs in to Trino as: one with a row live_skip runs. Its password
+    is the platform's, so deploy's preflight refuses while its file is missing (scripts/deploy.py),
+    where the row would otherwise fail after the swap."""
+    return {e.principal for e in m.expectations if getattr(e, "principal", None) and live_skip(e, m) is None}
 
 
 # ---- one row -------------------------------------------------------------------------------------
@@ -808,6 +821,20 @@ _REF = re.compile(r"\{\{\s*ref\(\s*'([a-z0-9_]+)'\s*\)\s*\}\}")
 _CONFIG = re.compile(r"\{\{-?\s*config\(.*?\)\s*-?\}\}", re.S)
 
 
+def ref_order(tables: list[Any], sql: dict[str, str], names: dict[str, str]) -> list[Any]:
+    """The tables with each after the product's own models its SQL names by ref(): a model is staged
+    by CREATE TABLE AS, so one that reads a sibling (security-master's instrument reads
+    venue_symbol_claim) needs it made first. Contract order is kept among the rest; a cycle is dbt's
+    to refuse (make test-dbt-tree), so it falls back to contract order here."""
+    by_name = {t.name: t for t in tables}
+    needs = {t.name: {names[r] for r in _REF.findall(sql[t.name]) if names.get(r) in by_name} - {t.name} for t in tables}
+    out: list[Any] = []
+    while len(out) < len(tables):
+        ready = [t for t in tables if t not in out and needs[t.name] <= {o.name for o in out}]
+        out += ready or [t for t in tables if t not in out]
+    return out
+
+
 def stage(release: Path, env_file: Path) -> int:
     from k2gen import model
     from k2gen.emit import lake
@@ -841,7 +868,7 @@ def stage(release: Path, env_file: Path) -> int:
             trino.ok(dbt, f"CREATE TABLE {model.quote_relation(rel)} ({', '.join(f'{model.quote_ident(h)} {ty}' for h, ty in zip(head, types, strict=True))})")
             values = ", ".join("(" + ", ".join(v if ty == "bigint" else model.sql_literal(v) for v, ty in zip(r, types, strict=True)) + ")" for r in body)
             trino.ok(dbt, f"INSERT INTO {model.quote_relation(rel)} VALUES {values}")
-        for t in tables:
+        for t in ref_order(tables, {t.name: p.models[f"{t.name}.sql"] for t in tables}, names):
             sql = _CONFIG.sub("", p.models[f"{t.name}.sql"])
             refs = {name: model.quote_relation(model.build_relation(p.domain, p.name, table)) for name, table in names.items()}
             sql = _REF.sub(lambda r, refs=refs: refs[r.group(1)], sql)
@@ -854,8 +881,7 @@ def stage(release: Path, env_file: Path) -> int:
                 # model's own rows, so one is refused.
                 if {model.reader_relation(t), model.input_relation(t)} & reads:
                     raise SystemExit(f"stage: {p.id} {t.name}: a read row asserts its rows, and only dbt renders its model")
-                sql = "SELECT " + ", ".join(f"CAST({placeholder(c) if c is key_column(t) else 'NULL'} AS {c.physical_type}) "
-                                            f"AS {model.quote_ident(c.name)}" for c in t.columns)
+                sql = placeholder_row(t)
             rel = model.build_relation(p.domain, p.name, t.name)
             trino.ok(dbt, f"CREATE TABLE {model.quote_relation(rel)} AS {sql}")
             if stand_in:  # its shape is the contract's, as Trino describes the table it made: names, order, types
@@ -906,6 +932,22 @@ def placeholder(c: Any) -> str:
     """A literal of c's type for a stand-in output's one row (stage): what moved_key can move."""
     return ("1" if c.physical_type in ("bigint", "integer") else "DATE '2000-01-01'" if c.physical_type == "date"
             else "'stage'")
+
+
+def placeholder_row(t: Any) -> str:
+    """One row in t's contract columns and types, its key a placeholder literal and the rest null."""
+    from k2gen.model import quote_ident
+    return "SELECT " + ", ".join(f"CAST({placeholder(c) if c is key_column(t) else 'NULL'} AS {c.physical_type}) "
+                                 f"AS {quote_ident(c.name)}" for c in t.columns)
+
+
+def untested(t: Any, source: str, by: int) -> str:
+    """The rows the tested-data marker plants past a tag: every row of `source` (the table at its tag)
+    and one placeholder_row, each key moved by `by`. That row is planted whatever the tag holds, so
+    an output whose tag is empty, as a held or rejected table's normally is, still gets a row past it."""
+    from k2gen.model import quote_ident
+    cols = ", ".join(quote_ident(c.name) for c in t.columns)
+    return f"SELECT {moved_key(t, by)} FROM ({placeholder_row(t)} UNION ALL SELECT {cols} FROM {source})"
 
 
 def moved_key(t: Any, by: int = 1000) -> str:

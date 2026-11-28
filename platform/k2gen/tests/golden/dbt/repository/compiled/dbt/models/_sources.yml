@@ -26,6 +26,66 @@ sources:
       description: 'Why TARGET is closed: Saturday, Sunday, or the holiday''s name from the seed (Good Friday, Labour Day,
         ...). Null on a day TARGET is open. A holiday falling on a weekend reads as the weekend day, since the seed lists
         only the holidays that fall on weekdays.'
+- name: canonical_trades
+  database: market_analytics
+  schema: canonical_trades__base
+  tables:
+  - name: trades
+    description: 'One row per trade and delivery of every venue, in one set of columns: each venue silver row once, its duplicate
+      flag as the venue set it, and the venue row''s key as its lineage.'
+    meta:
+      k2:
+        contract: market-analytics.canonical-trades.trades
+        tested_ref: audited
+    columns:
+    - name: venue
+      data_type: varchar
+      description: The venue the trade happened on, the security master's venue (kraken); a constant per venue input, derived
+        from no column.
+    - name: kafka_partition
+      data_type: integer
+      description: The venue row's topic partition; venue, kafka_partition, kafka_offset, trade_ordinal and trade_ts are the
+        venue silver row's key.
+    - name: kafka_offset
+      data_type: bigint
+      description: The venue row's frame offset in its partition.
+    - name: trade_ordinal
+      data_type: integer
+      description: The venue row's position in its frame, from 1.
+    - name: trade_ts
+      data_type: timestamp(6) with time zone
+      description: The venue's time of the trade, in UTC to the microsecond. The partition source (day), so it is in the key,
+        as an incremental merge's unique key holds every partition source column; the first four key columns alone are already
+        unique.
+    - name: instrument_id
+      data_type: varchar
+      description: The security master's instrument the venue's symbol named at trade_ts, as the venue product resolved it.
+    - name: venue_symbol
+      data_type: varchar
+      description: The symbol as the venue spells it.
+    - name: trade_id
+      data_type: bigint
+      description: The venue's trade id; with venue and venue_symbol, the trade a delivery is of.
+    - name: side
+      data_type: varchar
+      description: The taker's side, buy or sell.
+    - name: price
+      data_type: decimal(38,18)
+      description: The price in the quote asset, exactly as the venue product holds it.
+    - name: quantity
+      data_type: decimal(38,18)
+      description: The quantity in the base asset, exactly as the venue product holds it.
+    - name: is_duplicate
+      data_type: boolean
+      description: 'The venue product''s flag: true for a later delivery of a trade already delivered. Kept, never dropped;
+        when the venue flips it (a held frame taken back is older than a delivery already published), the row here follows
+        on the next build.'
+    - name: load_seq
+      data_type: bigint
+      description: 'The build order of the row: each build numbers the rows it writes, new or with a changed flag, after the
+        highest number already here, in key order. A derived product (candles) reads the rows past the highest number it has
+        counted, a number rather than a clock (I-1''s rule for a watermark). A full refresh numbers from 1 again, so the products
+        built on this one are rebuilt after it.'
 - name: currency_master
   database: lake
   schema: currency_master
@@ -56,6 +116,33 @@ sources:
     - name: source_file_sha256
       data_type: varchar
       description: The landed file's sha256, set by the connector on every row (its lineage).
+- name: currency_master
+  database: reference_data
+  schema: currency_master__base
+  tables:
+  - name: currency
+    description: One row per ISO 4217 alphabetic currency code that any landed list has held, with its numeric code, name,
+      minor units and fund flag.
+    meta:
+      k2:
+        contract: reference-data.currency-master.currency
+        tested_ref: audited
+    columns:
+    - name: code
+      data_type: varchar
+      description: The alphabetic code, three capital letters (EUR); unique.
+    - name: numeric_code
+      data_type: varchar
+      description: The numeric code, three digits, leading zeros kept (008).
+    - name: name
+      data_type: varchar
+      description: The currency's name as the list writes it.
+    - name: minor_units
+      data_type: integer
+      description: Digits after the decimal point (2 for EUR); null where the list says N.A.
+    - name: is_fund
+      data_type: boolean
+      description: True when the list marks the entry a fund, not a circulating currency.
 - name: ecb_fx_rates
   database: lake
   schema: ecb_fx_rates
@@ -80,3 +167,267 @@ sources:
     - name: source_file_sha256
       data_type: varchar
       description: The landed file's sha256, set by the connector on every row (its lineage).
+- name: kraken_instruments
+  database: lake
+  schema: kraken_instruments
+  tables:
+  - name: bronze_pairs
+    description: One row per pair of one landed AssetPairs response, the listing attributes as the parser read them, tick
+      size and minimum order the published strings. Each landed response adds a row for every pair it lists.
+    meta:
+      k2:
+        contract: market-capture.kraken-instruments.bronze_pairs
+        tested_ref: main
+    columns:
+    - name: pair_code
+      data_type: varchar
+      description: The pair's code, the key of the response's result object, as REST names the pair.
+    - name: ws_name
+      data_type: varchar
+      description: The pair's websocket name (wsname), the symbol a trades stream frame carries; unique in one response.
+    - name: base
+      data_type: varchar
+      description: The base asset's code as the venue spells it, its prefixes kept.
+    - name: quote
+      data_type: varchar
+      description: The quote asset's code as the venue spells it, its prefixes kept.
+    - name: tick_size
+      data_type: varchar
+      description: The smallest price step (tick_size), the published string; typed in silver.
+    - name: pair_decimals
+      data_type: integer
+      description: Digits after the decimal point of a price (pair_decimals).
+    - name: lot_decimals
+      data_type: integer
+      description: Digits after the decimal point of a volume (lot_decimals).
+    - name: order_min
+      data_type: varchar
+      description: The smallest order volume in the base asset (ordermin), the published string; typed in silver.
+    - name: status
+      data_type: varchar
+      description: The pair's trading status as the venue states it (online, cancel_only and the like).
+    - name: fetched_at
+      data_type: timestamp(6) with time zone
+      description: 'When the fetch that brought the response ran (fetch.json''s fetchedAt), in UTC: lineage set by the connector
+        on every row, as source_file_sha256 is, never by the parser.'
+    - name: source_file_sha256
+      data_type: varchar
+      description: The landed response's sha256, set by the connector on every row (its lineage).
+- name: kraken_instruments
+  database: market_capture
+  schema: kraken_instruments__base
+  tables:
+  - name: silver_listing
+    description: 'One row per pair and version: a version is a run of fetches, in fetch time order, that state the same listing
+      attributes for the pair, valid from the first fetch of the run. A refetch with no change adds no row, a changed tick
+      size adds one, and a pair missing from a fetch after it was listed adds one row with is_listed false and no attributes.'
+    meta:
+      k2:
+        contract: market-capture.kraken-instruments.silver_listing
+        tested_ref: audited
+    columns:
+    - name: pair_code
+      data_type: varchar
+      description: The pair's REST code, the key of the response's result object.
+    - name: first_fetched_at
+      data_type: timestamp(6) with time zone
+      description: 'The fetch time (bronze fetched_at) of the first fetch that stated this version, in UTC: the version is
+        valid from it until the pair''s next version. Ordered by fetch time, never by when a response arrived in the lake.'
+    - name: is_listed
+      data_type: boolean
+      description: False when this version is the pair's absence from the response, every attribute below but source_file_sha256
+        null.
+    - name: ws_name
+      data_type: varchar
+      description: The websocket name (wsname), the symbol a trades stream frame carries.
+    - name: base
+      data_type: varchar
+      description: The base asset's code as the venue spells it.
+    - name: quote
+      data_type: varchar
+      description: The quote asset's code as the venue spells it.
+    - name: tick_size
+      data_type: decimal(38,18)
+      description: The smallest price step, the published string cast exactly.
+    - name: pair_decimals
+      data_type: integer
+      description: Digits after the decimal point of a price.
+    - name: lot_decimals
+      data_type: integer
+      description: Digits after the decimal point of a volume.
+    - name: order_min
+      data_type: decimal(38,18)
+      description: The smallest order volume in the base asset, the published string cast exactly.
+    - name: status
+      data_type: varchar
+      description: The pair's trading status as the venue states it.
+    - name: source_file_sha256
+      data_type: varchar
+      description: The landed response that first stated this version (or the pair's absence).
+- name: kraken_trades
+  database: lake
+  schema: kraken_trades
+  tables:
+  - name: bronze_trade
+    description: 'One row per record of the raw Kraken topic whose envelope stream is trade, its RawMessage envelope decoded
+      by the frame''s writer schema id (I-1, 2026-11-28: Trino decodes no Avro, so silver reads these columns, never the frame''s
+      bytes, which stay in the landing): staged from lake.kraken_trades.landing by offset, so a retry or a kill between the
+      landing commit and the stage adds no row twice and leaves no hole. The connector''s audit (accounting, parses, keys_unique)
+      passes before a batch publishes; parses fails a frame whose writer schema lacks an envelope column or types it otherwise,
+      naming the column.'
+    meta:
+      k2:
+        contract: market-capture.kraken-trades.bronze_trade
+        tested_ref: main
+    columns:
+    - name: kafka_partition
+      data_type: integer
+      description: The topic partition; with kafka_offset, the row's lineage to the landing and the topic.
+    - name: kafka_offset
+      data_type: bigint
+      description: The record's offset in its partition.
+    - name: kafka_timestamp
+      data_type: timestamp(6) with time zone
+      description: The record's Kafka timestamp, set when the capture produced it.
+    - name: schema_id
+      data_type: integer
+      description: The frame's Confluent writer schema id, the registry's id for the RawMessage version that wrote it; null
+        for a record that is not Confluent-framed, which the audit's parses fails.
+    - name: exchange
+      data_type: varchar
+      description: RawMessage.exchange, the venue identifier, decoded by the writer schema.
+    - name: stream
+      data_type: varchar
+      description: RawMessage.stream, the subscription the frame arrived on; trade for every row the filter kept.
+    - name: symbol
+      data_type: varchar
+      description: RawMessage.symbol, the instrument as the venue spells it; null for a frame of no single instrument.
+    - name: recv_ts_ns
+      data_type: bigint
+      description: RawMessage.recv_ts_ns, the capture's receive time, nanoseconds since the Unix epoch.
+    - name: conn_id
+      data_type: varchar
+      description: RawMessage.conn_id, the WebSocket connection the frame arrived on.
+    - name: conn_msg_seq
+      data_type: bigint
+      description: RawMessage.conn_msg_seq, the capture's counter of frames on conn_id, from 1.
+    - name: payload
+      data_type: varbinary
+      description: RawMessage.payload, the venue's frame byte for byte as it came off the socket.
+    - name: batch_id
+      data_type: varchar
+      description: The landing batch that landed the record, its k2.batch-id.
+    - name: landed_at
+      data_type: timestamp(6) with time zone
+      description: When that landing batch committed, UTC.
+    - name: run_id
+      data_type: varchar
+      description: The run that landed the record, <dag_id>/<run_id>.
+    - name: release_id
+      data_type: varchar
+      description: The release that run resolved at its start.
+- name: kraken_trades
+  database: market_capture
+  schema: kraken_trades__base
+  tables:
+  - name: silver_trade
+    description: 'One typed row per trade and delivery: each element of a bronze trade frame''s data array, its symbol resolved
+      to the security master''s instrument at the trade''s time. A trade the venue sent twice is two rows, the later one flagged
+      is_duplicate. A frame is here only once every trade in it resolves; until then it is held in silver_trade_unresolved.
+      A frame the model cannot type is never here, whole: it is in silver_trade_rejected with its reason.'
+    meta:
+      k2:
+        contract: market-capture.kraken-trades.silver_trade
+        tested_ref: audited
+    columns:
+    - name: kafka_partition
+      data_type: integer
+      description: The topic partition of the frame; with kafka_offset, the row's lineage to bronze_trade, the landing and
+        the topic.
+    - name: kafka_offset
+      data_type: bigint
+      description: The frame's offset in its partition.
+    - name: trade_ordinal
+      data_type: integer
+      description: The trade's position in the frame's data array, from 1 (UNNEST ... WITH ORDINALITY).
+    - name: trade_ts
+      data_type: timestamp(6) with time zone
+      description: The venue's timestamp of the trade (timestamp), in UTC to the microsecond. The partition source (day),
+        so it is in the key, as an incremental merge's unique key holds every partition source column; the first three key
+        columns alone are already unique.
+    - name: trade_id
+      data_type: bigint
+      description: The venue's trade id (trade_id), sequential per symbol.
+    - name: venue_symbol
+      data_type: varchar
+      description: The symbol as the venue spells it (symbol), the security master's venue_symbol.
+    - name: instrument_id
+      data_type: varchar
+      description: The security master's instrument the symbol named at trade_ts, from the version valid then.
+    - name: side
+      data_type: varchar
+      description: The taker's side as the venue sends it, buy or sell.
+    - name: price
+      data_type: decimal(38,18)
+      description: 'The price in the quote asset, the venue''s JSON number cast exactly to a decimal: twenty integer and eighteen
+        fractional digits, the precision of the listing''s tick_size, so a price is compared with its tick exactly and nothing
+        the venue sends is rounded.'
+    - name: quantity
+      data_type: decimal(38,18)
+      description: The quantity in the base asset (qty), cast exactly as price is; the listing's order_min has the same precision.
+    - name: order_type
+      data_type: varchar
+      description: The taker order's type as the venue sends it (ord_type), market or limit.
+    - name: frame_type
+      data_type: varchar
+      description: 'The frame''s type: snapshot, the recent trades the venue sends on subscribing, or update, trades as they
+        happen. A snapshot repeats trades an earlier connection delivered, which is_duplicate then flags.'
+    - name: is_duplicate
+      data_type: boolean
+      description: 'True when an earlier delivery of the same trade_id for the same venue_symbol is in this table: the first
+        delivery by (kafka_partition, kafka_offset, trade_ordinal) is the original, every later one is flagged and kept.'
+    - name: received_at
+      data_type: timestamp(6) with time zone
+      description: When the capture received the frame (the envelope's recv_ts_ns), in UTC, truncated to the microsecond.
+    - name: conn_id
+      data_type: varchar
+      description: The capture's websocket connection that received the frame.
+    - name: conn_msg_seq
+      data_type: bigint
+      description: The frame's number within that connection, from the envelope.
+- name: security_master
+  database: reference_data
+  schema: security_master__base
+  tables:
+  - name: venue_symbol
+    description: 'Type-2: one row per venue spelling and version, the symbol the venue''s trades stream carries and the instrument
+      it names, valid from valid_from up to but not including valid_to. A trade resolves through the row of its venue and
+      symbol whose interval holds its time. A version changes when the instrument or the pair behind the spelling changes;
+      a delisting does not close it (the instrument''s is_listed records that), so the spelling still resolves.'
+    meta:
+      k2:
+        contract: reference-data.security-master.venue_symbol
+        tested_ref: audited
+    columns:
+    - name: venue
+      data_type: varchar
+      description: The venue (kraken).
+    - name: venue_symbol
+      data_type: varchar
+      description: The symbol as the venue's trades stream spells it (BTC/USD on Kraken's websocket v2).
+    - name: valid_from
+      data_type: timestamp(6) with time zone
+      description: The fetch that first saw this version, in UTC; the spelling's first version opens at 1970-01-01 00:00:00
+        UTC.
+    - name: valid_to
+      data_type: timestamp(6) with time zone
+      description: The next version's valid_from; 9999-12-31 23:59:59 UTC on the open row, never null.
+    - name: instrument_id
+      data_type: varchar
+      description: The instrument the spelling names (instrument.instrument_id).
+    - name: pair_code
+      data_type: varchar
+      description: The venue's REST code of the pair whose listing claims the spelling.
+    - name: recorded_at
+      data_type: timestamp(6) with time zone
+      description: When the fetch that first saw this version ran, in UTC (knowledge time).

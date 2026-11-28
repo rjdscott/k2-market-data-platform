@@ -313,3 +313,29 @@ The rules are unchanged in kind. What phases 002 and 003 changed around them:
 
 **Still open:** compose configures no authentication for Redpanda or Alertmanager, so every service on
 `k2-net` can reach both; only fetch, which runs product code, was moved off that network.
+
+## Outcome (2026-11-28, phase 004: the role order, the holds' writer, topics, inputs as read)
+
+The decision stands; four rules join it. Built on branch `phase/004-005-kraken-and-enriched`; **not yet in a deployed release**.
+
+1. **The role order.** `contracts/access/roles.yaml` may say a role is `within` others; the one pair
+   is `delayed_reader` within `full_reader`. `access.inherit-role` then lets an output offer a role
+   over an input that offers a role it is declared within, and holds the output to that role's
+   policy on the input. ADR-056's "an enriched product is never less restricted than its inputs"
+   admits it: a `delayed_reader` holder sees no more of the input than a `full_reader` holder would.
+   `kraken-trades`' `silver_trade` needs it, since the security master it joins offers `full_reader`
+   only. `access.role-within-invalid` refuses an undeclared role, a cycle, and `public_reader` within
+   anything, the direction that would let data offered only inside leave.
+2. **The holds' writer** is `svc.operator`, the operator's own login from the host: INSERT on
+   `governance_build.run_records.holds` and nothing else there, every read of the holds through the
+   read-only `governance` catalog; no compose service or one-shot mounts its password file.
+3. **A topic belongs to one product of its owning domain**: `contracts/domains.yaml` lists each
+   domain's topics, and `connectors.topic-not-owned` and `connectors.topic-claimed-twice` hold them,
+   since Redpanda has no ACLs.
+4. **Inputs are what a model reads**: every `access.inherit-*` rule runs over the output's declared
+   inputs plus every `k2_input` its model reads through the product's own `ref()` chain;
+   `access.input-undeclared` refuses one read and not declared.
+
+Provenance: `platform/k2gen/tests/test_checks_access.py`, `test_checks_connectors.py`,
+`test_emit_trino_rules.py`, `tests/test_hold.py`, and the access rows in
+`tests/access/expectations.yaml`, which run in `make access-verify RELEASE=<dir>` on a throwaway lake.

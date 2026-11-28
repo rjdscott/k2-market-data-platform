@@ -344,6 +344,7 @@ def test_the_schema_and_the_model_hold_one_grammar() -> None:
     assert sorted(_defs("identifier")["not"]["enum"]) == sorted(model.TRINO_RESERVED)
     assert _defs("identifier")["maxLength"] == model.MAX_IDENTIFIER and _defs("slug")["maxLength"] == model.MAX_SLUG
     assert _defs("template")["pattern"] == model.TEMPLATE
+    assert _defs("principals")["properties"]["principals"]["items"]["properties"]["kind"]["enum"] == list(typing.get_args(model.PrincipalKind))
     assert _defs("tableName")["allOf"][1]["pattern"] == f"^{model.TABLE_NAME.pattern}$"
     values = _defs("rolePolicy")["properties"]["rowScope"]["properties"]["values"]["items"]["oneOf"][1]
     assert values["pattern"] == model.ROW_SCOPE_VALUE

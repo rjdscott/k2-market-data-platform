@@ -1,0 +1,6 @@
+trade_id,symbol,price,quantity
+1,ALPHA-USD,10.5,2
+2,BRAVO-USD,20.25,1
+3,CHARLIE-USD,30,5
+4,ALPHA-USD,10.75,1
+5,CHARLIE-USD,30.1,2

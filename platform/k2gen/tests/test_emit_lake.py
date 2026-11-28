@@ -20,6 +20,7 @@ from typing import Any
 
 import pytest
 import yaml
+from test_checks_connectors import kinds
 
 from k2gen import model
 from k2gen.emit import lake
@@ -131,7 +132,7 @@ def held_to_their_shape(out: dict[str, str], m: Model) -> None:
             assert sql.count(";") == 1 and sql.endswith(");\n"), path
             literals = {model.sql_literal(v) for kv in lake.TBLPROPERTIES for v in kv}
         elif path.startswith("compiled/lake/ddl/trino/"):
-            assert text == model.RUN_RECORD_SQL.read_text(), path  # the frozen file, copied
+            assert text in [f.read_text() for f in model.PLATFORM_SQL], path  # a frozen file, copied
             continue
         else:
             assert path.endswith(".json"), path
@@ -623,6 +624,27 @@ def test_a_kafka_connector_lands_in_a_table_and_a_fetch_kind_in_objects() -> Non
     assert '"prefixes": []' in streamed[model.STORAGE_PLAN] and '"kind": "landing"' not in streamed[model.BACKUP_SET]
 
 
+def test_a_kafka_landing_is_restored_and_never_expired_and_a_file_landing_keeps_its_objects() -> None:
+    """The kinds overlay: the Kafka landing is a table backed up as restore at main, with snapshot
+    retention and no landing objects (so maintain's 14-day landing expiry has nothing of it); a
+    public-api product lands objects under its prefix, as a file kind does."""
+    out = lake.emit(load(kinds()))
+    backup = json.loads(out[model.BACKUP_SET])["entries"]
+    tables = {e["table"]: (e["mode"], e["ref"]) for e in backup if e["kind"] == "table"}
+    assert tables["k2.station_feed.landing"] == ("restore", "main")
+    assert tables["k2.station_feed.bronze_frames"] == ("rebuild", "main")  # restaged from the landing by offset
+    prefixes = {e["prefix"] for e in backup if e["kind"] == "landing"}
+    assert prefixes == {"sensor-net/station-readings/", "sensor-net/station-list/"}  # none for the Kafka product
+    assert json.loads(out[model.STORAGE_PLAN])["landing"]["prefixes"] == sorted(prefixes)
+    retention = json.loads(out[model.RETENTION])
+    assert {k for k in retention if k.startswith("k2.station_feed.")} == {
+        "k2.station_feed.landing", "k2.station_feed.bronze_frames", "k2.station_feed.audit_checks"}
+    assert "k2.station_list.landing_files" in retention
+    ddl = out[model.ddl_path("spark", "k2", "station_feed", "bronze_frames")]
+    assert '"kafka_partition" INT NOT NULL' in ddl and '"schema_id" INT,' in ddl and '"payload" BINARY' in ddl
+    assert '"record_value"' not in ddl  # the frame's bytes stay in the landing
+
+
 def test_a_contract_platform_table_is_refused_until_its_ddl_is_decided() -> None:
     m = load(good())
     m = dataclasses.replace(m, products=tuple(dataclasses.replace(p, tables=tuple(
@@ -640,13 +662,15 @@ def with_governance(documents: dict[str, bytes]) -> dict[str, bytes]:
         governance={"owner": "platform-team", "kind": "consumer-aligned", "description": "Made up for the test."}))
 
 
-def test_the_run_record_is_copied_byte_for_byte_when_its_domain_is_declared() -> None:
-    path = model.ddl_path("trino", "governance", "run_records", "run_record")
+@pytest.mark.parametrize(("table", "source"), [("run_record", model.RUN_RECORD_SQL), ("holds", model.HOLDS_SQL)])
+def test_each_platform_table_is_copied_byte_for_byte_when_its_domain_is_declared(table: str, source: Path) -> None:
+    path = model.ddl_path("trino", "governance", "run_records", table)
     assert path not in lake.emit(load(good()))
     out = lake.emit(load(with_governance(good())))
-    assert out[path].encode() == model.RUN_RECORD_SQL.read_bytes()
-    assert '"governance.run_records.run_record": 7' in out[model.RETENTION]
-    assert '"table": "governance.run_records.run_record"' in out[model.BACKUP_SET]
+    assert out[path].encode() == source.read_bytes()
+    assert f'"governance.run_records.{table}": 7' in out[model.RETENTION]  # the run records' retention, the floor
+    entry = {"kind": "table", "table": f"governance.run_records.{table}", "mode": "restore", "ref": "main"}
+    assert entry in json.loads(out[model.BACKUP_SET])["entries"]
     assert model.need_of(path) == "ddl"
 
 

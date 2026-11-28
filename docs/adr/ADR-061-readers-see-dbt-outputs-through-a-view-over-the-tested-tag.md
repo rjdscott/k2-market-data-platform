@@ -323,3 +323,46 @@ learns that the output is not yet published and nothing more.
 
 **Revisit when**, besides the triggers above: `INVALID_VIEW` appears in a reader's poll again, which
 reopens the view sync's order.
+
+## Outcome (2026-11-28, phase 004: compaction after the tests)
+
+The decision stands, with one write added on top of the tested snapshot. Built on branch `phase/004-005-kraken-and-enriched`; **not yet in a deployed release**. A merge-heavy
+incremental output leaves delete files every build, and a compaction by maintenance after the tag
+moved would put `main` past `audited`, which the next build's reconcile restores. So the wrapper
+compacts an incremental output inside the build, after its tests and before the tag commit: once
+its `main` holds 12 delete files or 48 small files beyond one per partition, one `ALTER TABLE ...
+EXECUTE optimize` as the builder under the run's client tag, and the tag then moves onto the
+compaction by the same compare-and-set commit. A `table` model is never compacted. The only snapshot
+accepted on top of the tested one is a `replace` whose parent is the tested snapshot, committed by
+this run's own optimize statement (its query id), reading as many rows (`total-records` less
+`total-position-deletes`; a snapshot with equality deletes is refused as uncountable). Anything else
+is rolled back to the tested snapshot and refused, exit 3; a failed or empty optimize publishes the
+tested snapshot (`docker/dbt-runner/k2_dbt.py`, `compact` and `compaction_guard`). Provenance:
+`docker/dbt-runner/test_k2_dbt.py`; `scripts/verify/dbt-patterns.sh` claim 12 (compaction to zero
+delete files, a reconcile that changes nothing, an INSERT after the optimize refused) is written and
+its run pending.
+
+## Outcome (2026-11-28, phase 004: the publish waits after narrowing a view)
+
+The open observation of 2026-11-27 came back: in the full deploy rehearsal of 2026-11-28 one of 22
+reader polls failed during the marker's schema change with `INVALID_VIEW: ... Column 'currency' cannot
+be resolved`, which was this ADR's revisit trigger. The cause that fits is in the design, not in the
+order of its statements. Part 5's invariant holds for the catalog's state at every instant, but a
+reader's query reads two objects at two instants: the view's definition, then its base at the tag. A
+query that read the view before it was narrowed and loaded the base after the tag commit selects a
+column the new snapshot no longer holds. The narrow and the commit were consecutive calls, a few
+milliseconds apart, so the window was as long as a query's own gap between the two reads. The catalog
+has no commit that spans a view and a table, so the window cannot be closed, only made far longer than
+that gap: the publish now waits `VIEW_SETTLE_S` (2 s, `docker/dbt-runner/k2_dbt.py`) after it narrows
+any view and before the tag commit, and the marker's own publish does the same. The failure stays what
+it was, an error and never a wrong or untested row, and it needs a schema change to an output that
+already has readers.
+
+Measured after the change: `scripts/verify/tested-data-marker.sh` run ten times on one throwaway lake
+(a scratch release of the phase 004 branch), 20 publishes, 551 polls at 50 ms, 0 errors. That is
+evidence for the cause, not proof of it: before the change the error appeared about once in several
+runs.
+
+**Revisit when** `INVALID_VIEW` appears in a reader's poll again with the wait in place: the cause
+above is then wrong or incomplete, and a reader's query slower than the wait between its two reads is
+the first thing to measure.

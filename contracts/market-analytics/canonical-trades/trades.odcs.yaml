@@ -1,0 +1,138 @@
+apiVersion: v3.2.0
+kind: DataContract
+id: market-analytics.canonical-trades.trades
+name: trades
+version: 1.0.0
+domain: market-analytics
+description:
+  purpose: >-
+    One row per trade and delivery of every venue, in one set of columns: each venue silver row
+    once, its duplicate flag as the venue set it, and the venue row's key as its lineage.
+  limitations: >-
+    The capture's connection columns (conn_id, conn_msg_seq) are not carried: the venue product
+    masks them from delayed readers, and nothing here needs them.
+team:
+  name: analytics-team
+schema:
+  - id: trades
+    name: trades
+    physicalName: canonical_trades.trades
+    physicalType: table
+    properties:
+      - name: venue
+        physicalType: varchar
+        required: true
+        primaryKey: true
+        primaryKeyPosition: 1
+        description: The venue the trade happened on, the security master's venue (kraken); a constant per venue input, derived from no column.
+        transformSourceObjects: []
+      - name: kafka_partition
+        physicalType: integer
+        required: true
+        primaryKey: true
+        primaryKeyPosition: 2
+        description: The venue row's topic partition; venue, kafka_partition, kafka_offset, trade_ordinal and trade_ts are the venue silver row's key.
+        transformSourceObjects: [market-capture.kraken-trades.silver_trade.kafka_partition]
+      - name: kafka_offset
+        physicalType: bigint
+        required: true
+        primaryKey: true
+        primaryKeyPosition: 3
+        description: The venue row's frame offset in its partition.
+        transformSourceObjects: [market-capture.kraken-trades.silver_trade.kafka_offset]
+      - name: trade_ordinal
+        physicalType: integer
+        required: true
+        primaryKey: true
+        primaryKeyPosition: 4
+        description: The venue row's position in its frame, from 1.
+        transformSourceObjects: [market-capture.kraken-trades.silver_trade.trade_ordinal]
+      - name: trade_ts
+        physicalType: timestamp(6) with time zone
+        required: true
+        primaryKey: true
+        primaryKeyPosition: 5
+        description: >-
+          The venue's time of the trade, in UTC to the microsecond. The partition source (day), so
+          it is in the key, as an incremental merge's unique key holds every partition source
+          column; the first four key columns alone are already unique.
+        transformSourceObjects: [market-capture.kraken-trades.silver_trade.trade_ts]
+        customProperties:
+          - property: time
+            value: event
+      - name: instrument_id
+        physicalType: varchar
+        required: true
+        description: The security master's instrument the venue's symbol named at trade_ts, as the venue product resolved it.
+        transformSourceObjects: [market-capture.kraken-trades.silver_trade.instrument_id]
+      - name: venue_symbol
+        physicalType: varchar
+        required: true
+        description: The symbol as the venue spells it.
+        transformSourceObjects: [market-capture.kraken-trades.silver_trade.venue_symbol]
+      - name: trade_id
+        physicalType: bigint
+        required: true
+        description: The venue's trade id; with venue and venue_symbol, the trade a delivery is of.
+        transformSourceObjects: [market-capture.kraken-trades.silver_trade.trade_id]
+      - name: side
+        physicalType: varchar
+        required: true
+        description: The taker's side, buy or sell.
+        transformSourceObjects: [market-capture.kraken-trades.silver_trade.side]
+      - name: price
+        physicalType: decimal(38,18)
+        required: true
+        description: The price in the quote asset, exactly as the venue product holds it.
+        transformSourceObjects: [market-capture.kraken-trades.silver_trade.price]
+      - name: quantity
+        physicalType: decimal(38,18)
+        required: true
+        description: The quantity in the base asset, exactly as the venue product holds it.
+        transformSourceObjects: [market-capture.kraken-trades.silver_trade.quantity]
+      - name: is_duplicate
+        physicalType: boolean
+        required: true
+        description: >-
+          The venue product's flag: true for a later delivery of a trade already delivered. Kept,
+          never dropped; when the venue flips it (a held frame taken back is older than a delivery
+          already published), the row here follows on the next build.
+        transformSourceObjects: [market-capture.kraken-trades.silver_trade.is_duplicate]
+      - name: load_seq
+        physicalType: bigint
+        required: true
+        description: >-
+          The build order of the row: each build numbers the rows it writes, new or with a
+          changed flag, after the highest number already here, in key order. A derived product
+          (candles) reads the rows past the highest number it has counted, a number rather than a
+          clock (I-1's rule for a watermark). A full refresh numbers from 1 again, so the products
+          built on this one are rebuilt after it.
+        transformSourceObjects:
+          - market-capture.kraken-trades.silver_trade.kafka_partition
+          - market-capture.kraken-trades.silver_trade.kafka_offset
+          - market-capture.kraken-trades.silver_trade.trade_ordinal
+roles:
+  - role: full_reader
+    access: read
+  - role: delayed_reader
+    access: read
+customProperties:
+  - property: layer
+    value: gold  # the canonical cross-venue surface, as the archived gold.trades was (ADR-026)
+  - property: build
+    value: dbt
+  - property: backup
+    value: rebuild  # rebuilt from the venue products
+  - property: partitioning
+    value: [day(trade_ts)]
+  - property: policies
+    value:
+      delayed_reader:
+        # The venue's delay, on the same market time (access.inherit-delay); candles carries it on
+        # to window_end. The venue's masks where a column is carried (access.inherit-mask):
+        # kafka_offset, and load_seq, which derives from it and is itself a running count of the
+        # rows each build writes, so a late rewrite of an old visible row carries the newest number.
+        # conn_id, conn_msg_seq and received_at are not carried. kafka_offset is a key column, so
+        # this role's rows are not keyed by the whole key (silver_trade's note).
+        delay: {column: trade_ts, minutes: 20}
+        mask: [kafka_offset, load_seq]

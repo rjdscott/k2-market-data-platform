@@ -1,0 +1,80 @@
+apiVersion: v3.2.0
+kind: DataContract
+id: market-capture.kraken-instruments.silver_listing
+name: silver_listing
+version: 1.0.0
+domain: market-capture
+description:
+  purpose: >-
+    One row per pair and version: a version is a run of fetches, in fetch time order, that state
+    the same listing attributes for the pair, valid from the first fetch of the run. A refetch
+    with no change adds no row, a changed tick size adds one, and a pair missing from a fetch
+    after it was listed adds one row with is_listed false and no attributes.
+team:
+  name: capture-team
+schema:
+  - id: silver_listing
+    name: silver_listing
+    physicalName: kraken_instruments.silver_listing
+    physicalType: table
+    properties:
+      - name: pair_code
+        physicalType: varchar
+        required: true
+        primaryKey: true
+        primaryKeyPosition: 1
+        description: The pair's REST code, the key of the response's result object.
+      - name: first_fetched_at
+        physicalType: timestamp(6) with time zone
+        required: true
+        primaryKey: true
+        primaryKeyPosition: 2
+        description: >-
+          The fetch time (bronze fetched_at) of the first fetch that stated this version, in UTC:
+          the version is valid from it until the pair's next version. Ordered by fetch time,
+          never by when a response arrived in the lake.
+        customProperties:
+          - property: time
+            value: valid
+      - name: is_listed
+        physicalType: boolean
+        required: true
+        description: False when this version is the pair's absence from the response, every attribute below but source_file_sha256 null.
+      - name: ws_name
+        physicalType: varchar
+        description: The websocket name (wsname), the symbol a trades stream frame carries.
+      - name: base
+        physicalType: varchar
+        description: The base asset's code as the venue spells it.
+      - name: quote
+        physicalType: varchar
+        description: The quote asset's code as the venue spells it.
+      - name: tick_size
+        physicalType: decimal(38,18)
+        description: The smallest price step, the published string cast exactly.
+      - name: pair_decimals
+        physicalType: integer
+        description: Digits after the decimal point of a price.
+      - name: lot_decimals
+        physicalType: integer
+        description: Digits after the decimal point of a volume.
+      - name: order_min
+        physicalType: decimal(38,18)
+        description: The smallest order volume in the base asset, the published string cast exactly.
+      - name: status
+        physicalType: varchar
+        description: The pair's trading status as the venue states it.
+      - name: source_file_sha256
+        physicalType: varchar
+        required: true
+        description: The landed response that first stated this version (or the pair's absence).
+roles:
+  - role: full_reader  # offered, held by nobody (grants.yaml): the security master, built on it, may then offer it (access.inherit-role)
+    access: read
+customProperties:
+  - property: layer
+    value: silver
+  - property: build
+    value: dbt
+  - property: backup
+    value: rebuild  # rebuilt from bronze

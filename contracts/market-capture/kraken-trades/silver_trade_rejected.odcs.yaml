@@ -1,0 +1,72 @@
+apiVersion: v3.2.0
+kind: DataContract
+id: market-capture.kraken-trades.silver_trade_rejected
+name: silver_trade_rejected
+version: 1.0.0
+domain: market-capture
+description:
+  purpose: >-
+    The rejected frames: every bronze trade frame that is not in silver_trade because the model
+    cannot type it, with the reason and the frame's bytes. One trade that cannot be typed rejects
+    its whole frame, as one unresolved symbol holds it, so a frame is in silver_trade whole or not
+    at all. A rejected frame is neither in silver_trade nor in silver_trade_unresolved, and is never
+    taken in automatically: its bytes do not change, so it stays here until a release whose model
+    types it builds. Rebuilt on every build, so a frame leaves it on the build that takes it in.
+team:
+  name: capture-team
+schema:
+  - id: silver_trade_rejected
+    name: silver_trade_rejected
+    physicalName: kraken_trades.silver_trade_rejected
+    physicalType: table
+    properties:
+      - name: kafka_partition
+        physicalType: integer
+        required: true
+        primaryKey: true
+        primaryKeyPosition: 1
+        description: The topic partition of the frame; with kafka_offset, its lineage to bronze_trade, the landing and the topic.
+      - name: kafka_offset
+        physicalType: bigint
+        required: true
+        primaryKey: true
+        primaryKeyPosition: 2
+        description: The frame's offset in its partition.
+      - name: kafka_timestamp
+        physicalType: timestamp(6) with time zone
+        description: The record's Kafka timestamp, as bronze_trade holds it.
+      - name: reason
+        physicalType: varchar
+        required: true
+        description: >-
+          Why the frame cannot be typed, the first that holds, the frame's own before its trades'
+          by ordinal: payload_not_json; no_trade_array (a trade frame whose data is missing or not
+          an array); field_missing:type (the frame's type); for a trade, field_missing:<field>
+          (timestamp, trade_id, symbol, side, price or qty absent, null or not a scalar),
+          field_not_timestamp:timestamp (not an ISO 8601 time) or field_not_numeric:<field>
+          (trade_id not a bigint, price or qty not a decimal(38,18)). Each is decided under try(),
+          so deciding it never fails the build.
+      - name: payload
+        physicalType: varbinary
+        description: The frame byte for byte as bronze_trade holds it, the venue's frame as sent; bronze data, so the table is the owning team's.
+    quality:
+      - name: rejected_frames_zero
+        type: custom
+        engine: dbt
+        implementation:
+          k2_quality:
+            arguments:
+              query: "select count(*) from ${table}"
+              holds: "metric_value = 0"
+            config:
+              severity: warn
+        description: >-
+          No frame is rejected. A rejected one warns on every build while it stands: the build still
+          publishes the rest and the run is degraded, since silver_trade lacks the frame's trades.
+customProperties:
+  - property: layer
+    value: silver
+  - property: build
+    value: dbt
+  - property: backup
+    value: rebuild  # rebuilt from bronze and silver_trade

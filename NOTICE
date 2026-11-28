@@ -32,6 +32,30 @@ ClickHouse schema test (scripts/clickhouse-schema-test.sh):
   tests/clickhouse/trades_block1.jsonl
   tests/clickhouse/trades_block2.jsonl
 
+Hand-written synthetic rows, invented symbols and values, for the dbt
+patterns proof (scripts/verify/dbt-patterns.sh):
+
+  platform/k2gen/tests/fixtures/dbt-patterns/pattern-lab/seeds/listing.csv
+  platform/k2gen/tests/fixtures/dbt-patterns/pattern-lab/seeds/symbols.csv
+  platform/k2gen/tests/fixtures/dbt-patterns/pattern-lab/seeds/trades.csv
+  platform/k2gen/tests/fixtures/dbt-patterns/second/seeds/listing.csv
+  platform/k2gen/tests/fixtures/dbt-patterns/second/seeds/symbols.csv
+  platform/k2gen/tests/fixtures/dbt-patterns/second/seeds/trades.csv
+
+Hand-written public naming facts, no prices and no row copied from a feed,
+reviewed by the owner, for the security master
+(contracts/reference-data/security-master/): a venue's older code for an asset,
+and which asset codes are stablecoins:
+
+  contracts/reference-data/security-master/seeds/code_exceptions.csv
+  contracts/reference-data/security-master/seeds/stablecoins.csv
+
+Hand-written synthetic response, invented pairs and round numbers in the shape
+Kraken's public AssetPairs documentation describes, for the market-capture
+parser tests (domains/market-capture/tests/):
+
+  domains/market-capture/tests/fixtures/asset-pairs-synthetic.json
+
 The platform's own measurements, no venue data: recovery times written by
 `make chaos` (scripts/chaos/):
 

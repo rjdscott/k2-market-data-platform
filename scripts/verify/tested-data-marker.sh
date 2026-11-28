@@ -14,9 +14,11 @@
 #     token, what the release's lake emitter generates over the contract's columns the tagged
 #     snapshot holds (catalog_drift.generated_sql, so a column aliased past its mask fails); it is a
 #     definer view (trino.run-as-owner set) and its owner is the product's publisher;
-#  3. an untagged commit is planted (every tagged row again, its key moved by 1000000, as the
-#     builder): the view, read as the publisher, holds exactly the tagged snapshot's rows and none
-#     of main's planted ones, and every grantee reads only tagged keys, never a planted one;
+#  3. an untagged commit is planted, as the builder: every tagged row again and one placeholder row in
+#     the contract's columns, each key moved by 1000000 (access_verify.untested), so an output whose
+#     tag holds no row, as a held or rejected table's normally does, still has a row past it. The
+#     view, read as the publisher, holds exactly the tagged snapshot's rows and hides every planted
+#     one, and every grantee reads only tagged keys, never a planted one;
 #  4. unless --no-schema-change, or a check above failed: one contract column is dropped from the
 #     first output and added back, each as dbt's contracted path does it (CREATE OR REPLACE
 #     TABLE), each published by lake.view_update's two statements around one tag commit (ADR-061
@@ -95,16 +97,16 @@ for view, p, t, cat in outputs():
     dbt, pub = model.builder(p.name), model.publisher(p.name)
     build, base, vbuild = (quote_relation(model.build_relation(p.domain, p.name, t.name)), quote_relation(view.base),
                            quote_relation(model.view_build_relation(p.domain, p.name, t.name)))
-    trino.ok(dbt, f"INSERT INTO {build} SELECT {av.moved_key(t, 1_000_000)} FROM {build} FOR VERSION AS OF {tag}")
+    wrote = trino.ok(dbt, f"INSERT INTO {build} {av.untested(t, f'{build} FOR VERSION AS OF {tag}', 1_000_000)}")[0][0]
     meta, tag_after = tag_of(cat, p, t)
     cols = ", ".join(quote_ident(c) for c in view.columns if c in cd.columns_at(meta, tag))
     at_tag = f"SELECT {cols} FROM {base} FOR VERSION AS OF {tag}"
     extra = trino.ok(pub, f"SELECT count(*) FROM (SELECT {cols} FROM {vbuild} EXCEPT ALL {at_tag})")[0][0]
     short = trino.ok(pub, f"SELECT count(*) FROM ({at_tag} EXCEPT ALL SELECT {cols} FROM {vbuild})")[0][0]
     hidden = trino.ok(pub, f"SELECT count(*) FROM (SELECT {cols} FROM {base} EXCEPT ALL SELECT {cols} FROM {vbuild})")[0][0]
-    check(f"{view.relation} serves the tag", extra == 0 and short == 0 and hidden > 0 and tag_after == tag,
-          f"rows the view has beyond the tag {extra}, the tag's rows it lacks {short}, main's untested rows it hides {hidden}; "
-          f"tag unmoved {tag_after == tag}")
+    check(f"{view.relation} serves the tag", extra == 0 and short == 0 and wrote > 0 and hidden >= wrote and tag_after == tag,
+          f"rows the view has beyond the tag {extra}, the tag's rows it lacks {short}, main's untested rows it hides {hidden}, "
+          f"{wrote} planted here (the tag's {wrote - 1} again and one placeholder row); tag unmoved {tag_after == tag}")
     key = key_of(t)
     tagged = {r[0] for r in trino.ok(pub, f"SELECT {quote_ident(key)} FROM {base} FOR VERSION AS OF {tag}")}
     planted = {r[0] for r in trino.ok(pub, f"SELECT {quote_ident(key)} FROM {base}")} - tagged
@@ -156,6 +158,7 @@ else:
         t0 = time.monotonic()
         if first:
             trino.ok(pub, first)
+            time.sleep(2.0)  # the wrapper's settle (k2_dbt.VIEW_SETTLE_S): a poll that read the old view loads its base before the tag moves
         st, doc = cd.call("POST", f"{cat.base}/transactions/commit", {"table-changes": [{
             "identifier": {"namespace": [model.base_namespace(p.name)], "name": t.name},
             "requirements": [{"type": "assert-ref-snapshot-id", "ref": "main", "snapshot-id": tested},

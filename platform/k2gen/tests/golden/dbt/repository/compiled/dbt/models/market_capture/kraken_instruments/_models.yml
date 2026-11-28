@@ -1,0 +1,74 @@
+# Compiled by k2gen (platform/k2gen/k2gen/emit/dbt.py) from the release's documents. Never edit it: change the documents.
+version: 2
+models:
+- name: kraken_instruments__silver_listing
+  description: 'One row per pair and version: a version is a run of fetches, in fetch time order, that state the same listing
+    attributes for the pair, valid from the first fetch of the run. A refetch with no change adds no row, a changed tick size
+    adds one, and a pair missing from a fetch after it was listed adds one row with is_listed false and no attributes.'
+  config:
+    alias: silver_listing
+    meta:
+      k2:
+        contract: market-capture.kraken-instruments.silver_listing
+        reader: market_capture.kraken_instruments.silver_listing
+  columns:
+  - name: pair_code
+    description: The pair's REST code, the key of the response's result object.
+    data_type: varchar
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  - name: first_fetched_at
+    description: 'The fetch time (bronze fetched_at) of the first fetch that stated this version, in UTC: the version is valid
+      from it until the pair''s next version. Ordered by fetch time, never by when a response arrived in the lake.'
+    data_type: timestamp(6) with time zone
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  - name: is_listed
+    description: False when this version is the pair's absence from the response, every attribute below but source_file_sha256
+      null.
+    data_type: boolean
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  - name: ws_name
+    description: The websocket name (wsname), the symbol a trades stream frame carries.
+    data_type: varchar
+  - name: base
+    description: The base asset's code as the venue spells it.
+    data_type: varchar
+  - name: quote
+    description: The quote asset's code as the venue spells it.
+    data_type: varchar
+  - name: tick_size
+    description: The smallest price step, the published string cast exactly.
+    data_type: decimal(38,18)
+  - name: pair_decimals
+    description: Digits after the decimal point of a price.
+    data_type: integer
+  - name: lot_decimals
+    description: Digits after the decimal point of a volume.
+    data_type: integer
+  - name: order_min
+    description: The smallest order volume in the base asset, the published string cast exactly.
+    data_type: decimal(38,18)
+  - name: status
+    description: The pair's trading status as the venue states it.
+    data_type: varchar
+  - name: source_file_sha256
+    description: The landed response that first stated this version (or the pair's absence).
+    data_type: varchar
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  data_tests:
+  - k2_unique_key:
+      arguments:
+        columns:
+        - pair_code
+        - first_fetched_at

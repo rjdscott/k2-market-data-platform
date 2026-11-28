@@ -1,0 +1,53 @@
+apiVersion: v3.2.0
+kind: DataContract
+id: reference-data.pattern-lab.silver_trade_unresolved
+name: silver_trade_unresolved
+version: 1.0.0
+domain: reference-data
+description:
+  purpose: Synthetic trades whose symbol resolves to nothing, held until it does.
+team:
+  name: reference-data-team
+schema:
+  - id: silver_trade_unresolved
+    name: silver_trade_unresolved
+    physicalName: pattern_lab.silver_trade_unresolved
+    physicalType: table
+    properties:
+      - name: trade_id
+        physicalType: bigint
+        required: true
+        primaryKey: true
+        primaryKeyPosition: 1
+        description: The made-up trade's id.
+      - name: symbol
+        physicalType: varchar
+        required: true
+        description: The symbol nothing resolves.
+      - name: price
+        physicalType: decimal(18,8)
+        required: true
+        description: The made-up price.
+      - name: quantity
+        physicalType: decimal(18,8)
+        required: true
+        description: The made-up quantity.
+    quality:
+      - name: held_rows_zero
+        type: custom
+        engine: dbt
+        implementation:
+          k2_quality:
+            arguments:
+              query: "select count(*) from ${table}"
+              holds: "metric_value = 0"
+            config:
+              severity: warn
+        description: No trade is held; a held one warns, and the build still publishes.
+customProperties:
+  - property: layer
+    value: silver
+  - property: build
+    value: dbt
+  - property: backup
+    value: rebuild

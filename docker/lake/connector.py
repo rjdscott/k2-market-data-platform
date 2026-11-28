@@ -6,6 +6,17 @@ docs/development/phase-001-interfaces.md, "The fetch container" and the bronze n
     connector.py audit   --release <id> --product <domain>.<product> --run-id <dagId>/<runId>
     connector.py publish --release <id> --product <domain>.<product> --run-id <dagId>/<runId>
 
+A pipeline whose connector kind is kafka runs kafka.py's flows instead (task_of; its docstring):
+no spool, the topic in place of the landing bucket. Everything below is the https-file kind's, and
+the public-api kind's with three differences. Its fetch.json lists pages, {"fetchedAt", "pages":
+[{"page", "url", "finalUrl", "sha256", "bytes", "fetchedAt", "httpStatus", ..., "raw"}]}, and each
+page's own fields are read; a run must hold exactly one, page 1 at raw.1.json, landed as .json.
+Its batch is an observation, the bytes at the page's fetchedAt: every staged row gets fetched_at
+too, set here and never by the parser, and every check and dedupe is scoped by source_file_sha256
+and fetched_at both. So a response seen again after another (A, B, A) lands no second object, is
+logged in landing_files again at its own time, and stages its rows again; the same bytes fetched
+twice in a row never get here (fetch exits 10). A file's same bytes again stage nothing.
+
 --release defaults to $K2_RELEASE. Each reads the product's compiled/products/<product>/pipeline.json
 from /k2/releases/<id>/ and the run's spool entry /spool/<dagId>/<runId>/ that fetch.py left
 (raw.<format>, fetch.json, and rows.jsonl unless the parse failed). The batch id is the run id.
@@ -27,19 +38,26 @@ audit    checks the batch at `audit`'s head, scoped to its rows (source_file_sha
          pattern, values_unchanged (no published key with other values), and each declared
          parser audit as fetch recorded it in audits.json (product code runs in the fetch
          container, never here; no entry fails closed); one audit_checks row each, at that snapshot.
-publish  fast-forwards `main` to `audit` (Iceberg's fast_forward, which refuses anything else),
-         only if the batch's newest audit at `audit`'s current head passed every check; a batch
-         that staged nothing (the same bytes again) moves nothing.
+publish  sets `main` to `audit`'s head, only if the batch's newest audit at that head passed every
+         check and `main` is the snapshot the batch was staged on (a fast-forward, nothing
+         else), in one commit to the catalog's REST API that requires `main` to be that
+         snapshot and `audit` that head still; a ref moved by anyone in between fails the
+         commit and nothing is published. A batch that staged nothing (the same bytes again)
+         moves nothing.
 
-Exits: 0 done (audit: every check passed); 1 a task error; 2 refused (a spool file that is a link at
-any level, not a regular file, or has a second link; a sha256 or size mismatch, other bytes under the
-key, `audit` holding another unpublished batch); 3 the batch failed its audit
+Exits: 0 done (audit: every check passed); 1 a task error, a bad argument among them (publish: a
+catalog conflict with neither ref moved, which a retry decides); 2 refused (a
+spool file that is a link at any level, not a regular file, or has a second link; a sha256 or size
+mismatch, other bytes under the key, `audit` holding another unpublished batch; publish: `main` moved
+since staging, or `main` or `audit` moved before its commit); 3 the batch failed its audit
 (publish: its audit at `audit`'s head is missing or failed, main not moved).
 The last line on stdout is the task's result as JSON, {"exit": <n>, ...}, for the DAG's record
 task, which writes the run record (this task writes none).
 
 The landing key is the Spark key, K2_SPARK_S3_ACCESS_KEY and K2_SPARK_S3_SECRET_KEY (A8): get and
-put on the landing bucket, no delete. Nothing here prints a key.
+put on the landing bucket, no delete. Nothing here prints a key. The publish commit goes to
+Lakekeeper at K2_LAKE_CATALOG_URI, as spark_conf.py reads it, with no credential: the catalog has no
+authentication and answers on k2-catalog alone (ADR-059 part 7).
 """
 
 from __future__ import annotations
@@ -66,6 +84,7 @@ SPOOL = Path("/spool")
 # holds each equal to model.py's.
 LANDING_BUCKET = "k2-landing"
 LINEAGE = "source_file_sha256"  # model.LINEAGE_COLUMN
+FETCHED_AT = "fetched_at"  # a public-api row's second lineage column, its page's fetchedAt
 AUDIT = "audit"  # model.AUDIT_BRANCH
 SUMMARY_KEYS = ("k2.run-id", "k2.release", "k2.batch-id", "k2.source-sha256")  # model.SNAPSHOT_SUMMARY_KEYS
 LANDING_COLUMNS = ("object_key", "sha256", "bytes", "url", "final_url", "http_status", "fetched_at",
@@ -111,14 +130,15 @@ class Run:
     product: str
     run_id: str  # <dagId>/<runId>: the batch id too
     pipeline: dict
+    accept_data_loss: bool = False  # kafka load only: resume below the log start, the gap recorded
 
     @property
     def entry(self) -> Path:
         return SPOOL / self.run_id
 
     @property
-    def raw(self) -> Path:
-        return self.entry / f"raw.{self.pipeline['connector']['format']}"
+    def api(self) -> bool:
+        return self.pipeline["connector"]["kind"] == "public-api"
 
     @property
     def bronze(self) -> dict:
@@ -172,10 +192,55 @@ class Run:
             return None
 
     def spooled(self) -> tuple[dict, bytes, str]:
-        """fetch.json, the raw bytes and their verified sha256."""
+        """The fetch record of the run's one file, its bytes and their verified sha256: fetch.json
+        and raw.<format> for a file, fetch.json's one page and raw.1.json for a public API."""
         record = json.loads(self.read("fetch.json"))
-        data = self.read(self.raw.name)
+        if self.api:
+            record = one_page(record)
+            data = self.read(record["raw"])
+        else:
+            data = self.read(f"raw.{self.pipeline['connector']['format']}")
         return record, data, verify(record, data)
+
+
+def one_page(record: dict) -> dict:
+    """The one page a public API's fetch.json lists, refused unless it is page 1 at raw.1.json."""
+    pages = record.get("pages")
+    # ponytail: one page per run, which pagination `none` fetches and all k2gen compiles today. Lift it
+    # when a product declares pagination other than `none`: land each changed page and stage each
+    # page's rows at its own fetchedAt, which needs rows.jsonl to say which page a row came from.
+    if not isinstance(pages, list) or len(pages) != 1:
+        raise Refused(f"fetch.json lists {len(pages) if isinstance(pages, list) else 'no'} pages; "
+                      "a public-api run lands exactly one")
+    [page] = pages
+    if not isinstance(page, dict) or page.get("page") != 1 or page.get("raw") != "raw.1.json":
+        raise Refused("fetch.json's one page is not page 1 spooled as raw.1.json")
+    return page
+
+
+def extension(connector: dict) -> str:
+    """The landed object's extension: a public API's pages are JSON, a file is its format."""
+    return "json" if connector["kind"] == "public-api" else connector["format"]
+
+
+def observed_at(run: Run, record: dict) -> datetime | None:
+    """A public-api batch's fetched_at, its page's fetchedAt; None for a file. Refused unless the
+    bronze key holds fetched_at: without it a response seen again after another (A, B, A) would
+    stage the first one's keys again, a duplicate."""
+    if not run.api:
+        return None
+    if FETCHED_AT not in run.bronze["key"]:
+        raise Refused(f"{run.bronze['table']} has no {FETCHED_AT} in its key, so a response seen again "
+                      "after another would repeat its first rows' keys")
+    return datetime.fromisoformat(record["fetchedAt"])
+
+
+def at_fetch(fetched_at: datetime | None) -> tuple[str, dict]:
+    """The SQL that narrows a batch's rows to one observation, `AND fetched_at = :fetched_at`, and
+    its argument; nothing for a file."""
+    if fetched_at is None:
+        return "", {}
+    return f" AND {name(FETCHED_AT)} = :fetched_at", {"fetched_at": fetched_at}
 
 
 def verify(record: dict, data: bytes) -> str:
@@ -195,7 +260,7 @@ def object_key(pipeline: dict, record: dict, sha: str) -> str:
     if landing["bucket"] != LANDING_BUCKET or not SHA256.fullmatch(sha):
         raise ValueError(f"landing {landing['bucket']!r} or sha256 {sha!r} is not the connector's")
     day = datetime.fromisoformat(record["fetchedAt"]).astimezone(timezone.utc).date().isoformat()
-    return f"{landing['prefix']}{day}/{sha}.{pipeline['connector']['format']}"
+    return f"{landing['prefix']}{day}/{sha}.{extension(pipeline['connector'])}"
 
 
 def land(store, key: str, data: bytes) -> bool:
@@ -230,26 +295,30 @@ def check_names(bronze: dict) -> list[str]:
             *(f"in_domain:{c}" for c in sorted(bronze["patterns"])), *values, *bronze["audits"]]
 
 
-def check_sql(bronze: dict, snapshot, sha: str, parsed: int) -> list[tuple[str, str, dict, int]]:
+def check_sql(bronze: dict, snapshot, sha: str, parsed: int,
+              fetched_at: datetime | None = None) -> list[tuple[str, str, dict, int]]:
     """`(check, sql, args, wanted)` for each declared check that runs in SQL: the query returns
     one count, which must equal `wanted`. Every query reads the batch's rows alone (lineage =
-    the batch's sha256) at the one snapshot audited, never the whole branch (SPIKE-RUNCOST F12).
+    the batch's sha256, and for a public API its fetched_at) at the one snapshot audited, never
+    the whole branch (SPIKE-RUNCOST F12).
     Names come from the pipeline through name() and rel(); values only as bound parameters."""
     t, lin = rel(bronze["table"]), name(LINEAGE)
     at = f"VERSION AS OF {snapshot_id(snapshot)}"
-    src = f"{t} {at} WHERE {lin} = :sha"
+    observation, args = at_fetch(fetched_at)
+    src, args = f"{t} {at} WHERE {lin} = :sha{observation}", {"sha": sha, **args}
     keys = ", ".join(name(c) for c in bronze["key"])
-    out = [("row_count", f"SELECT count(*) FROM {src}", {"sha": sha}, parsed),
+    out = [("row_count", f"SELECT count(*) FROM {src}", args, parsed),
            ("keys_unique", f"SELECT count(*) FROM (SELECT 1 FROM {src} GROUP BY {keys} HAVING count(*) > 1)",
-            {"sha": sha}, 0)]
+            args, 0)]
     for column in sorted(bronze["patterns"]):
         c = name(column)
         out.append((f"in_domain:{column}",
                     f"SELECT count(*) FROM {src} AND {c} IS NOT NULL AND NOT (CAST({c} AS STRING) RLIKE :pattern)",
-                    {"sha": sha, "pattern": f"^(?:{bronze['patterns'][column]})$"}, 0))
+                    {**args, "pattern": f"^(?:{bronze['patterns'][column]})$"}, 0))
     if "values_unchanged" in check_names(bronze):
         # ponytail: the other side, `o`, is every published row sharing a key, which Spark reads by
         # scanning the table at the snapshot; partition bronze on the key's date when it grows.
+        # A public API's key holds fetched_at (observed_at), so its rows compare within one fetch.
         on = " AND ".join(f"b.{name(c)} = o.{name(c)}" for c in business_key(bronze))
         same = " AND ".join(f"b.{name(c)} <=> o.{name(c)}" for c in bronze["values"])
         out.append(("values_unchanged",
@@ -296,11 +365,12 @@ def load(run: Run, store, lake) -> tuple[int, dict]:
     except Refused as e:
         print(f"load refused: {e}", file=sys.stderr)
         return EXIT_REFUSED, {"objectKey": uri}
-    log = run.pipeline["landing"]["log"]
-    if not lake.has_object(log, uri):  # a retry of this task logs the object once
+    log, fetched = run.pipeline["landing"]["log"], datetime.fromisoformat(record["fetchedAt"])
+    # a retry of this task logs the object once; a public API logs each observation of it
+    if not lake.has_object(log, uri, fetched if run.api else None):
         row = {"object_key": uri, "sha256": sha, "bytes": len(data), "url": record["url"],
                "final_url": record["finalUrl"], "http_status": record["httpStatus"],
-               "fetched_at": datetime.fromisoformat(record["fetchedAt"]), "landed_at": now(), "parsed": parsed,
+               "fetched_at": fetched, "landed_at": now(), "parsed": parsed,
                "batch_id": run.run_id, "run_id": run.run_id, "release_id": run.release}
         lake.append(log, [row], summary(run, sha))
     print(f"load: {'landed' if wrote else 'already landed'} {uri}, {len(data)} bytes, parsed {parsed}")
@@ -308,13 +378,19 @@ def load(run: Run, store, lake) -> tuple[int, dict]:
     if not parsed:
         print("load: the parse failed, so nothing is staged; the audit fails the batch")
         return EXIT_OK, landed
-    return stage(run, lake, lines, sha, landed)
+    try:
+        at = observed_at(run, record)
+    except Refused as e:
+        print(f"load refused: {e}; its file is landed, nothing staged", file=sys.stderr)
+        return EXIT_REFUSED, landed
+    return stage(run, lake, lines, sha, landed, at)
 
 
-def stage(run: Run, lake, lines: list[str], sha: str, result: dict) -> tuple[int, dict]:
+def stage(run: Run, lake, lines: list[str], sha: str, result: dict,
+          fetched_at: datetime | None = None) -> tuple[int, dict]:
     """Appends the batch's rows to `audit` unless another batch waits there unpublished (it
     blocks this one: bronze publishes in order), this batch is staged already (a retry), or its
-    bytes are published already (the same file again)."""
+    bytes are published already (the same file again; for a public API, at this fetched_at)."""
     table = run.bronze["table"]
     refs = lake.refs(table)
     result = {**result, "table": table, "snapshotBefore": refs.get(AUDIT)}
@@ -326,15 +402,16 @@ def stage(run: Run, lake, lines: list[str], sha: str, result: dict) -> tuple[int
         print(f"load refused: {AUDIT} of {table} holds batch {pending}, unpublished; this batch waits "
               f"behind it (its file is landed)", file=sys.stderr)
         return EXIT_REFUSED, result
-    if lake.published_rows(table, sha):
-        print(f"load: {sha} is published in {table} already; nothing staged")
+    if lake.published_rows(table, sha, fetched_at):
+        print(f"load: {sha}{'' if fetched_at is None else f' at {fetched_at}'} is published in {table} already; "
+              "nothing staged")
         return EXIT_OK, result
     if AUDIT not in refs:
         lake.create_branch(table)
     elif refs[AUDIT] != refs.get("main"):  # behind main, which maintenance moved on
         lake.reset_branch(table, refs["main"])
     if lines:
-        lake.append_rows(table, lines, sha, summary(run, sha))
+        lake.append_rows(table, lines, sha, summary(run, sha), fetched_at)
     after = lake.refs(table).get(AUDIT)
     print(f"load: {len(lines)} rows staged on {AUDIT} of {table}, snapshot {after}")
     return EXIT_OK, {**result, "rows": len(lines), "snapshotAfter": after}
@@ -342,7 +419,8 @@ def stage(run: Run, lake, lines: list[str], sha: str, result: dict) -> tuple[int
 
 def audit(run: Run, store, lake) -> tuple[int, dict]:
     """Runs every check of the batch at `audit`'s head and records each in audit_checks."""
-    _, _, sha = run.spooled()
+    record, _, sha = run.spooled()
+    fetched_at = observed_at(run, record)
     bronze, lines = run.bronze, run.lines()
     table = bronze["table"]
     refs = lake.refs(table)
@@ -351,7 +429,7 @@ def audit(run: Run, store, lake) -> tuple[int, dict]:
         print(f"audit refused: {AUDIT} of {table} holds batch {pending}, not this one", file=sys.stderr)
         return EXIT_REFUSED, {"table": table}
     head = refs.get(AUDIT, refs.get("main"))
-    results = audit_results(bronze, lines, lake, head, sha, run.audits())
+    results = audit_results(bronze, lines, lake, head, sha, run.audits(), fetched_at)
     at = now()
     rows = [{"table_name": table, "batch_id": run.run_id, "snapshot_id": head, "check_name": check,
              "passed": passed, "detail": detail[:1000], "checked_at": at, "run_id": run.run_id,
@@ -380,30 +458,75 @@ def unaudited(found: list, expected: list[str]) -> str | None:
     return None
 
 
+def staged_on(parents: dict, head: int, batch: str):
+    """The snapshot `batch` was staged on top of: `head`'s newest ancestor that is not the batch's
+    own commit. `parents` is `{snapshot: (parent, k2.batch-id)}` over the table's snapshots."""
+    while head in parents and parents[head][1] == batch:
+        head = parents[head][0]
+    return head
+
+
+def publish_change(table: str, main, head: int, branch: str = AUDIT) -> dict:
+    """The one commit that publishes: `main` set to `head`, required to be `main` still (null: no
+    main yet) and `branch` to be `head` still, as Iceberg REST's assert-ref-snapshot-id checks them
+    in the catalog at the commit. The same requirements as the dbt wrapper's tag commit; a Kafka
+    landing commit is made main's head by it too, from its branch (kafka.LAND)."""
+    _, ns, name_ = table.split(".")
+    return {"identifier": {"namespace": [ns], "name": name_},
+            "requirements": [{"type": "assert-ref-snapshot-id", "ref": "main", "snapshot-id": main},
+                             {"type": "assert-ref-snapshot-id", "ref": branch, "snapshot-id": snapshot_id(head)}],
+            "updates": [{"action": "set-snapshot-ref", "ref-name": "main", "type": "branch",
+                         "snapshot-id": snapshot_id(head)}]}
+
+
 def publish(run: Run, store, lake) -> tuple[int, dict]:
-    """Fast-forwards `main` to `audit`'s head, only when the batch's newest audit at that very
-    head passed every check; a branch written after its audit is not published unaudited."""
+    """Sets `main` to `audit`'s head, only when the batch's newest audit at that very head passed
+    every check and `main` is the snapshot the batch was staged on, by one catalog commit that
+    requires both refs to be what was read here: a write to `audit` after its audit, or a move of
+    `main`, before the commit or during it, publishes nothing (CHANGELOG alpha.4, F8)."""
     bronze = run.bronze
     table = bronze["table"]
     refs = lake.refs(table)
-    head = refs.get(AUDIT, refs.get("main"))
-    result = {"table": table, "snapshotBefore": refs.get("main"), "snapshotAfter": refs.get("main")}
-    why = unaudited(lake.checks_of(bronze["checks"], table, run.run_id, head), check_names(bronze))
+    main, head = refs.get("main"), refs.get(AUDIT, refs.get("main"))
+    result = {"table": table, "snapshotBefore": main, "snapshotAfter": main}
+    if run.pipeline["connector"]["kind"] == "kafka":
+        import kafka  # not at the top: kafka.py imports this module
+
+        expected = list(kafka.CHECKS)  # a Kafka batch's audit runs these, never the file kind's
+    else:
+        expected = check_names(bronze)
+    why = unaudited(lake.checks_of(bronze["checks"], table, run.run_id, head), expected)
     if why:
-        print(f"publish refused at {AUDIT} snapshot {head}: {why}; main {refs.get('main')} not moved", file=sys.stderr)
+        print(f"publish refused at {AUDIT} snapshot {head}: {why}; main {main} not moved", file=sys.stderr)
         return EXIT_FAILED, result
     pending = pending_batch(lake, table, refs)
     if pending is None:
-        print(f"publish: batch {run.run_id} staged nothing unpublished; main {refs.get('main')} stays")
+        print(f"publish: batch {run.run_id} staged nothing unpublished; main {main} stays")
         return EXIT_OK, result
     if pending != run.run_id:
         print(f"publish refused: {AUDIT} holds batch {pending}, not this one", file=sys.stderr)
         return EXIT_REFUSED, result
-    lake.fast_forward(table)  # Iceberg refuses one that is not a fast-forward
-    after = lake.refs(table).get("main")
-    if after != head:
-        raise RuntimeError(f"main is {after} after the fast-forward, not {AUDIT}'s {head}")
-    print(f"publish: main {refs.get('main')} -> {after}, batch {run.run_id}")
+    base = staged_on(lake.parents(table), head, run.run_id)
+    if main is not None and main != base:  # no main yet: the first publish of the table
+        print(f"publish refused: main is {main}, not {base}, the snapshot batch {run.run_id} was staged on, so "
+              f"moving main to {AUDIT}'s {head} is no fast-forward (main moved since staging, or {AUDIT} does not "
+              "descend from it); nothing published", file=sys.stderr)
+        return EXIT_REFUSED, result
+    catalog = lake.catalog(table)
+    status, doc = catalog.commit(table, publish_change(table, main, head))
+    if status == 409:  # the commit failed: the catalog changed nothing
+        found = catalog.refs(table)
+        moved = [f"{ref} (read {want}, now {found.get(ref)})" for ref, want in (("main", main), (AUDIT, head))
+                 if found.get(ref) != want]
+        why = (f"{', '.join(moved)} moved since this task read it" if moved else
+               f"main and {AUDIT} read back unmoved, so another commit to the table raced this one; a retry decides")
+        print(f"publish refused: the catalog answered HTTP 409, {(doc.get('error') or {}).get('message')!r}: "
+              f"{why}; nothing published", file=sys.stderr)
+        return (EXIT_REFUSED if moved else EXIT_ERROR), result
+    after = (((doc.get("metadata") or {}).get("refs") or {}).get("main") or {}).get("snapshot-id")
+    if status != 200 or after != head:
+        raise RuntimeError(f"the publish commit answered HTTP {status} with main at {after}, not {AUDIT}'s {head}")
+    print(f"publish: main {main} -> {after}, batch {run.run_id}")
     return EXIT_OK, {**result, "snapshotAfter": after}
 
 
@@ -420,12 +543,6 @@ def procedure_table(relation: str) -> tuple[str, str]:
     rel(relation)
     catalog, ns, table = relation.split(".")
     return name(catalog), string_literal(f"{ns}.{table}")
-
-
-def fast_forward_sql(table: str) -> str:
-    catalog, ident = procedure_table(table)
-    return (f"CALL {catalog}.`system`.`fast_forward`(table => {ident}, branch => {string_literal('main')}, "
-            f"to => {string_literal(AUDIT)})")
 
 
 def parser_audits(declared: list[str], found: dict) -> list[tuple[str, bool, str]]:
@@ -452,11 +569,13 @@ def parser_audits(declared: list[str], found: dict) -> list[tuple[str, bool, str
 
 
 def audit_results(bronze: dict, lines: list[str] | None, lake, head, sha: str,
-                  audits: dict) -> list[tuple[str, bool, str]]:
+                  audits: dict, fetched_at: datetime | None = None) -> list[tuple[str, bool, str]]:
     """`(check, passed, detail)` in check_names order; a batch that did not parse has one row."""
     if lines is None:
         return [("parses", False, "fetch could not parse the file; its bytes are landed")]
-    problems = shape_problems(lines, lake.columns(bronze["table"]))
+    # a public API's fetched_at is the connector's to set, as source_file_sha256 is, never the parser's
+    columns = [c for c in lake.columns(bronze["table"]) if fetched_at is None or c != FETCHED_AT]
+    problems = shape_problems(lines, columns)
     if problems:
         return [("parses", False, f"{len(problems)} rows: " + "; ".join(problems[:5]))]
     out = [("parses", True, f"{len(lines)} rows"),
@@ -464,7 +583,7 @@ def audit_results(bronze: dict, lines: list[str] | None, lake, head, sha: str,
     if head is None:
         out += [(c, False, f"no snapshot on {AUDIT} to check") for c in check_names(bronze)[2:]]
         return out
-    for check, text, args, wanted in check_sql(bronze, head, sha, len(lines)):
+    for check, text, args, wanted in check_sql(bronze, head, sha, len(lines), fetched_at):
         got = lake.count(check, text, args)
         detail = (f"{got} rows on {AUDIT}, the parser wrote {wanted}" if check == "row_count"
                   else f"{got} rows fail it" if got else "")
@@ -528,6 +647,50 @@ class Landing:
             return response.read()
 
 
+class Catalog:
+    """One warehouse of the lake's Iceberg REST catalog, Lakekeeper, by the standard library. No
+    credential: it has no authentication and answers on k2-catalog alone (ADR-059 part 7)."""
+
+    def __init__(self, uri: str, warehouse: str):
+        uri = uri.rstrip("/")
+        status, config = self._call("GET", f"{uri}/v1/config?warehouse={urllib.parse.quote(warehouse)}")
+        if status != 200:
+            raise RuntimeError(f"the catalog's config of warehouse {warehouse}: HTTP {status}")
+        prefix = {**config.get("defaults", {}), **config.get("overrides", {})}["prefix"]  # overrides win (the spec)
+        self.base = f"{uri}/v1/{prefix}"
+
+    @staticmethod
+    def _call(method: str, url: str, body: dict | None = None) -> tuple[int, dict]:
+        """`(status, JSON body)`, an error status included: a 409 is an answer, not an exception."""
+        request = urllib.request.Request(url, None if body is None else json.dumps(body).encode(), method=method,
+                                         headers={"Content-Type": "application/json"})
+        try:
+            with urllib.request.urlopen(request, timeout=60) as r:  # noqa: S310 - the configured catalog
+                raw = r.read()
+                return r.status, json.loads(raw) if raw else {}
+        except urllib.error.HTTPError as e:
+            try:
+                return e.code, json.loads(e.read() or b"{}")
+            except ValueError:
+                return e.code, {}
+
+    def _path(self, table: str) -> str:
+        _, ns, name_ = table.split(".")
+        return f"{self.base}/namespaces/{urllib.parse.quote(ns)}/tables/{urllib.parse.quote(name_)}"
+
+    def commit(self, table: str, change: dict) -> tuple[int, dict]:
+        """Iceberg REST's table commit (POST, requirements and updates): 200 with the new metadata,
+        409 when a requirement fails."""
+        return self._call("POST", self._path(table), change)
+
+    def refs(self, table: str) -> dict:
+        """`{ref: snapshot id}` as the catalog holds them now (no engine's cached copy)."""
+        status, doc = self._call("GET", self._path(table))
+        if status != 200:
+            raise RuntimeError(f"the catalog's {table}: HTTP {status}")
+        return {r: v["snapshot-id"] for r, v in ((doc.get("metadata") or {}).get("refs") or {}).items()}
+
+
 class SparkLake:
     """The lake facts the flows read and the commits they make, each one statement over
     identifiers from rel() and values bound as parameters (Spark 3.5 named markers)."""
@@ -538,8 +701,10 @@ class SparkLake:
     def _sql(self, text: str, **args):
         return [tuple(r) for r in self.spark.sql(text, args or None).collect()]
 
-    def has_object(self, log: str, uri: str) -> bool:
-        return bool(self._sql(f"SELECT 1 FROM {rel(log)} WHERE `object_key` = :uri LIMIT 1", uri=uri))
+    def has_object(self, log: str, uri: str, fetched_at: datetime | None = None) -> bool:
+        """Whether `uri` is logged; with `fetched_at`, logged as that observation."""
+        at, args = at_fetch(fetched_at)
+        return bool(self._sql(f"SELECT 1 FROM {rel(log)} WHERE `object_key` = :uri{at} LIMIT 1", uri=uri, **args))
 
     def append(self, table: str, records: list, props: dict) -> None:
         schema = self.spark.table(rel(table)).schema
@@ -566,32 +731,45 @@ class SparkLake:
                           "WHERE `snapshot_id` = :s", s=snapshot_id(snapshot))
         return found[0][0] if found else None
 
-    def published_rows(self, table: str, sha: str) -> int:
-        return self._sql(f"SELECT count(*) FROM {rel(table)} WHERE {name(LINEAGE)} = :sha", sha=sha)[0][0]
+    def published_rows(self, table: str, sha: str, fetched_at: datetime | None = None) -> int:
+        at, args = at_fetch(fetched_at)
+        return self._sql(f"SELECT count(*) FROM {rel(table)} WHERE {name(LINEAGE)} = :sha{at}", sha=sha, **args)[0][0]
 
     def columns(self, table: str) -> list[str]:
         return [f.name for f in self.spark.table(rel(table)).schema.fields]
 
-    def create_branch(self, table: str) -> None:
-        self.spark.sql(f"ALTER TABLE {rel(table)} CREATE BRANCH IF NOT EXISTS {name(AUDIT)}")
+    def create_branch(self, table: str, branch: str = AUDIT) -> None:
+        self.spark.sql(f"ALTER TABLE {rel(table)} CREATE BRANCH IF NOT EXISTS {name(branch)}")
 
-    def reset_branch(self, table: str, snapshot: int) -> None:
-        self.spark.sql(f"ALTER TABLE {rel(table)} REPLACE BRANCH {name(AUDIT)} AS OF VERSION {snapshot_id(snapshot)}")
+    def reset_branch(self, table: str, snapshot, branch: str = AUDIT) -> None:
+        """`branch` set to `snapshot`, made if missing; None, a table with no main (a Kafka product's
+        first batch restaged, or its first landing commit), drops it and makes it again, empty
+        (Iceberg makes an empty snapshot for a branch of a table with none), as the first stage of
+        the table did."""
+        if snapshot is None:
+            self.spark.sql(f"ALTER TABLE {rel(table)} DROP BRANCH IF EXISTS {name(branch)}")
+            return self.create_branch(table, branch)
+        self.spark.sql(f"ALTER TABLE {rel(table)} CREATE OR REPLACE BRANCH {name(branch)} "
+                       f"AS OF VERSION {snapshot_id(snapshot)}")
 
-    def append_rows(self, table: str, lines: list[str], sha: str, props: dict) -> None:
+    def append_rows(self, table: str, lines: list[str], sha: str, props: dict,
+                    fetched_at: datetime | None = None) -> None:
         """rows.jsonl onto `audit`, read by Spark's JSON reader against the table's own types
         (FAILFAST: a value that does not read as its column's type fails the task, nothing
-        written), with the lineage column set to the batch's sha256."""
+        written), with the lineage column set to the batch's sha256 and, for a public API,
+        fetched_at to its page's fetchedAt."""
         from pyspark.sql import functions as F
         from pyspark.sql.types import StructType
 
+        stamped = {LINEAGE: sha, **({} if fetched_at is None else {FETCHED_AT: fetched_at})}
         schema = self.spark.table(rel(table)).schema
-        body = StructType([f for f in schema.fields if f.name != LINEAGE])
+        body = StructType([f for f in schema.fields if f.name not in stamped])
         # ponytail: the rows pass through the driver, bounded by fetch's 64 MiB cap.
         frame = (self.spark.read.schema(body).option("mode", "FAILFAST")
-                 .json(self.spark.sparkContext.parallelize(lines, 1))
-                 .withColumn(LINEAGE, F.lit(sha))
-                 .select(*[F.col(f.name).cast(f.dataType) for f in schema.fields]))
+                 .json(self.spark.sparkContext.parallelize(lines, 1)))
+        for column, value in stamped.items():
+            frame = frame.withColumn(column, F.lit(value))
+        frame = frame.select(*[F.col(f.name).cast(f.dataType) for f in schema.fields])
         self._write(frame, f"{rel(table)}.{name('branch_' + AUDIT)}", props)
 
     def count(self, check: str, text: str, args: dict) -> int:
@@ -601,29 +779,70 @@ class SparkLake:
         return self._sql(f"SELECT `check_name`, `passed`, `checked_at` FROM {rel(checks)} WHERE `table_name` = :t "
                          "AND `batch_id` = :b AND `snapshot_id` <=> :s", t=table, b=batch, s=snapshot)
 
-    def fast_forward(self, table: str) -> None:
-        self.spark.sql(fast_forward_sql(table))
+    def parents(self, table: str) -> dict:
+        """`{snapshot: (parent, k2.batch-id)}` over the table's snapshots, for staged_on."""
+        return {s: (p, b) for s, p, b in self._sql(
+            f"SELECT `snapshot_id`, `parent_id`, `summary`['k2.batch-id'] FROM {rel(table)}.`snapshots`")}
+
+    @staticmethod
+    def catalog(table: str) -> Catalog:
+        """The REST catalog of the table's warehouse, at the URI Spark's catalog uses."""
+        from spark_conf import CATALOG_URI, warehouse_of
+
+        return Catalog(CATALOG_URI, warehouse_of(table.split(".")[0]))
+
+
+class Arguments(argparse.ArgumentParser):
+    def error(self, message: str):
+        """A bad argument is a task error, exit 1: argparse's 2 would read as refused, which the DAG
+        does not retry (audit 2026-11-27, MED 28)."""
+        self.print_usage(sys.stderr)
+        self.exit(EXIT_ERROR, f"{self.prog}: error: {message}\n")
 
 
 def parse_args(argv: list[str] | None, read_pipeline) -> tuple[str, Run]:
-    ap = argparse.ArgumentParser(prog="connector.py", description=__doc__,
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = Arguments(prog="connector.py", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("task", choices=sorted(TASKS))
     ap.add_argument("--release", default=os.environ.get("K2_RELEASE"))
     ap.add_argument("--product", required=True)
     ap.add_argument("--run-id", required=True, help="<dagId>/<runId>")
+    ap.add_argument("--accept-data-loss", action="store_true",
+                    help="kafka load: partitions below the log start resume there, the gap recorded")
     a = ap.parse_args(argv)
     dag_id, _, run_name = a.run_id.partition("/")
     if not (a.release and RELEASE_ID.fullmatch(a.release) and PRODUCT_ID.fullmatch(a.product)
             and RUN_NAME.fullmatch(run_name)):
         ap.error("--release, --product or --run-id is not a plain name")
     pipeline = read_pipeline(RELEASES / a.release / "compiled" / "products" / a.product / "pipeline.json")
-    if (pipeline.get("connector") or {}).get("kind") != "https-file" or dag_id != pipeline["dagId"]:
-        ap.error(f"{a.product} has no https-file connector, or the run is not of DAG {pipeline['dagId']}")
-    return a.task, Run(release=a.release, product=a.product, run_id=a.run_id, pipeline=pipeline)
+    kind = (pipeline.get("connector") or {}).get("kind")
+    if kind not in KINDS or dag_id != pipeline["dagId"]:
+        ap.error(f"{a.product} has no {' or '.join(KINDS)} connector, or the run is not of DAG {pipeline['dagId']}")
+    if a.accept_data_loss and (kind != "kafka" or a.task != "load"):
+        ap.error("--accept-data-loss is for a kafka product's load only")
+    return a.task, Run(release=a.release, product=a.product, run_id=a.run_id, pipeline=pipeline,
+                       accept_data_loss=a.accept_data_loss)
 
 
 TASKS = {"load": load, "audit": audit, "publish": publish}
+KINDS = ("https-file", "kafka", "public-api")
+
+
+def task_of(task: str, kind: str):
+    """The task's flow for the connector kind: the file kind's here, the Kafka kind's in kafka.py."""
+    if kind == "kafka":
+        import kafka  # not at the top: kafka.py imports this module
+
+        return kafka.TASKS[task]
+    return TASKS[task]
+
+
+def shells(spark, pipeline: dict) -> tuple:
+    """The flows' two arguments over the real systems: the landing bucket or the topic, and the lake."""
+    if pipeline["connector"]["kind"] == "kafka":
+        import kafka
+
+        return kafka.SparkKafka(spark, pipeline["connector"]), kafka.SparkLanding(spark, pipeline["connector"]["registry"])
+    return Landing(), SparkLake(spark)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -633,7 +852,7 @@ def main(argv: list[str] | None = None) -> int:
     spark = lake_session(f"k2-connector-{task}-{run.pipeline['fence']}")
     code, result = EXIT_ERROR, {}
     try:
-        code, result = TASKS[task](run, Landing(), SparkLake(spark))
+        code, result = task_of(task, run.pipeline["connector"]["kind"])(run, *shells(spark, run.pipeline))
     except Refused as e:
         print(f"{task} refused: {e}", file=sys.stderr)
         code = EXIT_REFUSED

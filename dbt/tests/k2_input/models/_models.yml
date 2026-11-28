@@ -7,6 +7,9 @@ sources:
         columns:
           - {name: id, data_type: bigint}
           - {name: amount, data_type: bigint}
+          # Read by no model: an absent input renders every declared column, each with its own type.
+          - {name: price, data_type: "decimal(18,8)"}
+          - {name: seen_at, data_type: "timestamp(6) with time zone"}
 models:
   - name: reads_input
     columns:

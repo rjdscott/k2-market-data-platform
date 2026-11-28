@@ -38,7 +38,7 @@ test-api:  ## k2-api's tests and ruff from its own lock (services/k2-api/), with
 test-platform:  ## The run-records client, the catalog site generator and the dbt wrapper (platform/runs, platform/catalog-site, docker/dbt-runner): fakes only, no stack
 	uv run --no-project --with pytest==9.2.0 --with trino==0.340.0 pytest platform/runs platform/catalog-site -q
 	uv run --project platform/k2gen --locked -q --with pytest==9.2.0 --with trino==0.340.0 pytest docker/dbt-runner -q
-	uv run --no-project --with pytest==9.2.0 pytest domains -q
+	uv run --no-project --with pytest==9.2.0 --with pyyaml==6.0.4 pytest domains -q
 
 .PHONY: site
 site:  ## The live release's catalog site (its k2site.py --strict, in tools as svc.catalog) and dbt docs (k2-dbt docs, in its dbt-runner image) into the k2-site volume k2-api serves; deploy runs both after each deploy and rollback (scripts/deploy.py)
@@ -54,3 +54,9 @@ site-install:  ## Schedule `make site` daily at 05:15 UTC: a systemd user timer 
 	systemctl --user daemon-reload
 	systemctl --user enable --now k2-site.timer
 	@echo "Scheduled daily at 05:15 UTC. Deploy regenerates the site too; 'make site' runs it now."
+
+.PHONY: hold unhold
+hold:  ## PRODUCT=<domain/name> REASON="<text, at most 200 chars>" Hold a product of the live release, as svc.operator from the host (its file once: make password PRINCIPAL=svc.operator TO_FILE=1): the hold row first, then its DAG paused; no deploy unpauses it, its resolve task refuses runs (scripts/hold.py)
+	@uv run --no-project --with trino==0.340.0 python3 scripts/hold.py hold "$(PRODUCT)" "$(REASON)"
+unhold:  ## PRODUCT=<domain/name> End the operator hold, as svc.operator: the release row, then the DAG unpaused unless a rebuild or restore hold is still open (scripts/hold.py)
+	@uv run --no-project --with trino==0.340.0 python3 scripts/hold.py unhold "$(PRODUCT)"

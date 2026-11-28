@@ -224,6 +224,794 @@
     "partitioning": [],
     "sort": []
   },
+  "k2.kraken_instruments.bronze_pairs": {
+    "columns": [
+      {
+        "name": "pair_code",
+        "required": true,
+        "type": "varchar"
+      },
+      {
+        "name": "ws_name",
+        "required": true,
+        "type": "varchar"
+      },
+      {
+        "name": "base",
+        "required": true,
+        "type": "varchar"
+      },
+      {
+        "name": "quote",
+        "required": true,
+        "type": "varchar"
+      },
+      {
+        "name": "tick_size",
+        "required": true,
+        "type": "varchar"
+      },
+      {
+        "name": "pair_decimals",
+        "required": true,
+        "type": "integer"
+      },
+      {
+        "name": "lot_decimals",
+        "required": true,
+        "type": "integer"
+      },
+      {
+        "name": "order_min",
+        "required": true,
+        "type": "varchar"
+      },
+      {
+        "name": "status",
+        "required": true,
+        "type": "varchar"
+      },
+      {
+        "name": "fetched_at",
+        "required": true,
+        "type": "timestamp(6) with time zone"
+      },
+      {
+        "name": "source_file_sha256",
+        "required": true,
+        "type": "varchar"
+      }
+    ],
+    "partitioning": [],
+    "sort": []
+  },
+  "k2.kraken_trades.bronze_trade": {
+    "columns": [
+      {
+        "name": "kafka_partition",
+        "required": true,
+        "type": "integer"
+      },
+      {
+        "name": "kafka_offset",
+        "required": true,
+        "type": "bigint"
+      },
+      {
+        "name": "kafka_timestamp",
+        "required": false,
+        "type": "timestamp(6) with time zone"
+      },
+      {
+        "name": "schema_id",
+        "required": false,
+        "type": "integer"
+      },
+      {
+        "name": "exchange",
+        "required": false,
+        "type": "varchar"
+      },
+      {
+        "name": "stream",
+        "required": false,
+        "type": "varchar"
+      },
+      {
+        "name": "symbol",
+        "required": false,
+        "type": "varchar"
+      },
+      {
+        "name": "recv_ts_ns",
+        "required": false,
+        "type": "bigint"
+      },
+      {
+        "name": "conn_id",
+        "required": false,
+        "type": "varchar"
+      },
+      {
+        "name": "conn_msg_seq",
+        "required": false,
+        "type": "bigint"
+      },
+      {
+        "name": "payload",
+        "required": false,
+        "type": "varbinary"
+      },
+      {
+        "name": "batch_id",
+        "required": false,
+        "type": "varchar"
+      },
+      {
+        "name": "landed_at",
+        "required": false,
+        "type": "timestamp(6) with time zone"
+      },
+      {
+        "name": "run_id",
+        "required": false,
+        "type": "varchar"
+      },
+      {
+        "name": "release_id",
+        "required": false,
+        "type": "varchar"
+      }
+    ],
+    "partitioning": [],
+    "sort": []
+  },
+  "market_analytics.candles__base.ohlcv_1d": {
+    "columns": [
+      {
+        "name": "venue",
+        "required": true,
+        "type": "varchar"
+      },
+      {
+        "name": "instrument_id",
+        "required": true,
+        "type": "varchar"
+      },
+      {
+        "name": "window_start",
+        "required": true,
+        "type": "timestamp(6) with time zone"
+      },
+      {
+        "name": "window_end",
+        "required": true,
+        "type": "timestamp(6) with time zone"
+      },
+      {
+        "name": "open",
+        "required": true,
+        "type": "decimal(38,18)"
+      },
+      {
+        "name": "high",
+        "required": true,
+        "type": "decimal(38,18)"
+      },
+      {
+        "name": "low",
+        "required": true,
+        "type": "decimal(38,18)"
+      },
+      {
+        "name": "close",
+        "required": true,
+        "type": "decimal(38,18)"
+      },
+      {
+        "name": "volume",
+        "required": true,
+        "type": "decimal(38,18)"
+      },
+      {
+        "name": "quote_volume",
+        "required": true,
+        "type": "decimal(38,18)"
+      },
+      {
+        "name": "trade_count",
+        "required": true,
+        "type": "bigint"
+      },
+      {
+        "name": "first_trade_at",
+        "required": true,
+        "type": "timestamp(6) with time zone"
+      },
+      {
+        "name": "last_trade_at",
+        "required": true,
+        "type": "timestamp(6) with time zone"
+      },
+      {
+        "name": "through_load_seq",
+        "required": true,
+        "type": "bigint"
+      }
+    ],
+    "partitioning": [
+      "year(window_start)"
+    ],
+    "sort": []
+  },
+  "market_analytics.candles__base.ohlcv_1h": {
+    "columns": [
+      {
+        "name": "venue",
+        "required": true,
+        "type": "varchar"
+      },
+      {
+        "name": "instrument_id",
+        "required": true,
+        "type": "varchar"
+      },
+      {
+        "name": "window_start",
+        "required": true,
+        "type": "timestamp(6) with time zone"
+      },
+      {
+        "name": "window_end",
+        "required": true,
+        "type": "timestamp(6) with time zone"
+      },
+      {
+        "name": "open",
+        "required": true,
+        "type": "decimal(38,18)"
+      },
+      {
+        "name": "high",
+        "required": true,
+        "type": "decimal(38,18)"
+      },
+      {
+        "name": "low",
+        "required": true,
+        "type": "decimal(38,18)"
+      },
+      {
+        "name": "close",
+        "required": true,
+        "type": "decimal(38,18)"
+      },
+      {
+        "name": "volume",
+        "required": true,
+        "type": "decimal(38,18)"
+      },
+      {
+        "name": "quote_volume",
+        "required": true,
+        "type": "decimal(38,18)"
+      },
+      {
+        "name": "trade_count",
+        "required": true,
+        "type": "bigint"
+      },
+      {
+        "name": "first_trade_at",
+        "required": true,
+        "type": "timestamp(6) with time zone"
+      },
+      {
+        "name": "last_trade_at",
+        "required": true,
+        "type": "timestamp(6) with time zone"
+      },
+      {
+        "name": "through_load_seq",
+        "required": true,
+        "type": "bigint"
+      }
+    ],
+    "partitioning": [
+      "year(window_start)"
+    ],
+    "sort": []
+  },
+  "market_analytics.candles__base.ohlcv_1m": {
+    "columns": [
+      {
+        "name": "venue",
+        "required": true,
+        "type": "varchar"
+      },
+      {
+        "name": "instrument_id",
+        "required": true,
+        "type": "varchar"
+      },
+      {
+        "name": "window_start",
+        "required": true,
+        "type": "timestamp(6) with time zone"
+      },
+      {
+        "name": "window_end",
+        "required": true,
+        "type": "timestamp(6) with time zone"
+      },
+      {
+        "name": "open",
+        "required": true,
+        "type": "decimal(38,18)"
+      },
+      {
+        "name": "high",
+        "required": true,
+        "type": "decimal(38,18)"
+      },
+      {
+        "name": "low",
+        "required": true,
+        "type": "decimal(38,18)"
+      },
+      {
+        "name": "close",
+        "required": true,
+        "type": "decimal(38,18)"
+      },
+      {
+        "name": "volume",
+        "required": true,
+        "type": "decimal(38,18)"
+      },
+      {
+        "name": "quote_volume",
+        "required": true,
+        "type": "decimal(38,18)"
+      },
+      {
+        "name": "trade_count",
+        "required": true,
+        "type": "bigint"
+      },
+      {
+        "name": "first_trade_at",
+        "required": true,
+        "type": "timestamp(6) with time zone"
+      },
+      {
+        "name": "last_trade_at",
+        "required": true,
+        "type": "timestamp(6) with time zone"
+      },
+      {
+        "name": "through_load_seq",
+        "required": true,
+        "type": "bigint"
+      }
+    ],
+    "partitioning": [
+      "month(window_start)"
+    ],
+    "sort": []
+  },
+  "market_analytics.candles__base.ohlcv_5m": {
+    "columns": [
+      {
+        "name": "venue",
+        "required": true,
+        "type": "varchar"
+      },
+      {
+        "name": "instrument_id",
+        "required": true,
+        "type": "varchar"
+      },
+      {
+        "name": "window_start",
+        "required": true,
+        "type": "timestamp(6) with time zone"
+      },
+      {
+        "name": "window_end",
+        "required": true,
+        "type": "timestamp(6) with time zone"
+      },
+      {
+        "name": "open",
+        "required": true,
+        "type": "decimal(38,18)"
+      },
+      {
+        "name": "high",
+        "required": true,
+        "type": "decimal(38,18)"
+      },
+      {
+        "name": "low",
+        "required": true,
+        "type": "decimal(38,18)"
+      },
+      {
+        "name": "close",
+        "required": true,
+        "type": "decimal(38,18)"
+      },
+      {
+        "name": "volume",
+        "required": true,
+        "type": "decimal(38,18)"
+      },
+      {
+        "name": "quote_volume",
+        "required": true,
+        "type": "decimal(38,18)"
+      },
+      {
+        "name": "trade_count",
+        "required": true,
+        "type": "bigint"
+      },
+      {
+        "name": "first_trade_at",
+        "required": true,
+        "type": "timestamp(6) with time zone"
+      },
+      {
+        "name": "last_trade_at",
+        "required": true,
+        "type": "timestamp(6) with time zone"
+      },
+      {
+        "name": "through_load_seq",
+        "required": true,
+        "type": "bigint"
+      }
+    ],
+    "partitioning": [
+      "month(window_start)"
+    ],
+    "sort": []
+  },
+  "market_analytics.canonical_trades__base.trades": {
+    "columns": [
+      {
+        "name": "venue",
+        "required": true,
+        "type": "varchar"
+      },
+      {
+        "name": "kafka_partition",
+        "required": true,
+        "type": "integer"
+      },
+      {
+        "name": "kafka_offset",
+        "required": true,
+        "type": "bigint"
+      },
+      {
+        "name": "trade_ordinal",
+        "required": true,
+        "type": "integer"
+      },
+      {
+        "name": "trade_ts",
+        "required": true,
+        "type": "timestamp(6) with time zone"
+      },
+      {
+        "name": "instrument_id",
+        "required": true,
+        "type": "varchar"
+      },
+      {
+        "name": "venue_symbol",
+        "required": true,
+        "type": "varchar"
+      },
+      {
+        "name": "trade_id",
+        "required": true,
+        "type": "bigint"
+      },
+      {
+        "name": "side",
+        "required": true,
+        "type": "varchar"
+      },
+      {
+        "name": "price",
+        "required": true,
+        "type": "decimal(38,18)"
+      },
+      {
+        "name": "quantity",
+        "required": true,
+        "type": "decimal(38,18)"
+      },
+      {
+        "name": "is_duplicate",
+        "required": true,
+        "type": "boolean"
+      },
+      {
+        "name": "load_seq",
+        "required": true,
+        "type": "bigint"
+      }
+    ],
+    "partitioning": [
+      "day(trade_ts)"
+    ],
+    "sort": []
+  },
+  "market_capture.kraken_instruments__base.silver_listing": {
+    "columns": [
+      {
+        "name": "pair_code",
+        "required": true,
+        "type": "varchar"
+      },
+      {
+        "name": "first_fetched_at",
+        "required": true,
+        "type": "timestamp(6) with time zone"
+      },
+      {
+        "name": "is_listed",
+        "required": true,
+        "type": "boolean"
+      },
+      {
+        "name": "ws_name",
+        "required": false,
+        "type": "varchar"
+      },
+      {
+        "name": "base",
+        "required": false,
+        "type": "varchar"
+      },
+      {
+        "name": "quote",
+        "required": false,
+        "type": "varchar"
+      },
+      {
+        "name": "tick_size",
+        "required": false,
+        "type": "decimal(38,18)"
+      },
+      {
+        "name": "pair_decimals",
+        "required": false,
+        "type": "integer"
+      },
+      {
+        "name": "lot_decimals",
+        "required": false,
+        "type": "integer"
+      },
+      {
+        "name": "order_min",
+        "required": false,
+        "type": "decimal(38,18)"
+      },
+      {
+        "name": "status",
+        "required": false,
+        "type": "varchar"
+      },
+      {
+        "name": "source_file_sha256",
+        "required": true,
+        "type": "varchar"
+      }
+    ],
+    "partitioning": [],
+    "sort": []
+  },
+  "market_capture.kraken_trades__base.silver_trade": {
+    "columns": [
+      {
+        "name": "kafka_partition",
+        "required": true,
+        "type": "integer"
+      },
+      {
+        "name": "kafka_offset",
+        "required": true,
+        "type": "bigint"
+      },
+      {
+        "name": "trade_ordinal",
+        "required": true,
+        "type": "integer"
+      },
+      {
+        "name": "trade_ts",
+        "required": true,
+        "type": "timestamp(6) with time zone"
+      },
+      {
+        "name": "trade_id",
+        "required": true,
+        "type": "bigint"
+      },
+      {
+        "name": "venue_symbol",
+        "required": true,
+        "type": "varchar"
+      },
+      {
+        "name": "instrument_id",
+        "required": true,
+        "type": "varchar"
+      },
+      {
+        "name": "side",
+        "required": true,
+        "type": "varchar"
+      },
+      {
+        "name": "price",
+        "required": true,
+        "type": "decimal(38,18)"
+      },
+      {
+        "name": "quantity",
+        "required": true,
+        "type": "decimal(38,18)"
+      },
+      {
+        "name": "order_type",
+        "required": false,
+        "type": "varchar"
+      },
+      {
+        "name": "frame_type",
+        "required": true,
+        "type": "varchar"
+      },
+      {
+        "name": "is_duplicate",
+        "required": true,
+        "type": "boolean"
+      },
+      {
+        "name": "received_at",
+        "required": true,
+        "type": "timestamp(6) with time zone"
+      },
+      {
+        "name": "conn_id",
+        "required": true,
+        "type": "varchar"
+      },
+      {
+        "name": "conn_msg_seq",
+        "required": true,
+        "type": "bigint"
+      }
+    ],
+    "partitioning": [
+      "day(trade_ts)"
+    ],
+    "sort": []
+  },
+  "market_capture.kraken_trades__base.silver_trade_rejected": {
+    "columns": [
+      {
+        "name": "kafka_partition",
+        "required": true,
+        "type": "integer"
+      },
+      {
+        "name": "kafka_offset",
+        "required": true,
+        "type": "bigint"
+      },
+      {
+        "name": "kafka_timestamp",
+        "required": false,
+        "type": "timestamp(6) with time zone"
+      },
+      {
+        "name": "reason",
+        "required": true,
+        "type": "varchar"
+      },
+      {
+        "name": "payload",
+        "required": false,
+        "type": "varbinary"
+      }
+    ],
+    "partitioning": [],
+    "sort": []
+  },
+  "market_capture.kraken_trades__base.silver_trade_unresolved": {
+    "columns": [
+      {
+        "name": "kafka_partition",
+        "required": true,
+        "type": "integer"
+      },
+      {
+        "name": "kafka_offset",
+        "required": true,
+        "type": "bigint"
+      },
+      {
+        "name": "trade_ordinal",
+        "required": true,
+        "type": "integer"
+      },
+      {
+        "name": "trade_ts",
+        "required": true,
+        "type": "timestamp(6) with time zone"
+      },
+      {
+        "name": "trade_id",
+        "required": true,
+        "type": "bigint"
+      },
+      {
+        "name": "venue_symbol",
+        "required": true,
+        "type": "varchar"
+      },
+      {
+        "name": "side",
+        "required": true,
+        "type": "varchar"
+      },
+      {
+        "name": "price",
+        "required": true,
+        "type": "decimal(38,18)"
+      },
+      {
+        "name": "quantity",
+        "required": true,
+        "type": "decimal(38,18)"
+      },
+      {
+        "name": "order_type",
+        "required": false,
+        "type": "varchar"
+      },
+      {
+        "name": "frame_type",
+        "required": true,
+        "type": "varchar"
+      },
+      {
+        "name": "received_at",
+        "required": true,
+        "type": "timestamp(6) with time zone"
+      },
+      {
+        "name": "conn_id",
+        "required": true,
+        "type": "varchar"
+      },
+      {
+        "name": "conn_msg_seq",
+        "required": true,
+        "type": "bigint"
+      }
+    ],
+    "partitioning": [],
+    "sort": []
+  },
   "reference_data.calendars__base.target_days": {
     "columns": [
       {
@@ -271,6 +1059,266 @@
         "name": "is_fund",
         "required": true,
         "type": "boolean"
+      }
+    ],
+    "partitioning": [],
+    "sort": []
+  },
+  "reference_data.security_master__base.asset": {
+    "columns": [
+      {
+        "name": "asset_code",
+        "required": true,
+        "type": "varchar"
+      },
+      {
+        "name": "kind",
+        "required": true,
+        "type": "varchar"
+      },
+      {
+        "name": "first_seen_at",
+        "required": true,
+        "type": "timestamp(6) with time zone"
+      }
+    ],
+    "partitioning": [],
+    "sort": []
+  },
+  "reference_data.security_master__base.instrument": {
+    "columns": [
+      {
+        "name": "venue",
+        "required": true,
+        "type": "varchar"
+      },
+      {
+        "name": "instrument_id",
+        "required": true,
+        "type": "varchar"
+      },
+      {
+        "name": "valid_from",
+        "required": true,
+        "type": "timestamp(6) with time zone"
+      },
+      {
+        "name": "valid_to",
+        "required": true,
+        "type": "timestamp(6) with time zone"
+      },
+      {
+        "name": "recorded_at",
+        "required": true,
+        "type": "timestamp(6) with time zone"
+      },
+      {
+        "name": "base_asset",
+        "required": true,
+        "type": "varchar"
+      },
+      {
+        "name": "quote_asset",
+        "required": true,
+        "type": "varchar"
+      },
+      {
+        "name": "is_listed",
+        "required": true,
+        "type": "boolean"
+      },
+      {
+        "name": "pair_code",
+        "required": false,
+        "type": "varchar"
+      },
+      {
+        "name": "tick_size",
+        "required": false,
+        "type": "decimal(38,18)"
+      },
+      {
+        "name": "pair_decimals",
+        "required": false,
+        "type": "integer"
+      },
+      {
+        "name": "lot_decimals",
+        "required": false,
+        "type": "integer"
+      },
+      {
+        "name": "order_min",
+        "required": false,
+        "type": "decimal(38,18)"
+      },
+      {
+        "name": "status",
+        "required": false,
+        "type": "varchar"
+      }
+    ],
+    "partitioning": [],
+    "sort": []
+  },
+  "reference_data.security_master__base.venue_symbol": {
+    "columns": [
+      {
+        "name": "venue",
+        "required": true,
+        "type": "varchar"
+      },
+      {
+        "name": "venue_symbol",
+        "required": true,
+        "type": "varchar"
+      },
+      {
+        "name": "valid_from",
+        "required": true,
+        "type": "timestamp(6) with time zone"
+      },
+      {
+        "name": "valid_to",
+        "required": true,
+        "type": "timestamp(6) with time zone"
+      },
+      {
+        "name": "instrument_id",
+        "required": true,
+        "type": "varchar"
+      },
+      {
+        "name": "pair_code",
+        "required": true,
+        "type": "varchar"
+      },
+      {
+        "name": "recorded_at",
+        "required": true,
+        "type": "timestamp(6) with time zone"
+      }
+    ],
+    "partitioning": [],
+    "sort": []
+  },
+  "reference_data.security_master__base.venue_symbol_claim": {
+    "columns": [
+      {
+        "name": "venue",
+        "required": true,
+        "type": "varchar"
+      },
+      {
+        "name": "pair_code",
+        "required": true,
+        "type": "varchar"
+      },
+      {
+        "name": "claimed_from",
+        "required": true,
+        "type": "timestamp(6) with time zone"
+      },
+      {
+        "name": "claimed_to",
+        "required": true,
+        "type": "timestamp(6) with time zone"
+      },
+      {
+        "name": "ws_name",
+        "required": true,
+        "type": "varchar"
+      },
+      {
+        "name": "base_asset",
+        "required": false,
+        "type": "varchar"
+      },
+      {
+        "name": "quote_asset",
+        "required": false,
+        "type": "varchar"
+      },
+      {
+        "name": "venue_symbol",
+        "required": false,
+        "type": "varchar"
+      },
+      {
+        "name": "instrument_id",
+        "required": false,
+        "type": "varchar"
+      },
+      {
+        "name": "tick_size",
+        "required": false,
+        "type": "decimal(38,18)"
+      },
+      {
+        "name": "pair_decimals",
+        "required": false,
+        "type": "integer"
+      },
+      {
+        "name": "lot_decimals",
+        "required": false,
+        "type": "integer"
+      },
+      {
+        "name": "order_min",
+        "required": false,
+        "type": "decimal(38,18)"
+      },
+      {
+        "name": "status",
+        "required": false,
+        "type": "varchar"
+      },
+      {
+        "name": "held_reason",
+        "required": false,
+        "type": "varchar"
+      }
+    ],
+    "partitioning": [],
+    "sort": []
+  },
+  "reference_data.security_master__base.venue_symbol_held": {
+    "columns": [
+      {
+        "name": "venue",
+        "required": true,
+        "type": "varchar"
+      },
+      {
+        "name": "pair_code",
+        "required": true,
+        "type": "varchar"
+      },
+      {
+        "name": "claimed_from",
+        "required": true,
+        "type": "timestamp(6) with time zone"
+      },
+      {
+        "name": "claimed_to",
+        "required": true,
+        "type": "timestamp(6) with time zone"
+      },
+      {
+        "name": "ws_name",
+        "required": true,
+        "type": "varchar"
+      },
+      {
+        "name": "venue_symbol",
+        "required": false,
+        "type": "varchar"
+      },
+      {
+        "name": "held_reason",
+        "required": true,
+        "type": "varchar"
       }
     ],
     "partitioning": [],

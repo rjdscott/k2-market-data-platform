@@ -1,0 +1,44 @@
+apiVersion: v3.2.0
+kind: DataContract
+id: sensor-net.station-list.bronze_stations
+name: bronze_stations
+version: 1.0.0
+domain: sensor-net
+description:
+  purpose: One row per station of a landed page, as the synthetic API wrote it.
+team:
+  name: sensor-team
+schema:
+  - id: bronze_stations
+    name: bronze_stations
+    physicalName: station_list.bronze_stations
+    physicalType: table
+    properties:
+      - name: code
+        physicalType: varchar
+        required: true
+        primaryKey: true
+        primaryKeyPosition: 1
+        description: The made-up station's code.
+      - name: station_name
+        physicalType: varchar
+        description: The station's name as the page wrote it.
+      - name: source_file_sha256
+        physicalType: varchar
+        required: true
+        primaryKey: true
+        primaryKeyPosition: 2
+        description: The landed page's sha256.
+    quality:
+      - name: code_present
+        type: custom
+        engine: k2-connector
+        implementation: code_present
+        description: Every row has a station code.
+customProperties:
+  - property: layer
+    value: bronze
+  - property: build
+    value: connector
+  - property: backup
+    value: rebuild

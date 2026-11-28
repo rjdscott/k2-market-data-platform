@@ -1,0 +1,84 @@
+# dbt unit tests: each runs one model's SQL on the rows written here instead of its real inputs,
+# and compares the result with the expected rows, on the columns the expectation lists. They prove
+# the logic, not the data. Every pair, asset and value is invented (ALPHA, BRAVO, CHARLIE, round
+# numbers); a sha256 is a two-letter stand-in for a landed response's.
+unit_tests:
+  - name: silver_listing_unchanged_refetch_adds_nothing
+    model: kraken_instruments__silver_listing  # the dbt name, <fence>__<table> (k2gen.model.dbt_model)
+    description: >-
+      Response bb landed because an attribute silver does not keep changed (fees, say); ALPHAUSD's
+      listing attributes are those of response aa, so it keeps one version, from aa's fetch.
+    given:
+      - input: source('kraken_instruments', 'bronze_pairs')
+        # format sql, every column typed: dbt reads a dict fixture's column types from the input
+        # relation in the warehouse, and a bronze table may not exist where the unit test runs.
+        format: sql
+        rows: |
+          select cast('ALPHAUSD' as varchar) as pair_code, cast('ALPHA/USD' as varchar) as ws_name, cast('ALPHA' as varchar) as base, cast('ZUSD' as varchar) as quote, cast('0.1' as varchar) as tick_size, cast(1 as integer) as pair_decimals, cast(8 as integer) as lot_decimals, cast('0.01' as varchar) as order_min, cast('online' as varchar) as status, cast(timestamp '2026-01-05 10:00:00 UTC' as timestamp(6) with time zone) as fetched_at, cast('aa' as varchar) as source_file_sha256
+          union all select 'ALPHAUSD', 'ALPHA/USD', 'ALPHA', 'ZUSD', '0.1', 1, 8, '0.01', 'online', timestamp '2026-01-05 11:00:00 UTC', 'bb'
+    expect:
+      rows:
+        - {pair_code: ALPHAUSD, first_fetched_at: "2026-01-05 10:00:00 UTC", is_listed: true, tick_size: 0.1, source_file_sha256: aa}
+
+  - name: silver_listing_changed_tick_size_adds_one_version
+    model: kraken_instruments__silver_listing
+    description: >-
+      ALPHAUSD's tick size goes from 0.1 in response aa to 0.5 in bb, everything else equal: a
+      second version, valid from bb's fetch; BRAVOUSD, unchanged in both, keeps one.
+    given:
+      - input: source('kraken_instruments', 'bronze_pairs')
+        format: sql  # every column typed, as above
+        rows: |
+          select cast('ALPHAUSD' as varchar) as pair_code, cast('ALPHA/USD' as varchar) as ws_name, cast('ALPHA' as varchar) as base, cast('ZUSD' as varchar) as quote, cast('0.1' as varchar) as tick_size, cast(1 as integer) as pair_decimals, cast(8 as integer) as lot_decimals, cast('0.01' as varchar) as order_min, cast('online' as varchar) as status, cast(timestamp '2026-01-05 10:00:00 UTC' as timestamp(6) with time zone) as fetched_at, cast('aa' as varchar) as source_file_sha256
+          union all select 'BRAVOUSD', 'BRAVO/USD', 'BRAVO', 'ZUSD', '0.01', 2, 8, '1', 'online', timestamp '2026-01-05 10:00:00 UTC', 'aa'
+          union all select 'ALPHAUSD', 'ALPHA/USD', 'ALPHA', 'ZUSD', '0.5', 1, 8, '0.01', 'online', timestamp '2026-01-05 11:00:00 UTC', 'bb'
+          union all select 'BRAVOUSD', 'BRAVO/USD', 'BRAVO', 'ZUSD', '0.01', 2, 8, '1', 'online', timestamp '2026-01-05 11:00:00 UTC', 'bb'
+    expect:
+      rows:
+        - {pair_code: ALPHAUSD, first_fetched_at: "2026-01-05 10:00:00 UTC", is_listed: true, tick_size: 0.1, source_file_sha256: aa}
+        - {pair_code: ALPHAUSD, first_fetched_at: "2026-01-05 11:00:00 UTC", is_listed: true, tick_size: 0.5, source_file_sha256: bb}
+        - {pair_code: BRAVOUSD, first_fetched_at: "2026-01-05 10:00:00 UTC", is_listed: true, tick_size: 0.01, source_file_sha256: aa}
+
+  - name: silver_listing_pair_that_disappears_and_returns
+    model: kraken_instruments__silver_listing
+    description: >-
+      ALPHAUSD is in response aa, missing from bb and back in cc with aa's attributes: three
+      versions, the middle one unlisted with no attributes. CHARLIEUSD first appears in cc, so it
+      has one row and no absence before it. BRAVOUSD is in every response, unchanged: one row.
+    given:
+      - input: source('kraken_instruments', 'bronze_pairs')
+        format: sql  # every column typed, as above
+        rows: |
+          select cast('ALPHAUSD' as varchar) as pair_code, cast('ALPHA/USD' as varchar) as ws_name, cast('ALPHA' as varchar) as base, cast('ZUSD' as varchar) as quote, cast('0.1' as varchar) as tick_size, cast(1 as integer) as pair_decimals, cast(8 as integer) as lot_decimals, cast('0.01' as varchar) as order_min, cast('online' as varchar) as status, cast(timestamp '2026-01-05 10:00:00 UTC' as timestamp(6) with time zone) as fetched_at, cast('aa' as varchar) as source_file_sha256
+          union all select 'BRAVOUSD', 'BRAVO/USD', 'BRAVO', 'ZUSD', '0.01', 2, 8, '1', 'online', timestamp '2026-01-05 10:00:00 UTC', 'aa'
+          union all select 'BRAVOUSD', 'BRAVO/USD', 'BRAVO', 'ZUSD', '0.01', 2, 8, '1', 'online', timestamp '2026-01-05 11:00:00 UTC', 'bb'
+          union all select 'ALPHAUSD', 'ALPHA/USD', 'ALPHA', 'ZUSD', '0.1', 1, 8, '0.01', 'online', timestamp '2026-01-05 12:00:00 UTC', 'cc'
+          union all select 'BRAVOUSD', 'BRAVO/USD', 'BRAVO', 'ZUSD', '0.01', 2, 8, '1', 'online', timestamp '2026-01-05 12:00:00 UTC', 'cc'
+          union all select 'CHARLIEUSD', 'CHARLIE/USD', 'CHARLIE', 'ZUSD', '0.001', 3, 2, '100', 'online', timestamp '2026-01-05 12:00:00 UTC', 'cc'
+    expect:
+      rows:
+        - {pair_code: ALPHAUSD, first_fetched_at: "2026-01-05 10:00:00 UTC", is_listed: true, ws_name: ALPHA/USD, tick_size: 0.1, source_file_sha256: aa}
+        - {pair_code: ALPHAUSD, first_fetched_at: "2026-01-05 11:00:00 UTC", is_listed: false, ws_name: null, tick_size: null, source_file_sha256: bb}
+        - {pair_code: ALPHAUSD, first_fetched_at: "2026-01-05 12:00:00 UTC", is_listed: true, ws_name: ALPHA/USD, tick_size: 0.1, source_file_sha256: cc}
+        - {pair_code: BRAVOUSD, first_fetched_at: "2026-01-05 10:00:00 UTC", is_listed: true, ws_name: BRAVO/USD, tick_size: 0.01, source_file_sha256: aa}
+        - {pair_code: CHARLIEUSD, first_fetched_at: "2026-01-05 12:00:00 UTC", is_listed: true, ws_name: CHARLIE/USD, tick_size: 0.001, source_file_sha256: cc}
+
+  - name: silver_listing_orders_by_fetch_time_not_arrival
+    model: kraken_instruments__silver_listing
+    description: >-
+      Three responses written here in the reverse of their fetch order, their sha256 stand-ins
+      sorting differently again (zz fetched first, then aa, then mm): ALPHAUSD's tick size goes
+      0.1, 0.5 and back to 0.1 by fetch time, so three versions in that order. Ordered by
+      arrival or by sha256 it would be two versions with the wrong start times.
+    given:
+      - input: source('kraken_instruments', 'bronze_pairs')
+        format: sql  # every column typed, as above
+        rows: |
+          select cast('ALPHAUSD' as varchar) as pair_code, cast('ALPHA/USD' as varchar) as ws_name, cast('ALPHA' as varchar) as base, cast('ZUSD' as varchar) as quote, cast('0.1' as varchar) as tick_size, cast(1 as integer) as pair_decimals, cast(8 as integer) as lot_decimals, cast('0.01' as varchar) as order_min, cast('online' as varchar) as status, cast(timestamp '2026-01-05 12:00:00 UTC' as timestamp(6) with time zone) as fetched_at, cast('mm' as varchar) as source_file_sha256
+          union all select 'ALPHAUSD', 'ALPHA/USD', 'ALPHA', 'ZUSD', '0.5', 1, 8, '0.01', 'online', timestamp '2026-01-05 11:00:00 UTC', 'aa'
+          union all select 'ALPHAUSD', 'ALPHA/USD', 'ALPHA', 'ZUSD', '0.1', 1, 8, '0.01', 'online', timestamp '2026-01-05 10:00:00 UTC', 'zz'
+    expect:
+      rows:
+        - {pair_code: ALPHAUSD, first_fetched_at: "2026-01-05 10:00:00 UTC", tick_size: 0.1, source_file_sha256: zz}
+        - {pair_code: ALPHAUSD, first_fetched_at: "2026-01-05 11:00:00 UTC", tick_size: 0.5, source_file_sha256: aa}
+        - {pair_code: ALPHAUSD, first_fetched_at: "2026-01-05 12:00:00 UTC", tick_size: 0.1, source_file_sha256: mm}

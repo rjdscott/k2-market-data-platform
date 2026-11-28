@@ -56,6 +56,185 @@
       "relation": "governance.quality_results.test_results"
     },
     {
+      "base": "market_analytics.candles__base.ohlcv_1d",
+      "columns": [
+        "venue",
+        "instrument_id",
+        "window_start",
+        "window_end",
+        "open",
+        "high",
+        "low",
+        "close",
+        "volume",
+        "quote_volume",
+        "trade_count",
+        "first_trade_at",
+        "last_trade_at",
+        "through_load_seq"
+      ],
+      "owner": "pub_candles",
+      "relation": "market_analytics.candles.ohlcv_1d"
+    },
+    {
+      "base": "market_analytics.candles__base.ohlcv_1h",
+      "columns": [
+        "venue",
+        "instrument_id",
+        "window_start",
+        "window_end",
+        "open",
+        "high",
+        "low",
+        "close",
+        "volume",
+        "quote_volume",
+        "trade_count",
+        "first_trade_at",
+        "last_trade_at",
+        "through_load_seq"
+      ],
+      "owner": "pub_candles",
+      "relation": "market_analytics.candles.ohlcv_1h"
+    },
+    {
+      "base": "market_analytics.candles__base.ohlcv_1m",
+      "columns": [
+        "venue",
+        "instrument_id",
+        "window_start",
+        "window_end",
+        "open",
+        "high",
+        "low",
+        "close",
+        "volume",
+        "quote_volume",
+        "trade_count",
+        "first_trade_at",
+        "last_trade_at",
+        "through_load_seq"
+      ],
+      "owner": "pub_candles",
+      "relation": "market_analytics.candles.ohlcv_1m"
+    },
+    {
+      "base": "market_analytics.candles__base.ohlcv_5m",
+      "columns": [
+        "venue",
+        "instrument_id",
+        "window_start",
+        "window_end",
+        "open",
+        "high",
+        "low",
+        "close",
+        "volume",
+        "quote_volume",
+        "trade_count",
+        "first_trade_at",
+        "last_trade_at",
+        "through_load_seq"
+      ],
+      "owner": "pub_candles",
+      "relation": "market_analytics.candles.ohlcv_5m"
+    },
+    {
+      "base": "market_analytics.canonical_trades__base.trades",
+      "columns": [
+        "venue",
+        "kafka_partition",
+        "kafka_offset",
+        "trade_ordinal",
+        "trade_ts",
+        "instrument_id",
+        "venue_symbol",
+        "trade_id",
+        "side",
+        "price",
+        "quantity",
+        "is_duplicate",
+        "load_seq"
+      ],
+      "owner": "pub_canonical_trades",
+      "relation": "market_analytics.canonical_trades.trades"
+    },
+    {
+      "base": "market_capture.kraken_instruments__base.silver_listing",
+      "columns": [
+        "pair_code",
+        "first_fetched_at",
+        "is_listed",
+        "ws_name",
+        "base",
+        "quote",
+        "tick_size",
+        "pair_decimals",
+        "lot_decimals",
+        "order_min",
+        "status",
+        "source_file_sha256"
+      ],
+      "owner": "pub_kraken_instruments",
+      "relation": "market_capture.kraken_instruments.silver_listing"
+    },
+    {
+      "base": "market_capture.kraken_trades__base.silver_trade",
+      "columns": [
+        "kafka_partition",
+        "kafka_offset",
+        "trade_ordinal",
+        "trade_ts",
+        "trade_id",
+        "venue_symbol",
+        "instrument_id",
+        "side",
+        "price",
+        "quantity",
+        "order_type",
+        "frame_type",
+        "is_duplicate",
+        "received_at",
+        "conn_id",
+        "conn_msg_seq"
+      ],
+      "owner": "pub_kraken_trades",
+      "relation": "market_capture.kraken_trades.silver_trade"
+    },
+    {
+      "base": "market_capture.kraken_trades__base.silver_trade_rejected",
+      "columns": [
+        "kafka_partition",
+        "kafka_offset",
+        "kafka_timestamp",
+        "reason",
+        "payload"
+      ],
+      "owner": "pub_kraken_trades",
+      "relation": "market_capture.kraken_trades.silver_trade_rejected"
+    },
+    {
+      "base": "market_capture.kraken_trades__base.silver_trade_unresolved",
+      "columns": [
+        "kafka_partition",
+        "kafka_offset",
+        "trade_ordinal",
+        "trade_ts",
+        "trade_id",
+        "venue_symbol",
+        "side",
+        "price",
+        "quantity",
+        "order_type",
+        "frame_type",
+        "received_at",
+        "conn_id",
+        "conn_msg_seq"
+      ],
+      "owner": "pub_kraken_trades",
+      "relation": "market_capture.kraken_trades.silver_trade_unresolved"
+    },
+    {
       "base": "reference_data.calendars__base.target_days",
       "columns": [
         "calendar_date",
@@ -76,6 +255,87 @@
       ],
       "owner": "pub_currency_master",
       "relation": "reference_data.currency_master.currency"
+    },
+    {
+      "base": "reference_data.security_master__base.asset",
+      "columns": [
+        "asset_code",
+        "kind",
+        "first_seen_at"
+      ],
+      "owner": "pub_security_master",
+      "relation": "reference_data.security_master.asset"
+    },
+    {
+      "base": "reference_data.security_master__base.instrument",
+      "columns": [
+        "venue",
+        "instrument_id",
+        "valid_from",
+        "valid_to",
+        "recorded_at",
+        "base_asset",
+        "quote_asset",
+        "is_listed",
+        "pair_code",
+        "tick_size",
+        "pair_decimals",
+        "lot_decimals",
+        "order_min",
+        "status"
+      ],
+      "owner": "pub_security_master",
+      "relation": "reference_data.security_master.instrument"
+    },
+    {
+      "base": "reference_data.security_master__base.venue_symbol",
+      "columns": [
+        "venue",
+        "venue_symbol",
+        "valid_from",
+        "valid_to",
+        "instrument_id",
+        "pair_code",
+        "recorded_at"
+      ],
+      "owner": "pub_security_master",
+      "relation": "reference_data.security_master.venue_symbol"
+    },
+    {
+      "base": "reference_data.security_master__base.venue_symbol_claim",
+      "columns": [
+        "venue",
+        "pair_code",
+        "claimed_from",
+        "claimed_to",
+        "ws_name",
+        "base_asset",
+        "quote_asset",
+        "venue_symbol",
+        "instrument_id",
+        "tick_size",
+        "pair_decimals",
+        "lot_decimals",
+        "order_min",
+        "status",
+        "held_reason"
+      ],
+      "owner": "pub_security_master",
+      "relation": "reference_data.security_master.venue_symbol_claim"
+    },
+    {
+      "base": "reference_data.security_master__base.venue_symbol_held",
+      "columns": [
+        "venue",
+        "pair_code",
+        "claimed_from",
+        "claimed_to",
+        "ws_name",
+        "venue_symbol",
+        "held_reason"
+      ],
+      "owner": "pub_security_master",
+      "relation": "reference_data.security_master.venue_symbol_held"
     }
   ]
 }

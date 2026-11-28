@@ -1,0 +1,102 @@
+apiVersion: v3.2.0
+kind: DataContract
+id: market-capture.kraken-instruments.bronze_pairs
+name: bronze_pairs
+version: 1.0.0
+domain: market-capture
+description:
+  purpose: >-
+    One row per pair of one landed AssetPairs response, the listing attributes as the parser read
+    them, tick size and minimum order the published strings. Each landed response adds a row for
+    every pair it lists.
+  limitations: >-
+    Every column is in the primary key on purpose: a pair's attributes change from one response to
+    the next by design (a new tick size is a new version, silver_listing's), so no column is a
+    value the bronze audit's values_unchanged may hold fixed across files. A pair code is unique
+    in one response: the parser refuses a key repeated in an object.
+team:
+  name: capture-team
+schema:
+  - id: bronze_pairs
+    name: bronze_pairs
+    physicalName: kraken_instruments.bronze_pairs
+    physicalType: table
+    properties:
+      - name: pair_code
+        physicalType: varchar
+        required: true
+        primaryKey: true
+        primaryKeyPosition: 1
+        description: The pair's code, the key of the response's result object, as REST names the pair.
+      - name: ws_name
+        physicalType: varchar
+        required: true
+        primaryKey: true
+        primaryKeyPosition: 2
+        description: The pair's websocket name (wsname), the symbol a trades stream frame carries; unique in one response.
+      - name: base
+        physicalType: varchar
+        required: true
+        primaryKey: true
+        primaryKeyPosition: 3
+        description: The base asset's code as the venue spells it, its prefixes kept.
+      - name: quote
+        physicalType: varchar
+        required: true
+        primaryKey: true
+        primaryKeyPosition: 4
+        description: The quote asset's code as the venue spells it, its prefixes kept.
+      - name: tick_size
+        physicalType: varchar
+        required: true
+        primaryKey: true
+        primaryKeyPosition: 5
+        description: The smallest price step (tick_size), the published string; typed in silver.
+      - name: pair_decimals
+        physicalType: integer
+        required: true
+        primaryKey: true
+        primaryKeyPosition: 6
+        description: Digits after the decimal point of a price (pair_decimals).
+      - name: lot_decimals
+        physicalType: integer
+        required: true
+        primaryKey: true
+        primaryKeyPosition: 7
+        description: Digits after the decimal point of a volume (lot_decimals).
+      - name: order_min
+        physicalType: varchar
+        required: true
+        primaryKey: true
+        primaryKeyPosition: 8
+        description: The smallest order volume in the base asset (ordermin), the published string; typed in silver.
+      - name: status
+        physicalType: varchar
+        required: true
+        primaryKey: true
+        primaryKeyPosition: 9
+        description: The pair's trading status as the venue states it (online, cancel_only and the like).
+      - name: fetched_at
+        physicalType: timestamp(6) with time zone
+        required: true
+        primaryKey: true
+        primaryKeyPosition: 10
+        description: >-
+          When the fetch that brought the response ran (fetch.json's fetchedAt), in UTC: lineage
+          set by the connector on every row, as source_file_sha256 is, never by the parser.
+        customProperties:
+          - property: time
+            value: known
+      - name: source_file_sha256
+        physicalType: varchar
+        required: true
+        primaryKey: true
+        primaryKeyPosition: 11
+        description: The landed response's sha256, set by the connector on every row (its lineage).
+customProperties:
+  - property: layer
+    value: bronze
+  - property: build
+    value: connector
+  - property: backup
+    value: restore  # the endpoint shows the listing as it is now: past responses cannot be fetched again

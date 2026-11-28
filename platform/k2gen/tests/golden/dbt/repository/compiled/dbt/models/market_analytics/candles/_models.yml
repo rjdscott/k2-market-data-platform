@@ -1,0 +1,507 @@
+# Compiled by k2gen (platform/k2gen/k2gen/emit/dbt.py) from the release's documents. Never edit it: change the documents.
+version: 2
+models:
+- name: candles__ohlcv_1d
+  description: 'One row per venue, instrument and one-day window holding at least one trade: its open, high, low, close, volume,
+    quote volume and trade count over the window''s trades, duplicates excluded, the window half-open [window_start, window_end)
+    in UTC. The day is the UTC day, from 00:00:00 UTC to the next, whatever time zone a reader sets.'
+  config:
+    alias: ohlcv_1d
+    properties:
+      partitioning: ARRAY['year(window_start)']
+    unique_key:
+    - venue
+    - instrument_id
+    - window_start
+    meta:
+      k2:
+        contract: market-analytics.candles.ohlcv_1d
+        reader: market_analytics.candles.ohlcv_1d
+  columns:
+  - name: venue
+    description: The venue the trades happened on.
+    data_type: varchar
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  - name: instrument_id
+    description: The security master's instrument the trades are of.
+    data_type: varchar
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  - name: window_start
+    description: The window's first instant, inclusive, in UTC, at midnight.
+    data_type: timestamp(6) with time zone
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  - name: window_end
+    description: 'The window''s end, exclusive, in UTC: window_start plus 1 day. Every trade counted has trade_ts before it,
+      so the delayed_reader''s delay on it holds for every trade in the candle.'
+    data_type: timestamp(6) with time zone
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  - name: open
+    description: 'The first trade''s price, first by trade_ts, ties broken by the venue row''s key (kafka_partition, kafka_offset,
+      trade_ordinal): the capture''s order, as the archived candles broke ties by receive time and position in the frame.'
+    data_type: decimal(38,18)
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  - name: high
+    description: The highest price.
+    data_type: decimal(38,18)
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  - name: low
+    description: The lowest price.
+    data_type: decimal(38,18)
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  - name: close
+    description: The last trade's price, in the order open uses.
+    data_type: decimal(38,18)
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  - name: volume
+    description: The sum of the trades' quantities, in the base asset, exact.
+    data_type: decimal(38,18)
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  - name: quote_volume
+    description: 'The sum of price times quantity, in the quote asset: each price rounded half up to 12 and each quantity
+      to 10 fractional digits first, the sum to 18.'
+    data_type: decimal(38,18)
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  - name: trade_count
+    description: The trades counted, each once (is_duplicate false).
+    data_type: bigint
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  - name: first_trade_at
+    description: The earliest trade_ts counted.
+    data_type: timestamp(6) with time zone
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  - name: last_trade_at
+    description: The latest trade_ts counted.
+    data_type: timestamp(6) with time zone
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  - name: through_load_seq
+    description: 'The highest canonical-trades load_seq the build that wrote this row had read: the table''s watermark is
+      its highest value, and the next build recomputes the windows of the trades written past it.'
+    data_type: bigint
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  data_tests:
+  - k2_unique_key:
+      arguments:
+        columns:
+        - venue
+        - instrument_id
+        - window_start
+- name: candles__ohlcv_1h
+  description: 'One row per venue, instrument and one-hour window holding at least one trade: its open, high, low, close,
+    volume, quote volume and trade count over the window''s trades, duplicates excluded, the window half-open [window_start,
+    window_end) in UTC.'
+  config:
+    alias: ohlcv_1h
+    properties:
+      partitioning: ARRAY['year(window_start)']
+    unique_key:
+    - venue
+    - instrument_id
+    - window_start
+    meta:
+      k2:
+        contract: market-analytics.candles.ohlcv_1h
+        reader: market_analytics.candles.ohlcv_1h
+  columns:
+  - name: venue
+    description: The venue the trades happened on.
+    data_type: varchar
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  - name: instrument_id
+    description: The security master's instrument the trades are of.
+    data_type: varchar
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  - name: window_start
+    description: The window's first instant, inclusive, in UTC.
+    data_type: timestamp(6) with time zone
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  - name: window_end
+    description: 'The window''s end, exclusive, in UTC: window_start plus 1 hour. Every trade counted has trade_ts before
+      it, so the delayed_reader''s delay on it holds for every trade in the candle.'
+    data_type: timestamp(6) with time zone
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  - name: open
+    description: 'The first trade''s price, first by trade_ts, ties broken by the venue row''s key (kafka_partition, kafka_offset,
+      trade_ordinal): the capture''s order, as the archived candles broke ties by receive time and position in the frame.'
+    data_type: decimal(38,18)
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  - name: high
+    description: The highest price.
+    data_type: decimal(38,18)
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  - name: low
+    description: The lowest price.
+    data_type: decimal(38,18)
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  - name: close
+    description: The last trade's price, in the order open uses.
+    data_type: decimal(38,18)
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  - name: volume
+    description: The sum of the trades' quantities, in the base asset, exact.
+    data_type: decimal(38,18)
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  - name: quote_volume
+    description: 'The sum of price times quantity, in the quote asset: each price rounded half up to 12 and each quantity
+      to 10 fractional digits first, the sum to 18.'
+    data_type: decimal(38,18)
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  - name: trade_count
+    description: The trades counted, each once (is_duplicate false).
+    data_type: bigint
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  - name: first_trade_at
+    description: The earliest trade_ts counted.
+    data_type: timestamp(6) with time zone
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  - name: last_trade_at
+    description: The latest trade_ts counted.
+    data_type: timestamp(6) with time zone
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  - name: through_load_seq
+    description: 'The highest canonical-trades load_seq the build that wrote this row had read: the table''s watermark is
+      its highest value, and the next build recomputes the windows of the trades written past it.'
+    data_type: bigint
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  data_tests:
+  - k2_unique_key:
+      arguments:
+        columns:
+        - venue
+        - instrument_id
+        - window_start
+- name: candles__ohlcv_1m
+  description: 'One row per venue, instrument and one-minute window holding at least one trade: its open, high, low, close,
+    volume, quote volume and trade count over the window''s trades, duplicates excluded, the window half-open [window_start,
+    window_end) in UTC.'
+  config:
+    alias: ohlcv_1m
+    properties:
+      partitioning: ARRAY['month(window_start)']
+    unique_key:
+    - venue
+    - instrument_id
+    - window_start
+    meta:
+      k2:
+        contract: market-analytics.candles.ohlcv_1m
+        reader: market_analytics.candles.ohlcv_1m
+  columns:
+  - name: venue
+    description: The venue the trades happened on.
+    data_type: varchar
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  - name: instrument_id
+    description: The security master's instrument the trades are of.
+    data_type: varchar
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  - name: window_start
+    description: The window's first instant, inclusive, in UTC.
+    data_type: timestamp(6) with time zone
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  - name: window_end
+    description: 'The window''s end, exclusive, in UTC: window_start plus 1 minute. Every trade counted has trade_ts before
+      it, so the delayed_reader''s delay on it holds for every trade in the candle.'
+    data_type: timestamp(6) with time zone
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  - name: open
+    description: 'The first trade''s price, first by trade_ts, ties broken by the venue row''s key (kafka_partition, kafka_offset,
+      trade_ordinal): the capture''s order, as the archived candles broke ties by receive time and position in the frame.'
+    data_type: decimal(38,18)
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  - name: high
+    description: The highest price.
+    data_type: decimal(38,18)
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  - name: low
+    description: The lowest price.
+    data_type: decimal(38,18)
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  - name: close
+    description: The last trade's price, in the order open uses.
+    data_type: decimal(38,18)
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  - name: volume
+    description: The sum of the trades' quantities, in the base asset, exact.
+    data_type: decimal(38,18)
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  - name: quote_volume
+    description: 'The sum of price times quantity, in the quote asset: each price rounded half up to 12 and each quantity
+      to 10 fractional digits first, the sum to 18.'
+    data_type: decimal(38,18)
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  - name: trade_count
+    description: The trades counted, each once (is_duplicate false).
+    data_type: bigint
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  - name: first_trade_at
+    description: The earliest trade_ts counted.
+    data_type: timestamp(6) with time zone
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  - name: last_trade_at
+    description: The latest trade_ts counted.
+    data_type: timestamp(6) with time zone
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  - name: through_load_seq
+    description: 'The highest canonical-trades load_seq the build that wrote this row had read: the table''s watermark is
+      its highest value, and the next build recomputes the windows of the trades written past it.'
+    data_type: bigint
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  data_tests:
+  - k2_unique_key:
+      arguments:
+        columns:
+        - venue
+        - instrument_id
+        - window_start
+- name: candles__ohlcv_5m
+  description: 'One row per venue, instrument and five-minute window holding at least one trade: its open, high, low, close,
+    volume, quote volume and trade count over the window''s trades, duplicates excluded, the window half-open [window_start,
+    window_end) in UTC.'
+  config:
+    alias: ohlcv_5m
+    properties:
+      partitioning: ARRAY['month(window_start)']
+    unique_key:
+    - venue
+    - instrument_id
+    - window_start
+    meta:
+      k2:
+        contract: market-analytics.candles.ohlcv_5m
+        reader: market_analytics.candles.ohlcv_5m
+  columns:
+  - name: venue
+    description: The venue the trades happened on.
+    data_type: varchar
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  - name: instrument_id
+    description: The security master's instrument the trades are of.
+    data_type: varchar
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  - name: window_start
+    description: The window's first instant, inclusive, in UTC.
+    data_type: timestamp(6) with time zone
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  - name: window_end
+    description: 'The window''s end, exclusive, in UTC: window_start plus 5 minute. Every trade counted has trade_ts before
+      it, so the delayed_reader''s delay on it holds for every trade in the candle.'
+    data_type: timestamp(6) with time zone
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  - name: open
+    description: 'The first trade''s price, first by trade_ts, ties broken by the venue row''s key (kafka_partition, kafka_offset,
+      trade_ordinal): the capture''s order, as the archived candles broke ties by receive time and position in the frame.'
+    data_type: decimal(38,18)
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  - name: high
+    description: The highest price.
+    data_type: decimal(38,18)
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  - name: low
+    description: The lowest price.
+    data_type: decimal(38,18)
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  - name: close
+    description: The last trade's price, in the order open uses.
+    data_type: decimal(38,18)
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  - name: volume
+    description: The sum of the trades' quantities, in the base asset, exact.
+    data_type: decimal(38,18)
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  - name: quote_volume
+    description: 'The sum of price times quantity, in the quote asset: each price rounded half up to 12 and each quantity
+      to 10 fractional digits first, the sum to 18.'
+    data_type: decimal(38,18)
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  - name: trade_count
+    description: The trades counted, each once (is_duplicate false).
+    data_type: bigint
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  - name: first_trade_at
+    description: The earliest trade_ts counted.
+    data_type: timestamp(6) with time zone
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  - name: last_trade_at
+    description: The latest trade_ts counted.
+    data_type: timestamp(6) with time zone
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  - name: through_load_seq
+    description: 'The highest canonical-trades load_seq the build that wrote this row had read: the table''s watermark is
+      its highest value, and the next build recomputes the windows of the trades written past it.'
+    data_type: bigint
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
+  data_tests:
+  - k2_unique_key:
+      arguments:
+        columns:
+        - venue
+        - instrument_id
+        - window_start

@@ -8,6 +8,11 @@
     {
       "bucket": "k2-landing",
       "kind": "landing",
+      "prefix": "market-capture/kraken-instruments/"
+    },
+    {
+      "bucket": "k2-landing",
+      "kind": "landing",
       "prefix": "reference-data/currency-master/"
     },
     {
@@ -33,6 +38,12 @@
       "mode": "rebuild",
       "ref": "audited",
       "table": "governance.quality_results__base.test_results"
+    },
+    {
+      "kind": "table",
+      "mode": "restore",
+      "ref": "main",
+      "table": "governance.run_records.holds"
     },
     {
       "kind": "table",
@@ -78,6 +89,96 @@
     },
     {
       "kind": "table",
+      "mode": "restore",
+      "ref": "main",
+      "table": "k2.kraken_instruments.audit_checks"
+    },
+    {
+      "kind": "table",
+      "mode": "restore",
+      "ref": "main",
+      "table": "k2.kraken_instruments.bronze_pairs"
+    },
+    {
+      "kind": "table",
+      "mode": "restore",
+      "ref": "main",
+      "table": "k2.kraken_instruments.landing_files"
+    },
+    {
+      "kind": "table",
+      "mode": "restore",
+      "ref": "main",
+      "table": "k2.kraken_trades.audit_checks"
+    },
+    {
+      "kind": "table",
+      "mode": "rebuild",
+      "ref": "main",
+      "table": "k2.kraken_trades.bronze_trade"
+    },
+    {
+      "kind": "table",
+      "mode": "restore",
+      "ref": "main",
+      "table": "k2.kraken_trades.landing"
+    },
+    {
+      "kind": "table",
+      "mode": "rebuild",
+      "ref": "audited",
+      "table": "market_analytics.candles__base.ohlcv_1d"
+    },
+    {
+      "kind": "table",
+      "mode": "rebuild",
+      "ref": "audited",
+      "table": "market_analytics.candles__base.ohlcv_1h"
+    },
+    {
+      "kind": "table",
+      "mode": "rebuild",
+      "ref": "audited",
+      "table": "market_analytics.candles__base.ohlcv_1m"
+    },
+    {
+      "kind": "table",
+      "mode": "rebuild",
+      "ref": "audited",
+      "table": "market_analytics.candles__base.ohlcv_5m"
+    },
+    {
+      "kind": "table",
+      "mode": "rebuild",
+      "ref": "audited",
+      "table": "market_analytics.canonical_trades__base.trades"
+    },
+    {
+      "kind": "table",
+      "mode": "rebuild",
+      "ref": "audited",
+      "table": "market_capture.kraken_instruments__base.silver_listing"
+    },
+    {
+      "kind": "table",
+      "mode": "rebuild",
+      "ref": "audited",
+      "table": "market_capture.kraken_trades__base.silver_trade"
+    },
+    {
+      "kind": "table",
+      "mode": "rebuild",
+      "ref": "audited",
+      "table": "market_capture.kraken_trades__base.silver_trade_rejected"
+    },
+    {
+      "kind": "table",
+      "mode": "rebuild",
+      "ref": "audited",
+      "table": "market_capture.kraken_trades__base.silver_trade_unresolved"
+    },
+    {
+      "kind": "table",
       "mode": "rebuild",
       "ref": "audited",
       "table": "reference_data.calendars__base.target_days"
@@ -87,6 +188,36 @@
       "mode": "rebuild",
       "ref": "audited",
       "table": "reference_data.currency_master__base.currency"
+    },
+    {
+      "kind": "table",
+      "mode": "rebuild",
+      "ref": "audited",
+      "table": "reference_data.security_master__base.asset"
+    },
+    {
+      "kind": "table",
+      "mode": "rebuild",
+      "ref": "audited",
+      "table": "reference_data.security_master__base.instrument"
+    },
+    {
+      "kind": "table",
+      "mode": "rebuild",
+      "ref": "audited",
+      "table": "reference_data.security_master__base.venue_symbol"
+    },
+    {
+      "kind": "table",
+      "mode": "rebuild",
+      "ref": "audited",
+      "table": "reference_data.security_master__base.venue_symbol_claim"
+    },
+    {
+      "kind": "table",
+      "mode": "rebuild",
+      "ref": "audited",
+      "table": "reference_data.security_master__base.venue_symbol_held"
     },
     {
       "kind": "lakekeeper-db"

@@ -1,0 +1,86 @@
+apiVersion: v3.2.0
+kind: DataContract
+id: market-capture.kafka-fixture.bronze_frames
+name: bronze_frames
+version: 1.0.0
+domain: market-capture
+description:
+  purpose: >-
+    Synthetic: the landing's trade frames, staged by offset, their RawMessage envelope decoded
+    (docs/development/phase-001-interfaces.md, "Bronze").
+team:
+  name: capture-team
+schema:
+  - id: bronze_frames
+    name: bronze_frames
+    physicalName: kafka_fixture.bronze_frames
+    physicalType: table
+    properties:
+      - name: kafka_partition
+        physicalType: integer
+        required: true
+        primaryKey: true
+        primaryKeyPosition: 1
+        description: The topic partition.
+      - name: kafka_offset
+        physicalType: bigint
+        required: true
+        primaryKey: true
+        primaryKeyPosition: 2
+        description: The record's offset.
+      - name: kafka_timestamp
+        physicalType: timestamp(6) with time zone
+        required: true
+        description: The record's timestamp.
+        customProperties:
+          - property: time
+            value: event
+      - name: schema_id
+        physicalType: integer
+        description: The frame's Confluent writer schema id, the registry's id for the RawMessage version that wrote it; null for a record that is not Confluent-framed, which the audit's parses fails.
+      - name: exchange
+        physicalType: varchar
+        description: RawMessage.exchange, the venue identifier, decoded by the writer schema.
+      - name: stream
+        physicalType: varchar
+        description: RawMessage.stream, the subscription the frame arrived on; trade for every row the filter kept.
+      - name: symbol
+        physicalType: varchar
+        description: RawMessage.symbol, the instrument as the venue spells it; null for a frame of no single instrument.
+      - name: recv_ts_ns
+        physicalType: bigint
+        description: RawMessage.recv_ts_ns, the capture's receive time, nanoseconds since the Unix epoch.
+      - name: conn_id
+        physicalType: varchar
+        description: RawMessage.conn_id, the WebSocket connection the frame arrived on.
+      - name: conn_msg_seq
+        physicalType: bigint
+        description: RawMessage.conn_msg_seq, the capture's counter of frames on conn_id, from 1.
+      - name: payload
+        physicalType: varbinary
+        description: RawMessage.payload, the venue's frame byte for byte as it came off the socket.
+      - name: batch_id
+        physicalType: varchar
+        required: true
+        description: The landing batch that landed the record.
+      - name: landed_at
+        physicalType: timestamp(6) with time zone
+        required: true
+        description: When that landing batch committed, UTC.
+      - name: run_id
+        physicalType: varchar
+        required: true
+        description: The run that landed the record.
+      - name: release_id
+        physicalType: varchar
+        required: true
+        description: That run's release.
+customProperties:
+  - property: layer
+    value: bronze
+  - property: build
+    value: connector
+  - property: backup
+    value: rebuild
+  - property: retention
+    value: 7

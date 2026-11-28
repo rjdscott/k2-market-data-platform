@@ -20,6 +20,22 @@ select 'governance.access-canary' as "product_id", "run_id", "dbt_invocation_id"
 union all
 select 'governance.quality-results' as "product_id", "run_id", "dbt_invocation_id", "release_id", "run_started_at", "writer", "unique_id", "test_name", "tested", "status", "failures", "execution_time", "message" from "governance"."quality_results__base"."dq_test_results" where "writer" = 'dbt_quality_results'
 {%- endif %}
+{%- if k2_test_results_exist('market_analytics', 'candles__base') %}
+union all
+select 'market-analytics.candles' as "product_id", "run_id", "dbt_invocation_id", "release_id", "run_started_at", "writer", "unique_id", "test_name", "tested", "status", "failures", "execution_time", "message" from "market_analytics"."candles__base"."dq_test_results" where "writer" = 'dbt_candles'
+{%- endif %}
+{%- if k2_test_results_exist('market_analytics', 'canonical_trades__base') %}
+union all
+select 'market-analytics.canonical-trades' as "product_id", "run_id", "dbt_invocation_id", "release_id", "run_started_at", "writer", "unique_id", "test_name", "tested", "status", "failures", "execution_time", "message" from "market_analytics"."canonical_trades__base"."dq_test_results" where "writer" = 'dbt_canonical_trades'
+{%- endif %}
+{%- if k2_test_results_exist('market_capture', 'kraken_instruments__base') %}
+union all
+select 'market-capture.kraken-instruments' as "product_id", "run_id", "dbt_invocation_id", "release_id", "run_started_at", "writer", "unique_id", "test_name", "tested", "status", "failures", "execution_time", "message" from "market_capture"."kraken_instruments__base"."dq_test_results" where "writer" = 'dbt_kraken_instruments'
+{%- endif %}
+{%- if k2_test_results_exist('market_capture', 'kraken_trades__base') %}
+union all
+select 'market-capture.kraken-trades' as "product_id", "run_id", "dbt_invocation_id", "release_id", "run_started_at", "writer", "unique_id", "test_name", "tested", "status", "failures", "execution_time", "message" from "market_capture"."kraken_trades__base"."dq_test_results" where "writer" = 'dbt_kraken_trades'
+{%- endif %}
 {%- if k2_test_results_exist('reference_data', 'calendars__base') %}
 union all
 select 'reference-data.calendars' as "product_id", "run_id", "dbt_invocation_id", "release_id", "run_started_at", "writer", "unique_id", "test_name", "tested", "status", "failures", "execution_time", "message" from "reference_data"."calendars__base"."dq_test_results" where "writer" = 'dbt_calendars'
@@ -27,6 +43,10 @@ select 'reference-data.calendars' as "product_id", "run_id", "dbt_invocation_id"
 {%- if k2_test_results_exist('reference_data', 'currency_master__base') %}
 union all
 select 'reference-data.currency-master' as "product_id", "run_id", "dbt_invocation_id", "release_id", "run_started_at", "writer", "unique_id", "test_name", "tested", "status", "failures", "execution_time", "message" from "reference_data"."currency_master__base"."dq_test_results" where "writer" = 'dbt_currency_master'
+{%- endif %}
+{%- if k2_test_results_exist('reference_data', 'security_master__base') %}
+union all
+select 'reference-data.security-master' as "product_id", "run_id", "dbt_invocation_id", "release_id", "run_started_at", "writer", "unique_id", "test_name", "tested", "status", "failures", "execution_time", "message" from "reference_data"."security_master__base"."dq_test_results" where "writer" = 'dbt_security_master'
 {%- endif %}
 {%- endmacro %}
 

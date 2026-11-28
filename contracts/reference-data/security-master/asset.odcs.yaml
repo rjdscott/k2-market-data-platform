@@ -1,0 +1,54 @@
+apiVersion: v3.2.0
+kind: DataContract
+id: reference-data.security-master.asset
+name: asset
+version: 1.1.0
+domain: reference-data
+description:
+  purpose: >-
+    One row per canonical asset code that a published instrument buys or is priced in, with its
+    kind and when a listing first showed it. No history: an asset's code and kind do not change.
+team:
+  name: reference-data-team
+schema:
+  - id: asset
+    name: asset
+    physicalName: security_master.asset
+    physicalType: table
+    properties:
+      - name: asset_code
+        physicalType: varchar
+        required: true
+        primaryKey: true
+        primaryKeyPosition: 1
+        description: The canonical code, upper case, a venue's older code already mapped (BTC, USD).
+      - name: kind
+        physicalType: varchar
+        required: true
+        description: >-
+          fiat when the currency master lists the code as a circulating currency (not a fund, with
+          minor units, so not a metal, the SDR or a testing code); stablecoin when
+          seeds/stablecoins.csv lists it; else crypto.
+      - name: first_seen_at
+        physicalType: timestamp(6) with time zone
+        required: true
+        description: The first fetch whose listing showed an instrument with this asset, in UTC.
+        customProperties:
+          - property: time
+            value: known
+    quality:
+      - name: kind_is_known
+        type: sql
+        query: "select count(*) from ${table} where kind <> 'fiat' and kind <> 'stablecoin' and kind <> 'crypto'"
+        mustBe: 0
+        description: Every asset is fiat, stablecoin or crypto.
+roles:
+  - role: full_reader  # offered, held by nobody yet (grants.yaml)
+    access: read
+customProperties:
+  - property: layer
+    value: gold
+  - property: build
+    value: dbt
+  - property: backup
+    value: rebuild  # rebuilt from instrument, the currency master and the seed

@@ -3,6 +3,7 @@
     "bucket": "k2-landing",
     "prefixes": [
       "fx-reference/ecb-fx-rates/",
+      "market-capture/kraken-instruments/",
       "reference-data/currency-master/"
     ]
   },
@@ -30,18 +31,30 @@
       "name": "k2",
       "namespaces": [
         "currency_master",
-        "ecb_fx_rates"
+        "ecb_fx_rates",
+        "kraken_instruments",
+        "kraken_trades"
       ],
       "remoteSigningEnabled": false
     },
     {
       "name": "market_analytics",
-      "namespaces": [],
+      "namespaces": [
+        "candles",
+        "candles__base",
+        "canonical_trades",
+        "canonical_trades__base"
+      ],
       "remoteSigningEnabled": false
     },
     {
       "name": "market_capture",
-      "namespaces": [],
+      "namespaces": [
+        "kraken_instruments",
+        "kraken_instruments__base",
+        "kraken_trades",
+        "kraken_trades__base"
+      ],
       "remoteSigningEnabled": false
     },
     {
@@ -50,7 +63,9 @@
         "calendars",
         "calendars__base",
         "currency_master",
-        "currency_master__base"
+        "currency_master__base",
+        "security_master",
+        "security_master__base"
       ],
       "remoteSigningEnabled": false
     }

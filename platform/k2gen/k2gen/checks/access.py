@@ -8,7 +8,12 @@ declared roles (`access.role-undeclared`); its `policies` name only roles it off
 (`access.policy-role-not-offered`: a misspelt role would leave the real one with no policy) and
 only its own columns (`access.policy-column-unknown`: a misspelt mask leaves the column shown); a
 role's `requires` are set for it on every table offering it (`access.role-requirement-unmet`).
-A delay's column is `timestamp(6) with time zone` (`access.delay-type`): Trino compares any other
+The role order in roles.yaml (`within`) names declared roles, never the role itself, with no cycle,
+and `public_reader` is within none (`access.role-within-invalid`, A6 of the 2026-11-28 review).
+`R within S` lets an output offer R over an input offering only S: with R `public_reader`, whose
+holders may take data off the platform, data an input offered only inside it would leave. The other
+way is allowed: an output offering an internal role over an input offering `public_reader` is held
+to that role's policy there, and nothing leaves. A delay's column is `timestamp(6) with time zone` (`access.delay-type`): Trino compares any other
 time type with `current_timestamp` in the reader's own session time zone, which a reader may set,
 so a `timestamp(6)` or `date` delay moves with it, and a `time(6)` one fails every read. A row
 scope's column is an identity partition field of its table (`access.row-scope-unpartitioned`):
@@ -29,21 +34,35 @@ principal the platform's patterns match (`model.PIPELINE_PRINCIPALS`, `BUILD_CAT
 `READER_CATALOG_ALL`, `READER_NAMESPACE_OWNERS`, `RETENTION_PROPERTY_PRINCIPALS`, `REFS_READERS`):
 those hold writer rights, CALL or the statistics property (`access.grant-to-platform`). And no
 declared principal falls under a platform pattern by accident: `dbt_<x>` and `pub_<x>` match
-`dbt_.*` and `pub_.*`, so `<x>` must be a product's fence (`access.principal-collides`).
+`dbt_.*` and `pub_.*`, so `<x>` must be a product's fence, and a partner (`kind: partner`, another
+organisation's service) matches none of the platform's patterns, so it holds only the reader roles
+its grants give it (`access.principal-collides`).
 
 **Inheritance: "at least as strict".** For an output O, a role R that O offers, and each input I
 that O derives from (the contracts its output port lists in `inputContracts`, a sibling table of
 the product replaced by what that sibling derives from; every input port of the product when it
-lists none), O's policy for R is at least as strict as I's when:
+lists none), and each input O's model reads, O's policy for R is at least as strict as I's when:
 
-- role: I offers R. A role I does not offer is I's strictest policy, no access at all, so O may not
-  offer it either (`access.inherit-role`);
+- role: I offers R, or, where it does not, a role that roles.yaml declares R `within` (a role whose
+  holders see no less: `delayed_reader` within `full_reader`), and then each such role's policy on I
+  stands in for R's in the three rules below. A role I offers neither itself nor through a
+  declaration is I's strictest policy, no access at all, so O may not offer it either
+  (`access.inherit-role`), and an input offering no role blocks every role of O. The order is only
+  what roles.yaml declares, one pair at a time: no chain is followed, and a role declared within
+  none (`public_reader`, whose holders may take data off the platform) is comparable only to itself;
 - delay: if I delays R by m minutes on column c, O delays R by at least m minutes, on a column
   declared to derive from I.c (`access.inherit-delay`);
 - mask: if I masks column x for R, every column of O declared to derive from I.x is masked for R
   on O; a masked column may also reach O through no column at all (`access.inherit-mask`);
 - row scope: if I scopes R to values V on column c, O scopes R to a subset of V, on a column
   declared to derive from I.c (`access.inherit-row-scope`).
+
+**What a model reads** (A1 of the 2026-11-28 review: the port's list is the author's claim, and
+Trino lets a builder read every input port of its product): each `k2_input` target of O's model,
+and of each sibling model it reaches through `ref()`, read by `sql.model_reads`; an expression that
+module cannot name stands for every input port. One the port does not declare is
+`access.input-undeclared`, on the product file, naming the model, the input and the chain. One
+declared and never read is no finding: it only adds a floor.
 
 A role I offers with no policy constrains nothing. **Derivation** is the column's ODCS
 `transformSourceObjects`, each entry `<contract id>.<column>` of an input. SQL does not tell it
@@ -86,10 +105,12 @@ from __future__ import annotations
 
 import re
 from collections import defaultdict
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
 from k2gen import model
+from k2gen.checks import sql
 from k2gen.model import DocumentSet, Finding
 
 _KINDS = {"roles", "principals", "grants", "contract", "product", "expectations"}
@@ -100,6 +121,7 @@ _PLATFORM = (*model.PIPELINE_PRINCIPALS, *model.BUILD_CATALOG_PRINCIPALS, *model
              *model.READER_NAMESPACE_OWNERS, *model.RETENTION_PROPERTY_PRINCIPALS,
              *(re.escape(p) for p in model.REFS_READERS))
 _VIEW_BUILDS = ("dbt", "code")
+PUBLIC_ROLE = "public_reader"  # whose holders may take data off the platform (roles.yaml): within no role
 _READER_CATALOG_BUILDS = ("dbt", "code", "platform")
 
 
@@ -153,7 +175,9 @@ def _platform(principal: str) -> bool:
 def check(docs: DocumentSet, previous: DocumentSet | None) -> list[Finding]:
     parsed = {p: model.parse(p, b) for p, b in docs.documents.items() if model.document_kind(p) in _KINDS}
     roles: dict[str, Any] = parsed.get(model.ROLES, {}).get("roles", {})
-    principals = [p["id"] for p in parsed.get(model.PRINCIPALS, {}).get("principals", [])]
+    declared = parsed.get(model.PRINCIPALS, {}).get("principals", [])
+    principals = [p["id"] for p in declared]
+    partners = {p["id"] for p in declared if p["kind"] == "partner"}
     rows: list[dict[str, Any]] = parsed.get(model.EXPECTATIONS, {}).get("expectations", [])
     products: dict[str, _Product] = {}
     for path, doc in parsed.items():
@@ -167,13 +191,15 @@ def check(docs: DocumentSet, previous: DocumentSet | None) -> list[Finding]:
             product.tables[path] = doc
         elif product and model.document_kind(path) == "grants":
             product.grants = list(doc.get("grants", []))
-    return [*_declarations(roles, principals, products), *_grants(roles, principals, products),
-            *_deprecated(products, previous), *_inheritance(products), *_coverage(principals, products, rows)]
+    return [*_declarations(roles, principals, partners, products), *_grants(roles, principals, products),
+            *_deprecated(products, previous), *_inheritance(roles, products, docs.documents),
+            *_coverage(principals, products, rows)]
 
 
-def _declarations(roles: dict[str, Any], principals: list[str], products: dict[str, _Product]) -> list[Finding]:
+def _declarations(roles: dict[str, Any], principals: list[str], partners: set[str], products: dict[str, _Product]) -> list[Finding]:
     out = [_err("principal-duplicate", model.PRINCIPALS, f"principal {p} is declared {principals.count(p)} times; declare it once")
            for p in sorted({p for p in principals if principals.count(p) > 1})]
+    out += _role_order(roles)
     fences = {model.fence(p.name) for p in products.values()}
     for p in principals:
         for prefix, what in (("dbt_", "builder"), ("pub_", "publisher")):
@@ -182,6 +208,12 @@ def _declarations(roles: dict[str, Any], principals: list[str], products: dict[s
                                 f"{p} matches the platform pattern {prefix}.*, which every {what} has (builder, publisher and "
                                 f"pipeline rights in Trino's rules), but no product has fence {p.removeprefix(prefix)}; "
                                 f"name a consumer p.<name> or svc.<name>"))
+    for p in sorted(partners):
+        if _platform(p):
+            out.append(_err("principal-collides", model.PRINCIPALS,
+                            f"{p} is a partner, and its id matches the platform's patterns in k2gen.model, which give writer "
+                            f"rights, CALL or the statistics property; a partner holds only the reader roles its grants give it, "
+                            f"so give it a svc.<name> of its own"))
     for product in products.values():
         for path, t in product.tables.items():
             columns = {c["name"] for c in _columns(t)}
@@ -220,6 +252,28 @@ def _declarations(roles: dict[str, Any], principals: list[str], products: dict[s
                 if missing:
                     out.append(_err("role-requirement-unmet", path,
                                     f"{t['id']} offers {role}, which requires {', '.join(missing)} (roles.yaml), and sets none for it"))
+    return out
+
+
+def _role_order(roles: dict[str, Any]) -> list[Finding]:
+    out = []
+    within = {r: [w for w in d.get("within", []) if w in roles and w != r] for r, d in roles.items()}
+    for role, d in roles.items():
+        for other in d.get("within", []):
+            if other == role or other not in roles:
+                out.append(_err("role-within-invalid", model.ROLES, f"{role} is within {other}, "
+                                f"{'itself' if other == role else 'which roles.yaml does not declare'}; name another declared role"))
+        if role == PUBLIC_ROLE and d.get("within"):
+            out.append(_err("role-within-invalid", model.ROLES, f"{role} is within {', '.join(d['within'])}: its holders may take data "
+                            f"off the platform, so an output may offer it only over an input offering it too; declare it within none"))
+        seen, todo = set(), list(within[role])
+        while todo:
+            r = todo.pop()
+            if r not in seen:
+                seen.add(r)
+                todo += within[r]
+        if role in seen:
+            out.append(_err("role-within-invalid", model.ROLES, f"{role} is within itself through a cycle of within; the order runs one way"))
     return out
 
 
@@ -288,29 +342,77 @@ def _inputs(product: _Product, contract: dict[str, Any], seen: frozenset[str] = 
     return [p["contractId"] for p in product.doc.get("inputPorts", [])]
 
 
+def _reads(product: _Product, contract: dict[str, Any], documents: Mapping[str, bytes], fences: dict[str, _Product],
+           seen: frozenset[str] = frozenset()) -> dict[str, str]:
+    """Each input `contract`'s model reads, to the chain that reaches it: every k2_input target, a
+    sibling's through the product's own ref() chain included. An expression k2gen cannot read
+    (sql.model_reads) stands for every input port of the product, all that Trino lets its builder
+    read."""
+    here = f"models/{contract['name']}.sql"
+    text = documents.get(f"{product.path}/{here}")
+    if _build(contract) != "dbt" or text is None:
+        return {}
+    inputs, refs, opaque = sql.model_reads(text.decode("utf-8", errors="replace"))
+    own = {t["name"]: t for t in product.tables.values()}
+    seen = seen | {contract["name"]}
+    out: dict[str, str] = {}
+
+    def follow(table: str, how: str) -> None:
+        if table in own and table not in seen:
+            for cid, chain in _reads(product, own[table], documents, fences, seen).items():
+                out.setdefault(cid, f"{here}: {how} -> {chain}")
+
+    for fence, table in inputs:
+        p = fences.get(fence)
+        if p is product:
+            follow(table, f"k2_input('{fence}', '{table}')")
+        else:
+            out.setdefault(model.contract_id(p.domain, p.name, table) if p else f"{fence}/{table}", f"{here}: k2_input('{fence}', '{table}')")
+    for name in refs:  # a seed, or another product's model (sql.foreign-read), has no model here to follow
+        follow(name.removeprefix(model.fence(product.name) + "__"), f"ref('{name}')")
+    for code in opaque:
+        for port in product.doc.get("inputPorts", []):
+            out.setdefault(port["contractId"], f"{here}: {{{{ {code} }}}}, which k2gen cannot read, so any input port")
+    return out
+
+
 def _derives(column: dict[str, Any]) -> set[str] | None:
     sources = column.get("transformSourceObjects")
     return None if sources is None else set(sources)
 
 
-def _inheritance(products: dict[str, _Product]) -> list[Finding]:
+def _inheritance(roles: dict[str, Any], products: dict[str, _Product], documents: Mapping[str, bytes]) -> list[Finding]:
     contracts = {t["id"]: t for p in products.values() for t in p.tables.values()}
+    fences = {model.fence(p.name): p for p in products.values()}
     out = []
     for product in products.values():
         for path, o in product.tables.items():
             columns = {c["name"]: c for c in _columns(o)}
+            declared, reads = _inputs(product, o), _reads(product, o, documents, fences)
+            for input_id, chain in reads.items():
+                if input_id not in declared:
+                    out.append(_err("input-undeclared", f"{product.path}/{model.V2_PRODUCT_FILE}",
+                                    f"{o['id']}'s model reads {input_id} ({chain}), which its output port does not declare "
+                                    f"(inputs: {', '.join(declared) or 'none'}): every inherit-* rule runs over what a model "
+                                    f"reads, so list it in the port's inputContracts, or stop reading it"))
             for role in _offered(o):
                 mine = _policies(o).get(role, {})
-                for input_id in _inputs(product, o):
+                within = list(roles.get(role, {}).get("within", []))  # ponytail: one declared pair, no chain followed
+                for input_id in dict.fromkeys([*declared, *reads]):
                     i = contracts.get(input_id)
                     if i is None:  # an unknown input is the docs check's
                         continue
-                    if role not in _offered(i):
+                    # the input's own policy for the role, else each declared looser role's, every one applied
+                    floors = [role] if role in _offered(i) else [r for r in within if r in _offered(i)]
+                    if not floors:
                         out.append(_err("inherit-role", path,
-                                        f"{o['id']} offers {role}, but its input {input_id} does not: holders of {role} may not read "
-                                        f"the input, so not what is derived from it; offer {role} on {input_id} or stop offering it here"))
+                                        f"{o['id']} offers {role}, but its input {input_id} offers neither {role} nor a role "
+                                        f"{model.ROLES} declares {role} within ({', '.join(within) or 'none'}): holders of {role} may "
+                                        f"not read the input, so not what is derived from it; offer {role} on {input_id} or stop "
+                                        f"offering it here"))
                         continue
-                    out += _inherit(path, o, columns, role, mine, input_id, _policies(i).get(role, {}))
+                    for floor in floors:
+                        out += _inherit(path, o, columns, role, mine, input_id, floor, _policies(i).get(floor, {}))
     return out
 
 
@@ -331,13 +433,15 @@ def _carrier(path: str, o: dict[str, Any], column: dict[str, Any] | None, role: 
 
 
 def _inherit(path: str, o: dict[str, Any], columns: dict[str, dict[str, Any]], role: str, mine: dict[str, Any],
-             input_id: str, theirs: dict[str, Any]) -> list[Finding]:
+             input_id: str, floor: str, theirs: dict[str, Any]) -> list[Finding]:
+    """O's policy for `role` against `theirs`, I's policy for `floor` (the role itself, or a role
+    roles.yaml declares it within)."""
     out: list[Finding | None] = []
     if "delay" in theirs:
         need, source = theirs["delay"]["minutes"], f"{input_id}.{theirs['delay']['column']}"
         if "delay" not in mine or mine["delay"]["minutes"] < need:
             have = f"{mine['delay']['minutes']} minutes" if "delay" in mine else "no delay"
-            out.append(_err("inherit-delay", path, f"{input_id} delays {role} by {need} minutes on {source}; {o['id']} has {have} for "
+            out.append(_err("inherit-delay", path, f"{input_id} delays {floor} by {need} minutes on {source}; {o['id']} has {have} for "
                                                    f"{role}: delay it by at least {need} minutes on a column derived from {source}"))
         else:
             out.append(_carrier(path, o, columns.get(mine["delay"]["column"]), role, "delay", source))
@@ -346,7 +450,7 @@ def _inherit(path: str, o: dict[str, Any], columns: dict[str, dict[str, Any]], r
         extra = [v for v in mine["rowScope"]["values"] if v not in allowed] if "rowScope" in mine else None
         if extra is None or extra:
             have = f"adds {extra}" if extra else "has no row scope"
-            out.append(_err("inherit-row-scope", path, f"{input_id} scopes {role} to {allowed} on {source}; {o['id']} {have} for {role}: "
+            out.append(_err("inherit-row-scope", path, f"{input_id} scopes {floor} to {allowed} on {source}; {o['id']} {have} for {role}: "
                                                        f"scope it to a subset of {allowed} on a column derived from {source}"))
         else:
             out.append(_carrier(path, o, columns.get(mine["rowScope"]["column"]), role, "row scope", source))
@@ -357,12 +461,12 @@ def _inherit(path: str, o: dict[str, Any], columns: dict[str, dict[str, Any]], r
         derives = _derives(column)
         if derives is None:
             out.append(_err("inherit-undeclared", path,
-                            f"{input_id} masks {', '.join(sorted(masked))} for {role}, and k2gen cannot tell whether {o['id']}.{name} "
+                            f"{input_id} masks {', '.join(sorted(masked))} for {floor}, and k2gen cannot tell whether {o['id']}.{name} "
                             f"is computed from it; declare transformSourceObjects on {name} (the input columns it derives from), "
                             f"or mask {name} for {role}"))
         elif derives & masked:
             out.append(_err("inherit-mask", path, f"{o['id']}.{name} derives from {', '.join(sorted(derives & masked))}, which the "
-                                                  f"input masks for {role}; mask {name} for {role} on {o['id']}"))
+                                                  f"input masks for {floor}; mask {name} for {role} on {o['id']}"))
     return [f for f in out if f]
 
 

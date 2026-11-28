@@ -1,0 +1,1 @@
+SELECT "venue", "pair_code", "claimed_from", "claimed_to", "ws_name", "venue_symbol", "held_reason" FROM "reference_data"."security_master__base"."venue_symbol_held" FOR VERSION AS OF 'audited' WHERE EXISTS (SELECT 1 FROM "reference_data"."security_master__base"."venue_symbol_held$refs" WHERE "name" = 'audited' AND "type" = 'TAG')

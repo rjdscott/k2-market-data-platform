@@ -1,0 +1,124 @@
+# Kraken's trade frames as the capture sent them: the Kafka connector reads the raw Kraken topic
+# every five minutes, lands every record of the planned offset range byte for byte in
+# lake.kraken_trades.landing (control frames included, end offsets in the same commit, ADR-022),
+# then stages the trade frames into bronze_trade by offset, after its audit (I-1,
+# docs/development/phase-001-interfaces.md). dbt then types them, one row per trade (silver_trade),
+# resolving each trade's symbol through the security master; a trade whose symbol resolves to
+# nothing waits in silver_trade_unresolved and moves into silver_trade once it resolves, and a frame
+# the model cannot type is kept, with its reason, in silver_trade_rejected, so neither stops the venue.
+apiVersion: v1.1.0
+kind: DataProduct
+id: market-capture.kraken-trades
+name: kraken-trades
+version: 1.1.0
+status: active
+domain: market-capture
+type: sourceAligned
+description:
+  purpose: >-
+    Every trade Kraken's WebSocket v2 trade channel sent the capture: the frames exactly as read
+    (bronze_trade), and one typed row per trade and delivery (silver_trade) with the instrument
+    its symbol names, every delivery kept and a repeat of a trade id flagged, never dropped.
+  limitations: >-
+    Only frames the capture received are here; a capture outage is a hole in time, not in
+    offsets, and the offset checks cannot see it. A trade whose symbol the security master does
+    not resolve at the trade's time is held in silver_trade_unresolved, owner-only, and missing
+    from silver_trade until the master resolves it; the audit unresolved_rows_zero then warns and
+    the product shows degraded. A frame the model cannot type (not JSON, no data array, a trade
+    lacking a field or holding one that does not cast) is missing from silver_trade whole and kept
+    in silver_trade_rejected, owner-only, with its reason and bytes; rejected_frames_zero warns and
+    the product shows degraded on every build while it stands, until a release whose model types it
+    builds. Every delivery is a row: a reader counting trades filters
+    is_duplicate false. The venue's terms of reuse are not yet recorded here: the owner confirms
+    them before any grant outside the owning team (k2gen check refuses such a grant while no terms
+    are recorded).
+  usage: >-
+    Read market_capture.kraken_trades.silver_trade, one row per trade and delivery keyed by
+    (kafka_partition, kafka_offset, trade_ordinal, trade_ts); is_duplicate false keeps each trade
+    once, its first delivery by offset. bronze_trade, silver_trade_unresolved and
+    silver_trade_rejected are the owning team's.
+team:
+  name: capture-team
+inputPorts:
+  - name: venue_symbol
+    version: 1.0.0
+    contractId: reference-data.security-master.venue_symbol
+    customProperties:
+      - property: required
+        # silver_trade_unresolved is a table model, which zero rows of an absent master would
+        # rebuild holding every trade; with the master paused the build reads its last audited
+        # snapshot, and with none it exits 4 (I-4).
+        value: true
+      - property: maxLagMinutes
+        value: null  # the listing changes by the hour at most; a late master holds trades, which the audit reports
+outputPorts:
+  - name: bronze_trade
+    version: 1.0.0
+    contractId: market-capture.kraken-trades.bronze_trade
+  - name: silver_trade
+    version: 1.0.0
+    contractId: market-capture.kraken-trades.silver_trade
+    inputContracts:  # bronze a sibling, not an input port: the catalog's lineage edges
+      - id: market-capture.kraken-trades.bronze_trade
+        version: 1.0.0
+      - id: reference-data.security-master.venue_symbol
+        version: 1.0.0
+  - name: silver_trade_unresolved
+    version: 1.0.0
+    contractId: market-capture.kraken-trades.silver_trade_unresolved
+    inputContracts:  # the frames of bronze that silver_trade does not hold
+      - id: market-capture.kraken-trades.bronze_trade
+        version: 1.0.0
+      - id: market-capture.kraken-trades.silver_trade
+        version: 1.0.0
+  - name: silver_trade_rejected
+    version: 1.0.0
+    contractId: market-capture.kraken-trades.silver_trade_rejected
+    inputContracts:  # the frames of bronze that silver_trade does not hold and cannot type
+      - id: market-capture.kraken-trades.bronze_trade
+        version: 1.0.0
+      - id: market-capture.kraken-trades.silver_trade
+        version: 1.0.0
+customProperties:
+  - property: connector
+    value:
+      kind: kafka
+      brokers: "redpanda:9092"
+      registry: "http://redpanda:8081"
+      topic: market.crypto.v3.raw.kraken
+      envelope:
+        format: avro-confluent
+        # ponytail: names bronze_trade, which carries the RawMessage's fields as Spark decodes them at
+        # staging, as the k2gen fixture station-feed does. I-1 names a raw_message contract, which waits on a build
+        # kind for a contract with no lake table (k2-v2.schema.json build has none but serving).
+        contract: market-capture.kraken-trades.bronze_trade
+      filter:
+        field: stream
+        in: [trade]
+      payload: json
+      startFrom: earliest-retained
+      # An engineering bound, not a measurement. Assumed: the busiest partition of the topic's 12
+      # (keyed by symbol, so one partition can carry several) stays under 100 records a second,
+      # trade and control frames, book capture off (ADR-050). A normal five-minute run then reads
+      # at most 300 s x 100 = 30,000 per partition, a fifth of this bound; a backlog falls by at
+      # least 150,000 - 30,000 = 120,000 per partition per run, so a one-hour stall (360,000)
+      # clears in 3 runs. One run reads at most 12 x 150,000 = 1,800,000 records, twice (count,
+      # then write). The first live runs confirm or move it: load's backlog per partition must be
+      # 0 after a normal run, and the read time stays inside the timeout (W0-12, the soak's
+      # benchmark).
+      maxOffsetsPerPartition: 150000
+  - property: schedule
+    value:
+      # Every five minutes, one run at a time (the factory's max_active_runs=1). The timeout is
+      # two periods, an engineering bound until the first measured runs set it: a run draining a
+      # backlog may hold the next slot, never a third. A run killed by it lands nothing twice: the
+      # next plans from the newest connector snapshot (ADR-022).
+      cron: "*/5 * * * *"
+      timeoutMinutes: 10
+  # A build degraded by unresolved_rows_zero (a trade's symbol resolved to nothing) starts an
+  # instruments run, so the master can learn a new pair, at most once an hour (W1-6; k2gen check
+  # refresh.*). Not rejected_frames_zero: a new listing cannot make a malformed frame typeable.
+  - property: refresh
+    value:
+      product: market-capture.kraken-instruments
+      rules: [unresolved_rows_zero]

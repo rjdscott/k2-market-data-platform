@@ -1077,6 +1077,26 @@ sys.exit(f"fake docker: no answer for {A}")
             (world.secrets / n).write_text("fixture\n")
         assert deploy.required_secrets(world.ctx, p) == []
 
+    def test_preflight_refuses_while_a_principal_the_live_suite_logs_in_as_has_no_password_file(world: World) -> None:
+        """svc.operator's rows run on live (its host-held login is the platform operator's), so its file is
+        asked before anything moves, not failed by the live suite after the swap; a partner's rows are skipped
+        there (`kind: partner`, access_verify.partners), so its file is never asked."""
+        principals = "contracts/access/principals.yaml"
+        rows = ('  - {principal: svc.operator, sql: "SELECT 1", expect: ok}\n'
+                '  - {principal: svc.partner-dashboard, sql: "SELECT 1", expect: denied}\n')
+        declared = "".join(f"  - id: {x}\n    kind: {k}\n    owner: platform-team\n" for x, k in (("svc.operator", "service"), ("svc.partner-dashboard", "partner")))
+        world.live(world.release())
+        r1 = world.release(over={EXPECT: (GOOD / EXPECT).read_bytes() + rows.encode(),
+                                 principals: (GOOD / principals).read_bytes() + declared.encode()})
+        live = deploy.live_principals(r1)
+        assert "svc.operator" in live and "svc.partner-dashboard" not in live, live
+        with pytest.raises(deploy.Refused) as e:
+            world.deploy(r1)
+        assert "principals/svc.operator.password (make password PRINCIPAL=svc.operator TO_FILE=1)" in str(e.value)
+        assert "partner" not in str(e.value) and world.ups() == [] and records(world)[-1]["step"] == "preflight"
+        (world.secrets / "principals/svc.operator.password").write_text("fixture\n")
+        assert world.deploy(r1) == 0
+
     # --- review R6: lake-init runs the deployed release's own script and policies --------
 
     def test_lake_init_runs_the_target_release_script_and_an_older_release_skips_it(world: World) -> None:
@@ -1176,10 +1196,14 @@ sys.exit(f"fake docker: no answer for {A}")
         def plan(target: Any, *sources: Any, recreate: tuple[str, ...] = ()) -> Any:
             return deploy.Plan(target, list(sources), list(recreate), [], False, [], [], [])
 
-        assert deploy.drain_need(plan(new, old)) == ({"a", "b"}, "the task list of a, b changes or goes")  # d is new: no run
-        assert deploy.drain_need(plan(same, new))[0] == set()
+        fresh = "; new in this release, with no run to drain, never paused or unpaused by deploy: d"
+        assert deploy.drain_need(plan(new, old)) == ({"a", "b"}, "the task list of a, b changes or goes" + fresh)  # d: no run
+        # A release adding DAGs and moving the factory (phase 004's first): every DAG Airflow has, the new named apart
+        assert deploy.drain_need(plan(new, moved)) == (None, "the DAG code moved since v1-d" + fresh)
+        assert deploy.drain_need(plan(new, old, recreate=("trino",))) == (None, "Trino restarts" + fresh)
+        assert deploy.drain_need(plan(same, new)) == (set(), "no Trino restart and no DAG's task list changes")
+        assert deploy.new_dags(plan(new, None)) == []  # a first deploy: its drain is every DAG Airflow has
         assert deploy.drain_need(plan(same, new, recreate=("standin", "trino"))) == (None, "Trino restarts")
-        assert deploy.drain_need(plan(new, moved)) == (None, "the DAG code moved since v1-d")
         assert deploy.drain_need(plan(same, new, moved))[0] is None  # any source the code moved from: all
         assert deploy.drain_need(plan(new, None))[0] is None  # no release before: its DAGs are unknown
 
@@ -1197,7 +1221,8 @@ sys.exit(f"fake docker: no answer for {A}")
         assert world.deploy(r2) == 0
         runs = [[*p, "--state", "running", "-o", "json"] for p in (["dags", "list-runs", DL], ["dags", "list-runs", SR])]
         poll = [*runs, ["tasks", "states-for-dag-run", SR, "scheduled__1", "-o", "json"]]
-        assert world.airflow_calls() == [["dags", "list", "-o", "json"], ["dags", "pause", SR], *poll, *poll,
+        listing = ["dags", "list", "-o", "json"]  # the drain's, then verify's (idle_dags), read-only
+        assert world.airflow_calls() == [listing, ["dags", "pause", SR], *poll, *poll, listing,
                                          ["dags", "unpause", SR]]  # daily_load's run is asked, its pause kept
         assert world.paused() == {SR: False, DL: True} and not (world.root / deploy.DRAIN_STATE).exists()
         t = [e[:3] for e in world.timeline()]
@@ -1267,6 +1292,89 @@ sys.exit(f"fake docker: no answer for {A}")
         assert world.paused()[SR] is held and (world.root / deploy.DRAIN_STATE).exists() is held
         assert (["dags", "unpause", SR] in world.airflow_calls()) is not held
 
+    def held_world(world: World, monkeypatch: pytest.MonkeyPatch, held: dict[str, str]) -> tuple[Any, Any, list[tuple[str, str]]]:
+        """drained_world, the releases standing in for ones with the holds table (every release has DAGS), and
+        Trino answering k2runs' HELD statement with `held` (product -> reason); each read as (user, statement)."""
+        monkeypatch.setattr(deploy, "HOLDS_DDL", model.DAGS)
+        r1, r2 = drained_world(world, {SR: False, DL: False})
+        asked: list[tuple[str, str]] = []
+        real = world.sql
+
+        def sql(ctx: Any, user: str, statement: str) -> dict[str, Any]:
+            if "run_records.holds" not in statement:
+                return real(ctx, user, statement)
+            asked.append((user, statement))
+            product = re.search(r"h\.product_id = '([^']+)'", statement)[1]  # type: ignore[index]
+            row = [product, "operator", held.get(product), "rob", "2026-11-28 01:02:03 UTC", None, None]
+            return {"columns": [], "rows": [row] if product in held else []}
+
+        monkeypatch.setattr(deploy, "sql", sql)
+        return r1, r2, asked
+
+    def test_a_drained_dag_whose_product_is_held_stays_paused_and_the_deploy_says_so(
+            world: World, monkeypatch: pytest.MonkeyPatch) -> None:
+        """W1-12, and audit LOW 40: an operator holds a product while deploy has its DAG paused (a hold
+        taken mid-drain, or after a deploy died there); done unpauses every other DAG deploy paused."""
+        r1, r2, asked = held_world(world, monkeypatch, {"sensor-net.station-readings": "re-staging bronze"})
+        said: list[str] = []
+        world.ctx.say = said.append
+        assert world.deploy(r2) == 0
+        assert world.paused() == {SR: True, DL: False} and ["dags", "unpause", SR] not in world.airflow_calls(), [x for x in said if "paused" in x]
+        assert not (world.root / deploy.DRAIN_STATE).exists()  # the hold is the operator's now: never unpaused by a later deploy
+        assert "  unpaused daily_load: the DAGs deploy paused" in said
+        assert ("  kept paused, held: station_readings (operator hold by rob at 2026-11-28 01:02:03 UTC: re-staging bronze); "
+                "each stays paused until its hold is released") in said
+        assert {u for u, _ in asked} == {"svc.platform"}  # SELECT alone, by the emitted rules: deploy never ends a hold
+        bound = deploy.k2runs.HELD.replace("?", "'sensor-net.station-readings'")
+        assert any(s == bound for _, s in asked), asked  # k2runs' own statement, its one parameter bound
+
+    def test_holds_that_cannot_be_read_keep_every_dag_deploy_paused(world: World, monkeypatch: pytest.MonkeyPatch) -> None:
+        r1, r2, _ = held_world(world, monkeypatch, {})
+        real = deploy.sql
+
+        def refused(ctx: Any, user: str, statement: str) -> dict[str, Any]:
+            if "run_records.holds" in statement:
+                raise deploy.k2tools.TrinoError("TABLE_NOT_FOUND", "Table 'governance_build.run_records.holds' does not exist")
+            return real(ctx, user, statement)
+
+        monkeypatch.setattr(deploy, "sql", refused)
+        said: list[str] = []
+        world.ctx.say = said.append
+        # Review D7: live and verified, never rolled back, but not a clean exit 0: exit 4, the DAGs and why on the
+        # deploy's last line, and in make release-status; they wait for a check of the holds, or the next done.
+        assert world.deploy(r2) == deploy.EXIT_PAUSED
+        assert world.paused() == {SR: True, DL: True} and deploy.paused_by_deploy(world.ctx) == {SR, DL}
+        assert any(x.startswith("  kept paused daily_load, station_readings: the holds could not be read as svc.platform") for x in said)
+        why = "the holds could not be read as svc.platform (TrinoError"
+        assert said[-1].startswith(f"deploy: {r2.id} is live and verified, but 2 DAG(s) deploy paused are left paused: "
+                                   f"daily_load, station_readings ({why}") and said[-1].endswith(f"its holds: {deploy.UNPAUSE}"), said[-1]
+        assert records(world)[-2]["step"] == "done" and [r["step"] for r in records(world) if r["step"].startswith("rollback")] == []
+        assert "live and verified, but DAGs left paused" in deploy.MEANING[deploy.EXIT_PAUSED]
+        status: list[str] = []
+        world.ctx.say = status.append
+        deploy.status(world.ctx)
+        line = next(x for x in status if "DAGs a deploy paused" in x)
+        assert line.startswith("  DAGs a deploy paused and has not yet unpaused: daily_load, station_readings (left paused at ")
+        assert why in line and deploy.UNPAUSE in line
+        monkeypatch.setattr(deploy, "sql", real)  # the holds readable again: the next done unpauses them and exits 0
+        world.ctx.say = said.append
+        assert world.deploy(world.release(over={CODE: b"# three\n"})) == deploy.EXIT_OK
+        assert world.paused() == {SR: False, DL: False} and not (world.root / deploy.DRAIN_STATE).exists()
+
+    def test_a_release_without_the_holds_table_unpauses_without_reading_them(world: World) -> None:
+        r1, r2 = drained_world(world, {SR: False, DL: False})
+        assert deploy.HOLDS_DDL == "compiled/lake/ddl/trino/governance.run_records.holds.sql"  # what k2gen emits (I-7)
+        assert deploy.HOLDS_DDL not in r2.manifest.files
+        assert world.deploy(r2) == 0 and world.paused() == {SR: False, DL: False}
+        assert not [e for e in world.timeline() if e[0] == "sql" and "holds" in e[2]]
+
+    def test_the_holds_ddl_is_read_as_the_catalog_spells_it() -> None:
+        """The table deploy's ddl step creates from the release (needs.ddl names it, the file is k2gen's
+        copy of platform/runs/holds.sql) compares equal to what the catalog prints for it."""
+        want = deploy.expected_table(model.HOLDS_SQL.read_text(), "trino")
+        assert [c[0] for c in want["columns"]] == list(deploy.k2runs.HOLD_COLUMNS) and want["partitioning"] == []
+        assert {c[1] for c in want["columns"]} == {"string", "timestamptz"} and not any(c[2] for c in want["columns"])
+
     def test_no_drain_no_scheduler_and_no_dags_are_recorded_and_the_deploy_goes_on(world: World) -> None:
         r1 = world.release(over={CODE: b"# one\n"})
         world.live(r1)
@@ -1276,11 +1384,35 @@ sys.exit(f"fake docker: no answer for {A}")
         assert any(x.startswith("  no scheduler: airflow-scheduler is not running") for x in said), said
         world.scheduler({})
         assert world.deploy(world.release(over={CODE: b"# three\n"})) == 0
-        assert any(x.startswith("  no DAGs: Airflow has none to drain") for x in said) and world.airflow_calls() == [["dags", "list", "-o", "json"]]
+        listing = ["dags", "list", "-o", "json"]
+        assert any(x.startswith("  no DAGs: Airflow has none to drain") for x in said) and world.airflow_calls() == [listing] * 2  # drain, verify
         assert world.deploy(world.release(over={CODE: b"# three\n", **policy(60)})) == 0
         assert any(x.startswith("  no drain: no Trino restart and no DAG's task list changes") for x in said)
-        assert len(world.airflow_calls()) == 1  # no change that drains: Airflow not asked
+        assert world.airflow_calls() == [listing] * 3  # no change that drains: only verify's read-only listing
         assert all(r["outcome"] == "ok" for r in records(world) if r["step"] == "drain")
+
+    def test_verify_names_the_releases_dags_paused_in_airflow_that_no_hold_explains(world: World, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Review D6: every DAG is created paused, so a fresh install, or a release adding a product, sits idle
+        unless someone unpauses it. Deploy's verify and make release-verify name them with the command, read-only;
+        never a DAG deploy paused itself (resume unpauses it next) or one a hold keeps paused."""
+        r1 = world.release(over={CODE: b"# one\n"})
+        world.live(r1)
+        world.scheduler({SR: True, DL: True, "not_this_release": True})
+        said: list[str] = []
+        world.ctx.say = said.append
+        assert world.deploy(world.release(over={CODE: b"# one\n", **policy(60)})) == 0  # no drain: both stay as Airflow has them
+        line = f"  paused in Airflow and not held, so idle: daily_load, station_readings; unpause each once ready: {deploy.UNPAUSE}"
+        assert line in said and deploy.UNPAUSE == "docker exec k2-airflow-scheduler airflow dags unpause <dag> -y"
+        assert all(c == ["dags", "list", "-o", "json"] for c in world.airflow_calls()) and world.paused()[SR] is True
+        live = deploy.open_release(world.ctx, deploy.resolve(world.ctx)[0].id)
+        deploy.write_paused(world.ctx, {DL})  # a deploy's own pause: resume's to lift, not idle
+        monkeypatch.setattr(deploy, "holds", lambda ctx, rel, dags: {SR: {"kind": "operator"}} if SR in dags else {})
+        assert deploy.idle_dags(world.ctx, live) == []  # station_readings held, daily_load deploy's own
+        monkeypatch.setattr(deploy, "holds", lambda ctx, rel, dags: {})
+        only = f"paused in Airflow and not held, so idle: station_readings; unpause each once ready: {deploy.UNPAUSE}"
+        assert only in deploy.verify(world.ctx, live, None)  # the lines make release-verify prints too
+        world.write(world.read() | {"airflow": {"paused": {SR: False, DL: False}, "busy": {}}})
+        assert deploy.idle_dags(world.ctx, live) == []
 
     # --- a release that adds a product (the first live deploy of alpha.4-rc.1, 2026-11-27) ----------
 
@@ -1403,3 +1535,12 @@ sys.exit(f"fake docker: no answer for {A}")
         monkeypatch.setattr(deploy, "drift", lambda ctx, rel: stuck)
         lines, wrong = deploy.s20_checks(None, None)  # type: ignore[arg-type]
         assert any("drift check exit 1" in w for w in wrong) and any("waited 20 s" in x for x in lines), (lines, wrong)
+
+    def test_a_failed_drift_check_names_its_differences_not_the_last_lines_of_its_output(monkeypatch: pytest.MonkeyPatch) -> None:
+        """The deploy rehearsal, 2026-11-28: with this branch's 19 outputs the drift check prints a SKIP line
+        per tag, and verify's failure quoted the output's last 12 lines, every one a SKIP, never the DRIFT."""
+        plant = "DRIFT table governance.access_canary__base.planted: in a namespace of the release, and the release declares no such table"
+        skips = "\n".join(f"SKIP tag k2.p{i}__base.t audited = {i}: no run-records reader given" for i in range(19))
+        monkeypatch.setattr(deploy, "drift", lambda ctx, rel: {"exit": 1, "doc": {"differences": [plant], "pending": ["p"]}, "text": skips})
+        _, wrong = deploy.s20_checks(None, None)  # type: ignore[arg-type]
+        assert len(wrong) == 1 and plant in wrong[0], wrong

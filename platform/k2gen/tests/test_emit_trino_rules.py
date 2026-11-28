@@ -158,6 +158,74 @@ def test_the_repository_set_has_the_run_record_rules() -> None:
         {"user": "svc\\.catalog", "catalog": "governance", "schema": "run_records", "table": "run_record", "privileges": ["SELECT"]}]
 
 
+def _first(rules: dict[str, Any], user: str, relation: str) -> list[str]:
+    """The privileges Trino gives `user` on `relation`: the first table rule matching all four
+    names decides; a field a rule leaves out matches any name; no rule, none."""
+    names = dict(zip(("catalog", "schema", "table"), relation.split("."), strict=True), user=user)
+    for r in rules["tables"]:
+        if "user" in r and all(re.fullmatch(r.get(k, ".*"), v) for k, v in names.items()):
+            return r["privileges"]
+    return []
+
+
+def test_the_holds_are_svc_operators_alone_to_append_and_read_only_elsewhere() -> None:
+    # I-7 and review A4: svc.platform creates the table (OWNERSHIP); svc.operator, host-held, alone
+    # appends (make hold, the locks), with INSERT and nothing else in governance_build; every reader,
+    # svc.operator, svc.runs (a DAG's resolve), svc.platform (deploy) and svc.catalog (the page),
+    # reads through the read-only reader catalog, where no table procedure runs: SELECT in
+    # governance_build is the right to roll the table back (spike (e)), which ends a hold with no row.
+    # No DELETE or UPDATE for anyone, so a hold is ended only by a release row; no group rule reaches it.
+    m = loaded("repository")
+    rules, _ = emitted(m)
+    holds = [r for r in rules["tables"] if r.get("table") == "holds"]
+    assert holds == [
+        {"user": "svc\\.platform", "catalog": "governance_build", "schema": "run_records", "table": "holds", "privileges": ["SELECT", "OWNERSHIP"]},
+        {"user": "svc\\.operator", "catalog": "governance_build", "schema": "run_records", "table": "holds", "privileges": ["INSERT"]},
+        {"user": "svc\\.catalog|svc\\.operator|svc\\.platform|svc\\.runs", "catalog": "governance", "schema": "run_records", "table": "holds",
+         "privileges": ["SELECT"]}]
+    want = {("svc.platform", "governance_build"): ["SELECT", "OWNERSHIP"], ("svc.operator", "governance_build"): ["INSERT"],
+            **{(u, "governance"): ["SELECT"] for u in ("svc.catalog", "svc.operator", "svc.platform", "svc.runs")}}
+    users = {*trino_rules.known_principals(m), "svc.api", "svc.runsx", "svcXruns", "svc.operatorx", "p.stranger"}
+    assert {"svc.runs", "svc.catalog", "svc.platform", "svc.operator", "dbt_quality_results", "pub_access_canary"} <= users
+    for user in sorted(users):
+        for catalog in ("governance_build", "governance"):
+            assert _first(rules, user, f"{catalog}.run_records.holds") == want.get((user, catalog), []), (user, catalog)
+        # svc.operator reaches nothing else: no other table of either catalog, the run record included
+        if user == "svc.operator":
+            others = [r for r in rules["tables"] if "user" in r and re.fullmatch(r["user"], user) and r.get("table") != "holds"]
+            assert others == [], others
+    assert not [r for r in rules["tables"] if "group" in r and re.fullmatch(r.get("table", ".*"), "holds")]
+    # The writer's catalog access is what INSERT needs; every reader's of the holds is read-only.
+    access = {(r["catalog"], r["allow"]): unescape(r["user"]) for r in rules["catalogs"] if "user" in r}
+    assert {"svc.runs", "svc.operator"} <= set(access[("governance_build", "all")])
+    assert {"svc.catalog", "svc.operator", "svc.runs"} <= set(access[("governance", "read-only")])
+    assert [c for (c, _), who in access.items() if "svc.operator" in who] == ["governance_build", "governance"]
+    # svc.operator is a platform principal: never a reader, never a pipeline principal (no statistics property).
+    assert any(re.fullmatch(p, "svc.operator") for p in model.BUILD_CATALOG_PRINCIPALS)
+    assert not any(re.fullmatch(p, "svc.operator") for p in model.PIPELINE_PRINCIPALS)
+    # Without the governance domain, neither platform table gets a rule.
+    gone, _ = emitted(dataclasses.replace(m, domains=tuple(d for d in m.domains if d.name != "governance"),
+                                          products=tuple(p for p in m.products if p.domain != "governance")))
+    assert not [r for r in gone["tables"] if r.get("table") in ("holds", "run_record")]
+
+
+def test_a_delayed_reader_never_sees_a_delivery_or_build_counter() -> None:
+    # Review A5: the delay hides a row by its trade time, but a late delivery of an old trade is
+    # visible at once, and a column set at delivery or build counts or dates what the delay hides:
+    # each is masked for delayed_reader wherever it is carried, and full_reader sees every column.
+    rules, _ = emitted(loaded("repository"))
+    want = {"market_capture.kraken_trades.silver_trade": {"conn_id", "conn_msg_seq", "kafka_offset", "received_at"},
+            "market_analytics.canonical_trades.trades": {"kafka_offset", "load_seq"},
+            **{f"market_analytics.candles.ohlcv_{i}": {"through_load_seq"} for i in ("1m", "5m", "1h", "1d")}}
+    for relation, masked in want.items():
+        names = dict(zip(("catalog", "schema", "table"), relation.split("."), strict=True))
+        for role, expect in (("delayed_reader", masked), ("full_reader", set())):
+            (rule,) = [r for r in rules["tables"] if "group" in r and r["group"].endswith(f"__{role}")
+                       and all(re.fullmatch(r[k], v) for k, v in names.items())]
+            assert {c["name"] for c in rule.get("columns", [])} == expect, (relation, role)
+            assert all(c["mask"].startswith("CAST(NULL AS ") for c in rule.get("columns", []))
+
+
 def _relations(rules: list[dict[str, Any]]) -> set[str]:
     return {f"{r['catalog']}.{r['schema']}.{r['table']}" for r in rules}
 
@@ -167,10 +235,10 @@ def test_the_quality_builder_alone_reads_every_writers_results_and_svc_catalog_i
     rules, _ = emitted(m)
     results = [r for r in rules["tables"] if r.get("table") == model.TEST_RESULTS]
     want = {model.base_relation(p.domain, p.name, model.TEST_RESULTS) for p in model.test_results_writers(m)}
-    assert len(want) == 5 and _relations(results) == want and len(results) == len(want)
+    assert len(want) == 10 and _relations(results) == want and len(results) == len(want)
     assert {r["user"] for r in results} == {"dbt_quality_results"} and all(r["privileges"] == ["SELECT"] for r in results)
-    catalog = [r for r in rules["tables"] if r.get("user") == "svc\\.catalog"]
-    assert _relations(catalog) == {"governance.run_records.run_record", "governance.quality_results.test_results"}
+    catalog = [r for r in rules["tables"] if "svc.catalog" in unescape(r.get("user", "")) and "$refs" not in r.get("table", "")]
+    assert _relations(catalog) == {"governance.run_records.run_record", "governance.run_records.holds", "governance.quality_results.test_results"}
     assert all(r["privileges"] == ["SELECT"] for r in catalog)
     # A retired writer drops out; without the quality product, nobody reads any results table.
     retired = dataclasses.replace(m, products=tuple(dataclasses.replace(p, status="retired") if p.name == "access-canary" else p
@@ -199,6 +267,8 @@ def edit_grants(m: Model, product: str, grants: tuple[Grant, ...]) -> Model:
     (lambda m: edit_grants(m, "station-readings", (Grant("dbt_daily_load", "full_reader"),)), "platform principal"),
     (lambda m: edit_grants(m, "station-readings", (Grant("svc.platform", "full_reader"),)), "platform principal"),
     (lambda m: edit_grants(m, "station-readings", (Grant("k2_release_0123456789ab", "full_reader"),)), "platform principal"),
+    (lambda m: dataclasses.replace(m, principals=tuple(dataclasses.replace(p, kind="partner") if p.id == "svc.runs" else p
+                                                       for p in m.principals)), "a partner and a platform principal"),
     (lambda m: edit_table(m, "station-readings", lambda t: dataclasses.replace(
         t, policies={**t.policies, "public_reader": RolePolicy(None, ("region",), None)}) if t.name == "silver_readings" else t), "does not offer"),
     (lambda m: edit_table(m, "station-readings", lambda t: dataclasses.replace(
@@ -212,6 +282,16 @@ def edit_grants(m: Model, product: str, grants: tuple[Grant, ...]) -> Model:
 def test_what_the_documents_leave_inconsistent_fails_closed(change: Any, message: str) -> None:
     with pytest.raises(ValueError, match=message):
         trino_rules.emit(change(loaded("good")))
+
+
+def test_a_partner_is_a_reader_by_its_grants_alone() -> None:
+    # svc.load-dashboard holds full_reader on daily-load: as a partner it compiles to the same rules
+    # and groups, so its kind gives it no right and takes none its grants give.
+    m = loaded("good")
+    partner = dataclasses.replace(m, principals=tuple(dataclasses.replace(p, kind="partner") if p.id == "svc.load-dashboard" else p
+                                                      for p in m.principals))
+    assert trino_rules.emit(partner) == trino_rules.emit(m)
+    assert "svc.load-dashboard" in trino_rules.emit(partner)[trino_rules.GROUPS]
 
 
 def test_a_policy_value_is_one_literal_and_a_name_one_identifier() -> None:
@@ -297,7 +377,7 @@ def unescape(pattern: str) -> list[str]:
 def universe(m: Model) -> set[str]:
     """Every name a rule could be asked about, and near misses of each: an extension, a prefix, a
     `.` swapped for `x`, every `$` metadata table."""
-    names = {"lake", "system", "runtime", "metadata", "jdbc", "information_schema", "run_records", "run_record",
+    names = {"lake", "system", "runtime", "metadata", "jdbc", "information_schema", "run_records", "run_record", "holds",
              "svc.platform", "svc.api", "svc.runs", "svc.catalog", model.canary_user(m.provenance.set_sha256)}
     names |= set(trino_rules.known_principals(m)) | {p.id for p in m.principals}
     for d in m.domains:

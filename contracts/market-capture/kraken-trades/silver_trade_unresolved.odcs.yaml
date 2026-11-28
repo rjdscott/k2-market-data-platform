@@ -1,0 +1,103 @@
+apiVersion: v3.2.0
+kind: DataContract
+id: market-capture.kraken-trades.silver_trade_unresolved
+name: silver_trade_unresolved
+version: 1.0.0
+domain: market-capture
+description:
+  purpose: >-
+    The held trades: every trade of a bronze trade frame that is not in silver_trade, because a
+    trade in it has a symbol the security master resolves to nothing at the trade's time. Rebuilt
+    on every build, so a frame leaves it on the build that moves it into silver_trade. A frame the
+    model cannot type is not held but rejected (silver_trade_rejected), even if a symbol in it
+    resolves to nothing too: a held frame is one the master alone can release.
+team:
+  name: capture-team
+schema:
+  - id: silver_trade_unresolved
+    name: silver_trade_unresolved
+    physicalName: kraken_trades.silver_trade_unresolved
+    physicalType: table
+    properties:
+      - name: kafka_partition
+        physicalType: integer
+        required: true
+        primaryKey: true
+        primaryKeyPosition: 1
+        description: The topic partition of the frame.
+      - name: kafka_offset
+        physicalType: bigint
+        required: true
+        primaryKey: true
+        primaryKeyPosition: 2
+        description: The frame's offset in its partition.
+      - name: trade_ordinal
+        physicalType: integer
+        required: true
+        primaryKey: true
+        primaryKeyPosition: 3
+        description: The trade's position in the frame's data array, from 1.
+      - name: trade_ts
+        physicalType: timestamp(6) with time zone
+        required: true
+        description: The venue's timestamp of the trade, in UTC to the microsecond; the time the symbol must resolve at.
+      - name: trade_id
+        physicalType: bigint
+        required: true
+        description: The venue's trade id.
+      - name: venue_symbol
+        physicalType: varchar
+        required: true
+        description: The symbol as the venue spells it.
+      - name: side
+        physicalType: varchar
+        required: true
+        description: The taker's side as the venue sends it.
+      - name: price
+        physicalType: decimal(38,18)
+        required: true
+        description: The price, cast exactly as in silver_trade.
+      - name: quantity
+        physicalType: decimal(38,18)
+        required: true
+        description: The quantity, cast exactly as in silver_trade.
+      - name: order_type
+        physicalType: varchar
+        description: The taker order's type as the venue sends it.
+      - name: frame_type
+        physicalType: varchar
+        required: true
+        description: The frame's type, snapshot or update.
+      - name: received_at
+        physicalType: timestamp(6) with time zone
+        required: true
+        description: When the capture received the frame, in UTC, truncated to the microsecond.
+      - name: conn_id
+        physicalType: varchar
+        required: true
+        description: The capture's websocket connection that received the frame.
+      - name: conn_msg_seq
+        physicalType: bigint
+        required: true
+        description: The frame's number within that connection.
+    quality:
+      - name: unresolved_rows_zero
+        type: custom
+        engine: dbt
+        implementation:
+          k2_quality:
+            arguments:
+              query: "select count(*) from ${table}"
+              holds: "metric_value = 0"
+            config:
+              severity: warn
+        description: >-
+          No trade is held. A held one warns: the build still publishes the rest, the run is
+          degraded, and an instruments run is started so the master can resolve the symbol.
+customProperties:
+  - property: layer
+    value: silver
+  - property: build
+    value: dbt
+  - property: backup
+    value: rebuild  # rebuilt from bronze and silver_trade

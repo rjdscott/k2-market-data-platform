@@ -3,13 +3,15 @@ throwaway lake's tools container: /work is the lake's state, /work/rp the run's 
 
     run_path_probe.py setup <release id>            the namespaces and the run-record table
     run_path_probe.py seed <release id> <fixture> <run>   a spool entry, as fetch.py leaves one
+    run_path_probe.py seed-api <release id> <product> <response> <run>   a public-API page's entry, likewise
+    run_path_probe.py chain-state <label>           the phase 004 chain's tables, every row, to chain-<label>.json
     run_path_probe.py state <label>                 refs, snapshots and counts, to state-<label>.json
     run_path_probe.py poll <label>                  a reader on gold every 50 ms until stop-<label>
     run_path_probe.py wait-started <run id>         until the wrapper's started row of the run is in
     run_path_probe.py wait-trino                    until Trino answers again
     run_path_probe.py claim <name> [args]           one PASS or FAIL line; exit 1 on a FAIL
 
-`seed` writes the spool; nothing else here writes the lake."""
+`seed` and `seed-api` write the spool; nothing else here writes the lake."""
 import hashlib
 import json
 import os
@@ -39,6 +41,19 @@ TABLES = {"bronze": ("k2", "ecb_fx_rates", "bronze_daily"), "landing_log": ("k2"
           "silver": ("fx_reference", "ecb_fx_rates__base", "silver_rates"),
           "gold": ("fx_reference", "ecb_fx_rates__base", "gold_eur_rates_daily"),
           "calendars": ("reference_data", "calendars__base", "target_days")}
+# The phase 004 chain's tables (run-path.sh claims 10 to 18), each read as its product's builder
+CHAIN = {"pairs": ("dbt_kraken_instruments", "lake.kraken_instruments.bronze_pairs"),
+         "listing": ("dbt_kraken_instruments", "market_capture_build.kraken_instruments__base.silver_listing"),
+         "venue_symbol": ("dbt_security_master", "reference_data_build.security_master__base.venue_symbol"),
+         "symbol_held": ("dbt_security_master", "reference_data_build.security_master__base.venue_symbol_held"),
+         "bronze_trade": ("dbt_kraken_trades", "lake.kraken_trades.bronze_trade"),
+         "silver_trade": ("dbt_kraken_trades", "market_capture_build.kraken_trades__base.silver_trade"),
+         "unresolved": ("dbt_kraken_trades", "market_capture_build.kraken_trades__base.silver_trade_unresolved"),
+         "rejected": ("dbt_kraken_trades", "market_capture_build.kraken_trades__base.silver_trade_rejected"),
+         "canonical": ("dbt_canonical_trades", "market_analytics_build.canonical_trades__base.trades"),
+         **{f"ohlcv_{w}": ("dbt_candles", f"market_analytics_build.candles__base.ohlcv_{w}") for w in ("1m", "5m", "1h", "1d")}}
+KT, CT, KI, SM, CA = ("market-capture.kraken-trades", "market-analytics.canonical-trades", "market-capture.kraken-instruments",
+                      "reference-data.security-master", "market-analytics.candles")
 trino, env = av.connect(Path("/work/env.json"))
 LK = f"{env['lakekeeper']}/catalog"
 cmd, args = sys.argv[1], sys.argv[2:]
@@ -87,6 +102,48 @@ elif cmd == "seed":  # seed <release id> <fixture> <run>: the entry fetch.py lea
     audits = list(dict.fromkeys(a for b in p.get("bronze", []) for a in b["audits"]))  # as fetch.main() lists them
     code = fetch.parse(release(rid) / fetch.PARSER.format(domain=p["domain"], parser=c["parser"]), entry, raw, audits)
     (RP / f"{run}.seed.json").write_text(json.dumps({"exit": code, "sha256": sha, "unchanged": unchanged}))
+elif cmd == "seed-api":  # seed-api <release id> <product> <response> <run>: fetch_api()'s entry for one page, then its parse
+    sys.path.insert(0, str(RP))
+    import fetch
+    rid, product, fixture, run = args
+    p = pipeline(rid, product)
+    c, dag = p["connector"], SPOOL / p["dagId"]
+    data = (RP / fixture).read_bytes()
+    content = fetch.content_sha256(data, set(c.get("volatileFields", [])))
+    before = fetch.newest(dag).get("pages", []) if dag.is_dir() else []
+    if [content] == [x.get("contentSha256") for x in before]:  # fetch.main() exits 10 here and spools nothing
+        (RP / f"{run}.seed.json").write_text(json.dumps({"exit": 10, "unchanged": True}))
+        sys.exit(0)
+    entry = dag / run
+    entry.mkdir(parents=True)
+    (entry / "raw.1.json").write_bytes(data)
+    at = datetime.now(fetch.UTC).isoformat(timespec="microseconds")
+    url = c["url"].replace("{{ds}}", at[:10])
+    page = {"page": 1, "url": url, "finalUrl": url, "sha256": hashlib.sha256(data).hexdigest(), "bytes": len(data),
+            "fetchedAt": at, "httpStatus": 200, "address": None, "contentSha256": content, "raw": "raw.1.json"}  # no address: nothing was dialled
+    (entry / "fetch.json").write_text(json.dumps({"fetchedAt": at, "pages": [page]}, indent=1) + "\n")
+    audits = list(dict.fromkeys(a for b in p.get("bronze", []) for a in b["audits"]))  # as fetch.main() lists them
+    code = fetch.parse(release(rid) / fetch.PARSER.format(domain=p["domain"], parser=c["parser"]), entry, ["raw.1.json"], audits)
+    (RP / f"{run}.seed.json").write_text(json.dumps({"exit": code, "unchanged": False, "fetchedAt": at, "sha256": page["sha256"],
+                                                     "audits": audits}))
+elif cmd == "chain-state":  # chain-state <label>: every row of the chain's tables, each read as its product's builder; refs by the catalog
+    s = {}
+    for k, (user, rel) in CHAIN.items():
+        # Times cast to varchar: Trino rounds a timestamp to milliseconds for a client that does not declare
+        # the PARAMETRIC_DATETIME capability, as access_verify's does not; the varchar is every digit
+        cols = trino.run(user, f"SELECT * FROM {rel} LIMIT 0", zone="UTC").columns
+        a = trino.run(user, "SELECT " + (", ".join(f'CAST("{c}" AS varchar) AS "{c}"' if t.startswith("timestamp") else f'"{c}"' for c, t in cols)
+                                         or "*") + f" FROM {rel}", zone="UTC")
+        a.columns = [(c, t) for (c, t), _ in zip(cols, a.columns, strict=True)] if cols else a.columns
+        catalog, ns, t = rel.split(".")
+        meta = cd.Catalog(LK, "k2" if catalog == "lake" else catalog.removesuffix("_build")).table(ns, t) or {}
+        s[k] = {"error": a.says() if a.error else None, "columns": [c for c, _ in a.columns],
+                "rows": [{c: v if ty.startswith(("decimal", "varbinary")) else av.norm(ty, v) for (c, ty), v in zip(a.columns, r)} for r in a.rows],
+                "refs": {n: x["snapshot-id"] for n, x in (meta.get("refs") or {}).items()}}
+    meta = cd.Catalog(LK, "k2").table("kraken_trades", "landing") or {}
+    main = next((x for x in meta.get("snapshots") or [] if x["snapshot-id"] == (meta.get("refs") or {}).get("main", {}).get("snapshot-id")), {})
+    s["landing"] = {"records": int(main.get("summary", {}).get("total-records", 0)), "snapshots": len(meta.get("snapshots") or [])}
+    (RP / f"chain-{args[0]}.json").write_text(json.dumps(s, indent=1, default=str))
 elif cmd == "state":  # state <label>: refs and snapshots by the catalog, row counts by Trino
     s = {}
     for k, (wh, ns, t) in TABLES.items():
@@ -481,6 +538,288 @@ elif cmd == "claim":  # claim <name> [release ids]: one PASS or FAIL line; exit 
             (after == want, f"the records after the stopped run's started rows {after}"),
             (tagged(s, "silver") and tagged(s, "gold"), f"silver {s['silver']['refs']}, gold {s['gold']['refs']}")],
             f"{', '.join(e for e, _ in after)}; audited = main on both outputs")
+    # ---- the phase 004 chain, claims 10 to 18 (run-path.sh): chain-<label>.json, the task files, the run records
+    elif name in ("instruments", "master", "trades", "held", "candles", "idle", "paused", "venue-fail", "rejected"):
+        def chain(label):
+            return json.loads((RP / f"chain-{label}.json").read_text())
+
+        def rows(st, table, *cols):
+            return sorted(tuple(r[c] for c in cols) for r in st[table]["rows"]) if cols else \
+                sorted(st[table]["rows"], key=lambda r: json.dumps(r, sort_keys=True))  # Trino's order is no order
+
+        def checks(label):  # the audit task's "  pass  <check> ..." lines, by check
+            return {x.split()[1]: x.split()[0] == "pass" for x in text(label).splitlines() if x.startswith(("  pass ", "  FAIL "))}
+
+        def fixture_trades(*paths):  # every trade of the frames' trade channel, as the frame carries it, numbers exact
+            out = []
+            for path in paths:
+                for line in (RP / path).read_text().splitlines():
+                    f = json.loads(json.loads(line)["payload"], parse_float=Decimal) if line.strip() else {}
+                    out += f.get("data", []) if f.get("channel") == "trade" else []
+            return out
+
+        def candles(trades, width):  # this probe's own arithmetic: {(instrument, window_start): (o, h, l, c, volume, count)}
+            def start(t):
+                at = datetime.fromisoformat(t["timestamp"])
+                return {"1m": at.replace(second=0, microsecond=0), "5m": at.replace(minute=at.minute - at.minute % 5, second=0, microsecond=0),
+                        "1h": at.replace(minute=0, second=0, microsecond=0), "1d": at.replace(hour=0, minute=0, second=0, microsecond=0)}[width]
+            out = {}
+            for t in sorted(trades, key=lambda t: t["timestamp"]):  # the fixture's trade times are distinct
+                k = (t["symbol"].replace("/", "-"), start(t).isoformat(timespec="microseconds"))
+                o, h, lo, _, v, n = out.get(k, (t["price"], t["price"], t["price"], None, Decimal(0), 0))
+                out[k] = (o, max(h, t["price"]), min(lo, t["price"]), t["price"], v + t["qty"], n + 1)
+            return out
+
+        def table_candles(st, width):
+            return {(r["instrument_id"], r["window_start"]): tuple(Decimal(r[c]) for c in ("open", "high", "low", "close", "volume")) + (int(r["trade_count"]),)
+                    for r in rows(st, f"ohlcv_{width}")}
+
+        def state_of(product, through=None):  # k2runs.state over the product's run records (those up to run `through`'s last), the release's own client
+            import importlib.util
+            spec = importlib.util.spec_from_file_location("k2runs", release(args[1]) / "platform/platform/runs/k2runs.py")
+            k2runs = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(k2runs)
+            got = trino.ok("svc.runs", f"SELECT run_id, task, event, recorded_at, detail, inputs FROM {RECORDS} "
+                                       f"WHERE product_id = {sql_literal(product)}")
+            recs = [dict(zip(("run_id", "task", "event", "recorded_at", "detail", "inputs"), r)) for r in got]
+            end = max((r["recorded_at"] for r in recs if r["run_id"] == through), default=None) if through else None
+            return k2runs.state([r for r in recs if end is None or r["recorded_at"] <= end])
+
+        def built(run, want=0):  # a wrapper build: its exit and XCom's
+            return (rc(f"{run}.build") == want and result(f"{run}.build").get("exit") == want,
+                    f"{run} build exit {rc(f'{run}.build')}, XCom {result(f'{run}.build')} (want {want}): {why(f'{run}.build')}")
+
+        def tagged_on(st, *tables):
+            bad = [t for t in tables if st[t]["refs"].get("main") is None or st[t]["refs"].get("audited") != st[t]["refs"].get("main")]
+            return not bad, f"not audited on main: {[(t, st[t]['refs']) for t in bad]}"
+
+        def readable(st, *tables):
+            bad = [(k, st[k]["error"]) for k in tables if st[k]["error"]]
+            return not bad, f"read as the product's builder: {bad}"
+
+        trades_1 = fixture_trades("frames.jsonl")
+        n1 = len(trades_1)
+        if name == "instruments":  # 10
+            sd, st = seed("ki-1"), chain("ki-1")
+            listed = json.loads((RP / "listing-1.json").read_text())["result"]
+            entry = SPOOL / "kraken_instruments/ki-1"
+            fetched = json.loads((entry / "fetch.json").read_text())["pages"][0]["fetchedAt"]
+            audits = json.loads((entry / "audits.json").read_text())["audits"] if (entry / "audits.json").exists() else None
+            sys.path.insert(0, str(lake))
+            import connector  # the release's own check names, pure
+            [bronze] = pipeline(args[1], KI)["bronze"]
+            want = connector.check_names(bronze)
+            got, load, pub = checks("ki-1.audit"), result("ki-1.load"), result("ki-1.publish")
+            firsts = {r["pair_code"]: r["first_fetched_at"] for r in rows(st, "listing")}
+            verdict("kraken-instruments: the spooled listing lands, audits, publishes; silver_listing one version per pair at the fetch", [
+                (sd["exit"] == 0 and audits is not None and all(a["passed"] for a in audits) and [a["name"] for a in audits] == sd["audits"],
+                 f"the spool: parse exit {sd['exit']}, audits.json {audits}, declared {sd['audits']}"),
+                task("ki-1", "load"),
+                (load.get("rows") == len(listed), f"load's result {load}, want {len(listed)} rows"),
+                task("ki-1", "audit"),
+                (sorted(got) == sorted(want) and all(got.values()), f"audit's checks {got}, declared {want}"),
+                task("ki-1", "publish"),
+                (st["pairs"]["refs"].get("main") == pub.get("snapshotAfter") is not None and len(rows(st, "pairs")) == len(listed),
+                 f"bronze_pairs refs {st['pairs']['refs']}, {len(rows(st, 'pairs'))} rows; publish {pub}"),
+                built("ki-1"), tagged_on(st, "listing"), readable(st, "pairs", "listing"),
+                (sorted(firsts) == sorted(listed) and len(rows(st, "listing")) == len(listed)
+                 and {datetime.fromisoformat(v) for v in firsts.values()} == {datetime.fromisoformat(fetched)},
+                 f"silver_listing {[(r['pair_code'], r['first_fetched_at']) for r in rows(st, 'listing')]}, the spool's fetchedAt {fetched}")],
+                f"{len(listed)} pairs loaded, {len(want)} checks passed ({len(audits or [])} parser audits declared, each passed), "
+                f"main {pub.get('snapshotAfter')}; silver_listing {len(firsts)} rows, one per pair, each first_fetched_at {fetched}")
+        elif name == "master":  # 11
+            st = chain("sm-1")
+            listed = json.loads((RP / "listing-1.json").read_text())["result"]
+            seed_csv = release(args[1]) / "documents/contracts/reference-data/security-master/seeds/code_exceptions.csv"
+            older = {}
+            for line in seed_csv.read_text().splitlines()[1:]:
+                venue, code, asset, _ = line.split(",", 3)
+                older[(venue, code.upper())] = asset.upper()
+            spell = {code: "/".join(older.get(("kraken", x.upper()), x.upper()) for x in a["wsname"].split("/")) for code, a in listed.items()}
+            got = {r["pair_code"]: r for r in rows(st, "venue_symbol")}
+            symbols = {t["symbol"] for t in trades_1}
+            mapped = [c for c, a in listed.items() if spell[c] != a["wsname"].upper()]
+            by_seed = ", ".join(f"{listed[c]['wsname']} -> {spell[c]}" for c in mapped)
+            verdict("security-master on the tested listing: one open venue_symbol per pair, as the trades stream spells it", [
+                built("sm-1"), tagged_on(st, "venue_symbol", "symbol_held"), readable(st, "venue_symbol", "symbol_held"),
+                (bool(older) and bool(mapped), f"the legacy-code mapping is not exercised: seed {older} ({seed_csv}), pairs needing it {mapped}"),
+                (sorted(got) == sorted(listed) and all(got[c]["venue_symbol"] == spell[c] for c in listed),
+                 f"venue_symbol {[(r['pair_code'], r['venue_symbol']) for r in rows(st, 'venue_symbol')]}, want {spell}"),
+                (symbols <= {r["venue_symbol"] for r in got.values()}, f"the frames' symbols {symbols} not all spelled"),
+                (all(r["valid_from"] == "1970-01-01T00:00:00.000000+00:00" and r["valid_to"] == "9999-12-31T23:59:59.000000+00:00" for r in got.values()),
+                 f"valid_from/valid_to {[(r['venue_symbol'], r['valid_from'], r['valid_to']) for r in got.values()]}"),
+                (rows(st, "symbol_held") == [], f"venue_symbol_held {rows(st, 'symbol_held')}")],
+                f"{len(got)} open rows from 1970-01-01 to 9999-12-31 23:59:59: {', '.join(sorted(spell[c] for c in listed))}; "
+                f"{by_seed} by the seed; none held")
+        elif name == "trades":  # 12
+            st, ca = chain("kt-1"), chain("ca-1")
+            load, pub = result("kt-1.load"), result("kt-1.publish")
+            frames = [x for x in (RP / "frames.jsonl").read_text().splitlines() if x.strip()]
+            trade_frames = [x for x in frames if json.loads(json.loads(x)["payload"]).get("channel") == "trade"]
+            got = checks("kt-1.audit")
+            silver = rows(st, "silver_trade")
+            one = next((r for r in silver if r["trade_id"] == trades_1[0]["trade_id"]), {})
+            verdict(f"kraken-trades: every frame lands, the {len(trade_frames)} trade frames stage, silver_trade one row per trade ({n1})", [
+                task("kt-1", "load"),
+                (load.get("landed") == len(frames) == st["landing"]["records"] and load.get("rows") == len(trade_frames)
+                 and load.get("rows", 0) + load.get("skipped", -1) == load.get("landed"),
+                 f"load's result {load}; the landing holds {st['landing']['records']} of {len(frames)} frames"),
+                task("kt-1", "audit"),
+                (got == {"accounting": True, "parses": True, "keys_unique": True}, f"audit's checks {got}"),
+                task("kt-1", "publish"),
+                (st["bronze_trade"]["refs"].get("main") == pub.get("snapshotAfter") is not None and len(rows(st, "bronze_trade")) == len(trade_frames)
+                 and all(r["stream"] == "trade" for r in rows(st, "bronze_trade")), f"bronze_trade refs {st['bronze_trade']['refs']}, {len(rows(st, 'bronze_trade'))} rows"),
+                built("kt-1"), tagged_on(st, "silver_trade", "unresolved"), readable(st, "bronze_trade", "silver_trade", "unresolved"),
+                (len(silver) == n1 and all(r["instrument_id"] == r["venue_symbol"].replace("/", "-") for r in silver)
+                 and not any(r["is_duplicate"] for r in silver), f"silver_trade {[(r['trade_id'], r['venue_symbol'], r['instrument_id'], r['is_duplicate']) for r in silver]}"),
+                (one and Decimal(one["price"]) == trades_1[0]["price"] and Decimal(one["quantity"]) == trades_1[0]["qty"]
+                 and one["price"] == f"{trades_1[0]['price']:.18f}" and one["quantity"] == f"{trades_1[0]['qty']:.18f}",
+                 f"trade {trades_1[0]['trade_id']}: price {one.get('price')}, quantity {one.get('quantity')}; the frame's {trades_1[0]['price']}, {trades_1[0]['qty']}"),
+                (rows(st, "unresolved") == [], f"silver_trade_unresolved {rows(st, 'unresolved')}"),
+                built("ct-1"), built("ca-1")],
+                f"{load.get('landed')} frames landed, {load.get('rows')} staged + {load.get('skipped')} skipped; accounting, parses, keys_unique passed; "
+                f"silver_trade {len(silver)} rows, each resolved ({', '.join(sorted({r['instrument_id'] for r in silver}))}), none a duplicate; "
+                f"trade {trades_1[0]['trade_id']} price {one.get('price')} quantity {one.get('quantity')}; nothing held")
+        elif name == "held":  # 13
+            h, r, a = chain("kt-2"), chain("kt-3"), chain("ca-2")
+            late = fixture_trades("unknown.jsonl")[0]
+            x2, x3 = result("kt-2.build"), result("kt-3.build")
+
+            def in_silver(st):
+                return [x for x in rows(st, "silver_trade") if x["venue_symbol"] == late["symbol"]]
+            held_rows = [x for x in rows(h, "unresolved") if x["venue_symbol"] == late["symbol"]]
+            rec = history(KT)
+            degraded = [x for x in rec if x["run"] == "kraken_trades/kt-2" and x["event"] == "audited"]
+            verdict(f"a trade of {late['symbol']}, unlisted, is held and degraded; the listing naming it takes it in once", [
+                task("kt-2", "load"), task("kt-2", "audit"), task("kt-2", "publish"), built("kt-2"),
+                (state_of(KT, "kraken_trades/kt-2") == "degraded", f"k2runs.state through kt-2 {state_of(KT, 'kraken_trades/kt-2')!r}"),
+                (len(held_rows) == 1 == len(rows(h, "unresolved")) and not in_silver(h) and len(rows(h, "silver_trade")) == n1,
+                 f"after kt-2: held {[(x['venue_symbol'], x['trade_id']) for x in rows(h, 'unresolved')]}, silver {len(rows(h, 'silver_trade'))} rows"),
+                # the test carries its rule's name (k2gen's dbt emitter): the held table's one warn rule,
+                # unresolved_rows_zero (silver_trade_unresolved.odcs.yaml)
+                (x2.get("degraded") is True and len(x2.get("warned", [])) == 1
+                 and x2["warned"][0].startswith("test.k2.unresolved_rows_zero."),
+                 f"kt-2's XCom {x2}"),
+                (bool(degraded) and all(json.loads(x["detail"] or "{}").get("degraded") is True for x in degraded),
+                 f"kt-2's audited rows {[(x['table'], x['detail']) for x in degraded]}"),
+                (len(rows(a, "canonical")) == n1, f"canonical-trades after the held build: {len(rows(a, 'canonical'))} rows, want {n1}"),
+                (seed("ki-2")["exit"] == 0, f"the second listing's parse: {seed('ki-2')}"),
+                task("ki-2", "load"), task("ki-2", "audit"), task("ki-2", "publish"), built("ki-2"), built("sm-2"),
+                (any(v["venue_symbol"] == late["symbol"] and v["valid_from"].startswith("1970-01-01") for v in rows(r, "venue_symbol")),
+                 f"venue_symbol after the second listing {[(v['venue_symbol'], v['valid_from']) for v in rows(r, 'venue_symbol')]}"),
+                task("kt-3", "load"), built("kt-3"),
+                (len(in_silver(r)) == 1 and len(rows(r, "silver_trade")) == n1 + 1 and rows(r, "unresolved") == []
+                 and in_silver(r)[0]["instrument_id"] == late["symbol"].replace("/", "-") and not in_silver(r)[0]["is_duplicate"],
+                 f"after kt-3: silver {[(x['venue_symbol'], x['trade_id'], x['instrument_id']) for x in rows(r, 'silver_trade')]}, held {rows(r, 'unresolved')}"),
+                (x3.get("degraded") is not True, f"kt-3's XCom {x3}"),
+                (state_of(KT, "kraken_trades/kt-3") == "complete", f"k2runs.state through kt-3 {state_of(KT, 'kraken_trades/kt-3')!r}")],
+                f"after kt-2 {late['symbol']} trade {late['trade_id']} held, silver {n1} rows, XCom degraded, warned "
+                f"{[w.split('.')[2] for w in x2.get('warned', [])]}, k2runs.state degraded; after the second listing, kt-3 took it in "
+                f"once ({n1 + 1} rows), nothing held, state complete")
+        elif name == "candles":  # 14
+            one, two, three = chain("ca-1"), chain("ca-2"), chain("ca-3")
+            late = fixture_trades("unknown.jsonl")
+            canon = rows(three, "canonical")
+            key = ("kafka_partition", "kafka_offset", "trade_ordinal")
+            mine = candles(trades_1, "1m")
+            (inst, minute), want = next(iter(sorted(mine.items())))
+            checks_ = [built("ct-1"), built("ca-1"), built("ct-3"), built("ca-3"), readable(three, *[k for k in CHAIN if k.startswith(("canonical", "ohlcv"))]),
+                       (sorted(rows(three, "canonical", *key)) == sorted(rows(three, "silver_trade", *key)) and len(canon) == n1 + 1
+                        and "conn_id" not in three["canonical"]["columns"] and all(r["venue"] == "kraken" for r in canon),
+                        f"canonical {len(canon)} rows, silver {len(rows(three, 'silver_trade'))}; columns {three['canonical']['columns']}"),
+                       (table_candles(one, "1m").get((inst, minute)) == want,
+                        f"ohlcv_1m {inst} {minute}: {table_candles(one, '1m').get((inst, minute))}, the frames' (o, h, l, c, volume, count) {want}"),
+                       (table_candles(one, "1d") == candles(trades_1, "1d"), f"ohlcv_1d {table_candles(one, '1d')}, the frames' {candles(trades_1, '1d')}")]
+            for w in ("1m", "5m", "1h", "1d"):
+                mine_all, before, after = candles(trades_1 + late, w), table_candles(two, w), table_candles(three, w)
+                new = {k: v for k, v in mine_all.items() if k[0] == late[0]["symbol"].replace("/", "-")}
+                checks_.append((after == mine_all and not set(new) & set(before) and before == candles(trades_1, w),
+                                f"ohlcv_{w}: before the release {before}, after {after}; the frames' {mine_all}"))
+            verdict("canonical-trades one row per silver_trade row; candles equal the frames' own arithmetic", checks_,
+                    f"canonical {len(canon)} rows, no conn_id; ohlcv_1m {inst} {minute[:16]} (o, h, l, c, volume, count) = {tuple(str(x) for x in want)}; "
+                    f"ohlcv_1d {len(rows(one, 'ohlcv_1d'))} row; the released trade's 1m, 5m, 1h and 1d buckets written after its release, the others unchanged")
+        elif name == "idle":  # 15
+            b, a = chain("ca-3"), chain("idle")
+            moved = {k: (len(b[k]["rows"]), len(a[k]["rows"])) for k in CHAIN
+                     if sorted(json.dumps(r, sort_keys=True) for r in b[k]["rows"]) != sorted(json.dumps(r, sort_keys=True) for r in a[k]["rows"])}
+            verdict("every product again with nothing new adds no row and changes none", [
+                (seed("ki-3").get("exit") == 10, f"the listing again: {seed('ki-3')}, want fetch's exit 10"),
+                built("ki-3"), built("sm-3"), task("kt-4", "load"), task("kt-4", "audit"), task("kt-4", "publish"),
+                ("no new records" in text("kt-4.load"), f"kt-4 load: {why('kt-4.load')}"),
+                built("kt-4"), built("ct-4"), built("ca-4"), readable(a, *CHAIN),
+                (not moved and a["landing"]["records"] == b["landing"]["records"], f"changed {moved}, landing {b['landing']} -> {a['landing']}")],
+                "fetch exit 10, load, audit, publish skipped; " + ", ".join(f"{k} {len(a[k]['rows'])}" for k in CHAIN) +
+                f" rows, as before; the landing {a['landing']['records']} records")
+        elif name == "paused":  # 16
+            b, a = chain("idle"), chain("paused")
+            started = [x for x in records("canonical_trades/ct-5") if x["event"] == "started"]
+            inputs = [i for x in started for i in json.loads(x["inputs"] or "[]")]
+            st = state_of(CT, "canonical_trades/ct-5")
+            verdict("canonical-trades with kraken-trades paused builds, adds nothing, and is partial", [
+                built("ct-5"),
+                (all(x["release"] == args[2] for x in started) and bool(started), f"ct-5 started rows {started}"),
+                (bool(inputs) and all(i["state"] == "paused" and i["snapshot"] is None for i in inputs), f"its inputs {inputs}"),
+                (rows(a, "canonical") == rows(b, "canonical"), f"canonical {len(rows(b, 'canonical'))} -> {len(rows(a, 'canonical'))} rows"),
+                (st == f"partial: {KT}.silver_trade", f"k2runs.state {st!r}")],
+                f"exit 0 on release {args[2]}; the input read as zero rows, its snapshot null, state paused; canonical {len(rows(a, 'canonical'))} rows "
+                f"as before; k2runs.state {st!r}")
+        elif name == "venue-fail":  # 17
+            b, v, a = chain("paused"), chain("kt-5"), chain("failed")
+            bad = fixture_trades("more.jsonl")[0]
+            rolled = [x for x in history(KT) if x["run"] == "kraken_trades/kt-5" and x["event"] == "rolled_back"]
+            failed = trino.ok("dbt_kraken_trades", "SELECT * FROM market_capture_build.kraken_trades__base.dq_test_results "
+                                                   "WHERE run_id = 'kraken_trades/kt-5' AND status = 'fail'")
+            derived = [k for k in ("canonical", "ohlcv_1m", "ohlcv_5m", "ohlcv_1h", "ohlcv_1d") if rows(b, k) != rows(a, k)]
+            verdict("a failed venue test (silver_trade given a duplicate row): the build rolls back, the derived products unchanged", [
+                task("kt-5", "load"), task("kt-5", "audit"), task("kt-5", "publish"),
+                (len(rows(v, "bronze_trade")) == len(rows(b, "bronze_trade")) + 1, f"bronze_trade {len(rows(b, 'bronze_trade'))} -> {len(rows(v, 'bronze_trade'))} rows"),
+                built("kt-5", 1),
+                # silver_trade's unit tests run first in the build and catch the duplicate, so its data test never runs
+                (bool(failed) and all(".kraken_trades__silver_trade" in json.dumps(f) for f in failed), f"the failed tests of kt-5 {failed}"),
+                (all(x["release"] == args[2] for x in history(KT) if x["run"] == "kraken_trades/kt-5"), "kt-5's records not all under its release"),
+                (all(v[t]["refs"].get("main") == v[t]["refs"].get("audited") == b[t]["refs"].get("audited") is not None for t in ("silver_trade", "unresolved"))
+                 and rows(v, "silver_trade") == rows(b, "silver_trade"),
+                 f"silver_trade refs {b['silver_trade']['refs']} -> {v['silver_trade']['refs']}; unresolved {b['unresolved']['refs']} -> {v['unresolved']['refs']}"),
+                (bool(rolled), f"rolled_back rows of kt-5 {rolled}"),
+                (not any(x["trade_id"] == bad["trade_id"] for x in rows(a, "silver_trade")), "the bad trade reached silver_trade"),
+                built("ct-6"), built("ca-6"), (not derived, f"changed after the failed venue build: {derived}")],
+                f"kt-5 exit 1 on release {args[2]}, failed {sorted({x for f in failed for x in f if isinstance(x, str) and x.startswith(('unit_test.', 'test.'))})}; silver_trade and the held table back on audited "
+                f"{v['silver_trade']['refs'].get('audited')}; canonical-trades and candles then build and change nothing")
+        elif name == "rejected":  # 18
+            b, r, n = chain("failed"), chain("kt-6"), chain("kt-7")
+            bad = json.loads((RP / "malformed.jsonl").read_text().splitlines()[0])  # the frame without side; the good one follows
+            want = [t["trade_id"] for t in fixture_trades("more.jsonl", "malformed.jsonl") if "side" in t]  # kt-5's, then the good frame's
+            x6, x7 = result("kt-6.build"), result("kt-7.build")
+
+            def ids(st):
+                return sorted(x["trade_id"] for x in rows(st, "silver_trade"))
+            held = rows(r, "rejected")
+            one = held[0] if len(held) == 1 else {}
+
+            def warned_rule(x):  # the build's warn tests, by the rule's name (the dbt emitter names each test by it)
+                return x.get("degraded") is True and [w.split(".")[2] for w in x.get("warned", [])] == ["rejected_frames_zero"]
+            verdict("a trade frame the model cannot type (no side) is rejected whole, with its reason; the rest publishes, degraded while it stands", [
+                (len(rows(r, "bronze_trade")) == len(rows(b, "bronze_trade")) + 2, f"bronze_trade {len(rows(b, 'bronze_trade'))} -> {len(rows(r, 'bronze_trade'))} rows"),
+                task("kt-6", "load"), task("kt-6", "audit"), task("kt-6", "publish"), built("kt-6"),
+                (set(want) <= set(ids(r)) and len(ids(r)) == len(ids(b)) + len(want) and json.loads(bad["payload"])["data"][0]["trade_id"] not in ids(r),
+                 f"silver_trade trade ids {ids(b)} -> {ids(r)}; want {want} added, the bad frame's not"),
+                (bool(one) and one["reason"] == "field_missing:side" and (one["kafka_partition"], one["kafka_offset"]) not in
+                 {(x["kafka_partition"], x["kafka_offset"]) for x in rows(r, "silver_trade")}
+                 # the payload as Trino returns varbinary, compared with bronze's own row of the key
+                 and any((x["kafka_partition"], x["kafka_offset"], x["payload"]) == (one["kafka_partition"], one["kafka_offset"], one["payload"])
+                         for x in rows(r, "bronze_trade")),
+                 f"silver_trade_rejected {held}"),
+                (rows(r, "unresolved") == [], f"silver_trade_unresolved {rows(r, 'unresolved')}"),
+                (warned_rule(x6), f"kt-6's XCom {x6}"),
+                (state_of(KT, "kraken_trades/kt-6") == "degraded", f"k2runs.state through kt-6 {state_of(KT, 'kraken_trades/kt-6')!r}"),
+                task("kt-7", "load"), ("no new records" in text("kt-7.load"), f"kt-7 load: {why('kt-7.load')}"), built("kt-7"),
+                (rows(n, "silver_trade") == rows(r, "silver_trade") and rows(n, "rejected") == held and rows(n, "unresolved") == [],
+                 f"after kt-7: silver {len(rows(r, 'silver_trade'))} -> {len(rows(n, 'silver_trade'))} rows, rejected {rows(n, 'rejected')}"),
+                (warned_rule(x7), f"kt-7's XCom {x7}"),
+                (state_of(KT, "kraken_trades/kt-7") == "degraded", f"k2runs.state through kt-7 {state_of(KT, 'kraken_trades/kt-7')!r}")],
+                f"kt-6 exit 0: silver_trade took trades {want}, the frame without side rejected at partition {one.get('kafka_partition')} "
+                f"offset {one.get('kafka_offset')} ({one.get('reason')}, its bytes bronze's), warned {[w.split('.')[2] for w in x6.get('warned', [])]}, "
+                f"degraded; kt-7 with nothing new: no row added or changed, the frame still rejected once, still degraded")
     else:
         sys.exit(f"no claim {name}")
 else:

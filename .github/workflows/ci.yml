@@ -181,6 +181,7 @@ jobs:
           rel=$(bash scripts/verify/ci-validate.sh "$RUNNER_TEMP/k2-ci" | tail -1)
           [ -d "$rel" ] || { echo "ci-validate printed no release directory as its last line: '$rel'" >&2; exit 1; }
           make access-verify RELEASE="$rel"
+          make check-release-alerts RELEASE="$rel"  # the same release's product alerts through promtool
 
   dbt:
     name: dbt (marts)

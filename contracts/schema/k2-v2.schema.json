@@ -63,7 +63,7 @@
       "pattern": "^[a-z][a-z0-9]*(-[a-z0-9]+)*\\.[a-z][a-z0-9]*(-[a-z0-9]+)*\\.[a-z][a-z0-9]*(_[a-z0-9]+)*$"
     },
     "principalId": {
-      "description": "A principal: p.<pseudonym> for a person, svc.<name> for a service, dbt_<fence> for a product's builder and pub_<fence> for its publisher (A8, A10).",
+      "description": "A principal: p.<pseudonym> for a person, svc.<name> for a service or a partner, dbt_<fence> for a product's builder and pub_<fence> for its publisher (A8, A10).",
       "type": "string",
       "pattern": "^((p|svc)\\.[a-z0-9]+(-[a-z0-9]+)*|(dbt|pub)_[a-z][a-z0-9]*(_[a-z0-9]+)*)$"
     },
@@ -109,7 +109,8 @@
             "properties": {
               "owner": {"description": "The owning team; .github/CODEOWNERS names it for contracts/<domain>/.", "$ref": "#/$defs/slug"},
               "kind": {"description": "Whether the domain's products face a source or a consumer.", "enum": ["source-aligned", "consumer-aligned"]},
-              "description": {"description": "What the domain's data is.", "$ref": "#/$defs/text"}
+              "description": {"description": "What the domain's data is.", "$ref": "#/$defs/text"},
+              "topics": {"description": "The Kafka topics this domain's capture writes: only a product of this domain reads one, and only one product reads each (k2gen check connectors.topic-not-owned, connectors.topic-claimed-twice). Here, in the file the platform team owns, and not in a product's directory, which its author edits.", "type": "array", "uniqueItems": true, "items": {"type": "string", "pattern": "^[A-Za-z0-9._-]+$"}}
             }
           }
         }
@@ -156,7 +157,14 @@
               "version": {"description": "The input contract's version this product was written against.", "$ref": "#/$defs/semver"},
               "contractId": {"description": "The input table's contract id.", "$ref": "#/$defs/contractId"},
               "customProperties": {"description": "K2's input port properties.", "type": "array", "items": {"$ref": "#/$defs/inputPortProperty"}}
-            }
+            },
+            "allOf": [
+              {
+                "description": "An input read empty when absent is optional: a required one with no audited snapshot stops the build first (wrapper exit 4).",
+                "if": {"required": ["customProperties"], "properties": {"customProperties": {"contains": {"required": ["property", "value"], "properties": {"property": {"const": "whenAbsent"}, "value": {"not": {"const": "fail"}}}}}}},
+                "then": {"properties": {"customProperties": {"contains": {"required": ["property", "value"], "properties": {"property": {"const": "required"}, "value": {"const": false}}}}}}
+              }
+            ]
           }
         },
         "outputPorts": {
@@ -210,14 +218,15 @@
       "description": "One K2 custom property of a product file.",
       "type": "object",
       "required": ["property", "value"],
-      "properties": {"property": {"description": "The property's name.", "enum": ["connector", "schedule", "terms", "lifecycleChange", "examples", "seeds"]}},
+      "properties": {"property": {"description": "The property's name.", "enum": ["connector", "schedule", "terms", "lifecycleChange", "examples", "seeds", "refresh"]}},
       "allOf": [
         {"if": {"properties": {"property": {"const": "connector"}}}, "then": {"properties": {"value": {"$ref": "#/$defs/connector"}}}},
         {"if": {"properties": {"property": {"const": "schedule"}}}, "then": {"properties": {"value": {"$ref": "#/$defs/schedule"}}}},
         {"if": {"properties": {"property": {"const": "terms"}}}, "then": {"properties": {"value": {"$ref": "#/$defs/terms"}}}},
         {"if": {"properties": {"property": {"const": "lifecycleChange"}}}, "then": {"properties": {"value": {"$ref": "#/$defs/lifecycleChange"}}}},
         {"if": {"properties": {"property": {"const": "examples"}}}, "then": {"properties": {"value": {"$ref": "#/$defs/examples"}}}},
-        {"if": {"properties": {"property": {"const": "seeds"}}}, "then": {"properties": {"value": {"$ref": "#/$defs/seeds"}}}}
+        {"if": {"properties": {"property": {"const": "seeds"}}}, "then": {"properties": {"value": {"$ref": "#/$defs/seeds"}}}},
+        {"if": {"properties": {"property": {"const": "refresh"}}}, "then": {"properties": {"value": {"description": "The product whose DAG a build of this one degraded by one of the named warn rules starts, at most once an hour (W1-6): product, one the product's build depends on through its input ports, scheduled, declaring no refresh of its own; rules, the warn-severity rules of this product whose failure the target's run can cure (k2gen check refresh.*); pipeline.json refresh.", "type": "object", "required": ["product", "rules"], "additionalProperties": false, "properties": {"product": {"$ref": "#/$defs/productId"}, "rules": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"}}}}}}}
       ]
     },
     "seeds": {
@@ -286,10 +295,11 @@
       "description": "One K2 custom property of an input port.",
       "type": "object",
       "required": ["property", "value"],
-      "properties": {"property": {"description": "The property's name.", "enum": ["required", "maxLagMinutes"]}},
+      "properties": {"property": {"description": "The property's name.", "enum": ["required", "maxLagMinutes", "whenAbsent"]}},
       "allOf": [
-        {"if": {"properties": {"property": {"const": "required"}}}, "then": {"properties": {"value": {"description": "A required input that was never audited stops the build (wrapper exit 4); an optional one makes the product partial.", "type": "boolean"}}}},
-        {"if": {"properties": {"property": {"const": "maxLagMinutes"}}}, "then": {"properties": {"value": {"description": "How far behind the input may be before this product is shown partial; null for no bound.", "type": ["integer", "null"], "minimum": 0}}}}
+        {"if": {"properties": {"property": {"const": "required"}}}, "then": {"properties": {"value": {"description": "A required input that was never audited stops the build (wrapper exit 4); an optional one is read as its whenAbsent says.", "type": "boolean"}}}},
+        {"if": {"properties": {"property": {"const": "maxLagMinutes"}}}, "then": {"properties": {"value": {"description": "How far behind the input may be before this product is shown partial; null for no bound.", "type": ["integer", "null"], "minimum": 0}}}},
+        {"if": {"properties": {"property": {"const": "whenAbsent"}}}, "then": {"properties": {"value": {"description": "What the build reads for an optional input that is paused or was never audited. fail (the default): no snapshot fails the build at compile, and a paused input with one is read at it. empty: k2_input renders zero rows of the input's contracted columns, and the run records it with a null snapshot, so the product is partial. emptyIntoTable: as empty, also accepted when a model of this product is not incremental, which then rebuilds from zero rows and publishes empty; without it k2gen check refuses empty there (docs.empty-input-into-table).", "enum": ["fail", "empty", "emptyIntoTable"]}}}}
       ]
     },
     "outputPortProperty": {
@@ -328,14 +338,14 @@
       ]
     },
     "kafkaConnector": {
-      "description": "Reads the product's own topic at its own position; lands the records its filter keeps in lake.<fence>.landing, end offsets in the same commit (ADR-022). Built in phase 004.",
+      "description": "Reads the product's own topic at its own position; lands every record of the planned range byte for byte, control frames included, in lake.<fence>.landing, end offsets in the same commit (ADR-022); bronze is staged from the landing by offset, the filter applied there, each frame's envelope decoded by its writer schema id into bronze's envelope columns by field name, never its bytes (I-1, 2026-11-28). Built in phase 004.",
       "type": "object",
       "additionalProperties": false,
       "required": ["kind", "brokers", "registry", "topic", "envelope", "payload", "startFrom", "maxOffsetsPerPartition"],
       "properties": {
         "kind": {"description": "kafka.", "const": "kafka"},
-        "brokers": {"description": "Bootstrap servers, host:port, comma separated.", "type": "string", "pattern": "^[a-z0-9.-]+:[0-9]+(,[a-z0-9.-]+:[0-9]+)*$"},
-        "registry": {"description": "The schema registry's URL.", "type": "string", "pattern": "^https?://[a-z0-9.-]+(:[0-9]+)?/?$"},
+        "brokers": {"description": "Bootstrap servers, host:port, comma separated: each host a service of the stack's compose file on the load's network (k2gen check connectors.host-outside-stack); never a credential.", "type": "string", "pattern": "^[a-z0-9.-]+:[0-9]+(,[a-z0-9.-]+:[0-9]+)*$"},
+        "registry": {"description": "The schema registry's URL, no userinfo: its host a service of the stack's compose file on the load's network (connectors.host-outside-stack).", "type": "string", "pattern": "^https?://[a-z0-9.-]+(:[0-9]+)?/?$"},
         "topic": {"description": "The topic the product reads.", "type": "string", "pattern": "^[A-Za-z0-9._-]+$"},
         "envelope": {
           "description": "How each record is framed.",
@@ -344,11 +354,11 @@
           "required": ["format", "contract"],
           "properties": {
             "format": {"description": "The framing.", "enum": ["avro-confluent"]},
-            "contract": {"description": "The contract that declares the envelope's schema.", "$ref": "#/$defs/contractId"}
+            "contract": {"description": "The contract that declares the envelope's schema; a contract of the set (connectors.envelope-unresolved).", "$ref": "#/$defs/contractId"}
           }
         },
         "filter": {
-          "description": "Keep only records whose envelope field holds one of the values; the rest are counted, never landed.",
+          "description": "Bronze staging keeps only records whose envelope field holds one of the values and counts the rest per partition in the bronze commit's summary (k2.kafka-skipped); the landing holds every record whatever the filter, so staged plus skipped equals the landing range read (I-1).",
           "type": "object",
           "additionalProperties": false,
           "required": ["field", "in"],
@@ -370,9 +380,9 @@
       "properties": {
         "kind": {"description": "public-api.", "const": "public-api"},
         "url": {"description": "The first page's URL, https only; may hold {{ds}}, no other macro.", "allOf": [{"$ref": "#/$defs/template"}, {"pattern": "^https://"}]},
-        "allowHosts": {"description": "The only hosts the fetch may connect to, redirects included (ADR-036 part 3).", "type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/host"}},
+        "allowHosts": {"description": "The only hosts the fetch may connect to, redirects included (ADR-036 part 3), each matched exactly as written; the url's host among them (connectors.url-host-not-allowed).", "type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/host"}},
         "params": {"description": "Query parameters added to every request; a value may hold {{ds}}, no other macro.", "type": "object", "additionalProperties": {"$ref": "#/$defs/template"}},
-        "pagination": {"description": "How the next page is found.", "enum": ["none", "next-link", "page"]},
+        "pagination": {"description": "How the next page is found. Only none compiles (k2gen check connectors.pagination-unsupported): fetch.py runs next-link (the Link header) and page (page=1, 2, ...), but no field here yet says where a next link sits in a body or names the page parameter and its start.", "enum": ["none", "next-link", "page"]},
         "maxPages": {"description": "The most pages one run fetches; required unless pagination is none.", "type": "integer", "minimum": 1},
         "minIntervalS": {"description": "The least time between two requests, in seconds.", "type": "integer", "minimum": 0},
         "records": {"description": "The response field that holds the records.", "$ref": "#/$defs/plain"},
@@ -392,7 +402,7 @@
       "properties": {
         "kind": {"description": "https-file.", "const": "https-file"},
         "url": {"description": "The file's URL, https only; may hold {{ds}}, the run's date, and no other macro.", "allOf": [{"$ref": "#/$defs/template"}, {"pattern": "^https://"}]},
-        "allowHosts": {"description": "The only hosts the fetch may connect to, redirects included (ADR-036 part 3).", "type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/host"}},
+        "allowHosts": {"description": "The only hosts the fetch may connect to, redirects included (ADR-036 part 3), each matched exactly as written; the url's host among them (connectors.url-host-not-allowed).", "type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/host"}},
         "format": {"$ref": "#/$defs/fileFormat"},
         "parser": {"$ref": "#/$defs/parser"},
         "calendar": {"description": "The contract id of a calendars table: the days the source publishes.", "$ref": "#/$defs/contractId"},
@@ -545,7 +555,7 @@
         "name": {"description": "The column's name.", "$ref": "#/$defs/identifier"},
         "physicalType": {"description": "The Trino type exactly as Trino's typeof spells it, from the types an Iceberg table holds: boolean, integer, bigint, real, double, decimal(p,s) with p 1 to 38, varchar, varbinary, date, time(6), timestamp(6), timestamp(6) with time zone, uuid, and one level of array(t) or map(k, v) (k2gen.model.PHYSICAL_TYPE; a scale above its precision is refused by k2gen.model.physical_type_problem, in S05).", "type": "string", "pattern": "^(?:boolean|integer|bigint|real|double|decimal\\((?:[1-9]|[12][0-9]|3[0-8]),(?:[0-9]|[12][0-9]|3[0-8])\\)|varchar|varbinary|date|time\\(6\\)|timestamp\\(6\\)|timestamp\\(6\\) with time zone|uuid|array\\((?:boolean|integer|bigint|real|double|decimal\\((?:[1-9]|[12][0-9]|3[0-8]),(?:[0-9]|[12][0-9]|3[0-8])\\)|varchar|varbinary|date|time\\(6\\)|timestamp\\(6\\)|timestamp\\(6\\) with time zone|uuid)\\)|map\\((?:boolean|integer|bigint|real|double|decimal\\((?:[1-9]|[12][0-9]|3[0-8]),(?:[0-9]|[12][0-9]|3[0-8])\\)|varchar|varbinary|date|time\\(6\\)|timestamp\\(6\\)|timestamp\\(6\\) with time zone|uuid), (?:boolean|integer|bigint|real|double|decimal\\((?:[1-9]|[12][0-9]|3[0-8]),(?:[0-9]|[12][0-9]|3[0-8])\\)|varchar|varbinary|date|time\\(6\\)|timestamp\\(6\\)|timestamp\\(6\\) with time zone|uuid)\\))$"},
         "relationships": {
-          "description": "Keys of another product's table this column refers to.",
+          "description": "Keys of another product's table this column refers to; the table is a declared input port of this product, and one with valid_from requires asOf (phase-001-interfaces.md, step I-6).",
           "type": "array",
           "items": {
             "type": "object",
@@ -574,9 +584,10 @@
       "description": "One K2 custom property of a relationship.",
       "type": "object",
       "required": ["property", "value"],
-      "properties": {"property": {"description": "The property's name.", "enum": ["asOf"]}},
+      "properties": {"property": {"description": "The property's name.", "enum": ["asOf", "asOfColumn"]}},
       "allOf": [
-        {"if": {"properties": {"property": {"const": "asOf"}}}, "then": {"properties": {"value": {"description": "When the target keeps history: join on its valid time or its knowledge time.", "enum": ["valid", "known"]}}}}
+        {"if": {"properties": {"property": {"const": "asOf"}}}, "then": {"properties": {"value": {"description": "When the target keeps history: join on its valid time or its knowledge time, the mode of the model's k2_as_of for it (dbt/macros/k2_as_of.sql).", "enum": ["valid", "known"]}}}},
+        {"if": {"properties": {"property": {"const": "asOfColumn"}}}, "then": {"properties": {"value": {"description": "With asOf: the referring table's timestamp(6) with time zone column the join is as of (docs.relationship-as-of-column).", "$ref": "#/$defs/identifier"}}}}
       ]
     },
     "contractProperty": {
@@ -692,7 +703,8 @@
             "required": ["description"],
             "properties": {
               "description": {"description": "What a holder of the role sees.", "$ref": "#/$defs/text"},
-              "requires": {"description": "Policies every table offering the role must set for it (S07).", "type": "array", "uniqueItems": true, "items": {"enum": ["delay", "mask", "rowScope"]}}
+              "requires": {"description": "Policies every table offering the role must set for it (S07).", "type": "array", "uniqueItems": true, "items": {"enum": ["delay", "mask", "rowScope"]}},
+              "within": {"description": "Roles whose holders see no less than this role's: an output may offer this role over an input offering one of them instead, held to that role's policy on the input (checks.access, access.inherit-role). Declared one pair at a time; no chain is followed.", "type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/identifier"}}
             }
           }
         }
@@ -713,13 +725,14 @@
             "required": ["id", "kind", "owner"],
             "properties": {
               "id": {"$ref": "#/$defs/principalId"},
-              "kind": {"description": "A person (p.*) or a service (svc.*, dbt_*, pub_*).", "enum": ["person", "service"]},
+              "kind": {"description": "A person (p.*), a service (svc.*, dbt_*, pub_*), or a partner (svc.*): a service of another organisation, whose credential the platform never holds and which holds only the reader roles grants give it.", "enum": ["person", "service", "partner"]},
               "owner": {"description": "The team answerable for the principal.", "$ref": "#/$defs/slug"},
               "description": {"description": "What the principal is for.", "$ref": "#/$defs/text"}
             },
             "allOf": [
               {"if": {"properties": {"kind": {"const": "person"}}}, "then": {"properties": {"id": {"pattern": "^p\\."}}}},
-              {"if": {"properties": {"kind": {"const": "service"}}}, "then": {"properties": {"id": {"pattern": "^(svc\\.|dbt_|pub_)"}}}}
+              {"if": {"properties": {"kind": {"const": "service"}}}, "then": {"properties": {"id": {"pattern": "^(svc\\.|dbt_|pub_)"}}}},
+              {"if": {"properties": {"kind": {"const": "partner"}}}, "then": {"properties": {"id": {"pattern": "^svc\\."}}}}
             ]
           }
         }
