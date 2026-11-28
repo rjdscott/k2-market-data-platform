@@ -362,6 +362,37 @@ def test_a_version_closed_before_the_trade_does_not_resolve_it(at_snapshot, tmp_
     assert "(1, 0, 1)" in out and "2 held" in out
 
 
+class Recorder:
+    """A connection that keeps every statement and returns no rows."""
+
+    def __init__(self):
+        self.sql = []
+
+    def execute(self, sql, *_):
+        self.sql.append(sql)
+        return self
+
+    def executemany(self, sql, *_):
+        self.sql.append(sql)
+
+    def fetchmany(self, _):
+        return []
+
+
+def test_every_statement_read_at_a_snapshot_parses_with_the_real_at_clause():
+    """The fixtures read `<table>@<n>`: here each statement that reads at a snapshot is parsed as
+    DuckDB will parse it on the lake, `AT (VERSION => n)` and all (an alias after it does not)."""
+    r = Recorder()
+    list(P.landing_rows(r, P.at('"k2"."kraken_trades"."landing"', 9), {0: 3}))
+    P.recompute(r, P.at('"reference_data"."security_master__base"."venue_symbol"', 3))
+    parser = duckdb.connect()
+    for sql in r.sql:
+        parser.extract_statements(sql)  # a ParserException fails the test
+    assert any("AT (VERSION => 9)" in x for x in r.sql) and any("AT (VERSION => 3)" in x for x in r.sql)
+    with pytest.raises(duckdb.ParserException):
+        parser.extract_statements(f"SELECT * FROM {P.at('t', 9)} AS l")
+
+
 # --- the pin -----------------------------------------------------------------------------------------
 
 

@@ -446,7 +446,9 @@ def landing_rows(c, landing: str, through: dict):
         return
     c.execute("CREATE OR REPLACE TEMP TABLE through_offsets (p INTEGER, e BIGINT)")
     c.executemany("INSERT INTO through_offsets VALUES (?, ?)", sorted(through.items()))
-    cur = c.execute(f"""SELECT l.kafka_partition, l.kafka_offset, l.record_value FROM {landing} AS l
+    # a subquery, not `<item> AS l`: DuckDB takes an alias before an AT clause, never after it
+    cur = c.execute(f"""SELECT l.kafka_partition, l.kafka_offset, l.record_value
+                        FROM (SELECT kafka_partition, kafka_offset, record_value FROM {landing}) AS l
                         JOIN through_offsets AS t ON l.kafka_partition = t.p AND l.kafka_offset < t.e""")
     while batch := cur.fetchmany(10_000):
         yield from batch

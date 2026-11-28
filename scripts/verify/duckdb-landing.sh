@@ -1,79 +1,168 @@
 #!/usr/bin/env bash
 # W0-11 and W1-18 (phases 004 and 005): DuckDB in the tools image reads a Kafka product's landing at a
 # pinned snapshot through Lakekeeper with the tools MinIO key alone, its extensions baked into the
-# image; then make parity-silver's and make parity-ohlcv's scripts on tables the chain built. ONE
-# throwaway lake with a Redpanda (prefix duckdb-landing, K2_THROWAWAY_REDPANDA=1), the phase 004 chain
-# run as run-path-lib.sh runs it (the release's own Spark tasks and the wrapper's builds), and the tools
-# image built from this tree as tools:duckdb-landing, run on the lake's network as mk/parity.mk runs
-# it: the tools key by -e name, this tree's scripts/ and docker/lake/ read-only, 1 CPU / 2G.
+# image; then make parity-silver's and make parity-ohlcv's scripts on tables the chain built, clean
+# and planted. ONE throwaway lake with a Redpanda (prefix duckdb-landing, K2_THROWAWAY_REDPANDA=1), the
+# phase 004 chain run as run-path-lib.sh runs it (the release's own Spark tasks and the wrapper's
+# builds), and the tools image built from this tree as tools:duckdb-landing, run as mk/parity.mk runs
+# it: the tools key by -e name, this tree's scripts/ and docker/lake/ read-only, 1 CPU / 2G. Every tools
+# run is on <prefix>-sealed, an --internal network holding only Lakekeeper, MinIO and the Redpanda (the
+# lake's own network reaches out), and prints its cgroup's memory.peak.
 #
 #   bash scripts/verify/duckdb-landing.sh <release dir>   # KEEP=1 keeps the scratch directory
 #
-# <release dir> is the one run-path.sh takes (rp_start's checks). Claims, one PASS or FAIL line each:
+# <release dir> is the one run-path.sh takes (rp_start's checks). Frames are the chain's synthetic
+# ones (rp_chain_files) and four made here: reflag-1.jsonl, a frame of ALPHA/USD trade 70 and DELTA/USD
+# trade 71 (two symbols, so no key: any of the 3 partitions), and reflag-2.jsonl, ALPHA/USD trade 70
+# again (keyed, so partition 2, the last, by murmur2), seeded after it, so the first is older whatever
+# partition it lands on; and extra.jsonl, BTC/USD trades 5 and 6. Claims, one PASS or FAIL line each:
 #   1 the image holds DuckDB 1.4.4, and httpfs, avro and iceberg load from /opt/k2/duckdb with no
-#     network (--network none) and autoinstall off; an extension not baked in (spatial) does not load
-#   2 after two kraken-trades loads, DuckDB on the tools key reads the landing AT each load's
-#     snapshot (its first two connector commits): per partition the rows, distinct offsets and first
-#     and last offset its spans (k2.kafka-starts to k2.kafka-offsets) give, the total its
-#     total-records; the first read again after the second, unchanged
-#   3 that connection holds the tools key and no other storage key, and writes nothing: a COPY to the
-#     lake's bucket is refused (403)
-#   4 parity_silver.py passes on silver_trade, every class empty, pinned by kt-2's build record
-#   5 parity_ohlcv.py passes on candles at every timeframe, pinned by ca-2's build records
-#   6 a release of this tree whose silver_trade writes conn_msg_seq one too high (its unit tests list
-#     no such column, so its build publishes) builds kt-3 over one more frame: parity_silver.py exits
-#     1, conn_msg_seq the one class that fails, pinned by kt-3's build record
+#     network at all (--network none) and autoinstall off; an extension not baked in (spatial) does not
+#   2 after two kraken-trades loads, DuckDB on the tools key reads the landing AT each load's snapshot
+#     (its first two connector commits): per partition the rows, distinct offsets and first and last
+#     offset its spans (k2.kafka-starts to k2.kafka-offsets) give, the total its total-records; the
+#     first read again after the second, unchanged
+#   3 that connection holds the tools key and no other storage key, writes nothing (a COPY to the
+#     lake's bucket is refused, 403), and the sealed network has no way out (a TCP connect fails)
+#   4 kt-2 published ALPHA/USD 70's keyed delivery and held the two-symbol frame (DELTA/USD unknown);
+#     listing-2 names DELTA/USD and kt-3 takes the held frame back, flagging the published delivery a
+#     duplicate: a MERGE update, so silver_trade's tested snapshot holds position deletes. Pinned by
+#     kt-3's build record, parity_silver.py passes, every class empty, and DuckDB's row count of that
+#     snapshot is its total-records less its total-position-deletes
+#   5 ca-3 rewrote the ALPHA/USD windows at every timeframe (MERGE updates, position deletes):
+#     parity_ohlcv.py passes, pinned by ca-3's records, each timeframe's DuckDB count total-records less
+#     total-position-deletes, deletes in each
+#   6 a release of this tree whose silver_trade writes conn_msg_seq one too high and leaves out BTC/USD
+#     trade 5 (its unit tests name neither) builds kt-4 over extra.jsonl: parity_silver.py exits 1,
+#     conn_msg_seq and missing the only failing classes
+#   7 a release whose ohlcv_5m adds 1 to the volume of every instrument but the unit tests' i-aaa builds
+#     ca-4 after ct-4: parity_ohlcv.py exits 1, ohlcv_5m.volume the only failing class
+# INFO lines: each tools run's memory.peak against its 2G.
 #
 # One container job (run-path-lib.sh's guards); a killed run leaves the lake to
-# `bash scripts/lib/throwaway-lake.sh down duckdb-landing`, the images to
-# `docker rmi dbt-runner:duckdb-landing tools:duckdb-landing`.
+# `bash scripts/lib/throwaway-lake.sh down duckdb-landing` and `docker network rm duckdb-landing-sealed`,
+# the images to `docker rmi dbt-runner:duckdb-landing tools:duckdb-landing`.
 set -uo pipefail
 # shellcheck source=scripts/lib/run-path-lib.sh
 . "$(dirname "$0")/../lib/run-path-lib.sh"
-rp_start duckdb-landing "${1:-}" 6
-TOOLS=tools:duckdb-landing
-trap 'rp_cleanup; docker rmi -f "$TOOLS" >/dev/null 2>&1' EXIT
-# claim 6's release: this tree with silver_trade's conn_msg_seq one too high
+rp_start duckdb-landing "${1:-}" 7
+TOOLS=tools:duckdb-landing SEALED=duckdb-landing-sealed
+sealed_down() {
+  local c
+  for c in lakekeeper minio redpanda; do docker network disconnect -f "$SEALED" "$P-$c" >/dev/null 2>&1; done
+  docker network rm "$SEALED" >/dev/null 2>&1
+}
+trap 'sealed_down; rp_cleanup; docker rmi -f "$TOOLS" >/dev/null 2>&1' EXIT
+# claim 6's release: silver_trade's conn_msg_seq one too high, BTC/USD trade 5 left out
 rp_fail_release "$(cat <<'PY'
 import sys
 from pathlib import Path
 p = Path(sys.argv[1]) / "contracts/market-capture/kraken-trades/models/silver_trade.sql"
 sql = p.read_text()
-assert sql.count("    b.conn_msg_seq,\n") == 1, "silver_trade.sql no longer selects b.conn_msg_seq once: move the plant"
-p.write_text(sql.replace("    b.conn_msg_seq,\n", "    b.conn_msg_seq + 1 as conn_msg_seq,\n"))
+seq, tail = "    b.conn_msg_seq,\n", "\nfrom flagged\nwhere is_new or is_duplicate <> was_duplicate\n"
+assert sql.count(seq) == 1 and sql.endswith(tail), "silver_trade.sql's conn_msg_seq or its last where moved: move the plant"
+sql = sql.replace(seq, "    b.conn_msg_seq + 1 as conn_msg_seq,\n").removesuffix(tail)
+p.write_text(sql + "\nfrom flagged\nwhere (is_new or is_duplicate <> was_duplicate) and not (venue_symbol = 'BTC/USD' and trade_id = 5)\n")
 PY
 )" seq
-IDV=$IDF IDF= RP_MORE=seq
+IDV=$IDF
+# claim 7's release: ohlcv_5m's volume one too high off the unit tests' instrument
+rp_fail_release "$(cat <<'PY'
+import sys
+from pathlib import Path
+p = Path(sys.argv[1]) / "contracts/market-analytics/candles/models/ohlcv_5m.sql"
+sql = p.read_text()
+old = "  sum(c.quantity) as volume,\n"
+assert sql.count(old) == 1, "ohlcv_5m.sql's volume moved: move the plant"
+p.write_text(sql.replace(old, "  sum(c.quantity) + case when c.instrument_id = 'i-aaa' then 0 else 1 end as volume,\n"))
+PY
+)" c5m
+IDC=$IDF IDF= RP_MORE="seq c5m"
 rp_image
 docker build -q -f docker/tools/Dockerfile -t "$TOOLS" . > "$W/tools-build.log" 2>&1 || { tail -20 "$W/tools-build.log" >&2; die "the tools image did not build"; }
 export K2_THROWAWAY_REDPANDA=1
 rp_lake  # exports every engine's pair from the lake's s3.env; the tools runs below pass the tools pair alone
+docker network create --internal --label "k2.throwaway=$P" "$SEALED" > /dev/null || die "the sealed network was not made"
+for c in lakekeeper minio redpanda; do
+  docker network connect --alias "$c" "$SEALED" "$P-$c" || die "$P-$c did not join $SEALED"
+done
 rp_chain_files
-python3 - "$RP" <<'PY' || die "claim 6's frame could not be made"
-# Synthetic, in the fixture's line format, after more.jsonl's frame: one more BTC/USD trade.
+python3 - "$RP" <<'PY' || die "the frames made here could not be written"
+# Synthetic, in the fixture's line format, after the fixture's frames.
 import json, sys
 from pathlib import Path
-payload = json.dumps({"channel": "trade", "type": "update", "data": [{"symbol": "BTC/USD", "side": "buy", "price": 1001.0,
-                      "qty": 0.25, "ord_type": "limit", "trade_id": 5, "timestamp": "2001-09-09T01:47:30.000000Z"}]}, separators=(",", ":"))
-(Path(sys.argv[1]) / "extra.jsonl").write_text(json.dumps({"recv_ts_ns": 1_000_000_050_000_000_000, "payload": payload}) + "\n")
+rp = Path(sys.argv[1])
+def line(at_s, *trades):
+    payload = json.dumps({"channel": "trade", "type": "update", "data": list(trades)}, separators=(",", ":"))
+    return json.dumps({"recv_ts_ns": 1_000_000_000_000_000_000 + at_s * 1_000_000_000, "payload": payload}) + "\n"
+def trade(symbol, trade_id, at, price):
+    return {"symbol": symbol, "side": "buy", "price": price, "qty": 0.5, "ord_type": "limit", "trade_id": trade_id,
+            "timestamp": f"2001-09-09T01:{at}.000000Z"}
+# two files, seeded one after the other: one seed's records reach a partition in no set order
+(rp / "reflag-1.jsonl").write_text(line(60, trade("ALPHA/USD", 70, "48:00", 2.5), trade("DELTA/USD", 71, "48:00", 7.0)))
+(rp / "reflag-2.jsonl").write_text(line(61, trade("ALPHA/USD", 70, "48:00", 2.5)))
+(rp / "extra.jsonl").write_text(line(70, trade("BTC/USD", 5, "47:30", 1001.0)) + line(71, trade("BTC/USD", 6, "47:31", 1002.0)))
 PY
 
-tools() {  # tools <label> [docker flags --] <argv...>: the tools image on the lake's network with the tools pair alone
+tools() {  # tools <label> <argv...>: the tools image on the sealed network with the tools pair alone; its memory.peak to stderr
   local label=$1; shift
-  docker run --rm -i --name "$P-tools-$label" --label "k2.throwaway=$P" --network "$NET" --cpus 1 --memory 2g \
+  docker run --rm -i --name "$P-tools-$label" --label "k2.throwaway=$P" --network "$SEALED" --cpus 1 --memory 2g \
     --user "$(id -u):$(id -g)" -e K2_TOOLS_S3_ACCESS_KEY -e K2_TOOLS_S3_SECRET_KEY \
     -v "$STATE/releases:/k2/releases:ro" -v "$REPO/scripts:/opt/k2/scripts:ro" -v "$REPO/docker/lake:/opt/k2/docker/lake:ro" \
-    "$TOOLS" "$@" > "$RP/$label.out" 2> "$RP/$label.err"
+    "$TOOLS" sh -c '"$@"; rc=$?; echo "memory.peak $(cat /sys/fs/cgroup/memory.peak 2>/dev/null || echo unknown)" >&2; exit $rc' \
+    sh "$@" > "$RP/$label.out" 2> "$RP/$label.err"
   echo $? > "$RP/$label.rc"
   echo "$P: tools $label exit $(cat "$RP/$label.rc")"
 }
-verdict() {  # verdict <label> <exit wanted> <pattern the output holds> <claim>: one PASS or FAIL line
-  local rc; rc=$(cat "$RP/$1.rc")
-  if [ "$rc" = "$2" ] && grep -qE "$3" "$RP/$1.out"; then
-    echo "PASS $4"
-  else
-    echo "FAIL $4: exit $rc; $(grep -E '^(FAIL|parity)' "$RP/$1.out" | tail -4 | tr '\n' ' ')$(tail -3 "$RP/$1.err" | tr '\n' ' ')"
-  fi
+probe_out() {  # probe_out <label>: a tools probe's lines for claimed, its stderr's last lines when it printed no verdict
+  grep -E '^(PASS|FAIL|INFO) ' "$RP/$1.out" || tail -4 "$RP/$1.err"
+}
+# The probe behind claims 4 to 7: a parity script's main in the tools image, its lines as INFO, then
+# each table it pinned checked against its catalog summary (DuckDB's count is total-records less
+# total-position-deletes, and how many deletes), and one verdict: the exit wanted and the failing
+# classes wanted, exactly.
+PARITY_PROBE=$(cat <<'PY'
+import contextlib, io, json, re, sys
+sys.path[:0] = ["/opt/k2/scripts", "/opt/k2/docker/lake"]
+from verify.catalog_drift import Catalog
+kind, release, want_exit, want_classes, said = sys.argv[1], sys.argv[2], int(sys.argv[3]), json.loads(sys.argv[4]), sys.argv[5]
+buf = io.StringIO()
+with contextlib.redirect_stdout(buf):
+    if kind == "silver":
+        import parity_silver as M
+        code = M.main(["--release", release, "--product", "kraken-trades"])
+    else:
+        import parity_ohlcv as M
+        code = M.main(["--release", release])
+out = buf.getvalue()
+print("\n".join(f"INFO   | {x}" for x in out.splitlines()))
+failing = sorted(x.split()[1] for x in out.splitlines() if x.startswith("FAIL"))
+tables = {"silver_trade": ("market_capture", "kraken_trades__base")} if kind == "silver" else \
+    {t: ("market_analytics", "candles__base") for t in ("ohlcv_1m", "ohlcv_5m", "ohlcv_1h", "ohlcv_1d")}
+counts = {m[1]: int(m[2]) for m in re.finditer(r"^INFO\s+\S+\s+recomputed \d+, \S+\.(\w+) (\d+)$", out, re.M)}
+problems, deletes = [], {}
+for t, (wh, ns) in tables.items():
+    pin = re.search(rf"{t}@(\d+)", out)
+    if not pin:
+        problems.append(f"no pin of {t}")
+        continue
+    meta = Catalog("http://lakekeeper:8181/catalog", wh).table(ns, t)
+    [snap] = [s for s in meta["snapshots"] if s["snapshot-id"] == int(pin[1])]
+    s = snap["summary"]
+    deletes[t] = int(s.get("total-position-deletes", 0))
+    live = int(s["total-records"]) - deletes[t] - int(s.get("total-equality-deletes", 0))
+    if counts.get(t) != live:
+        problems.append(f"DuckDB read {counts.get(t)} rows of {t}@{pin[1]}, its summary {live} live ({s['total-records']} less {deletes[t]} deleted)")
+if want_exit == 0 and not all(deletes.values()):
+    problems.append(f"a pinned table holds no position delete: {deletes}")
+ok = code == want_exit and failing == want_classes and not problems
+print(("PASS" if ok else "FAIL") + f" {said} (exit {code}, failing {failing or 'none'}, position deletes {deletes})"
+      + ("" if ok else f": want exit {want_exit}, failing {want_classes}; {'; '.join(problems)}"))
+PY
+)
+parity_claim() {  # parity_claim <label> <silver|ohlcv> <exit> <failing classes, JSON> <claim>
+  tools "$1" python3 -c "$PARITY_PROBE" "$2" "/k2/releases/$ID" "$3" "$4" "$5"
+  claimed "$1" "$(probe_out "$1")" "$(cat "$RP/$1.rc")"
 }
 
 # 1. the extensions, with no network at all
@@ -88,7 +177,7 @@ loaded = sorted(r[0] for r in c.execute("SELECT extension_name FROM duckdb_exten
 try:
     c.execute("LOAD spatial")
     spatial = "spatial loaded"
-except duckdb.Error as e:
+except duckdb.Error:
     spatial = None
 ok = duckdb.__version__ == "1.4.4" and loaded == ["avro", "httpfs", "iceberg"] and spatial is None
 print(("PASS" if ok else "FAIL") + f" DuckDB {duckdb.__version__} loads {loaded} from /opt/k2/duckdb with no network; "
@@ -99,7 +188,7 @@ claimed extensions "$out" $?
 
 listing ki-1 listing-1.json; build "$ID" "$KI" ki-1; build "$ID" reference-data.currency-master cm-1; build "$ID" "$SM" sm-1
 kseed "$RP/frames.jsonl"; trades kt-1
-kseed "$RP/more.jsonl"; trades kt-2; build "$ID" "$CT" ct-2; build "$ID" "$CA" ca-2
+kseed "$RP/reflag-1.jsonl"; kseed "$RP/reflag-2.jsonl"; trades kt-2; build "$ID" "$CT" ct-2; build "$ID" "$CA" ca-2
 
 # 2. the landing at each of its first two connector snapshots
 tools landing python3 - <<'PY'
@@ -139,11 +228,11 @@ print(("PASS" if ok else "FAIL") + " the landing read AT its first two connector
       + ", ".join(f"{snap} ({total} rows)" for snap, total, _ in want) + " holds each one's spans exactly; the first again unchanged"
       + ("" if ok else f": want {[w[2] for w in want]}, got {got}"))
 PY
-claimed landing "$(cat "$RP/landing.out" "$RP/landing.err")" "$(cat "$RP/landing.rc")"
+claimed landing "$(probe_out landing)" "$(cat "$RP/landing.rc")"
 
-# 3. the key it holds, and nothing written with it
+# 3. the key it holds, nothing written with it, no way out of the sealed network
 tools key python3 - <<'PY'
-import os, sys, tempfile
+import os, socket, sys, tempfile
 sys.path[:0] = ["/opt/k2/scripts", "/opt/k2/docker/lake"]
 import duckdb
 import parity_silver as P
@@ -157,27 +246,35 @@ with tempfile.TemporaryDirectory() as tmp:
         refused = "the COPY wrote"
     except duckdb.Error as e:
         refused = None if any(s in str(e) for s in ("403", "Forbidden", "AccessDenied", "Access Denied")) else f"refused otherwise: {str(e)[:200]}"
-ok = keys == ["K2_TOOLS_S3_ACCESS_KEY", "K2_TOOLS_S3_SECRET_KEY"] and n > 0 and refused is None
-print(("PASS" if ok else "FAIL") + f" holding {keys} alone, DuckDB reads {n} landing rows and a COPY to the lake's bucket is "
-      + (refused or "refused (403)"))
+out = []
+for host in ("extensions.duckdb.org", "1.1.1.1"):
+    try:
+        socket.create_connection((host, 443), timeout=5).close()
+        out.append(f"{host}:443 answered")
+    except OSError:
+        pass
+ok = keys == ["K2_TOOLS_S3_ACCESS_KEY", "K2_TOOLS_S3_SECRET_KEY"] and n > 0 and refused is None and not out
+print(("PASS" if ok else "FAIL") + f" holding {keys} alone, DuckDB reads {n} landing rows, a COPY to the lake's bucket is "
+      + (refused or "refused (403)") + "; " + ("; ".join(out) or "no TCP connect leaves the sealed network"))
 PY
-claimed key "$(cat "$RP/key.out" "$RP/key.err")" "$(cat "$RP/key.rc")"
+claimed key "$(probe_out key)" "$(cat "$RP/key.rc")"
 
-# 4 and 5. parity on the chain's tables
-tools silver python3 /opt/k2/scripts/parity_silver.py --release "/k2/releases/$ID" --product kraken-trades
-claimed parity-silver "$(verdict silver 0 'pin run kraken_trades/kt-2 .*' 'parity_silver.py: every class empty, pinned by kt-2')" 0
-grep -E '^(INFO|parity-silver: pin)' "$RP/silver.out"
-tools ohlcv python3 /opt/k2/scripts/parity_ohlcv.py --release "/k2/releases/$ID"
-claimed parity-ohlcv "$(verdict ohlcv 0 'pin run candles/ca-2 .*' 'parity_ohlcv.py: every class of every timeframe empty, pinned by ca-2')" 0
+# 4 and 5. the held frame taken back: updates, so position deletes, then parity on the clean chain
+listing ki-2 listing-2.json; build "$ID" "$KI" ki-2; build "$ID" "$SM" sm-2
+trades kt-3; build "$ID" "$CT" ct-3; build "$ID" "$CA" ca-3
+parity_claim silver silver 0 '[]' "kt-3's silver_trade, its held frame taken back: parity_silver.py every class empty"
+grep -q 'pin run kraken_trades/kt-3 ' "$RP/silver.out" || claimed silver-pin "FAIL parity_silver.py was not pinned by kt-3" 0
+parity_claim ohlcv ohlcv 0 '[]' "ca-3's candles, the ALPHA/USD windows rewritten: parity_ohlcv.py every class empty"
+grep -q 'pin run candles/ca-3 ' "$RP/ohlcv.out" || claimed ohlcv-pin "FAIL parity_ohlcv.py was not pinned by ca-3" 0
 
-# 6. a silver that differs in one column
-kseed "$RP/extra.jsonl"; trades kt-3 "$IDV"
-tools planted python3 /opt/k2/scripts/parity_silver.py --release "/k2/releases/$ID" --product kraken-trades
-said="parity_silver.py on kt-3's silver: exit 1, conn_msg_seq the one failing class, pinned by kt-3"
-if [ "$(cat "$RP/planted.rc")" = 1 ] && [ "$(grep -c '^FAIL' "$RP/planted.out")" = 1 ] \
-   && grep -q '^FAIL  conn_msg_seq ' "$RP/planted.out" && grep -q 'pin run kraken_trades/kt-3 ' "$RP/planted.out"; then
-  claimed planted "PASS $said" 0
-else
-  claimed planted "FAIL $said: exit $(cat "$RP/planted.rc"); $(grep -E '^(FAIL|parity)' "$RP/planted.out" | cut -c1-120 | tr '\n' ' ')$(tail -3 "$RP/planted.err" | tr '\n' ' ')" 0
-fi
+# 6 and 7. the planted releases
+kseed "$RP/extra.jsonl"; trades kt-4 "$IDV"
+parity_claim planted-silver silver 1 '["conn_msg_seq", "missing"]' "kt-4 by the planted silver_trade: parity_silver.py fails conn_msg_seq and missing alone"
+build "$ID" "$CT" ct-4; build "$IDC" "$CA" ca-4
+parity_claim planted-ohlcv ohlcv 1 '["ohlcv_5m.volume"]' "ca-4 by the planted ohlcv_5m: parity_ohlcv.py fails ohlcv_5m.volume alone"
+
+for f in "$RP"/*.err; do
+  peak=$(sed -n 's/^memory\.peak //p' "$f" | tail -1)
+  [ -n "$peak" ] && echo "INFO tools $(basename "$f" .err): memory.peak $([ "$peak" = unknown ] && echo unknown || echo "$((peak / 1048576)) MiB") of 2048 MiB" | tee -a "$W/claims"
+done
 finish
