@@ -53,8 +53,8 @@ names must sit under the table's location, or the run fails.
 | 1 | A copy of the live backup set | < 5 min | 1 s, the copy's own line (`backup-lake: OK in 1 s`), live, 2026-11-27, run `runs/20261127T100533Z`: 60 files |
 | 2 | Check the newest copy | < 1 min | `backup-verify: OK: 0 problem(s)` on that run, live, 2026-11-27; its time not recorded |
 | 3 | A failed or stale copy | next run | not induced; the error paths are exercised by `tests/test_backup_lake.py` |
-| 4 | `make restore` | none yet | last verified: throwaway, 2026-11-28 (`restore-path.sh`, the restore inside the drill: 32.0 s); live: not yet |
-| 5 | `make restore-drill` | none yet | last verified: throwaway, 2026-11-28 (`bash scripts/verify/restore-path.sh <release dir>`, `19 PASS, 0 FAIL in 661 s`; the drill 53.9 s with its checks and damage, claim 10); live: not yet. The rebuilds it leaves are [rebuild-a-product.md](./rebuild-a-product.md)'s, unmeasured at live size |
+| 4 | `make restore` | none yet | last verified: throwaway, 2026-11-28 (`restore-path.sh`, the restore inside the drill: 31.7 s); live: not yet |
+| 5 | `make restore-drill` | none yet | last verified: throwaway, 2026-11-28 (`bash scripts/verify/restore-path.sh <release dir>`, `19 PASS, 0 FAIL in 671 s`; the drill 57.9 s with its checks and damage, claim 10); live: not yet. The rebuilds it leaves are [rebuild-a-product.md](./rebuild-a-product.md)'s, unmeasured at live size |
 
 ---
 
@@ -240,7 +240,7 @@ make backup && make backup-verify && make health
 > **Built on the phase 004 exit branch, not in the live release.** `make restore` and `make
 > restore-drill` (`scripts/restore.py`, `mk/restore.mk`) and the restore key they write with came after
 > `v3.0.0-alpha.6-rc.1`, whose lake-init makes no restore user. Last verified: throwaway, 2026-11-28
-> (`bash scripts/verify/restore-path.sh <release dir>`, `19 PASS, 0 FAIL in 661 s`); live: not yet.
+> (`bash scripts/verify/restore-path.sh <release dir>`, `19 PASS, 0 FAIL in 671 s`); live: not yet.
 > The throwaway had no Airflow (`--no-airflow`) and no Trino port on the host (`--holds-in-network`), so
 > the pause, the drain and the selective unpause, and the holds written from the host, are proven by
 > `tests/test_restore.py` against fakes only. Every message quoted is the code's own text.
@@ -283,11 +283,20 @@ make restore                  # RUN=<stamp> only to name that same run: an older
 What it does, in order, stopping at the first refusal (exit 2) or failure (exit 1)
 (`scripts/restore.py`, header):
 
-1. **Checks that touch nothing**: both storage keys set, `svc.operator`'s file there, no `make rebuild`
-   one-shot running, and the run newest, complete, verified as `make backup-verify` checks it, and
-   holding the live backup set's tables and landings.
+1. **Checks that touch nothing**: both storage keys set; the live release's own files holding what the
+   restore needs, its lake-init's restore user (`platform/docker/lake/minio/policies/restore.json`) and
+   the holds table (`compiled/lake/ddl/trino/governance.run_records.holds.sql`); `svc.operator`'s file
+   there; no `make rebuild` one-shot running; and the run newest, complete, verified as `make
+   backup-verify` checks it, and holding the live backup set's tables and landings.
 2. **Every DAG quiet**: each DAG that is not paused is paused (only those are ever unpaused here),
-   then every DAG drained.
+   then every DAG drained. Then **the restore key proven against MinIO**, before the first write: in each
+   scope it writes (each warehouse a `restore` table sits in, and `k2-landing`), a listing, and a PUT with
+   `If-None-Match: *` of a file the run holds, at its own key with its own bytes. The key has no delete
+   and no admin right, so it can neither clean up a probe object nor read its own policy, and a listing
+   alone proves MinIO knows it but not that it may put. MinIO authorizes the put before it evaluates the
+   precondition, so an object that is there answers 412 and nothing is written; one that is not (a lost
+   lake) is put, the very bytes the restore puts there. Iceberg and landing objects are written once
+   under unique keys, so even a store that ignored the precondition would rewrite the same bytes.
 3. **The catalog database**, only when it is lost: Postgres answers no warehouse row, or says the
    database or its table does not exist. Then Lakekeeper is stopped, the run's dump replayed, and
    Lakekeeper started. Any other answer (Postgres restarting, too many clients) replaces nothing and
@@ -318,6 +327,8 @@ Its lines, in that order (`<n>` and the names are the run's own):
 ```text
 restore: run <stamp> (release <id>, tag <tag>) onto live release <id>
 restore: <n> DAG(s) paused here (<m> were paused already); every DAG drained
+  key <bucket>/warehouse/<name>: listed; a put of <uri> refused as existing (412): put reach proven, nothing written
+  key k2-landing: listed; a put of <uri> refused as existing (412): put reach proven, nothing written
 catalog database: present, not replaced
   table governance.run_records.holds: <n> file(s) put back, <m> already there; in the catalog at the backup's metadata
   held <product> (restore)
@@ -334,7 +345,8 @@ restore: each product above stays held (restore), its DAG paused, until its make
 restore: OK in <s> s: run <stamp>
 ```
 
-A lost catalog database prints `catalog database: replayed from <stamp>.sql.gz; Lakekeeper healthy, with
+On a lost lake a key line says `listed; <uri> was not there and is put back, the run's own bytes: put
+reach proven`. A lost catalog database prints `catalog database: replayed from <stamp>.sql.gz; Lakekeeper healthy, with
 the encryption key its environment holds` instead of `present, not replaced`. A product downstream of
 one recreated says `(downstream of one recreated)`. Then run the printed `make rebuild` lines in that
 order ([rebuild-a-product.md](./rebuild-a-product.md) section 2), then `make release-verify`, and
@@ -345,6 +357,8 @@ unpaused again unless the catalog database was already replayed:
 
 | Why | Do |
 |---|---|
+| `the live release <id> cannot be restored onto: its lake-init makes no restore MinIO user (no platform/docker/lake/minio/policies/restore.json); deploy a release that has them`, or `... it has no holds table (no compiled/lake/ddl/trino/governance.run_records.holds.sql); ...` | the live release predates the restore key or the holds (rc.1): deploy a later one, after `make engine-keys` |
+| ``lake --phase key: MinIO does not grant the restore key the reach the restore needs (no user or policy for it: `make engine-keys`, then deploy a release whose lake-init makes the restore user): <scope>: the restore key cannot list it (...)``, or `<scope>: the restore key's put answered HTTP <n>` | `make engine-keys` wrote the pair but no lake-init has given it to MinIO since: `make lake-init` (lake-init again on the live release, as deploy runs it), then run again; on a release that predates the restore key, deploy a later one first |
 | `no complete backup run under <dir>/runs` | `make backup`, if the lake still holds what it should; else there is nothing to restore from |
 | `run <stamp> is older than the newest complete run <stamp>: only the newest is restored` | drop `RUN=` |
 | `run <stamp> is incomplete: ...`, `run <stamp> does not hold what the live backup set names: ...` | the newest copy is damaged, or the live release names tables the run lacks: a fresh `make backup` if the lake is intact, else stop and investigate |
@@ -370,17 +384,20 @@ left for rebuild (`restore-path.sh` claim 16).
 `make restore` replays the catalog database only. Airflow's dump (`catalog/<stamp>.airflow.sql.gz`) is
 not replayed by any command here, and no replay of it has been run. The releases root is section 3c.
 
-**Measured**, throwaway only, 2026-11-28: the restore inside the drill (3b) in 32.0 s.
+**Measured**, throwaway only, 2026-11-28: the restore inside the drill (3b) in 31.7 s.
 
 ### 3b. `make restore-drill`
 
 **When**, to prove a restore on a stack whose data is disposable (before `v3.0.0`, the lab rule), after
 a manual `make backup`. It destroys the lake and restores it.
 
-**Expected behaviour**, it checks before it damages, in order: every check of 3a step 1; nothing
-committed since the run (each `restore` table's catalog metadata the run's, each landing's listing the
-run's, no run record written since the run began) and no rebuild lock open; then its statement of what
-it destroys, refused without `CONFIRM=<the live release id>`; then the pause and drain, the same check
+**Expected behaviour**, it checks before it damages, in order: every check of 3a step 1; the restore key
+proven against MinIO as in 3a step 2 (on an intact lake every probe answers 412, so nothing is written);
+nothing committed since the run (each `restore` table's catalog metadata the run's, each landing's listing the
+run's, no run record written since the run began) and no rebuild lock open; when it destroys a `rebuild` table, the live release's own `k2-dbt` taking
+`--full-refresh`, asked of the dbt-runner image its `compiled/oneshots.json` pins
+([rebuild-a-product.md](./rebuild-a-product.md) section 0: a sealed release carries no copy of the
+wrapper); then its statement of what it destroys, refused without `CONFIRM=<the live release id>`; then the pause and drain, the same check
 again, and a restore hold on every product. Then the damage, with MinIO's root pair from `.env` in
 MinIO's own image (the damage only, never the restore): the catalog database dropped and made empty,
 and every object deleted at each `restore` table's location, each landing prefix, and each `rebuild`
@@ -404,7 +421,10 @@ restore: REFUSED: the drill destroys: the catalog database (back from <stamp>.sq
 
 Refused too, before any pause or damage: `the run cannot put back what the drill would destroy (take a
 fresh make backup): ...` (something committed or landed since the run, or a rebuild lock open), and
-`the drill's damage needs MINIO_ROOT_USER and MINIO_ROOT_PASSWORD in the environment (.env loaded)`. With
+`the drill's damage needs MINIO_ROOT_USER and MINIO_ROOT_PASSWORD in the environment (.env loaded)`, 3a's
+key and release refusals, and `the drill destroys rebuild tables that only make rebuild brings back, and
+release <id>'s k2-dbt (<image>) takes no --full-refresh (step W1-15a): a rebuild would replace bronze and
+then have its build refused; deploy a release whose dbt-runner has it`. With
 `CONFIRM`, its own lines are `drill: the drill destroys: ...`, `drill: damage done in <s> s: the catalog
 database emptied; <n> location(s) emptied`, then 3a's lines from the catalog replay, then `drill: restore
 passed in <s> s (checks, damage and restore <s> s)`. The products it leaves for rebuild are the owners
@@ -413,19 +433,19 @@ canonical-trades and candles; on a stack, its statement names the tables). They 
 [rebuild-a-product.md](./rebuild-a-product.md) section 2 rebuilds them, and kraken-trades' restage reads
 its whole landing, unmeasured at live size.
 
-What it does not check: that MinIO accepts the restore key. Its checks prove only that the key is set; a
-stack whose lake-init has not made the restore user (a release before the restore key, or `make
-engine-keys` run without the deploy after it) passes them, is damaged, and fails at 3a step 5 with the
-DAGs paused, the lake still empty, until a release that makes the user is deployed and `make restore`
-runs again. Drill only on a release deployed after `make engine-keys` wrote the restore pair.
+A stack whose lake-init has not made the restore user (a release before the restore key, or `make
+engine-keys` run without the deploy after it) is refused at the key step, before any pause or damage
+(finding E1 of the phase 004 audit, resolved in `145a81a`).
 
-**Measured**, throwaway only, 2026-11-28 (`restore-path.sh`): the restore 32.0 s, 53.9 s with the
-checks and the damage (claim 10); each restore table registered at the backup's metadata with its rows as
+**Measured**, throwaway only, 2026-11-28 (`restore-path.sh`): the restore 31.7 s, 57.9 s with the
+checks and the damage (claim 10), the restore key first proven in each of its three scopes with a put
+the pinned MinIO refused as existing (`412`), nothing written; each restore table registered at the backup's metadata with its rows as
 before the damage, every landing object back key for key (claims 11, 12); kraken-trades' bronze recreated
 empty, currency-master's spared (13); every product held before any table came back, kraken-trades and
 everything downstream kept held with the rebuild order printed (14); the drift check clean (15); then the
 three rebuilt in order and `ohlcv_1m` holding every trade it held before (17). Refused with the lake as it
-was: without `CONFIRM`, after a commit since the run, and with a backup set naming a table the run lacks
+was: without `CONFIRM`, after a commit since the run, with a backup set naming a table the run lacks,
+with a release whose lake-init makes no restore user, and with a restore secret MinIO does not hold
 (7); a restore with no product held puts nothing back (8); Postgres stopped replaces nothing (9).
 
 ### 3c. The releases root is lost
@@ -466,7 +486,7 @@ extract.
 `make backup` and `make backup-verify` (the lines above). Also on 2026-11-27, without touching the
 stack: `python3 scripts/backup_lake.py verify` on an empty scratch directory (the two lines in
 section 1), `bash scripts/backup-lake.sh` with a bad flag (its usage line). Section 3a and 3b on a
-throwaway lake, 2026-11-28: `bash scripts/verify/restore-path.sh <release dir>`, `19 PASS, 0 FAIL in 661
-s`. The backup set above read from the k2gen golden at the phase 004 exit branch. Not yet: `--dry-run`,
+throwaway lake, 2026-11-28: `bash scripts/verify/restore-path.sh <release dir>`, `19 PASS, 0 FAIL in 671
+s`, at `fc353b9`. The backup set above read from the k2gen golden at the phase 004 exit branch. Not yet: `--dry-run`,
 `make backup-install` and the timer, every fix in section 2 but the gzip one, and on the live stack
 `make restore`, `make restore-drill` and section 3c.

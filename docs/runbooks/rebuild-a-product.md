@@ -12,7 +12,8 @@ the holds and their one writer are [hold-a-product.md](./hold-a-product.md)'s.
 
 > **Built on the phase 004 exit branch, not in the live release.** `make rebuild` (`scripts/rebuild.py`,
 > `mk/rebuild.mk`) and `k2-dbt build --full-refresh` came after `v3.0.0-alpha.6-rc.1` was cut: that
-> release's dbt runner refuses `--full-refresh`, so **do not run this against rc.1** (Known limits).
+> release's dbt runner refuses `--full-refresh`, and `make rebuild` refuses such a release before its
+> lock, changing nothing (section 0).
 > Last verified: throwaway, 2026-11-28 (`bash scripts/verify/kafka-path.sh <release dir> d`, `8 PASS,
 > 0 FAIL`, and `bash scripts/verify/restore-path.sh <release dir>` claim 17); live: not yet. On the
 > throwaway, Airflow and the scheduler's one-shot launcher are stand-ins; the holds, Spark, the dbt
@@ -40,8 +41,17 @@ and reaches Airflow and Spark by `docker exec`.
   rebuild: REFUSED: no password file for svc.operator at <K2_SECRETS>/principals/svc.operator.password: the operator makes it once with `make password PRINCIPAL=svc.operator TO_FILE=1` (host-held: no container mounts it)
   ```
 
-- **A live release that knows `--full-refresh`.** It came with commit `df043fc`; `make
-  release-status` names the live release and its tag. For rc.1 the answer is no:
+- **A live release that knows `--full-refresh`.** It came with commit `df043fc`. `make rebuild` checks
+  it itself before its lock, from the live release's own wrapper, never the checkout's: a sealed release
+  carries no copy of `k2_dbt.py`, so it asks the dbt-runner image the release's `compiled/oneshots.json`
+  pins, with no network and nothing pulled (`docker run --rm --network none --pull never --entrypoint
+  k2-dbt <image> build --help`), and refuses unless its options list `--full-refresh`. Against rc.1:
+
+  ```text
+  rebuild: REFUSED: release <id>'s k2-dbt (<image>) takes no --full-refresh (step W1-15a): a rebuild would replace bronze and then have its build refused; deploy a release whose dbt-runner has it
+  ```
+
+  By hand, `make release-status` names the live release and its tag, and for rc.1:
 
   ```bash
   git merge-base --is-ancestor df043fc v3.0.0-alpha.6-rc.1; echo $?     # printed 1: not an ancestor
@@ -56,6 +66,8 @@ release, a table damaged by hand, or a rebuild table a restore recreated empty.
 
 **Expected behaviour**, in order, stopping at the first step that fails (`scripts/rebuild.py`, header):
 
+0. **check**: the live release's own `k2-dbt` takes `--full-refresh` (section 0), else refused before
+   anything changes.
 1. **lock**: a `rebuild` hold on the product, refused while one is open; its DAG paused unless it
    is already, then every task of its running runs waited for (up to 900 s). From here the
    product's runs fail in `resolve`, and nothing else builds it.
@@ -115,6 +127,9 @@ Refused before the lock, exit 2, nothing changed:
 | `<arg> is not a product of the live release (...)`, `<arg> is ambiguous: ...` | `PRODUCT` names none, or several |
 | `<product> is held by a restore (make restore at <time>); rebuild after it` | a restore is running, or one stopped with its holds kept: finish it first |
 | `<product> has a rebuild lock open already: another make rebuild runs, or one was killed; ...` | section 3 |
+| `release <id>'s k2-dbt (<image>) takes no --full-refresh (step W1-15a): a rebuild would replace bronze and then have its build refused; deploy a release whose dbt-runner has it` | the live release predates `--full-refresh` (rc.1): deploy a later one |
+| `could not read release <id>'s k2-dbt (<image>): exit <n>: ...` | its pinned dbt-runner image is not on this host (nothing is pulled) or did not answer: `docker images` |
+| `release <id> pins no dbt-runner image (compiled/oneshots.json)` | the live release pins no dbt runner: deploy one that does |
 
 Then read the product: [verify-a-kafka-product.md](./verify-a-kafka-product.md) for a Kafka product
 and the products downstream of it.
@@ -215,9 +230,10 @@ still open (...); its runs fail in resolve until make rebuild PRODUCT=<product> 
 
 ## Known limits
 
-- **Not on rc.1.** The live release `v3.0.0-alpha.6-rc.1` (`8df5be3`) predates `--full-refresh`, and
-  `scripts/rebuild.py` does not check the release's runner before it starts: against rc.1 a Kafka
-  product's bronze would be replaced and restaged, and then its build refused.
+- **Not on rc.1.** The live release `v3.0.0-alpha.6-rc.1` (`8df5be3`) predates `--full-refresh`, so
+  `make rebuild` refuses it before the lock (section 0; finding E2 of the phase 004 audit, resolved in
+  `145a81a`). The refusal is proven by `tests/test_rebuild.py` against fakes; on a throwaway lake the
+  check has only met this tree's dbt-runner image, which passes.
 - **Unmeasured at live size.** A Kafka product's restage reads the whole landing in one Spark batch
   ([ADR-063](../adr/ADR-063-kafka-product-landing-per-product-bronze-staged-by-offset.md): the landing
   is never expired, by the owner's decision of 2026-11-28, so it only grows). Its time and memory are
@@ -236,4 +252,4 @@ None yet: nothing here has run on the live stack.
 
 **Last verified:** 2026-11-28 on throwaway lakes: `bash scripts/verify/kafka-path.sh <release dir> d`
 (`8 PASS, 0 FAIL`) and `bash scripts/verify/restore-path.sh <release dir>` claim 17 (`19 PASS, 0 FAIL in
-661 s`); `git merge-base` in section 0 run in this checkout. Live: not yet.
+671 s`, at `fc353b9`); `git merge-base` in section 0 run in this checkout. Live: not yet.
