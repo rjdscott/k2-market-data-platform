@@ -783,7 +783,9 @@ def scheduler_up(rid: str) -> None:
     cli.chmod(0o755)
     tools = json.loads((ROOT / rid / "manifest.json").read_text())["images"]["tools"]
     sh("docker", "run", "-d", "--name", SCHED, "--label", f"com.docker.compose.project={PROJECT}",
-       "--label", "com.docker.compose.service=airflow-scheduler", "--network", "none", "--memory", "64m", "--cpus", "0.1",
+       "--label", "com.docker.compose.service=airflow-scheduler",
+       "--label", "com.docker.compose.config-hash=rehearsal",  # deploy reads only containers compose created (containers())
+       "--network", "none", "--memory", "64m", "--cpus", "0.1",
        "--user", f"{os.getuid()}:{os.getgid()}", "-v", f"{ROOT}:/rel:ro", "-v", f"{state}:/state",
        "-v", f"{cli}:/usr/local/bin/airflow:ro", "--entrypoint", "sleep", tools, "infinity")
 
