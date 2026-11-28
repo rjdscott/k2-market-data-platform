@@ -201,6 +201,13 @@ services:
     networks: [k2-net]
     restart: unless-stopped
     deploy: {resources: {limits: {cpus: '0.1', memory: 32M}}}
+  redpanda:  # a stand-in broker: a Kafka product's brokers and registry name a service of the stack on
+    # spark-iceberg's network (k2gen's connectors.host-outside-stack); nothing here loads from it
+    image: alpine@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc
+    command: ["sleep", "infinity"]
+    networks: [k2-net]
+    restart: unless-stopped
+    deploy: {resources: {limits: {cpus: '0.1', memory: 32M}}}
   tools:
     profiles: ["tools"]
     build: {context: ., dockerfile: docker/tools/Dockerfile}
@@ -472,7 +479,7 @@ def rehearse() -> int:
     t0 = time.monotonic()
     r1 = cut("v0.0.1-rehearsal.1", "R1: the repository's own documents but quality-results, the reader view in its old shape")
     check("make release compiles R1 at a scratch tag", (ROOT / r1 / "manifest.json").is_file(), f"{r1} in {time.monotonic() - t0:.0f} s")
-    compose("up", "-d", "--wait", "prefect-db", "minio", "lakekeeper", "spark-iceberg", "capture-binance")  # running already, as live
+    compose("up", "-d", "--wait", "prefect-db", "minio", "lakekeeper", "spark-iceberg", "capture-binance", "redpanda")  # running already, as live
     lake_setup(r1, f"{PROJECT}_k2-catalog")
     capture = started()["capture-binance"]
 
