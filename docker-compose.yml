@@ -1124,7 +1124,7 @@ services:
     volumes:
       - *k2-releases-ro
     # The one service besides minio holding the root pair: it makes the buckets, the warehouses
-    # (whose storage credential Lakekeeper keeps) and one MinIO user per engine from the ten names
+    # (whose storage credential Lakekeeper keeps) and one MinIO user per engine from the twelve names
     # below, refusing a pair unset, equal to the root's or shared (init-lake.sh).
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER}
@@ -1139,6 +1139,8 @@ services:
       K2_BACKUP_S3_SECRET_KEY: ${K2_BACKUP_S3_SECRET_KEY:?set K2_BACKUP_S3_SECRET_KEY in .env (make engine-keys)}
       K2_TOOLS_S3_ACCESS_KEY: ${K2_TOOLS_S3_ACCESS_KEY:?set K2_TOOLS_S3_ACCESS_KEY in .env (make engine-keys)}
       K2_TOOLS_S3_SECRET_KEY: ${K2_TOOLS_S3_SECRET_KEY:?set K2_TOOLS_S3_SECRET_KEY in .env (make engine-keys)}
+      K2_RESTORE_S3_ACCESS_KEY: ${K2_RESTORE_S3_ACCESS_KEY:?set K2_RESTORE_S3_ACCESS_KEY in .env (make engine-keys)}
+      K2_RESTORE_S3_SECRET_KEY: ${K2_RESTORE_S3_SECRET_KEY:?set K2_RESTORE_S3_SECRET_KEY in .env (make engine-keys)}
       # Empty: the script reads the plan through the trino pointer. Deploy sets it to the
       # release being deployed, so a first deploy and a new warehouse read that release.
       K2_STORAGE_PLAN: ${K2_STORAGE_PLAN:-}
