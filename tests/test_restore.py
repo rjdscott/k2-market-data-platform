@@ -101,6 +101,11 @@ def release(tmp_path):
         (rel / "compiled/products" / p / "pipeline.json").write_text(json.dumps(doc))
     (rel / "compiled/lake/backup-set.json").write_text(json.dumps(BACKUP_SET))
     (rel / "manifest.json").write_text(json.dumps({"images": {"tools": "tools@sha256:0"}}))
+    # what the restore needs of the release's own files: its lake-init's restore user, the holds table, its k2-dbt's image
+    for f in ("platform/docker/lake/minio/policies/restore.json", "compiled/lake/ddl/trino/governance.run_records.holds.sql"):
+        (rel / f).parent.mkdir(parents=True, exist_ok=True)
+        (rel / f).write_text("{}")
+    (rel / "compiled/oneshots.json").write_text(json.dumps({"oneshots": {"dbt-runner": {"image": "dbt-runner@sha256:1"}}}))
     (tmp_path / "releases" / "pointers").mkdir()
     (tmp_path / "releases" / "pointers" / "trino").symlink_to("../rel-1")
     return rel
@@ -177,6 +182,12 @@ class FakeStore:
     def put(self, uri, data):
         self.puts.append(uri)
         self.sizes[uri] = len(data)
+
+    def put_if_absent(self, uri, data):
+        if uri in self.sizes:
+            return 412
+        self.put(uri, data)
+        return 200
 
 
 def test_put_back_puts_what_is_gone_and_never_overwrites(tmp_path):
@@ -467,9 +478,10 @@ class Rec:
     """Airflow (scripts/rebuild.py's Live) and every docker call, recorded as one ordered list of step
     names; each in-network step answers from `answers`."""
 
-    def __init__(self, paused=(), lost="present", running=(), answers=None):
+    def __init__(self, paused=(), lost="present", running=(), answers=None, help_=None):
         self.calls, self.was_paused, self.lost, self.alive = [], set(paused), lost, set(running)
-        self.answers = {"check": {"problems": [], "changes": {}, "locations": {T: LOC}, "refs_lost": [], "stale": []},
+        self.help = help_ or "usage: k2-dbt build\n\noptions:\n  --release RELEASE\n  --full-refresh\n"
+        self.answers = {"key": {"lines": ["key k2-lake/warehouse/k2: listed; a put refused as existing (412)"]}, "check": {"problems": [], "changes": {}, "locations": {T: LOC}, "refs_lost": [], "stale": []},
                         "platform": {"lines": ["table holds: ok"], "changed": [], "recreated": []},
                         "rest": {"lines": [], "changed": [], "recreated": []},
                         "drift": {"bad": [], "rebuild": [], "pending": [], "left": [], "skipped": []}, **(answers or {})}
@@ -513,6 +525,10 @@ class Rec:
             if isinstance(answer, int):
                 return done(rc=answer, err="restore: REFUSED: no")
             return done(json.dumps(answer))
+        if "--entrypoint k2-dbt" in line:
+            self.calls.append("wrapper?")
+            self.argv["wrapper?"] = cmd
+            return done(self.help, 3)
         if "SELECT count(*) FROM warehouse" in line:
             self.calls.append("catalog?")
             return {"present": done("3\n"), "lost": done("0\n"), "gone": done(rc=2, err='psql: error: FATAL:  database "lakekeeper" does not exist'),
@@ -548,7 +564,7 @@ def test_restore_order_pause_drain_catalog_check_platform_holds_rest_drift_relea
     rec = Rec(paused={"calendars"})
     assert r.restore(stack(tmp_path, rec), None, say=lambda s: None) == r.OK
     unpaused = [d for d in DAGS if d != "calendars"]
-    assert rec.calls == [*(f"pause {d}" for d in unpaused), *(f"drain {d}" for d in DAGS), "catalog?", "check", "platform",
+    assert rec.calls == [*(f"pause {d}" for d in unpaused), *(f"drain {d}" for d in DAGS), "key", "catalog?", "check", "platform",
                          "holds hold", "rest", "drift", "holds release", *(f"unpause {d}" for d in unpaused)]
 
 
@@ -640,7 +656,7 @@ def test_no_storage_key_refuses_before_anything(tmp_path, monkeypatch):
 def test_only_the_writing_phases_get_the_restore_key(tmp_path):
     rec = Rec()
     assert r.restore(stack(tmp_path, rec), None, say=lambda s: None) == r.OK
-    for step, want in (("check", r.READ_KEY), ("platform", r.KEY), ("rest", r.KEY), ("drift", ()), ("holds hold", ())):
+    for step, want in (("key", r.KEY), ("check", r.READ_KEY), ("platform", r.KEY), ("rest", r.KEY), ("drift", ()), ("holds hold", ())):
         cmd = rec.argv[step]
         named = tuple(cmd[i + 1] for i, x in enumerate(cmd) if x == "-e" and "_S3_" in cmd[i + 1] and cmd[i + 1] != "K2_S3_ENDPOINT")
         assert named == tuple(want), step
@@ -695,7 +711,7 @@ def test_the_drill_refuses_a_run_that_cannot_put_back_what_it_destroys_before_an
     rec = Rec(answers=answers)
     with pytest.raises(r.Refused, match="cannot put back"):
         r.drill(drill_stack(tmp_path, rec), "rel-1", say=lambda s: None)
-    assert rec.calls == ["check fresh"]
+    assert rec.calls == ["key", "check fresh"]
 
 
 def test_the_drill_refuses_an_incomplete_run_before_any_call(tmp_path):
@@ -715,7 +731,7 @@ def test_the_drill_states_what_it_destroys_and_refuses_without_confirm(tmp_path)
     assert "CONFIRM=rel-1" in said and "rebuild table(s) k2.kraken_trades.bronze_trade (not in the run" in said
     assert "left as they are: k2.currency_master.bronze_currencies file product bronze" in said
     assert "lost: k2.ecb_fx_rates.bronze_daily@audit" in said
-    assert rec.calls == ["check fresh"]
+    assert rec.calls == ["key", "check fresh", "wrapper?"]
 
 
 def test_the_drill_order_checks_pause_drain_holds_damage_restore_drift_selective_unpause(tmp_path):
@@ -723,7 +739,7 @@ def test_the_drill_order_checks_pause_drain_holds_damage_restore_drift_selective
     assert r.drill(drill_stack(tmp_path, rec), "rel-1", say=lambda s: None) == r.OK
     unpaused = [d for d in DAGS if d != "calendars"]
     damage = [c for c in rec.calls if c.startswith("damage")]
-    assert rec.calls == ["check fresh", *(f"pause {d}" for d in unpaused), *(f"drain {d}" for d in DAGS), "check fresh",
+    assert rec.calls == ["key", "check fresh", "wrapper?", *(f"pause {d}" for d in unpaused), *(f"drain {d}" for d in DAGS), "check fresh",
                          "holds hold", *damage, "catalog?", "replay", "replay", "replay", "replay", "check", "platform", "holds hold",
                          "rest", "drift", "holds release", *(f"unpause {d}" for d in unpaused)]
     # by location: each restore table's, each landing, the destroyed rebuild table's; never a file product's bronze
@@ -748,3 +764,73 @@ def test_the_drill_refuses_when_something_lands_between_its_check_and_the_drain(
         r.drill(st, "rel-1", say=lambda s: None)
     assert not any(c.startswith(("damage", "holds")) for c in rec.calls)
     assert [c for c in rec.calls if c.startswith("unpause")] == [f"unpause {d}" for d in DAGS]
+
+
+
+# ---- E1: the restore key proven against MinIO; E2: what the live release must hold ---------------------
+
+def test_the_key_is_proven_per_scope_by_a_list_and_a_put_refused_as_existing(tmp_path):
+    run = write_run(tmp_path, STAMP)
+    m = json.loads((run / "manifest.json").read_text())
+    assert [s for s, _, _ in r.key_probes(m)] == ["k2-lake/warehouse/k2", "k2-lake/warehouse/governance", "k2-landing"]
+    there = FakeStore({META: 9, "s3://k2-lake/warehouse/governance/run_records/holds/metadata/1.metadata.json": 2,
+                       "s3://k2-landing/fx/ecb/2026/f.xml": 4})
+    lines, bad = r.run_key(m, run, there)
+    assert bad == [] and all("refused as existing (412)" in x for x in lines) and there.puts == []  # nothing written
+    lost = FakeStore()
+    lines, bad = r.run_key(m, run, lost)
+    assert bad == [] and sorted(lost.puts) == sorted([META, "s3://k2-lake/warehouse/governance/run_records/holds/metadata/1.metadata.json",
+                                                       "s3://k2-landing/fx/ecb/2026/f.xml"])  # the run's own files, at their keys
+
+
+@pytest.mark.parametrize("damage, says", [("list", "cannot list it"), ("put", "put answered HTTP 403")])
+def test_a_key_minio_does_not_know_or_lets_not_put_is_a_problem(tmp_path, damage, says):
+    run = write_run(tmp_path, STAMP)
+    m = json.loads((run / "manifest.json").read_text())
+    store = FakeStore()
+    if damage == "list":
+        store.list = lambda prefix: (_ for _ in ()).throw(r.Failed("listing: HTTP 403 InvalidAccessKeyId"))
+    else:
+        store.put_if_absent = lambda uri, data: 403
+    _, bad = r.run_key(m, run, store)
+    assert len(bad) == 3 and all(says in b for b in bad)
+
+
+def test_the_drill_refuses_a_key_minio_does_not_grant_before_any_pause(tmp_path):
+    rec = Rec(answers={"key": 2, "check": DRILL_CHECK})
+    with pytest.raises(r.Refused):
+        r.drill(drill_stack(tmp_path, rec), "rel-1", say=lambda s: None)
+    assert rec.calls == ["key"]
+
+
+def test_make_restore_proves_the_key_before_its_first_write(tmp_path):
+    rec = Rec(answers={"key": 2})
+    with pytest.raises(r.Refused):
+        r.restore(stack(tmp_path, rec), None, say=lambda s: None)
+    assert rec.calls == [*(f"pause {d}" for d in DAGS), *(f"drain {d}" for d in DAGS), "key", *(f"unpause {d}" for d in DAGS)]
+
+
+@pytest.mark.parametrize("lose, says", [("platform/docker/lake/minio/policies/restore.json", "makes no restore MinIO user"),
+                                        ("compiled/lake/ddl/trino/governance.run_records.holds.sql", "has no holds table")])
+def test_a_live_release_lacking_what_the_restore_needs_is_refused_before_anything(tmp_path, lose, says):
+    rec = Rec()
+    st = stack(tmp_path, rec)
+    (st.releases / "rel-1" / lose).unlink()
+    for go in (lambda: r.restore(st, None, say=lambda s: None), lambda: r.drill(st, "rel-1", say=lambda s: None)):
+        with pytest.raises(r.Refused, match=f"the live release rel-1 cannot be restored onto: .*{says}"):
+            go()
+    assert rec.calls == []
+
+
+def test_the_drill_refuses_a_release_whose_k2_dbt_cannot_rebuild_what_it_destroys(tmp_path):
+    rec = Rec(answers={"check": DRILL_CHECK}, help_="usage: k2-dbt build\n\noptions:\n  --release RELEASE\n  --run-id RUN_ID\n")
+    with pytest.raises(r.Refused, match="release rel-1's k2-dbt .* takes no --full-refresh"):
+        r.drill(drill_stack(tmp_path, rec), "rel-1", say=lambda s: None)
+    assert rec.calls == ["key", "check fresh", "wrapper?"]
+    cmd = rec.argv["wrapper?"]
+    assert cmd[cmd.index("--network") + 1] == "none" and "dbt-runner@sha256:1" in cmd  # the release's pinned image
+
+
+def test_the_in_network_container_runs_the_checkouts_run_records_client(tmp_path):
+    cmd = r.docker_run(stack(tmp_path, Rec()), "drift", "--release", "x")
+    assert f"{ROOT / 'platform/runs'}:/opt/k2/platform/runs:ro" in cmd and f"{ROOT / 'scripts'}:/opt/k2/scripts:ro" in cmd

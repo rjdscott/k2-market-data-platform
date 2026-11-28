@@ -10,6 +10,8 @@ writer, its password read from ${K2_SECRETS:-~/k2-secrets}/principals/svc.operat
 printed (`make password PRINCIPAL=svc.operator TO_FILE=1` makes it once). In order, stopping at the
 first step that fails:
 
+0. check  the live release's own k2-dbt (the dbt-runner image its compiled/oneshots.json pins) takes
+          --full-refresh, read from that image's argparse: else refused before anything changes.
 1. lock   a `rebuild` hold on the product (phase-001-interfaces.md, "Holds"), refused while one is
           open; its DAG paused unless it is already, then every task of its running runs waited for,
           as deploy's drain reads them (`dags list-runs`, `tasks states-for-dag-run`): from here the
@@ -133,6 +135,24 @@ def inputs(release_path: Path) -> dict[str, set[str]]:
     return out
 
 
+def full_refresh_problem(release_path: Path, help_of: Any) -> str | None:
+    """None when the release's own k2-dbt takes --full-refresh, else why not. The wrapper is not in the
+    sealed release's files: it is the dbt-runner image its compiled/oneshots.json pins (what oneshot.py
+    runs), so that image's own argparse is asked (`k2-dbt build --help`, no network), never the checkout's.
+    help_of(image) -> (exit status, its help text)."""
+    try:
+        image = json.loads((release_path / "compiled" / "oneshots.json").read_text())["oneshots"]["dbt-runner"]["image"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return f"release {release_path.name} pins no dbt-runner image (compiled/oneshots.json)"
+    code, text = help_of(image)
+    if re.search(r"(?m)^\s+--full-refresh\b", text or ""):
+        return None
+    if code not in (0, 3) or not re.search(r"(?m)^\s+--release\b", text or ""):  # 3: this k2-dbt's usage refusal, after the help
+        return f"could not read release {release_path.name}'s k2-dbt ({image}): exit {code}: {(text or '').strip()[-200:]}"
+    return (f"release {release_path.name}'s k2-dbt ({image}) takes no --full-refresh (step W1-15a): a rebuild would replace "
+            "bronze and then have its build refused; deploy a release whose dbt-runner has it")
+
+
 def upstream(graph: dict[str, set[str]], product: str) -> set[str]:
     seen: set[str] = set()
     todo = list(graph.get(product, ()))
@@ -213,6 +233,12 @@ class Live:
 
     def unpause(self, dag: str) -> None:
         hold.airflow("unpause", dag)
+
+    def wrapper_help(self, image: str) -> tuple[int, str]:
+        """`k2-dbt build --help` of a release's dbt-runner image: read-only, no network, nothing pulled."""
+        done = self._run(["docker", "run", "--rm", "--network", "none", "--pull", "never", "--entrypoint", "k2-dbt",
+                          image, "build", "--help"])
+        return done.returncode, done.stdout
 
     def busy(self, dag: str) -> list[str]:
         """Each task of the DAG's running runs in a state a pause does not stop: a paused DAG's run
@@ -312,6 +338,8 @@ def rebuild(conn: Any, release_path: Path, product: str, dag: str, by: str, io: 
     if not RELEASE.fullmatch(release):
         raise Refused(f"the live release {release!r} is not a release id")
     inside, run = f"{RELEASES_MOUNT}/{release}", run_id(dag, now)
+    if problem := full_refresh_problem(release_path, io.wrapper_help):
+        raise Refused(problem)
     pipeline = json.loads((release_path / "compiled" / "products" / product / "pipeline.json").read_text())
     table, statements = None, []
     if kafka := check(pipeline, product):

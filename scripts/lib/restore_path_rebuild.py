@@ -9,7 +9,7 @@ own rebuild(), on the host, with what differs on a throwaway put in two stand-in
   k2runs.connect as svc.operator, the holds' one writer, as hold.py does from the live host.
 - Airflow: there is none, so no DAG is paused, drained or unpaused (rebuild()'s calls are answered
   "paused already", "nothing runs"); the Spark steps are rebuild.Live's own, aimed at <P>-spark-iceberg;
-  the full refresh is the dbt-runner image built from this tree, run as run-path-lib.sh's build() runs
+  the full refresh (and the wrapper check before the lock) is the dbt-runner image built from this tree, run as run-path-lib.sh's build() runs
   a DAG build, with --full-refresh (rebuild.BUILD_PY's command), in place of the scheduler's oneshot.py.
 """
 import json
@@ -75,6 +75,9 @@ class IO(rb.Live):
 
     def running(self, name):
         return False
+
+    def wrapper_help(self, image):
+        return super().wrapper_help(IMAGE)  # the image this lake's builds run: the scratch release pins a placeholder
 
     def build(self, release_path, dag, product, run):
         rid = release_path.rsplit("/", 1)[1]
