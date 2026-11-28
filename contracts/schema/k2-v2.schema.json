@@ -584,9 +584,10 @@
       "description": "One K2 custom property of a relationship.",
       "type": "object",
       "required": ["property", "value"],
-      "properties": {"property": {"description": "The property's name.", "enum": ["asOf"]}},
+      "properties": {"property": {"description": "The property's name.", "enum": ["asOf", "asOfColumn"]}},
       "allOf": [
-        {"if": {"properties": {"property": {"const": "asOf"}}}, "then": {"properties": {"value": {"description": "When the target keeps history: join on its valid time or its knowledge time.", "enum": ["valid", "known"]}}}}
+        {"if": {"properties": {"property": {"const": "asOf"}}}, "then": {"properties": {"value": {"description": "When the target keeps history: join on its valid time or its knowledge time.", "enum": ["valid", "known"]}}}},
+        {"if": {"properties": {"property": {"const": "asOfColumn"}}}, "then": {"properties": {"value": {"description": "With asOf: the referring table's timestamp(6) with time zone column the join is as of (docs.relationship-as-of-column).", "$ref": "#/$defs/identifier"}}}}
       ]
     },
     "contractProperty": {

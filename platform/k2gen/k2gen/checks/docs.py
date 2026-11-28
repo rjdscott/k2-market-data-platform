@@ -16,9 +16,14 @@ schema-valid documents. Then, each rule a code in CODES:
   model for anything else; a serving table its port's `serves`, and a serving-only product is
   paused (ADR-057);
 - columns: every column described, physical types as model.physical_type_problem allows, every
-  column a partitioning, sort, policy or latency element names exists, every port and relationship
-  resolves; a dbt table's foreign key names a table its product builds or reads through an input
-  port, since its dbt test reads that table as the build does;
+  column a partitioning, sort, policy or latency element names exists, every port resolves;
+- relationships (plan 005, the owner's decisions of 2026-11-28): a column's key into another
+  product's table names a product of the set (docs.reference-unresolved) that is not retired, a
+  table and column it has, of the column's physical type, through one of the referring product's
+  input ports (docs.foreign-key-not-read), so the product's own build tests it through k2_input at
+  the tested snapshot and policy inheritance runs over it; a target with history (a valid_from
+  column, ADR-030) needs asOf, valid or known, and asOfColumn, the referring table's
+  timestamp(6) with time zone the join is as of; a target without history takes neither;
 - quality: every rule is one K2 runs (k2gen.emit.dbt.quality_test, the one mapping), so none is
   dropped: a custom dbt, sql or library rule on a dbt table, a k2-connector rule on a connector
   table, or text;
@@ -83,6 +88,12 @@ CODES = (
     "docs.unit-test-model-unknown",
     "docs.unit-test-branch-unstated",
     "docs.foreign-key-not-read",
+    "docs.relationship-retired",
+    "docs.relationship-column-unknown",
+    "docs.relationship-type-mismatch",
+    "docs.relationship-as-of-missing",
+    "docs.relationship-as-of-column",
+    "docs.relationship-as-of-unexpected",
     "docs.quality-unsupported",
     "docs.serving-without-serves",
     "docs.serving-only-not-paused",
@@ -101,6 +112,8 @@ CODES = (
 RETENTION_FLOOR_DAYS = 7  # what model.Table.retention None takes; a table another product reads keeps at least it
 FETCH_KINDS = frozenset(typing.get_args(model.ConnectorKind)) - {"kafka"}  # the kinds the fetch container runs
 SPIKE_A = "experiment (a) of docs/research/2026-11-26-release-spine-spikes.md"
+HISTORY_COLUMN = "valid_from"  # a type-2 table's (ADR-030): a key into it is joined as of a time
+AS_OF_TYPE = "timestamp(6) with time zone"  # valid_from's: any other type compares in a time zone the reader sets
 
 _PRODUCT_PATH = re.compile(r"contracts/([^/]+)/([^/]+)/(.+)")
 _PARTITION_SOURCE = re.compile(r"(?:[a-z]+\()?([a-z][a-z0-9_]*)(?:, ?[0-9]+)?\)?")  # day(ts), bucket(id, 16), ts
@@ -220,7 +233,7 @@ def _rules(shared: dict[str, Any], dirs: dict[tuple[str, str], _Dir]) -> Iterato
         upstream = [by_id[u] for u in sorted(_upstream(pid, feeds)) if u in by_id and u != pid]
         yield from _product(d, domains, owners, tables, upstream)
         for table, contract in d.contracts.items():
-            yield from _table(d, table, contract, tables, read)
+            yield from _table(d, table, contract, tables, read, by_id)
     yield from _taken("docs.product-name-taken", [(d.name, d.at(model.V2_PRODUCT_FILE)) for d in products],
                       "$.name: {} is also the name of {}; a product's name is unique on the platform, since its fence names its lake namespace, principals and DAG")
     dbt = [(model.dbt_model(d.name, t), d.at(f"{t}.odcs.yaml")) for d in products for t, c in d.contracts.items() if _build(c) == "dbt"]
@@ -357,7 +370,7 @@ def _incremental(sql: str | None) -> bool:
         return False
 
 
-def _table(d: _Dir, table: str, c: Any, tables: dict[str, Any], read: set[str]) -> Iterator[Finding]:
+def _table(d: _Dir, table: str, c: Any, tables: dict[str, Any], read: set[str], by_id: dict[str, _Dir]) -> Iterator[Finding]:
     path, props, build = d.at(f"{table}.odcs.yaml"), _props(c), _build(c)
     spec, columns = c["schema"][0], c["schema"][0]["properties"]
     names = _columns(c)
@@ -381,12 +394,7 @@ def _table(d: _Dir, table: str, c: Any, tables: dict[str, Any], read: set[str]) 
         if problem:
             yield _finding("docs.physical-type-invalid", path, f"$.schema[0].properties[{i}].physicalType: {problem}")
         for j, rel in enumerate(col.get("relationships", [])):
-            to = _RELATIONSHIP.fullmatch(rel["to"])  # the schema's pattern, so it matches
-            target = tables.get(model.contract_id(to[1], to[2], to[3])) if to else None
-            if not to or target is None or target["schema"][0]["id"] != to[4] or to[5] not in _columns(target):
-                yield _finding("docs.reference-unresolved", path, f"$.schema[0].properties[{i}].relationships[{j}].to: {rel['to']} names no column of a contract in the set")
-            elif build == "dbt" and not _readable(d, target):
-                yield _finding("docs.foreign-key-not-read", path, f"$.schema[0].properties[{i}].relationships[{j}].to: {target['id']} is neither a dbt or connector table of {model.product_id(d.domain, d.name)} nor one of its input ports, and the foreign key's dbt test reads the target as the build does; add it as an input port, or drop the relationship")
+            yield from _relationship(d, c, col, path, f"$.schema[0].properties[{i}].relationships[{j}]", rel, tables, by_id)
 
     for i, entry in enumerate(spec.get("quality", [])):
         try:
@@ -427,12 +435,42 @@ def _table(d: _Dir, table: str, c: Any, tables: dict[str, Any], read: set[str]) 
         yield from _dbt(d, table, c, names)
 
 
-def _readable(d: _Dir, target: Any) -> bool:
-    """Whether a dbt table of `d` can test a key into `target`: its own dbt or connector table, or
-    an input port's (k2gen.emit.dbt's relationships test reads it through ref, source or k2_input)."""
-    if target["id"] in {port["contractId"] for port in d.product.get("inputPorts", [])}:
-        return True
-    return target["id"] in {d.contract_id(t) for t in d.contracts} and _build(target) in ("dbt", "connector")
+def _relationship(d: _Dir, c: Any, col: Any, path: str, at: str, rel: Any, tables: dict[str, Any],
+                  by_id: dict[str, _Dir]) -> Iterator[Finding]:
+    """One key of `col` (of contract `c`, product `d`) into another product's table, both ends named."""
+    to = _RELATIONSHIP.fullmatch(rel["to"])  # the schema's pattern, so it matches
+    assert to, rel["to"]
+    here, pid = f"{c['id']}.{col['name']}", model.product_id(to[1], to[2])
+    there = f"{model.contract_id(to[1], to[2], to[3])}.{to[5]}"
+    product, target = by_id.get(pid), tables.get(model.contract_id(to[1], to[2], to[3]))
+    if product is None:
+        yield _finding("docs.reference-unresolved", path, f"{at}.to: {here} refers to {rel['to']}, and no product of the set has id {pid}; name contracts/<domain>/<product>/<table>.odcs.yaml of an existing product")
+        return
+    if product.product["status"] == "retired":
+        yield _finding("docs.relationship-retired", path, f"{at}.to: {here} refers to {there}, whose product {pid} is retired (ADR-055 part 4): it builds no more rows, so the key resolves to nothing; refer to its successor, or drop the relationship")
+        return
+    if target is None or target["schema"][0]["id"] != to[4] or to[5] not in _columns(target):
+        has = f"its tables: {', '.join(sorted(product.contracts))}" if target is None else f"columns of {to[3]}: {', '.join(_columns(target))}"
+        yield _finding("docs.relationship-column-unknown", path, f"{at}.to: {here} refers to {there}, which {pid} does not have ({has})")
+        return
+    theirs = next(t["physicalType"] for t in target["schema"][0]["properties"] if t["name"] == to[5])
+    if theirs != col["physicalType"]:
+        yield _finding("docs.relationship-type-mismatch", path, f"{at}.to: {here} is {col['physicalType']} and refers to {there}, a {theirs}: a key compares equal only at one type, and Trino would cast one side in the join; make them one type")
+    if target["id"] not in {port["contractId"] for port in d.product.get("inputPorts", [])}:
+        yield _finding("docs.foreign-key-not-read", path, f"{at}.to: {here} refers to {there}, and {target['id']} is not an input port of {model.product_id(d.domain, d.name)}: the key's test reads the target through k2_input at its tested snapshot, as the build does, and policy inheritance runs over input ports; add it as an input port, or drop the relationship")
+    props = _props(rel)
+    as_of = {k: props[k] for k in ("asOf", "asOfColumn") if k in props}
+    if HISTORY_COLUMN not in _columns(target):
+        if as_of:
+            yield _finding("docs.relationship-as-of-unexpected", path, f"{at}.customProperties: {here} refers to {there}, whose table keeps no history (no {HISTORY_COLUMN}), and declares {', '.join(as_of)}; one row per key holds at every time, so drop them")
+        return
+    if len(as_of) < 2:
+        yield _finding("docs.relationship-as-of-missing", path, f"{at}.customProperties: {here} refers to {there}, whose table keeps history ({HISTORY_COLUMN}, ADR-030), and does not state its point in time; add asOf (valid or known) and asOfColumn (the {c['name']} column the join is as of)")
+        return
+    types = {x["name"]: x["physicalType"] for x in c["schema"][0]["properties"]}
+    if types.get(as_of["asOfColumn"]) != AS_OF_TYPE:
+        what = f"a {types[as_of['asOfColumn']]}" if as_of["asOfColumn"] in types else f"not a column of {c['name']}"
+        yield _finding("docs.relationship-as-of-column", path, f"{at}.customProperties: {here} joins {there} as of {as_of['asOfColumn']}, {what}; name a {AS_OF_TYPE} column of {c['name']}, the type of {HISTORY_COLUMN}: any other compares in a time zone the reader sets")
 
 
 def _source(partition_field: str) -> str:

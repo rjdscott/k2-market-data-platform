@@ -694,3 +694,40 @@ roles its grants give; a grant to it is outside every team, so `docs.terms-missi
 included; the live access suite skips its rows by kind (`access_verify.partners`), so deploy's
 preflight asks no password file for it; `make password TO_FILE=1` refuses it. The compiled rules and
 groups do not change: a partner is a reader by its grants, as a person is.
+
+## Relationships and inheritance, 2026-11-28 (phases 004 and 005, steps W3-2 and W3-3)
+
+2026-11-28, a relationship's rules (owner's decisions): a column's `relationships` entry is valid
+only when its target product is in the set (`docs.reference-unresolved`) and not retired
+(`docs.relationship-retired`), the target table and column exist
+(`docs.relationship-column-unknown`), both columns have one physical type
+(`docs.relationship-type-mismatch`), and the target table is an input port of the referring
+product, whatever its build (`docs.foreign-key-not-read`; before, a dbt table only, and its own
+tables passed too): the key's test then runs in the product's own build through `k2_input` at the
+tested snapshot, and the `access.inherit-*` rules run over the target. A target that keeps history
+(a `valid_from` column, ADR-030) needs the relationship's point in time, two custom properties
+(additive, `k2-v2.schema.json#/$defs/relationshipProperty`): `asOf`, `valid` or `known`, and
+`asOfColumn`, the referring table's column the join is as of
+(`docs.relationship-as-of-missing` without either). That column is a
+`timestamp(6) with time zone`, `valid_from`'s type, since any other compares in a time zone the
+reader sets (`docs.relationship-as-of-column`). A target without history takes neither
+(`docs.relationship-as-of-unexpected`). The form, on `candles-eur`'s `instrument_id`:
+
+```yaml
+relationships:
+  - type: foreignKey
+    to: reference-data/security-master/instrument.odcs.yaml#/schema/instrument/properties/instrument_id
+    customProperties:
+      - {property: asOf, value: valid}
+      - {property: asOfColumn, value: window_end}
+```
+
+The compiled catalog document carries each key as a column's `references` and the product's
+`joinKeys`, with `asOf`; `asOfColumn` is not in it yet (`catalog-product.schema.json`).
+
+2026-11-28, inheritance over an enriched product (W3-3): the `access.inherit-*` rules are
+unchanged. `platform/k2gen/tests/fixtures/v2/enriched/` is plan 005's exit fixture, a product over
+three domains shaped as `candles-eur`, laid over the repository's documents: `k2gen check` passes
+it, fails it with `access.inherit-delay` when its `delayed_reader` delay is 10 minutes over
+candles' 20, and with `access.inherit-role` when it also reads `security-master.asset`, which
+offers no role (`tests/test_checks_access.py`, `test_the_enriched_fixture_*`).
