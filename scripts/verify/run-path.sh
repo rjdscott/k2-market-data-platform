@@ -82,37 +82,11 @@ set -uo pipefail
 # shellcheck source=scripts/lib/run-path-lib.sh
 . "$(dirname "$0")/../lib/run-path-lib.sh"
 rp_start run-path "${1:-}" 18
-# claim 16's release: this tree with kraken-trades paused
-rp_fail_release "$(cat <<'PY'
-import sys
-from pathlib import Path
-p = Path(sys.argv[1]) / "contracts/market-capture/kraken-trades/product.odps.yaml"
-doc = p.read_text()
-assert doc.count("\nstatus: active\n") == 1 and doc.count("\ncustomProperties:\n") == 1, "kraken-trades' status or customProperties moved: move the plant"
-p.write_text(doc.replace("\nstatus: active\n", "\nstatus: paused\n").replace("\ncustomProperties:\n", """
-customProperties:
-  - property: lifecycleChange
-    value:
-      since: "2026-11-28"
-      reason: The run path pauses the venue to prove its derived product goes partial.
-      decision: ADR-056
-      resume: From the topic's records still held when it resumes.
-"""))
-PY
-)" paused
+# claim 16's release: this tree with kraken-trades paused (run-path-lib.sh's PLANT_PAUSED)
+rp_fail_release "$PLANT_PAUSED" paused
 IDP=$IDF IDF=
-# claim 17's release: this tree with silver_trade given a duplicate of one new row
-rp_fail_release "$(cat <<'PY'
-import sys
-from pathlib import Path
-p = Path(sys.argv[1]) / "contracts/market-capture/kraken-trades/models/silver_trade.sql"
-sql = p.read_text()
-tail = "\nfrom flagged\nwhere is_new or is_duplicate <> was_duplicate\n"
-assert sql.endswith(tail) and sql.count(tail) == 1, "silver_trade no longer ends 'from flagged where ...': move the plant"
-p.write_text(sql.removesuffix(tail) + "\nfrom (select * from flagged union all (select * from flagged where is_new limit 1)) as flagged\n"
-             "where is_new or is_duplicate <> was_duplicate\n")
-PY
-)" venuefail
+# claim 17's release: this tree with silver_trade given a duplicate of one new row (PLANT_VENUE_FAIL)
+rp_fail_release "$PLANT_VENUE_FAIL" venuefail
 IDV=$IDF RP_MORE="paused venuefail" IDF=
 # claim 6's release: this tree with gold given a duplicate row, which gold's unit test catches
 rp_fail_release "$(cat <<'PY'
@@ -159,13 +133,7 @@ claim expire "$ID"
 claim records "$ID" "$IDF"
 rp_every  # 9
 # 10 to 17: the phase 004 chain
-listing ki-1 listing-1.json; build "$ID" "$KI" ki-1; probe chain-state ki-1
-claim instruments "$ID"            # 10
-build "$ID" "$SM" sm-1; probe chain-state sm-1
-claim master "$ID"                 # 11
-kseed "$RP/frames.jsonl"; trades kt-1; probe chain-state kt-1
-build "$ID" "$CT" ct-1; build "$ID" "$CA" ca-1; probe chain-state ca-1
-claim trades "$ID"                 # 12
+rp_chain                           # 10 to 12
 kseed "$RP/unknown.jsonl"; trades kt-2; probe chain-state kt-2
 build "$ID" "$CT" ct-2; build "$ID" "$CA" ca-2; probe chain-state ca-2
 listing ki-2 listing-2.json; build "$ID" "$KI" ki-2; build "$ID" "$SM" sm-2

@@ -539,7 +539,8 @@ elif cmd == "claim":  # claim <name> [release ids]: one PASS or FAIL line; exit 
             (tagged(s, "silver") and tagged(s, "gold"), f"silver {s['silver']['refs']}, gold {s['gold']['refs']}")],
             f"{', '.join(e for e, _ in after)}; audited = main on both outputs")
     # ---- the phase 004 chain, claims 10 to 18 (run-path.sh): chain-<label>.json, the task files, the run records
-    elif name in ("instruments", "master", "trades", "held", "candles", "idle", "paused", "venue-fail", "rejected"):
+    elif name in ("instruments", "master", "trades", "held", "candles", "idle", "paused", "venue-fail", "rejected",
+                  "unknown", "repaired"):
         def chain(label):
             return json.loads((RP / f"chain-{label}.json").read_text())
 
@@ -750,8 +751,8 @@ elif cmd == "claim":  # claim <name> [release ids]: one PASS or FAIL line; exit 
                 (not moved and a["landing"]["records"] == b["landing"]["records"], f"changed {moved}, landing {b['landing']} -> {a['landing']}")],
                 "fetch exit 10, load, audit, publish skipped; " + ", ".join(f"{k} {len(a[k]['rows'])}" for k in CHAIN) +
                 f" rows, as before; the landing {a['landing']['records']} records")
-        elif name == "paused":  # 16
-            b, a = chain("idle"), chain("paused")
+        elif name == "paused":  # 16; pause-input.sh: args[3] the chain state before (default idle)
+            b, a = chain(args[3] if len(args) > 3 else "idle"), chain("paused")
             started = [x for x in records("canonical_trades/ct-5") if x["event"] == "started"]
             inputs = [i for x in started for i in json.loads(x["inputs"] or "[]")]
             st = state_of(CT, "canonical_trades/ct-5")
@@ -763,8 +764,8 @@ elif cmd == "claim":  # claim <name> [release ids]: one PASS or FAIL line; exit 
                 (st == f"partial: {KT}.silver_trade", f"k2runs.state {st!r}")],
                 f"exit 0 on release {args[2]}; the input read as zero rows, its snapshot null, state paused; canonical {len(rows(a, 'canonical'))} rows "
                 f"as before; k2runs.state {st!r}")
-        elif name == "venue-fail":  # 17
-            b, v, a = chain("paused"), chain("kt-5"), chain("failed")
+        elif name == "venue-fail":  # 17; venue-test-fails.sh: args[3] the chain state before (default paused)
+            b, v, a = chain(args[3] if len(args) > 3 else "paused"), chain("kt-5"), chain("failed")
             bad = fixture_trades("more.jsonl")[0]
             rolled = [x for x in history(KT) if x["run"] == "kraken_trades/kt-5" and x["event"] == "rolled_back"]
             failed = trino.ok("dbt_kraken_trades", "SELECT * FROM market_capture_build.kraken_trades__base.dq_test_results "
@@ -820,6 +821,79 @@ elif cmd == "claim":  # claim <name> [release ids]: one PASS or FAIL line; exit 
                 f"kt-6 exit 0: silver_trade took trades {want}, the frame without side rejected at partition {one.get('kafka_partition')} "
                 f"offset {one.get('kafka_offset')} ({one.get('reason')}, its bytes bronze's), warned {[w.split('.')[2] for w in x6.get('warned', [])]}, "
                 f"degraded; kt-7 with nothing new: no row added or changed, the frame still rejected once, still degraded")
+        elif name == "unknown":  # unknown-symbol.sh: claim 13's case with a listed symbol's trade in the same batch
+            h, a, r = chain("kt-2"), chain("ca-2"), chain("kt-3")
+            late, other = fixture_trades("unknown.jsonl")[0], fixture_trades("more.jsonl")[0]
+            x2, x3 = result("kt-2.build"), result("kt-3.build")
+
+            def of(st, table, t):
+                return [x for x in rows(st, table) if (x["venue_symbol"], x["trade_id"]) == (t["symbol"], t["trade_id"])]
+            refresh = pipeline(args[1], KT).get("refresh") or {}
+            # factory.Refresh.execute's rule as written there, the operator held to it by docker/airflow/tests/test_factory.py:
+            # the build degraded, and a warned test's rule (test.<project>.<rule>.<hash>) one of refresh.rules
+            warned = {w.split(".", 2)[2].rsplit(".", 1)[0] for w in x2.get("warned") or [] if isinstance(w, str) and w.count(".") >= 3}
+            starts = x2.get("degraded") is True and bool(warned & set(refresh.get("rules") or []))
+            key = ("kafka_partition", "kafka_offset", "trade_ordinal")
+            verdict(f"a trade of {late['symbol']}, unlisted, is held and the run degraded, the instruments run starts, and "
+                    f"{other['symbol']}'s trade in the same batch publishes", [
+                task("kt-2", "load"), task("kt-2", "audit"), task("kt-2", "publish"), built("kt-2"),
+                (len(of(h, "unresolved", late)) == 1 == len(rows(h, "unresolved")) and not of(h, "silver_trade", late),
+                 f"after kt-2: held {[(x['venue_symbol'], x['trade_id']) for x in rows(h, 'unresolved')]}, in silver {of(h, 'silver_trade', late)}"),
+                (len(of(h, "silver_trade", other)) == 1 and len(rows(h, "silver_trade")) == n1 + 1 and not of(h, "silver_trade", other)[0]["is_duplicate"],
+                 f"after kt-2: silver {[(x['venue_symbol'], x['trade_id']) for x in rows(h, 'silver_trade')]}, want kt-1's {n1} and {other['symbol']} {other['trade_id']}"),
+                tagged_on(h, "silver_trade", "unresolved"), built("ct-2"), built("ca-2"),
+                (sorted(rows(a, "canonical", *key)) == sorted(rows(a, "silver_trade", *key)) and len(rows(a, "canonical")) == n1 + 1,
+                 f"canonical-trades after kt-2: {len(rows(a, 'canonical'))} rows, silver_trade {len(rows(a, 'silver_trade'))}"),
+                (x2.get("degraded") is True and warned == {"unresolved_rows_zero"}, f"kt-2's XCom {x2}"),
+                (state_of(KT, "kraken_trades/kt-2") == "degraded", f"k2runs.state through kt-2 {state_of(KT, 'kraken_trades/kt-2')!r}"),
+                (refresh.get("product") == KI and starts, f"kraken-trades' refresh {refresh}, warned {sorted(warned)}: factory.Refresh would "
+                 f"{'start' if starts else 'skip'} {refresh.get('product')}"),
+                (seed("ki-2")["exit"] == 0, f"the second listing's parse: {seed('ki-2')}"),
+                task("ki-2", "load"), task("ki-2", "audit"), task("ki-2", "publish"), built("ki-2"), built("sm-2"),
+                task("kt-3", "load"), built("kt-3"),
+                (len(of(r, "silver_trade", late)) == 1 and rows(r, "unresolved") == [] and len(rows(r, "silver_trade")) == n1 + 2
+                 and of(r, "silver_trade", late)[0]["instrument_id"] == late["symbol"].replace("/", "-"),
+                 f"after kt-3: silver {[(x['venue_symbol'], x['trade_id'], x['instrument_id']) for x in rows(r, 'silver_trade')]}, held {rows(r, 'unresolved')}"),
+                (x3.get("degraded") is not True and state_of(KT, "kraken_trades/kt-3") == "complete",
+                 f"kt-3's XCom {x3}, k2runs.state {state_of(KT, 'kraken_trades/kt-3')!r}")],
+                f"kt-2 held {late['symbol']} {late['trade_id']} and published {other['symbol']} {other['trade_id']} (silver_trade and "
+                f"canonical-trades {n1 + 1} rows); XCom degraded, warned {sorted(warned)}, k2runs.state degraded; refresh "
+                f"{refresh.get('product')} on {refresh.get('rules')}: factory.Refresh starts it; that run (ki-2) and security master "
+                f"(sm-2) listed {late['symbol']}; kt-3 took it in once, nothing held, state complete")
+        elif name == "repaired":  # bronze-failed-then-repaired.sh
+            one, f, w, r = chain("kt-1"), chain("kt-2"), chain("kt-3"), chain("kt-4")
+            v, reg = result("variant"), result("register")  # the frame's {id, latest, schema}; the registry's {id}
+            vt, later = fixture_trades("variant.jsonl")[0], fixture_trades("more.jsonl")[0]
+            main = one["bronze_trade"]["refs"].get("main")
+            failed, refused = text("kt-2.audit") + text("kt-2.audit", "err"), text("kt-3.load", "err")
+
+            def ids(st):
+                return sorted(x["trade_id"] for x in rows(st, "silver_trade"))
+            verdict("a batch that fails its audit blocks bronze while the landing advances; repaired and cleared, it reaches silver", [
+                task("kt-2", "load"), (result("kt-2.load").get("rows") == 1, f"kt-2 load's result {result('kt-2.load')}"),
+                task("kt-2", "audit", 3),
+                (checks("kt-2.audit").get("parses") is False and f"schema id {v.get('id')} is not a registered" in failed,
+                 f"kt-2 audit's checks {checks('kt-2.audit')}: {why('kt-2.audit')}"),
+                (f["bronze_trade"]["refs"].get("main") == main and ids(f) == ids(one),
+                 f"under the failed batch: bronze refs {f['bronze_trade']['refs']}, silver {ids(one)} -> {ids(f)}"),
+                task("kt-3", "load", 2),
+                ("holds batch kraken_trades/kt-2" in refused and "its records are landed" in refused, f"kt-3's refusal: {why('kt-3.load')}"),
+                (w["landing"]["records"] == f["landing"]["records"] + 1 and w["landing"]["snapshots"] > f["landing"]["snapshots"],
+                 f"the landing {f['landing']} -> {w['landing']}: kt-3's frame not committed"),
+                (w["bronze_trade"]["refs"] == f["bronze_trade"]["refs"], f"bronze refs {f['bronze_trade']['refs']} -> {w['bronze_trade']['refs']}"),
+                (reg.get("id") == v.get("id") is not None, f"the schema registered as {reg}, the frame names id {v.get('id')}"),
+                (f"REPLACE BRANCH audit AS OF VERSION {main}" in text("clear"), f"the clearing statement: {why('clear')}"),
+                task("kt-4", "load"), task("kt-4", "audit"), task("kt-4", "publish"),
+                (result("kt-4.load").get("rows") == 2 and checks("kt-4.audit") == {"accounting": True, "parses": True, "keys_unique": True},
+                 f"kt-4 load's result {result('kt-4.load')}, audit's checks {checks('kt-4.audit')}"),
+                built("kt-4"), tagged_on(r, "silver_trade", "unresolved"),
+                (ids(r) == sorted(ids(one) + [vt["trade_id"], later["trade_id"]]) and rows(r, "unresolved") == []
+                 and not any(x["is_duplicate"] for x in rows(r, "silver_trade")),
+                 f"silver_trade trade ids {ids(one)} -> {ids(r)}, want {vt['trade_id']} and {later['trade_id']} added once; held {rows(r, 'unresolved')}")],
+                f"kt-2's frame of schema id {v.get('id')}, unregistered, failed parses (audit exit 3), main {main} unmoved; kt-3's frame "
+                f"landed ({f['landing']['records']} -> {w['landing']['records']} records) and its stage was refused (exit 2), bronze "
+                f"unmoved; the schema registered as id {reg.get('id')}, audit cleared to main; kt-4 restaged both, passed, published, "
+                f"and silver_trade took trades {vt['trade_id']} and {later['trade_id']} once")
     else:
         sys.exit(f"no claim {name}")
 else:
