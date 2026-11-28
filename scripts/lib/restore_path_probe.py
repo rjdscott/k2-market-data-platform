@@ -4,6 +4,8 @@ container: /work is the lake's state, /work/rp the run's files, /work/backup the
     restore_path_probe.py state <release id> <label>     the backup set's tables, rows, holds, landings to rp/restore-<label>.json
     restore_path_probe.py plant <release id> <table>     the table dropped without purge, a new one made at its name
     restore_path_probe.py where <table>                  the table's location as <bucket>/<prefix>/, for the script's wipe
+    restore_path_probe.py data-file <table>              one data file of the table's main snapshot, as <bucket>/<key>
+    restore_path_probe.py touch-holds                    an operator hold and its release: a commit since the run
     restore_path_probe.py claim <name> <release id> ...  one PASS or FAIL line; exit 1 on a FAIL
 
 Only `plant` writes, the damage claim 13 needs; the restore itself is scripts/restore.py."""
@@ -67,6 +69,10 @@ def state(rid):
     for table, (user, rel) in ROWS.items():
         a = trino.run(user, f"SELECT count(*) FROM {rel}")
         out["rows"][table] = None if a.error else a.rows[0][0]
+    for name, user, sql in (("canonical", "dbt_canonical_trades", "SELECT count(*) FROM market_analytics_build.canonical_trades__base.trades"),
+                            ("candles", "dbt_candles", "SELECT sum(trade_count) FROM market_analytics_build.candles__base.ohlcv_1m")):
+        a = trino.run(user, sql)
+        out.setdefault("chain", {})[name] = None if a.error or not a.rows else a.rows[0][0]
     a = trino.run("svc.runs", "SELECT product_id, kind, CAST(held_at AS varchar), CAST(released_at AS varchar), reason "
                   "FROM governance.run_records.holds")
     out["holds"] = None if a.error else sorted(a.rows, key=lambda x: [str(v) for v in x])
@@ -80,8 +86,8 @@ def open_restore(rows):
 
 
 def newest_manifest():
-    runs = sorted(p for p in (BACKUP / "runs").iterdir() if p.is_dir() and not p.name.startswith("."))
-    return json.loads((runs[-1] / "manifest.json").read_text())
+    runs = sorted(p for p in (BACKUP / "runs").iterdir() if p.is_dir() and not p.name.startswith(".")) if (BACKUP / "runs").is_dir() else []
+    return json.loads((runs[-1] / "manifest.json").read_text()) if runs else None  # None before the first backup (claim 4)
 
 
 def text(name):
@@ -90,11 +96,43 @@ def text(name):
 
 
 def claim(name, rid):
-    s = {k: json.loads(text(f"restore-{k}.json") or "null") for k in ("built", "refused", "after", "again", "planted")}
+    s = {k: json.loads(text(f"restore-{k}.json") or "null")
+         for k in ("built", "refused", "prepg", "postpg", "after", "again", "rebuilt", "cycle", "notwhole", "planted")}
     m = newest_manifest()
     dags = sorted(d["product"] for d in json.loads(Path(f"/work/releases/{rid}/compiled/airflow/dags.json").read_text())["dags"])
     out = text("drill.out")
-    if name == "backup":
+    if name == "chain":
+        runs = ("cm-1", "ki-1", "sm-1", "kt-1", "ct-1", "ca-1")
+        c = s["built"]["chain"]
+        checks = [(all(text(f"{x}.build.rc").strip() == "0" for x in runs), f"builds: {[(x, text(f'{x}.build.rc').strip()) for x in runs]}"),
+                  (c["canonical"] and c["candles"] == c["canonical"], f"canonical trades {c['canonical']}, ohlcv_1m trades {c['candles']}")]
+        what = f"the Kafka chain built (kraken-instruments to candles): {c['canonical']} canonical trades, every one in ohlcv_1m"
+    elif name == "catalog-error":
+        err = text("pgdown.err")
+        same = all((s["postpg"]["tables"][t] or {}).get("metadata") == (s["prepg"]["tables"][t] or {}).get("metadata") for t in s["prepg"]["tables"])
+        checks = [(text("pgdown.rc").strip() == "1" and "cannot tell whether the catalog database is lost" in err, f"exit {text('pgdown.rc').strip()}: {err.strip()[-300:]}"),
+                  ("replayed" not in text("pgdown.out") and same and s["postpg"]["rows"] == s["prepg"]["rows"], "the catalog was replaced or changed")]
+        what = "Postgres down: the catalog's answer is an error, not a loss: the restore fails (exit 1), nothing dropped or replayed, every table as it was"
+    elif name == "rebuild-order":
+        first = text("rb-ct-first.err")
+        left = ["market-capture.kraken-trades", "market-analytics.canonical-trades", "market-analytics.candles"]
+        b, rb_, cy = s["built"]["chain"], s["rebuilt"]["chain"], s["cycle"]["chain"]
+        checks = [(text("rb-ct-first.rc").strip() == "2" and "make rebuild PRODUCT=market-capture.kraken-trades" in first,
+                   f"canonical-trades before kraken-trades: exit {text('rb-ct-first.rc').strip()}: {first.strip()[-200:]}"),
+                  (all(text(f"rb-{x}.rc").strip() == "0" for x in ("kt", "ct", "ca")), f"rebuilds: {[text(f'rb-{x}.rc').strip() for x in ('kt', 'ct', 'ca')]}"),
+                  (not open_restore(s["rebuilt"]["holds"] or []), f"holds still open: {sorted(open_restore(s['rebuilt']['holds'] or []))}"),
+                  (rb_ == b, f"after the rebuilds {rb_}, before the damage {b}"),
+                  (cy["canonical"] == cy["candles"] == b["canonical"] + 1, f"one more trade, a scheduled cycle: {cy}")]
+        what = (f"each left product rebuilt in the printed order ({', '.join(left)}), a downstream one first refused; every restore hold "
+                f"ended by its passed rebuild; ohlcv_1m holds every trade ({rb_['candles']} of {rb_['canonical']}), and the next trade too")
+    elif name == "not-whole":
+        gold = "fx_reference.ecb_fx_rates__base.gold_eur_rates_daily"
+        still = open_restore(s["notwhole"]["holds"] or [])
+        checks = [(text("notwhole.rc").strip() == "0", f"exit {text('notwhole.rc').strip()}: {text('notwhole.err').strip()[-200:]}"),
+                  (f"rebuild {gold}: its files are gone" in text("notwhole.out"), "the table missing a data file was not recreated"),
+                  ("k2.restore.rebuild=" in still.get("fx-reference.ecb-fx-rates", ""), f"ECB not held for rebuild: {sorted(still)}")]
+        what = f"{gold} missing one data file (its metadata and manifests there) is not whole: recreated, ECB held for its rebuild"
+    elif name == "backup":
         verify = text("verify.out")
         checks = [("backup-verify: OK: 0 problem(s)" in verify, f"backup-verify: {verify.strip().splitlines()[-1:] or 'no output'}"),
                   (len(m["tables"]) >= 8 and m["dumps"].get("lakekeeper") and m.get("releases"), "the run lacks tables, the catalog dump or the releases tar")]
@@ -111,23 +149,28 @@ def claim(name, rid):
                   (gone.get("before") == gone.get("after") == 0, f"the wiped table's objects: {gone}")]
         what = "`lake --phase rest` with no product held is refused (exit 2) and puts nothing back"
     elif name == "refused-drill":
-        no, stale = text("noconfirm.err"), text("stale.err")
+        no, stale, lacks = text("noconfirm.err"), text("stale.err"), text("lacks.err")
         checks = [(text("noconfirm.rc").strip() == "2" and "the drill destroys" in no and f"CONFIRM={rid}" in no
                    and "rebuild table(s) k2.kraken_trades.bronze_trade" in no and "k2.currency_master.bronze_currencies file product bronze" in no,
                    f"without CONFIRM: exit {text('noconfirm.rc').strip()}: {no.strip()[-300:]}"),
                   (text("stale.rc").strip() == "2" and "cannot put back" in stale and "governance.run_records.holds" in stale,
                    f"a commit after the run: exit {text('stale.rc').strip()}: {stale.strip()[-300:]}"),
+                  (text("lacks.rc").strip() == "2" and ("does not hold what the live backup set names" in lacks or "is incomplete" in lacks)
+                   and "k2.ecb_fx_rates.added_since" in lacks,
+                   f"a release with a table the run lacks: exit {text('lacks.rc').strip()}: {lacks.strip()[-300:]}"),
                   (s["refused"]["landings"] == s["built"]["landings"] and s["refused"]["rows"] == s["built"]["rows"]
                    and all((s["refused"]["tables"][t] or {}).get("metadata") == (s["built"]["tables"][t] or {}).get("metadata")
                            for t in s["built"]["tables"] if t != "governance.run_records.holds"), "the refused drill changed the lake")]
-        what = ("the drill refuses (exit 2) before any pause, hold or damage: without CONFIRM, saying what it destroys (the rebuild "
-                "table it names) and spares (a file product's bronze); and on a run older than a commit since it")
+        what = ("the drill refuses (exit 2) before any pause, hold or damage, the lake as it was: without CONFIRM, saying what it "
+                "destroys (the rebuild table it names) and spares (a file product's bronze); on a run older than a commit since it; "
+                "and when the live release names a table the run lacks")
     elif name == "drill":
         rc = text("drill.rc").strip()
         took = [x for x in out.splitlines() if x.startswith(("restore: OK in", "drill:"))]
         checks = [(rc == "0", f"restore.py drill exit {rc}: {text('drill.err').strip()[-300:]}"),
                   ("catalog database: replayed from" in out, "the catalog database was not replayed from its dump")]
-        what = "the drill empties the catalog database, warehouse k2, warehouse governance and k2-landing, and restores: " + " | ".join(took)
+        what = ("the drill empties the catalog database and each restore table's, landing's and rebuildable rebuild table's "
+                "location, and restores: " + " | ".join(took))
     elif name == "restored":
         bad = []
         for t in m["tables"]:
@@ -180,7 +223,8 @@ def claim(name, rid):
         a = text("again.out")
         moved = [x for x in a.splitlines() if x.strip().startswith(("table", "landing", "rebuild")) and
                  not (" 0 file(s) put back" in x or " 0 object(s) put back" in x or "whole: kept" in x or ": absent: " in x)]
-        moved += [x for x in a.splitlines() if "registered at" in x or "re-pointed" in x or "recreated" in x]
+        moved += [x for x in a.splitlines() if x.strip().startswith(("table", "landing", "rebuild"))
+                  and ("registered at" in x or "re-pointed" in x or "recreated" in x)]
         checks = [(text("again.rc").strip() == "0", f"exit {text('again.rc').strip()}: {text('again.err').strip()[-200:]}"),
                   (not moved, f"moved: {moved[:3]}"),
                   ({k: v for k, v in s["again"]["rows"].items()} == s["after"]["rows"], "rows changed"),
@@ -191,7 +235,7 @@ def claim(name, rid):
     elif name == "refused-lake":
         err = text("planted.err")
         checks = [(text("planted.rc").strip() == "2" and "not the ones the backup holds" in err, f"exit {text('planted.rc').strip()}: {err.strip()[-200:]}"),
-                  (s["planted"]["holds"] == s["again"]["holds"], "the refused restore wrote a hold")]
+                  (s["planted"]["holds"] == s["notwhole"]["holds"], "the refused restore wrote a hold")]
         what = "a restore onto a lake whose restore table is another table (dropped, a new one made at its name) is refused (exit 2) before any hold or write"
     else:
         raise SystemExit(f"no claim {name}")
@@ -216,6 +260,11 @@ elif cmd == "plant":
     lake.drop(table)
     lake.create(table, meta)
     print(f"planted {table}: a new table at {lake.load(table)['metadata']['location']}, the old at {meta['location']}")
+elif cmd == "data-file":
+    import backup_lake as bl
+    meta = load(args[0])["metadata"]
+    _, files = bl.snapshot_files(meta, "main", bl.get)
+    print(next(u for u, _ in files if "/data/" in u).removeprefix("s3://"))
 elif cmd == "where":
     loc = urllib.parse.urlsplit(load(args[0])["metadata"]["location"])
     print(f"{loc.netloc}/{loc.path.strip('/')}/")
