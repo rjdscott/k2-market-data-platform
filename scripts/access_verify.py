@@ -881,8 +881,7 @@ def stage(release: Path, env_file: Path) -> int:
                 # model's own rows, so one is refused.
                 if {model.reader_relation(t), model.input_relation(t)} & reads:
                     raise SystemExit(f"stage: {p.id} {t.name}: a read row asserts its rows, and only dbt renders its model")
-                sql = "SELECT " + ", ".join(f"CAST({placeholder(c) if c is key_column(t) else 'NULL'} AS {c.physical_type}) "
-                                            f"AS {model.quote_ident(c.name)}" for c in t.columns)
+                sql = placeholder_row(t)
             rel = model.build_relation(p.domain, p.name, t.name)
             trino.ok(dbt, f"CREATE TABLE {model.quote_relation(rel)} AS {sql}")
             if stand_in:  # its shape is the contract's, as Trino describes the table it made: names, order, types
@@ -933,6 +932,22 @@ def placeholder(c: Any) -> str:
     """A literal of c's type for a stand-in output's one row (stage): what moved_key can move."""
     return ("1" if c.physical_type in ("bigint", "integer") else "DATE '2000-01-01'" if c.physical_type == "date"
             else "'stage'")
+
+
+def placeholder_row(t: Any) -> str:
+    """One row in t's contract columns and types, its key a placeholder literal and the rest null."""
+    from k2gen.model import quote_ident
+    return "SELECT " + ", ".join(f"CAST({placeholder(c) if c is key_column(t) else 'NULL'} AS {c.physical_type}) "
+                                 f"AS {quote_ident(c.name)}" for c in t.columns)
+
+
+def untested(t: Any, source: str, by: int) -> str:
+    """The rows the tested-data marker plants past a tag: every row of `source` (the table at its tag)
+    and one placeholder_row, each key moved by `by`. That row is planted whatever the tag holds, so
+    an output whose tag is empty, as a held or rejected table's normally is, still gets a row past it."""
+    from k2gen.model import quote_ident
+    cols = ", ".join(quote_ident(c.name) for c in t.columns)
+    return f"SELECT {moved_key(t, by)} FROM ({placeholder_row(t)} UNION ALL SELECT {cols} FROM {source})"
 
 
 def moved_key(t: Any, by: int = 1000) -> str:

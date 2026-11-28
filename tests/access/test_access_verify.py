@@ -870,3 +870,53 @@ def test_staging_makes_a_model_after_the_siblings_its_sql_refs():
     assert [t.name for t in av.ref_order(tables, {t.name: "select 1" for t in tables}, names)] == [t.name for t in tables]
     loop = {"instrument": "{{ ref('p__venue_symbol') }}", "venue_symbol": "{{ ref('p__instrument') }}", "venue_symbol_claim": "", "asset": ""}
     assert sorted(t.name for t in av.ref_order(tables, loop, names)) == sorted(t.name for t in tables)
+
+
+# ---- the tested-data marker's plant (scripts/verify/tested-data-marker.sh, step 3) ---------------
+
+EMPTY = ("reference-data.security-master.venue_symbol_held", "market-capture.kraken-trades.silver_trade_unresolved",
+         "market-capture.kraken-trades.silver_trade_rejected")  # held or rejected: empty in their normal state
+READ = "governance.access-canary.events"  # an output with readers, and rows at its tag
+PLANT = r"""
+import json, sys
+sys.path.insert(0, "scripts")
+import access_verify as av
+from k2gen import model
+docs = {}
+for root in model.DOCUMENT_ROOTS:
+    base = model.REPO / root
+    docs |= {p.relative_to(model.REPO).as_posix(): p.read_bytes() for p in (sorted(base.rglob("*")) if root.endswith("/") else [base]) if p.is_file()}
+prov = model.Provenance("git", "working-tree", "0" * 40, "t", "1970-01-01T00:00:00Z", model.set_sha256(docs), ())
+tables = {t.contract_id: t for p in model.load(model.DocumentSet(docs, prov)).products for t in p.tables}
+print(json.dumps({cid: {"columns": [[c.name, c.physical_type] for c in tables[cid].columns], "key": av.key_column(tables[cid]).name,
+                        "sql": av.untested(tables[cid], '"tagged"', 1_000_000)} for cid in sys.argv[1:]}))
+"""
+
+
+def test_the_marker_plants_a_row_past_every_tag_the_held_and_rejected_tables_empty_one_included():
+    """Deploy rehearsal, 2026-11-28: the marker planted only copies of the tagged rows, so security master's
+    venue_symbol_held, empty at its tag as a held table normally is, got none, its `hidden > 0` failed and
+    preflight refused the release. The plant now adds one placeholder row of the contract's columns, whatever
+    the tag holds; an output with rows still gets every tagged row again, each key moved off the tag's."""
+    import duckdb
+
+    out = subprocess.run(["uv", "run", "--project", "platform/k2gen", "--locked", "-q", "python", "-c", PLANT, *EMPTY, READ],
+                         cwd=ROOT, capture_output=True, text=True, timeout=300)
+    assert out.returncode == 0, out.stderr
+    got = json.loads(out.stdout.strip().splitlines()[-1])
+    assert "av.untested(t, " in (ROOT / "scripts/verify/tested-data-marker.sh").read_text()  # the marker plants by it
+
+    def duck(text: str) -> str:  # DuckDB spells Trino's timestamp(6) with time zone without its precision
+        return text.replace("timestamp(6) with time zone", "timestamptz")
+
+    for cid, plant in got.items():
+        db = duckdb.connect()
+        db.execute(f"CREATE TABLE tagged ({', '.join(f'{json.dumps(n)} {duck(ty)}' for n, ty in plant['columns'])})")
+        key = [n for n, _ in plant["columns"]].index(plant["key"])
+        rows = db.execute(duck(plant["sql"])).fetchall()
+        assert len(rows) == 1, f"{cid}: an empty tag gets one planted row, got {rows}"
+        assert rows[0][key] is not None and all(v is None for i, v in enumerate(rows[0]) if i != key), f"{cid}: {rows}"
+        if cid == READ:  # the tag's rows planted again, every key moved off a tagged one
+            db.execute("INSERT INTO tagged (id) VALUES (1), (2)")
+            rows = db.execute(duck(plant["sql"])).fetchall()
+            assert len(rows) == 3 and not {r[key] for r in rows} & {1, 2}, rows
