@@ -32,7 +32,9 @@
 #      No warehouse: a unit test's SQL is only
 #      rendered when dbt sends it, so it is read from dbt's log of the one statement
 #      it tried before the refused connection; the step refuses to run at all if
-#      anything listens on the profile's port.
+#      anything listens on the profile's port. Then k2_as_of's (dbt/macros/k2_as_of.sql, step I-6),
+#      in dbt/tests/k2_as_of/: each mode's predicate and k2_known_to's window compiled and compared,
+#      each bad argument a compiler error at parse, the boundary unit tests parsed.
 #
 #   make test-dbt              # locally
 #   make test-dbt SELECTOR=x   # one selector and the products its inputs name, transitively
@@ -110,6 +112,40 @@ for entry in '{"absent": false}' '{"absent": "true"}' '{"absent": true, "snapsho
   grep -qF 'k2_input: k2_inputs entry up/events is absent only as {"absent": true}' <<< "$out" || fail "absent $entry: $out"
 done
 echo "ok k2_input: pinned, unpinned, a unit test with the var set, a var without the key, $n snapshots that are not integers, absent (zero typed rows; a unit test's CTE) and $m absent entries of another form (dbt/tests/k2_input/)"
+
+# k2_as_of's render cases (dbt/macros/k2_as_of.sql, step I-6), in dbt/tests/k2_as_of/ (symlinks to
+# the macros shipped): each mode's predicate and k2_known_to's window, rendered and compared, then
+# each bad argument a compiler error at parse. Its unit tests, every boundary on invented rows, run
+# where a warehouse listens; here they parse.
+k2a() {  # k2a <out dir> <dbt command> [args]: as k2i, the k2_as_of project
+  local out=$1; shift
+  uv run --locked dbt "$@" --project-dir tests/k2_as_of --profiles-dir . --no-partial-parse \
+    --target-path "$tmp/$out" --log-path "$tmp/$out"
+}
+k2a as-of compile -q
+for want in \
+  'instrument_as_of:  and (i.valid_from <= f.fact_time and f.fact_time < i.valid_to)' \
+  'instrument_as_of:  and (k.recorded_at <= f.fact_time and f.fact_time < k.known_to)' \
+  "instrument_as_of:  select h.*, coalesce(lead(recorded_at) over (partition by venue, instrument_id order by recorded_at, valid_from), timestamp '9999-12-31 23:59:59 UTC') as known_to" \
+  'rate_as_of:left join history as v on v.currency = c.currency and (v.valid_from <= c.window_end and c.window_end < v.valid_to)' \
+  'rate_as_of:left join known as k on k.currency = c.currency and (k.recorded_at <= c.window_end and c.window_end < k.known_to)'; do
+  f="$tmp/as-of/compiled/k2_as_of_test/models/${want%%:*}.sql"
+  grep -qxF "${want#*:}" "$f" || { echo "FAIL k2_as_of ${want%%:*}: no line ${want#*:}"; cat "$f"; exit 1; }
+done
+a=0
+for case in 'mode|"as_at"|k2_as_of: mode is' 'mode|null|k2_as_of: mode is' 'target_alias|""|k2_as_of: target_alias is' \
+    'target_alias|null|k2_as_of: target_alias is' 'target_alias|"i.x"|k2_as_of: target_alias is' \
+    'fact_time|"i.recorded_at + interval '"'1'"' hour"|k2_as_of: fact_time is' 'fact_time|"\"i\".\"recorded_at\""|k2_as_of: fact_time is' \
+    'fact_time|"(select 1)"|k2_as_of: fact_time is' 'keys|"venue"|k2_known_to: keys is' 'keys|[]|k2_known_to: keys is' \
+    'keys|["venue, instrument_id"]|k2_known_to: keys is'; do
+  a=$((a + 1))
+  IFS='|' read -r var value message <<< "$case"
+  if out=$(k2a "as-of-bad$a" parse --vars "{\"$var\": $value}" 2>&1); then
+    echo "FAIL k2_as_of $var=$value: parse passed"; exit 1
+  fi
+  grep -qF "$message" <<< "$out" || { echo "FAIL k2_as_of $var=$value: $out"; exit 1; }
+done
+echo "ok k2_as_of: both modes and k2_known_to rendered as frozen, $a bad arguments each a compiler error, the boundary unit tests parsed (dbt/tests/k2_as_of/)"
 
 rel=$(bash ../scripts/verify/ci-validate.sh "$tmp/ci" 2>"$tmp/ci.log" | tail -1) || { cat "$tmp/ci.log"; exit 1; }
 # Every selector, each after the products its input ports name (scripts/dbt_order.py); with SELECTOR,

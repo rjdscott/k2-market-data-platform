@@ -1,0 +1,121 @@
+# Invented rows only. XTS is ISO 4217's code for testing; venue_a and its pairs name nothing real.
+sources:
+  - name: ref  # the history's product fence
+    database: fixture
+    schema: ref__base
+    tables:
+      - name: instrument
+        columns:
+          - {name: venue, data_type: varchar}
+          - {name: instrument_id, data_type: varchar}
+          - {name: valid_from, data_type: "timestamp(6) with time zone"}
+          - {name: valid_to, data_type: "timestamp(6) with time zone"}
+          - {name: recorded_at, data_type: "timestamp(6) with time zone"}
+          - {name: version, data_type: integer}
+      - name: rates
+        columns:
+          - {name: rate_date, data_type: date}
+          - {name: currency, data_type: varchar}
+          - {name: rate_id, data_type: integer}
+          - {name: rate_available_at, data_type: "timestamp(6) with time zone"}
+  - name: up  # the facts' product fence
+    database: fixture
+    schema: up__base
+    tables:
+      - name: facts
+        columns:
+          - {name: fact_id, data_type: integer}
+          - {name: venue, data_type: varchar}
+          - {name: instrument_id, data_type: varchar}
+          - {name: fact_time, data_type: "timestamp(6) with time zone"}
+      - name: candles
+        columns:
+          - {name: candle_id, data_type: integer}
+          - {name: currency, data_type: varchar}
+          - {name: window_end, data_type: "timestamp(6) with time zone"}
+models:
+  - name: instrument_as_of
+    columns:
+      - {name: fact_id, data_type: integer}
+      - {name: valid_version, data_type: integer}
+      - {name: known_version, data_type: integer}
+  - name: rate_as_of
+    columns:
+      - {name: candle_id, data_type: integer}
+      - {name: valid_rate_id, data_type: integer}
+      - {name: known_rate_id, data_type: integer}
+  - name: probe
+unit_tests:
+  # AAA-BBB: version 1 from 1970 (first fetched 2026-02-01 08:00), version 2 from 2026-03-01 12:00.
+  # CCC-DDD: two versions recorded the same instant, 2026-04-01 00:00, one fetch learning both.
+  - name: instrument_as_of_each_boundary
+    model: instrument_as_of
+    given:
+      - input: source('ref', 'instrument')
+        format: sql
+        rows: |
+          select 'venue_a' as venue, 'AAA-BBB' as instrument_id,
+            cast(timestamp '1970-01-01 00:00:00 UTC' as timestamp(6) with time zone) as valid_from,
+            cast(timestamp '2026-03-01 12:00:00 UTC' as timestamp(6) with time zone) as valid_to,
+            cast(timestamp '2026-02-01 08:00:00 UTC' as timestamp(6) with time zone) as recorded_at, 1 as version
+          union all select 'venue_a', 'AAA-BBB',
+            cast(timestamp '2026-03-01 12:00:00 UTC' as timestamp(6) with time zone),
+            cast(timestamp '9999-12-31 23:59:59 UTC' as timestamp(6) with time zone),
+            cast(timestamp '2026-03-01 12:00:00 UTC' as timestamp(6) with time zone), 2
+          union all select 'venue_a', 'CCC-DDD',
+            cast(timestamp '1970-01-01 00:00:00 UTC' as timestamp(6) with time zone),
+            cast(timestamp '2026-03-20 00:00:00 UTC' as timestamp(6) with time zone),
+            cast(timestamp '2026-04-01 00:00:00 UTC' as timestamp(6) with time zone), 11
+          union all select 'venue_a', 'CCC-DDD',
+            cast(timestamp '2026-03-20 00:00:00 UTC' as timestamp(6) with time zone),
+            cast(timestamp '9999-12-31 23:59:59 UTC' as timestamp(6) with time zone),
+            cast(timestamp '2026-04-01 00:00:00 UTC' as timestamp(6) with time zone), 12
+      - input: source('up', 'facts')
+        format: sql
+        rows: |
+          select 1 as fact_id, 'venue_a' as venue, 'AAA-BBB' as instrument_id,
+            cast(timestamp '2026-03-01 12:00:00.000000 UTC' as timestamp(6) with time zone) as fact_time
+          union all select 2, 'venue_a', 'AAA-BBB', cast(timestamp '2026-03-01 11:59:59.999999 UTC' as timestamp(6) with time zone)
+          union all select 3, 'venue_a', 'AAA-BBB', cast(timestamp '2026-01-15 00:00:00 UTC' as timestamp(6) with time zone)
+          union all select 4, 'venue_a', 'AAA-BBB', cast(timestamp '2999-01-01 00:00:00 UTC' as timestamp(6) with time zone)
+          union all select 5, 'venue_a', 'AAA-BBB', cast(timestamp '9999-12-31 23:59:58.999999 UTC' as timestamp(6) with time zone)
+          union all select 6, 'venue_a', 'AAA-BBB', cast(timestamp '9999-12-31 23:59:59 UTC' as timestamp(6) with time zone)
+          union all select 7, 'venue_a', 'CCC-DDD', cast(timestamp '2026-03-10 00:00:00 UTC' as timestamp(6) with time zone)
+          union all select 8, 'venue_a', 'CCC-DDD', cast(timestamp '2026-03-25 00:00:00 UTC' as timestamp(6) with time zone)
+          union all select 9, 'venue_a', 'CCC-DDD', cast(timestamp '2026-04-01 00:00:00 UTC' as timestamp(6) with time zone)
+    expect:
+      rows:
+        - {fact_id: 1, valid_version: 2, known_version: 2}        # exactly on valid_from: the new version
+        - {fact_id: 2, valid_version: 1, known_version: 1}        # the instant before: the old one
+        - {fact_id: 3, valid_version: 1, known_version: null}     # before the first fetch: the 1970 version, known to nobody yet
+        - {fact_id: 4, valid_version: 2, known_version: 2}        # the open row
+        - {fact_id: 5, valid_version: 2, known_version: 2}        # the open row up to its end
+        - {fact_id: 6, valid_version: null, known_version: null}  # the end itself is outside it: half-open
+        - {fact_id: 7, valid_version: 11, known_version: null}    # recorded later: valid, not yet known
+        - {fact_id: 8, valid_version: 12, known_version: null}
+        - {fact_id: 9, valid_version: 12, known_version: 12}      # two recorded the same instant: the later valid_from is known
+  # The plan's example: XTS fixed 2026-03-09 (rate 1) and 2026-03-10 (rate 2), each published 16:00
+  # Frankfurt time, 15:00 UTC in winter.
+  - name: rate_as_of_valid_and_known_differ
+    model: rate_as_of
+    given:
+      - input: source('ref', 'rates')
+        format: sql
+        rows: |
+          select date '2026-03-09' as rate_date, 'XTS' as currency, 1 as rate_id,
+            cast(timestamp '2026-03-09 15:00:00 UTC' as timestamp(6) with time zone) as rate_available_at
+          union all select date '2026-03-10', 'XTS', 2, cast(timestamp '2026-03-10 15:00:00 UTC' as timestamp(6) with time zone)
+      - input: source('up', 'candles')
+        format: sql
+        rows: |
+          select 1 as candle_id, 'XTS' as currency,
+            cast(timestamp '2026-03-10 10:00:00 UTC' as timestamp(6) with time zone) as window_end
+          union all select 2, 'XTS', cast(timestamp '2026-03-10 14:59:59.999999 UTC' as timestamp(6) with time zone)
+          union all select 3, 'XTS', cast(timestamp '2026-03-10 15:00:00 UTC' as timestamp(6) with time zone)
+          union all select 4, 'XTS', cast(timestamp '2026-03-09 10:00:00 UTC' as timestamp(6) with time zone)
+    expect:
+      rows:
+        - {candle_id: 1, valid_rate_id: 2, known_rate_id: 1}     # 10:00 UTC: that day's by valid time, the previous day's by knowledge time
+        - {candle_id: 2, valid_rate_id: 2, known_rate_id: 1}     # the instant before publication
+        - {candle_id: 3, valid_rate_id: 2, known_rate_id: 2}     # exactly at publication: the new one is known
+        - {candle_id: 4, valid_rate_id: 1, known_rate_id: null}  # nothing published yet

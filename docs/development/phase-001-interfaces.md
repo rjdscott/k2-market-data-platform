@@ -695,6 +695,76 @@ included; the live access suite skips its rows by kind (`access_verify.partners`
 preflight asks no password file for it; `make password TO_FILE=1` refuses it. The compiled rules and
 groups do not change: a partner is a reader by its grants, as a person is.
 
+## Point in time, 2026-11-28 (phases 004 and 005, step I-6)
+
+Frozen as the owner decided on 2026-11-28, before phase 005 builds; step W3-1 built the macro in
+[`dbt/macros/k2_as_of.sql`](../../dbt/macros/k2_as_of.sql), whose header is the contract.
+
+- **The signature.** `k2_as_of(fact_time, target_alias, mode)` renders a join predicate and nothing
+  else, over an alias the model has already bound: the model reads the history with `k2_input`
+  and aliases it, so the history is pinned at its tested snapshot and the macro reads no relation.
+  The arguments are string literals: `fact_time` a column, `<alias>.<column>` or `<column>`,
+  unquoted (a time computed from others is a column of a CTE first); `target_alias` an unquoted
+  identifier; `mode` `'valid'` or `'known'`. Anything else is a compiler error at parse, and
+  `sql.as-of` in `k2gen check`.
+- **History** is half-open, `[valid_from, valid_to)` (ADR-030): the open row's `valid_to` is
+  `9999-12-31 23:59:59 UTC`, a first version opens at `1970-01-01 00:00:00 UTC`, and neither is
+  ever null. Exactly one version holds at any instant, and a fact exactly on `valid_from` picks
+  the new version.
+- **`mode='valid'`** renders `(<alias>.valid_from <= <fact_time> and <fact_time> < <alias>.valid_to)`:
+  the version true at the fact's time, as the history now states it.
+- **`mode='known'`** renders `(<alias>.recorded_at <= <fact_time> and <fact_time> < <alias>.known_to)`:
+  the newest version known at the fact's time, so nothing recorded later is looked ahead to.
+  `[recorded_at, known_to)` is each version's interval in knowledge time. `known_to` is no
+  contract's column: `k2_known_to(keys)`, the second macro of the same file, renders it as
+  `coalesce(lead(recorded_at) over (partition by <keys> order by recorded_at, valid_from), timestamp '9999-12-31 23:59:59 UTC')`,
+  selected beside the history's columns in a CTE that the alias then names; `keys` is the
+  history's key without `valid_from`. Two versions recorded the same instant are ordered by
+  `valid_from`, so the earlier one's interval is empty and the later one is known. An alias without
+  `known_to` fails the build at Trino; the predicate never matches two versions of one key.
+- **Rejected for `known`**, each in a way the chosen form is not: the predicate
+  `recorded_at <= fact_time` with a newest-per-key window after the join (each fact joins every row
+  known before it, every earlier fixing of its currency on a daily table, and a model that forgets
+  the window fans out into duplicate rows with no error); a correlated `NOT EXISTS` for a newer
+  known row (the relation and the key columns as two more arguments, the history read twice, and a
+  correlated subquery with an inequality whose plan on Trino nobody here has measured); a stored
+  `known_to` in each history contract (a schema change of every history product for what one
+  window computes). The chosen form keeps the three arguments, computes one window over the small
+  history, and joins it by range on the key.
+- **A daily fixing read as a history** (step W3-6): `ecb-fx-rates.gold_eur_rates_daily` has no
+  `valid_from`, so `candles-eur` maps it in a CTE, `valid_from` the start of `rate_date` in UTC,
+  `valid_to` the next `rate_date`'s, `recorded_at` its `rate_available_at`; the pattern is
+  [`dbt/tests/k2_as_of/models/rate_as_of.sql`](../../dbt/tests/k2_as_of/models/rate_as_of.sql). A
+  10:00 UTC candle then gets that day's fixing by valid time and the previous day's by knowledge
+  time, since the day's is published at 16:00 Frankfurt time.
+- **The lint.** `checks/sql.py` folds a `k2_as_of` or `k2_known_to` with valid arguments as
+  rendering no relation, so `sql.model_reads` does not count it opaque and `checks.access` does not
+  widen the model's reads to every input port. It refuses (`sql.as-of`) bad arguments, an alias the
+  model's SQL binds nowhere (after FROM, JOIN or a comma, as a CTE name or a subquery's alias), and
+  an alias bound straight to a `k2_input` whose contract lacks `valid_from` and `valid_to` (mode
+  valid) or at all (mode known). An alias bound to a CTE, a subquery or the product's own table is
+  accepted: the lint does not follow a CTE's columns, and Trino refuses a missing one at build.
+  Following them would need the lint to resolve each CTE's select list, which it does not parse.
+- **The cases.** [`dbt/tests/k2_as_of/`](../../dbt/tests/k2_as_of/) is a project of its own beside
+  `k2_input`'s, with symlinks to both macros. `scripts/dbt-test.sh` step 4 compiles it with no
+  warehouse and compares each mode's predicate and the window line by line, then makes each bad
+  argument fail at parse. Its unit tests, on invented rows, hold every boundary: exactly on
+  `valid_from` the new version, the instant before the old, a fact before the first fetch in the
+  `1970-01-01` version and known to nobody, the open row to `9999-12-31 23:59:59` and nothing at
+  that instant itself, two versions recorded the same instant, and the 10:00 UTC candle whose valid
+  and known rates differ. They run where a warehouse listens.
+- **Relationships** (step W3-2's check, the section below): a relationship's target is a declared input port
+  of the referring product, its table's contract among the product's `inputPorts`, so every
+  relationship test runs through `k2_input` and a reference the build never reads is refused; a
+  target table with `valid_from` requires `asOf`, `valid` or `known`, the mode the model's
+  `k2_as_of` uses for it, and `asOfColumn`, the column its `fact_time` names (the section below).
+- **Inheritance** (step W3-3's check, the section below), as plan 005 states it: no output policy is weaker
+  than an input's; a `delay` column is never earlier than the input's, a masked input column stays
+  masked or is dropped, a registered transform is as strict as any input's.
+- **An optional input that is absent.** On `candles-eur` only the `ecb-fx-rates` port declares
+  `whenAbsent: empty`, so a paused ECB gives `rate_missing` rows and a `partial` product; its other
+  input ports keep the default, `fail`.
+
 ## Relationships and inheritance, 2026-11-28 (phases 004 and 005, steps W3-2 and W3-3)
 
 2026-11-28, a relationship's rules (owner's decisions): a column's `relationships` entry is valid

@@ -50,6 +50,15 @@ with `line <n>:` where the line is known.
   builder every view change (h1.12).
 - `sql.model-not-sql`: a file under `models/` that is not `.sql`: dbt would read its config,
   hooks or properties, which neither the compiler nor this lint reads.
+- `sql.as-of`: a `k2_as_of(fact_time, target_alias, mode)` (dbt/macros/k2_as_of.sql, step I-6)
+  whose arguments are not three string literals, a column (`<alias>.<column>` or `<column>`), an
+  unquoted identifier and `'valid'` or `'known'`; a `k2_known_to(keys)` whose argument is not a
+  non-empty list of unquoted column names; or a `target_alias` that the model's SQL does not bind
+  after FROM, JOIN or a comma, as a CTE name or a subquery's alias, or that it binds straight to a
+  `k2_input` whose contract lacks `valid_from` and `valid_to` (mode valid) or at all (mode known,
+  whose `known_to` only `k2_known_to` in a CTE computes). An alias bound to a CTE, a subquery or the
+  product's own table is accepted: the lint does not follow a CTE's columns, and Trino refuses a
+  missing one at build.
 
 **Warnings.** `sql.adapter`: a read-only adapter call (`get_relation`,
 `get_columns_in_relation`, `get_missing_columns`, `check_schema_exists`, `quote`), which reads
@@ -60,8 +69,9 @@ aside), or one the lint cannot read (`{{ var('t') }}`).
 **How it reads, and its limits.** The package pins no SQL parser, and the SQL is a Jinja template,
 so the lint works on tokens. Jinja comments are dropped; every other Jinja block is code, inside a
 SQL comment too, since Jinja renders there. A `{{ }}` made of string literals joined by `~` or
-`+`, `this`, and `ref`, `source` or `k2_input` with literal arguments is folded into the SQL; any
-other expression is opaque. The SQL is then tokenized (comments, strings, quoted identifiers,
+`+`, `this`, and `ref`, `source` or `k2_input` with literal arguments is folded into the SQL, and so
+are `k2_as_of` and `k2_known_to` with valid arguments, which render a predicate and read no
+relation; any other expression is opaque. The SQL is then tokenized (comments, strings, quoted identifiers,
 lower-cased names), and relations are found after FROM in a clause that has a SELECT at its
 level (not `extract(... FROM x)` or `IS DISTINCT FROM`), after JOIN, after a comma in a FROM list,
 in `TABLE(<name>)`, and after MERGE ... USING. Not followed, each pinned by a test:
@@ -104,6 +114,9 @@ CONFIG_REASONS = {
 }
 READ_ONLY_ADAPTER = ("get_relation", "get_columns_in_relation", "get_missing_columns", "check_schema_exists", "quote")
 _RELATION_MACROS = ("ref", "source", "k2_input")
+_AS_OF_MACROS = ("k2_as_of", "k2_known_to")  # a predicate and a window: no relation read
+_IDENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+_FACT_TIME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)?")
 _READ = ("select", "with", "values", "show", "describe", "table")
 _DML = {"insert": "into", "delete": "from", "update": None, "merge": "into"}
 _NOT_RELATION = ("lateral", "unnest", "table", "values", "select", "with")
@@ -130,7 +143,7 @@ class _Block(NamedTuple):
 class _Ph(NamedTuple):
     """A folded `{{ }}` that names a relation, or an opaque one."""
 
-    kind: str  # this, ref, source, k2_input, opaque
+    kind: str  # this, ref, source, k2_input, k2_as_of, k2_known_to, opaque
     args: tuple[str | None, ...]
     code: str
 
@@ -213,11 +226,39 @@ def _positional(args: list[list[_J]]) -> list[str | None]:
             for a in args if a and not (len(a) > 1 and a[0].kind == "name" and a[1] == _J("op", "="))]
 
 
+def _as_of_args(name: str, args: list[list[_J]]) -> tuple[str, ...] | str:
+    """k2_as_of's or k2_known_to's literal arguments, or what is wrong with them."""
+    if name == "k2_known_to":
+        keys = args[0] if len(args) == 1 else []
+        items = _split(keys[1:-1], (",",)) if keys[:1] == [_J("op", "[")] and _close(keys, 0) == len(keys) - 1 else []
+        names = [a[0].value for a in items if len(a) == 1 and a[0].kind == "str" and _IDENT.fullmatch(a[0].value)]
+        if not items or len(names) != len(items):
+            return "k2_known_to(keys) takes one list of the history's key columns, unquoted names as string literals"
+        return tuple(names)
+    values = _positional(args)
+    if len(args) != 3 or len(values) != 3 or None in values:
+        return "k2_as_of(fact_time, target_alias, mode) takes three string literals"
+    fact_time, alias, mode = (str(v) for v in values)
+    if not _FACT_TIME.fullmatch(fact_time):
+        return f"k2_as_of's fact_time {fact_time!r} is not a column, <alias>.<column> or <column>; compute it in a CTE first"
+    if not _IDENT.fullmatch(alias):
+        return f"k2_as_of's target_alias {alias!r} is not an unquoted identifier"
+    if mode not in ("valid", "known"):
+        return f"k2_as_of's mode {mode!r} is 'valid' or 'known'"
+    return fact_time, alias, mode
+
+
 def _fold(tokens: list[_J], code: str) -> list[str | _Ph] | None:
     """A `{{ }}` as SQL text and relation placeholders, or None when it is anything else."""
     parts: list[str | _Ph] = []
     for term in _split(tokens, ("~", "+")):
-        if len(term) == 1 and term[0].kind == "str":
+        if (len(term) > 2 and term[0].kind == "name" and term[0].value in _AS_OF_MACROS and term[1] == _J("op", "(")
+                and _close(term, 1) == len(term) - 1):
+            as_of = _as_of_args(term[0].value, _split(term[2:-1], (",",)))
+            if isinstance(as_of, str):
+                return None
+            parts.append(_Ph(term[0].value, as_of, code))
+        elif len(term) == 1 and term[0].kind == "str":
             parts.append(term[0].value)
         elif term == [_J("name", "this")]:
             parts.append(_Ph("this", (), code))
@@ -273,6 +314,7 @@ class _Ctx:
     base: str
     seeds: frozenset[str]
     foreign: Mapping[str, str]  # another product's namespace (<fence>, <fence>__base) -> its id
+    columns: Mapping[tuple[str, str], frozenset[str]]  # (<fence>, <table>) -> its contract's column names
 
     def own_ref(self, name: str | None) -> bool:
         return name is not None and (name.startswith(self.fence + "__") or name in self.seeds)
@@ -285,6 +327,16 @@ def _f(ctx: _Ctx, code: str, line: int, message: str, severity: Severity = "erro
 def check(docs: DocumentSet, previous: DocumentSet | None) -> list[Finding]:
     products = {p.rsplit("/", 1)[0]: p.split("/")[1:3] for p in docs.documents if model.document_kind(p) == "product"}
     namespaces = {ns: model.product_id(d, n) for d, n in products.values() for ns in (model.reader_namespace(n), model.base_namespace(n))}
+    columns: dict[tuple[str, str], frozenset[str]] = {}
+    for path, data in docs.documents.items():
+        folder, _, file = path.rpartition("/")
+        if model.document_kind(path) == "contract" and folder in products:
+            try:
+                schema = (model.parse(path, data) or {}).get("schema") or [{}]
+                columns[(model.fence(products[folder][1]), file.removesuffix(".odcs.yaml"))] = frozenset(
+                    str(c["name"]) for c in schema[0].get("properties") or [] if isinstance(c, dict) and "name" in c)
+            except (model.DocumentError, AttributeError, IndexError, KeyError, TypeError):
+                continue  # the contract checks report a contract that does not read
     out = []
     for path, data in sorted(docs.documents.items()):
         directory = next((d for d in products if path.startswith(d + "/")), None)
@@ -294,7 +346,7 @@ def check(docs: DocumentSet, previous: DocumentSet | None) -> list[Finding]:
         rel = path[len(directory) + 1:]
         seeds = frozenset(PurePosixPath(p).stem for p in docs.documents if p.startswith(f"{directory}/seeds/") and p.endswith(".csv"))
         ctx = _Ctx(path, name, model.fence(name), model.build_catalog(domain), model.base_namespace(name), seeds,
-                   {ns: pid for ns, pid in namespaces.items() if pid != model.product_id(domain, name)})
+                   {ns: pid for ns, pid in namespaces.items() if pid != model.product_id(domain, name)}, columns)
         text = data.decode("utf-8", errors="replace")
         if rel.startswith("models/") and not rel.endswith(".sql"):
             out.append(_f(ctx, "model-not-sql", 1, "models/ holds SQL only: dbt would read this file's config, hooks or properties, "
@@ -378,7 +430,8 @@ def _lint(text: str, ctx: _Ctx) -> list[Finding]:
         out += _jinja(tokens, line(b.start), ctx, env=True)
         configs += [(text[b.start:b.end], line(b.start)) for _ in _calls(tokens, ("config",))]
     flat, runs = _flatten(text, blocks, line)
-    out += _sql(_stokens(flat), flat.phs, ctx)
+    sql_tokens = _stokens(flat)
+    out += _sql(sql_tokens, flat.phs, ctx) + _as_of(sql_tokens, flat.phs, ctx)
     for body in runs:
         out += _execute(body, "statement", "a {% call statement %} block", ctx)
     return out + _config(text, configs, ctx)
@@ -407,6 +460,9 @@ def _jinja(tokens: list[_J], line: int, ctx: _Ctx, env: bool) -> list[Finding]:
                           f"as an input port"))
         elif name == "run_query":
             out += _run(args[0] if args else [], "run_query()", line, ctx)
+    for name, args in _calls(tokens, _AS_OF_MACROS):
+        if isinstance(problem := _as_of_args(name, args), str):
+            out.append(_f(ctx, "as-of", line, f"{problem} (dbt/macros/k2_as_of.sql), so the lint can read what it renders"))
     for i, t in enumerate(tokens[:-2]):
         if t == _J("name", "adapter") and tokens[i + 1] == _J("op", ".") and tokens[i + 2].kind == "name":
             method = tokens[i + 2].value
@@ -482,9 +538,9 @@ def _chain(tokens: list[_T], j: int) -> list[_T]:
     return parts
 
 
-def _relations(tokens: list[_T]) -> Iterator[list[_T]]:
-    """Every relation a statement reads: after FROM in a clause with a SELECT at its level, JOIN,
-    a comma in a FROM list, TABLE(<name>), MERGE ... USING."""
+def _relations(tokens: list[_T]) -> Iterator[tuple[list[_T], int]]:
+    """Every relation a statement reads, with its first token's index: after FROM in a clause with
+    a SELECT at its level, JOIN, a comma in a FROM list, TABLE(<name>), MERGE ... USING."""
     selects, lists, merge = [False], [False], False
     for i, t in enumerate(tokens):
         expect = False
@@ -515,11 +571,11 @@ def _relations(tokens: list[_T]) -> Iterator[list[_T]]:
             elif t.value == "table" and _is(_at(tokens, i + 1), "sym", "("):
                 parts = _chain(tokens, i + 2)
                 if parts and _is(_at(tokens, i + 2 + 2 * len(parts) - 1), "sym", ")"):
-                    yield parts
+                    yield parts, i + 2
         if expect:
             parts = _chain(tokens, i + 1)
             if parts and not _is(parts[0], "word", *_NOT_RELATION):
-                yield parts
+                yield parts, i + 1
 
 
 def _ctes(tokens: list[_T]) -> set[str]:
@@ -545,7 +601,7 @@ def _sql(tokens: list[_T], phs: list[_Ph], ctx: _Ctx) -> list[Finding]:
             out.append(_f(ctx, "time-travel", t.line, "table_changes reads a table between snapshots picked by hand, untested ones "
                                                       "included; read inputs through k2_input()"))
     ctes = _ctes(tokens)
-    for parts in _relations(tokens):
+    for parts, _ in _relations(tokens):
         if len(parts) == 1 and parts[0].kind == "ph":
             ph = phs[int(parts[0].value)]
             if ph.kind == "opaque":
@@ -563,6 +619,44 @@ def _sql(tokens: list[_T], phs: list[_Ph], ctx: _Ctx) -> list[Finding]:
             out.append(_f(ctx, "relation-unmanaged", parts[0].line,
                           f"{relation} is read by name, not through source(), ref() or k2_input(): k2 cannot pin it to a tested "
                           f"snapshot or check whose it is", "warning"))
+    return out
+
+
+def _as_of(tokens: list[_T], phs: list[_Ph], ctx: _Ctx) -> list[Finding]:
+    """Each k2_as_of's alias, bound in this model's SQL, and never straight to a k2_input of a
+    table that lacks the columns its mode reads."""
+    calls = [(t, phs[int(t.value)]) for t in tokens if t.kind == "ph" and phs[int(t.value)].kind == "k2_as_of"]
+    if not calls:
+        return []
+    ctes = _ctes(tokens)
+    bound: dict[str, list[_Ph | str | None]] = {}  # alias -> what binds it: a placeholder, a relation name, None for a subquery
+    for parts, start in _relations(tokens):
+        j = start + 2 * len(parts) - 1
+        j += 1 if _is(_at(tokens, j), "word", "as") else 0
+        if _is(_at(tokens, j), "word") or _is(_at(tokens, j), "qid"):
+            bound.setdefault(tokens[j].value, []).append(phs[int(parts[0].value)] if len(parts) == 1 and parts[0].kind == "ph" else parts[-1].value)
+    for i, t in enumerate(tokens):
+        j = i + 2 if _is(_at(tokens, i + 1), "word", "as") else i + 1
+        if _is(t, "sym", ")") and (_is(_at(tokens, j), "word") or _is(_at(tokens, j), "qid")):
+            bound.setdefault(tokens[j].value, []).append(None)
+    out = []
+    for t, ph in calls:
+        _, alias, mode = ph.args
+        binders = bound.get(str(alias).lower(), []) + ([str(alias).lower()] if str(alias).lower() in ctes else [])
+        if not binders:
+            out.append(_f(ctx, "as-of", t.line, f"k2_as_of's target_alias {alias!r} is bound nowhere in this model: alias the history "
+                                                 f"after FROM or JOIN, read through k2_input(), or name a CTE over it"))
+        for b in binders:
+            if not (isinstance(b, _Ph) and b.kind == "k2_input"):
+                continue
+            have = ctx.columns.get((str(b.args[0]), str(b.args[1])))
+            if mode == "known":
+                out.append(_f(ctx, "as-of", t.line, f"k2_as_of(..., {alias!r}, 'known') over k2_input('{b.args[0]}', '{b.args[1]}') "
+                                                     f"itself: known_to is no column of a contract, so compute it with "
+                                                     f"k2_known_to(<keys>) in a CTE and alias that"))
+            elif have is not None and not {"valid_from", "valid_to"} <= have:
+                out.append(_f(ctx, "as-of", t.line, f"k2_as_of(..., {alias!r}, 'valid') over k2_input('{b.args[0]}', '{b.args[1]}'), "
+                                                     f"whose contract has no valid_from and valid_to: it keeps no history (ADR-030)"))
     return out
 
 

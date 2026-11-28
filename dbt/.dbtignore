@@ -1,2 +1,3 @@
 # The macro test project (scripts/dbt-test.sh) is a dbt project of its own, not tests of this one.
 tests/k2_input/
+tests/k2_as_of/
