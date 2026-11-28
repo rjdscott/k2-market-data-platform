@@ -1,4 +1,4 @@
-.PHONY: chaos help up down logs ps health backup backup-install gates test test-python test-rust test-airflow record-fixtures test-notebooks test-legacy-kotlin dev-up check-docs check-alerts check-release-alerts build-capture lint lake-verify test-clickhouse test-trino test-dbt parity-ohlcv parity-bars test-k2gen screenshots
+.PHONY: chaos help up down logs ps health backup backup-install gates test test-python test-rust test-airflow record-fixtures test-notebooks test-legacy-kotlin dev-up check-docs check-alerts check-release-alerts build-capture lint lake-verify test-clickhouse test-trino test-dbt parity-bars test-k2gen screenshots
 
 # Stamped into the capture binary's k2_capture_build_info gauge. `git describe`
 # and not `rev-parse`: an image built from a dirty tree must not claim to be the
@@ -160,7 +160,7 @@ check-release-alerts:  ## [RELEASE=<dir>] promtool: check a compiled release's p
 
 # platform/k2gen is checked with the ruff and mypy pinned in its own lock, as CI's contracts job does.
 lint:  ## Ruff over docker/lake, the Airflow image tests, the gate scripts and other scripts/ Python, and the tests; ruff and mypy (strict) over platform/k2gen
-	uv run --no-project --with ruff==0.17.6 ruff check docker/lake docker/airflow scripts/screenshots scripts/check_docs.py scripts/check-budget.py scripts/check-env.py scripts/make-synthetic-fixtures.py scripts/principal-secret.py scripts/engine-keys.py scripts/backup_lake.py scripts/deploy.py scripts/hold.py scripts/restore.py scripts/rebuild.py scripts/product_verify.py scripts/access_verify.py scripts/trino_rules_test.py scripts/trino_rules_c1_test.py scripts/verify docker/tools docker/fetch docker/dbt-runner platform/runs platform/catalog-site domains tests
+	uv run --no-project --with ruff==0.17.6 ruff check docker/lake docker/airflow scripts/screenshots scripts/check_docs.py scripts/check-budget.py scripts/check-env.py scripts/make-synthetic-fixtures.py scripts/principal-secret.py scripts/engine-keys.py scripts/backup_lake.py scripts/deploy.py scripts/hold.py scripts/restore.py scripts/rebuild.py scripts/product_verify.py scripts/parity_silver.py scripts/parity_ohlcv.py scripts/access_verify.py scripts/trino_rules_test.py scripts/trino_rules_c1_test.py scripts/verify docker/tools docker/fetch docker/dbt-runner platform/runs platform/catalog-site domains tests
 	cd platform/k2gen && uv run --locked -q ruff check . && uv run --locked -q mypy
 
 # Stood down, not deleted: the old lake ingest, the tables these gates read and
@@ -191,12 +191,9 @@ screenshots:  ## Capture every dashboard and console into docs/images/dashboards
 	  -e K2_AIRFLOW_PORT -e K2_GIT_SHA -v "$(CURDIR)":/repo -w /repo k2-screenshots:1.65.2 \
 	  python3 scripts/screenshots/capture.py $(if $(ONLY),--only $(ONLY),)
 
-# Stood down like lake-verify above: the pinned lake tables both compare were
-# dropped with the old ingest, and the scripts and pins are archived in
-# legacy/v3-lake-ingest/. Phase 004 re-pins them on Kraken.
-parity-ohlcv:  ## SKIP until phase 004: OHLCV parity over the old pipeline's tables, retired
-	@echo "SKIP parity-ohlcv: the pinned lake tables were dropped with the old lake ingest (legacy/v3-lake-ingest/); returns in phase 004"
-
+# Stood down like lake-verify above: the pinned lake tables it compares were
+# dropped with the old ingest, and the script and pins are archived in
+# legacy/v3-lake-ingest/. parity-ohlcv is back, on Kraken's candles (mk/parity.mk).
 parity-bars:  ## SKIP until phase 004: event-bar parity over the old pipeline's tables, retired
 	@echo "SKIP parity-bars: the pinned lake tables were dropped with the old lake ingest (legacy/v3-lake-ingest/); returns in phase 004"
 
