@@ -1,0 +1,16 @@
+# The k2_as_of macro's render cases and boundary unit tests (scripts/dbt-test.sh, step 4). Its own
+# project, ignored by the k2 project (dbt/.dbtignore), with macros/ symlinks to the ones in
+# dbt/macros/, so the macros tested are the macros shipped. Compiling asks no warehouse: every
+# source declares its column types. The unit tests run on Trino only where a warehouse listens.
+name: k2_as_of_test
+version: "0.1.0"
+profile: k2
+config-version: 2
+model-paths: ["models"]
+macro-paths: ["macros"]
+flags:
+  populate_cache: false
+  require_certificate_validation: true
+models:
+  k2_as_of_test:
+    +materialized: table

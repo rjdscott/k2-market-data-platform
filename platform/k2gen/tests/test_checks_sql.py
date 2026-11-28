@@ -20,7 +20,7 @@ PRODUCT = "contracts/ops-insight/daily-load"
 MODEL = f"{PRODUCT}/models/gold_daily_load.sql"
 CODES = {"env-var", "definer-view", "materialized-view", "incremental-predicates", "config-key", "config-unreadable",
          "foreign-read", "time-travel", "write-outside-base", "statement-ddl", "hook", "model-not-sql", "adapter",
-         "relation-unmanaged"}
+         "relation-unmanaged", "as-of"}
 WARNINGS = {"sql.adapter", "sql.relation-unmanaged"}
 INPUT = "{{ k2_input('station_readings', 'silver_readings') }}"
 TABLE = "{{ config(materialized='table') }}\n"
@@ -159,6 +159,19 @@ CAUGHT = {
         "{% call statement('s') %}update {{ ref('daily_load__silver_load') }} set x = 1{% endcall %}select 1",
         "{% do run_query('delete from ' ~ ref('daily_load__silver_load')) %}",
     ],
+    "sql.as-of": [
+        f"select * from {INPUT} as h where {{{{ k2_as_of('h.read_at', 'h', 'as_at') }}}}",
+        f"select * from {INPUT} as h where {{{{ k2_as_of('h.read_at + interval ''1'' hour', 'h', 'valid') }}}}",
+        f"select * from {INPUT} as h where {{{{ k2_as_of('\"h\".\"read_at\"', 'h', 'valid') }}}}",
+        f"select * from {INPUT} as h where {{{{ k2_as_of('h.read_at', '', 'valid') }}}}",
+        f"select * from {INPUT} as h where {{{{ k2_as_of('h.read_at', 'h') }}}}",
+        f"select * from {INPUT} as h where {{{{ k2_as_of(var('t'), 'h', 'valid') }}}}",
+        f"select * from {INPUT} as h where {{{{ k2_as_of('h.read_at', 'x', 'valid') }}}}",  # x is bound nowhere
+        f"select * from {INPUT} h where {{{{ k2_as_of('h.read_at', 'h', 'known') }}}}",  # known_to is no column
+        f"select h.*, {{{{ k2_known_to('station_id') }}}} as known_to from {INPUT} as h",
+        f"select h.*, {{{{ k2_known_to([]) }}}} as known_to from {INPUT} as h",
+        f"select h.*, {{{{ k2_known_to(['station_id, x']) }}}} as known_to from {INPUT} as h",
+    ],
     "sql.config-key": [
         "{{ config(materialized='table', properties={'location': \"'s3://elsewhere/'\"}) }}",
         "{{ config(materialized='table', on_table_exists='drop') }}",
@@ -187,9 +200,33 @@ def test_an_evasion_is_caught(code: str, text: str) -> None:
     "{% call statement('m', fetch_result=True) %}select max(load_date) from {{ this }}{% endcall %}select 1",
     "select * from {{ ref('daily_load__gold_daily_load') }}",
     "{{ config(materialized='table') }}select config.get('materialized')",
+    # k2_as_of over a CTE, a subquery or the model's own table: the lint does not follow their columns
+    f"with k as (select h.*, {{{{ k2_known_to(['station_id']) }}}} as known_to from {INPUT} as h) "
+    f"select * from {{{{ this }}}} as f join k on k.station_id = f.station_id and {{{{ k2_as_of('f.load_date', 'k', 'known') }}}}",
+    f"select * from {{{{ this }}}} as f join (select * from {INPUT}) as v on {{{{ k2_as_of('f.load_date', 'v', 'valid') }}}}",
+    "select * from {{ this }} f, {{ this }} v where {{ k2_as_of('load_date', 'v', 'valid') }}",
 ])
+
+
 def test_no_false_positive(text: str) -> None:
     assert codes(text) == set(), [f.message for f in findings(text)]
+
+
+def test_as_of_over_a_history_input_is_clean_and_renders_no_relation() -> None:
+    # station_readings gains a type-2 table in this docset only: valid over it is clean, known is not
+    history = "contracts/sensor-net/station-readings/station_history.odcs.yaml"
+    contract = (GOOD / "contracts/sensor-net/station-readings/silver_readings.odcs.yaml").read_text()
+    contract = contract.replace("silver_readings", "station_history").replace("    properties:\n", (
+        "    properties:\n      - {name: valid_from, physicalType: timestamp(6) with time zone}\n"
+        "      - {name: valid_to, physicalType: timestamp(6) with time zone}\n"), 1)
+    text = (f"{TABLE}select d.station_id, h.station_id as s from {INPUT} as d\n"
+            "left join {{ k2_input('station_readings', 'station_history') }} as h\n"
+            "  on h.station_id = d.station_id and {{ k2_as_of('d.read_at', 'h', 'valid') }}\n")
+    docs = docset({MODEL: text, history: contract})
+    assert sql.check(docs, None) == []
+    assert {f.code for f in sql.check(docset({MODEL: text.replace("'valid'", "'known'"), history: contract}), None)} == {"sql.as-of"}
+    # model_reads sees two inputs and nothing opaque, so checks.access does not widen to every port
+    assert sql.model_reads(text) == ([("station_readings", "silver_readings"), ("station_readings", "station_history")], [], [])
 
 
 @pytest.mark.parametrize(("text", "now"), [
