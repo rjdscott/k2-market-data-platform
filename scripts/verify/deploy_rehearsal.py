@@ -494,20 +494,6 @@ def result(release: str, kind: str) -> dict[str, Any]:
 # alpha.3 has the guarded shape. The chain now holds the guarded shape across a rollback and back.
 
 
-def marker_finding(out: subprocess.CompletedProcess[str], release: str) -> bool:
-    """FINDING (2026-11-28): stage builds security master's venue_symbol_held from a one-row placeholder whose
-    held_reason is null, so its tag holds no row, nothing can be planted, and the marker's `hidden > 0` fails:
-    preflight refuses every release of this checkout's documents (exit 2). Recorded as a FAIL; then the scratch
-    tree's marker, which deploy runs from the checkout, accepts an empty tag so the checks after it can run."""
-    if "fails the tested-data marker check" not in out.stderr:
-        return False
-    check(f"release time: the tested-data marker passes, unpatched, for {release}", False,
-          " | ".join(x for x in result(release, "marker").get("lines", []) if x.startswith("FAIL"))[:300])
-    edit("scripts/verify/tested-data-marker.sh", "hidden > 0 and",
-         "(hidden > 0 or trino.ok(pub, f\"SELECT count(*) FROM ({at_tag})\")[0][0] == 0) and", 1)
-    return True
-
-
 def rehearse() -> int:
     scratch_repo(COMPOSE.replace("STANDIN_IMAGE", ALPINE_A).replace("SPARK_IMAGE", SPARK))
     added(False)
@@ -523,8 +509,6 @@ def rehearse() -> int:
     # 1. a first deploy that fails, then the first deploy (its preflight runs the release-time suites)
     t0 = time.monotonic()
     out = make("deploy", f"RELEASE={r1}", fault="verify-mismatch", check=False)
-    if marker_finding(out, r1):
-        out = make("deploy", f"RELEASE={r1}", fault="verify-mismatch", check=False)
     check("a first deploy that fails verification exits 3 (nothing to go back to)", code(out) == 3,
           f"exit {code(out)} in {time.monotonic() - t0:.0f} s")
     access = result(r1, "access-release")
@@ -855,8 +839,10 @@ def phase004() -> None:
 
         # b. verify forced to fail: back to R10; the holds table and the new namespaces LEFT, not drift
         out = make("deploy", f"RELEASE={target}", fault="verify-mismatch", check=False)
-        if marker_finding(out, target):  # code_at(None) brought this checkout's marker back
-            out = make("deploy", f"RELEASE={target}", fault="verify-mismatch", check=False)
+        marker = result(target, "marker")
+        check("10: R11's release-time tested-data marker passes at preflight", marker.get("exit") == 0,
+              " | ".join(x for x in marker.get("lines", []) if x.startswith("FAIL"))[:300]
+              or f"{sum(1 for x in marker.get('lines', []) if x.startswith('PASS'))} PASS")
         ok = any(r["release"] == target and r["step"] == "preflight" and r["outcome"] == "ok" for r in records())
         check("10b: with every file present preflight passes; verify forced to fail rolls back to R10, exit 1, the drained DAGs unpaused",
               ok and code(out) == 1 and live_release() == base and not paused() & set(old.values()),
