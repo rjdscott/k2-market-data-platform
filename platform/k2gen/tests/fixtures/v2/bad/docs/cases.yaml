@@ -253,6 +253,15 @@ cases:
       - {file: contracts/sensor-net/station-readings/grants.yaml, set: grants, value: []}
       - {file: contracts/access/principals.yaml, set: principals/1/owner, value: sensor-team}  # p.analyst-delayed
       - {file: contracts/ops-insight/daily-load/grants.yaml, set: grants, value: [{principal: svc.load-dashboard, role: full_reader}, {principal: p.analyst-delayed, role: full_reader}]}
+  - code: docs.terms-missing
+    changes:  # a partner is outside every team, the one answering for it included: the within-team grant needs terms
+      - {file: contracts/ops-insight/daily-load/product.odps.yaml, remove: customProperties/1}
+      - {file: contracts/access/principals.yaml, set: principals/2/kind, value: partner}  # svc.load-dashboard, insight-team's
+  - code: docs.terms-missing
+    changes:  # and upstream: daily-load records terms, station-readings, which it reads, none (A3)
+      - {file: contracts/sensor-net/station-readings/product.odps.yaml, remove: customProperties/2}
+      - {file: contracts/sensor-net/station-readings/grants.yaml, set: grants, value: []}
+      - {file: contracts/access/principals.yaml, set: principals/2/kind, value: partner}
   - code: docs.retention-below-floor
     changes:  # daily-load reads silver_readings
       - {file: contracts/sensor-net/station-readings/silver_readings.odcs.yaml, set: customProperties/3/value, value: 3}

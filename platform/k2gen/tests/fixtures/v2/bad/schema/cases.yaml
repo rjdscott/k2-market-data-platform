@@ -39,6 +39,7 @@ cases:
   - {kind: principals, file: good/contracts/access/principals.yaml, set: principals/0/trinoBcrypt, value: "$2b$10$abcdefghijklmnopqrstuv", error: "Additional properties are not allowed ('trinoBcrypt' was unexpected)"}
   - {kind: principals, file: good/contracts/access/principals.yaml, set: principals/2/apiKeySha256, value: 0000000000000000000000000000000000000000000000000000000000000000, error: "Additional properties are not allowed ('apiKeySha256' was unexpected)"}
   - {kind: principals, file: good/contracts/access/principals.yaml, set: principals/0/id, value: svc.analyst-full, error: "does not match '^p\\\\.'"}
+  - {kind: principals, file: good/contracts/access/principals.yaml, set: principals/7/kind, value: partner, error: "does not match '^svc\\\\.'"}
   - {kind: roles, file: good/contracts/access/roles.yaml, set: roles/delayed_reader/requires, value: [filter], error: "'filter' is not one of"}
   - {kind: domains, file: good/contracts/domains.yaml, set: domains/sensor-build, value: {owner: sensor-team, kind: source-aligned, description: x}, error: "should not be valid under"}
   # tests/access/expectations.yaml

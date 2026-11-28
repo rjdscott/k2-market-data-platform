@@ -27,7 +27,8 @@ schema-valid documents. Then, each rule a code in CODES:
 - layers: bronze is written only by connectors and a connector writes only bronze (ADR-056 part 2);
   a bronze table is named bronze_<name> and keyed (pipeline.schema.json), and a fetch kind's carries
   model.LINEAGE_COLUMN;
-- terms before a grant outside the owning team (ADR-055 part 5), on the product and on every
+- terms before a grant outside the owning team (ADR-055 part 5; a grant to a partner, another
+  organisation's service, is always outside it, whichever team answers for the partner), on the product and on every
   product upstream of it through input ports, directly or through others (A3 of the 2026-11-28
   review: a derived product passes its inputs' data on). An upstream product is exempt only when
   everything it holds was written on the platform: no connector, no input port, every table built
@@ -199,7 +200,7 @@ def _columns(contract: Any) -> list[str]:
 
 def _rules(shared: dict[str, Any], dirs: dict[tuple[str, str], _Dir]) -> Iterator[Finding]:
     domains: dict[str, Any] = shared.get("domains", {}).get("domains", {})
-    owners = {p["id"]: p["owner"] for p in shared.get("principals", {}).get("principals", [])}
+    owners = {p["id"]: p for p in shared.get("principals", {}).get("principals", [])}
     for name in domains:
         problem = model.domain_name_problem(name)
         if problem:
@@ -270,7 +271,7 @@ def _platform_written(d: _Dir) -> bool:
             and bool(d.contracts) and all(_build(c) == "dbt" for c in d.contracts.values()))
 
 
-def _product(d: _Dir, domains: dict[str, Any], owners: dict[str, str], tables: dict[str, Any], upstream: list[_Dir]) -> Iterator[Finding]:
+def _product(d: _Dir, domains: dict[str, Any], owners: dict[str, Any], tables: dict[str, Any], upstream: list[_Dir]) -> Iterator[Finding]:
     p, path = d.product, d.at(model.V2_PRODUCT_FILE)
     props, team = _props(p), p["team"]["name"]
     yield from _repeated(path, p)
@@ -317,13 +318,15 @@ def _product(d: _Dir, domains: dict[str, Any], owners: dict[str, str], tables: d
 
     lacking = [model.product_id(u.domain, u.name) for u in upstream if "terms" not in _props(u.product) and not _platform_written(u)]
     for i, grant in enumerate(d.grants["grants"] if d.grants is not None else []):
-        owner = owners.get(grant["principal"])  # an undeclared principal is the access check's
-        if owner is None or owner == team:
+        who = owners.get(grant["principal"])  # an undeclared principal is the access check's
+        if who is None or (who["owner"] == team and who["kind"] != "partner"):
             continue
+        outside = ("is a partner, another organisation's service, outside every team" if who["kind"] == "partner"
+                   else f"belongs to {who['owner']}, outside the product's team {team}")
         if "terms" not in props:
-            yield _finding("docs.terms-missing", d.at("grants.yaml"), f"$.grants[{i}]: {grant['principal']} belongs to {owner}, outside the product's team {team}; record the source's terms in the product's terms property before a grant outside the owning team (ADR-055 part 5)")
+            yield _finding("docs.terms-missing", d.at("grants.yaml"), f"$.grants[{i}]: {grant['principal']} {outside}; record the source's terms in the product's terms property before a grant outside the owning team (ADR-055 part 5)")
         if lacking:
-            yield _finding("docs.terms-missing", d.at("grants.yaml"), f"$.grants[{i}]: {grant['principal']} belongs to {owner}, outside the product's team {team}, and reads through it the data of {', '.join(lacking)}, upstream through input ports, which record no terms; each records its source's terms before a grant outside the owning team downstream of it (ADR-055 part 5)")
+            yield _finding("docs.terms-missing", d.at("grants.yaml"), f"$.grants[{i}]: {grant['principal']} {outside}, and reads through it the data of {', '.join(lacking)}, upstream through input ports, which record no terms; each records its source's terms before a grant outside the owning team downstream of it (ADR-055 part 5)")
 
     # ponytail: any model of the product, not only those calling k2_input on the port: an ephemeral
     # or view between them passes the zero rows on. Name the readers when a product needs one exempt.

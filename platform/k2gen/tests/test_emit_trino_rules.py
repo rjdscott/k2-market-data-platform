@@ -267,6 +267,8 @@ def edit_grants(m: Model, product: str, grants: tuple[Grant, ...]) -> Model:
     (lambda m: edit_grants(m, "station-readings", (Grant("dbt_daily_load", "full_reader"),)), "platform principal"),
     (lambda m: edit_grants(m, "station-readings", (Grant("svc.platform", "full_reader"),)), "platform principal"),
     (lambda m: edit_grants(m, "station-readings", (Grant("k2_release_0123456789ab", "full_reader"),)), "platform principal"),
+    (lambda m: dataclasses.replace(m, principals=tuple(dataclasses.replace(p, kind="partner") if p.id == "svc.runs" else p
+                                                       for p in m.principals)), "a partner and a platform principal"),
     (lambda m: edit_table(m, "station-readings", lambda t: dataclasses.replace(
         t, policies={**t.policies, "public_reader": RolePolicy(None, ("region",), None)}) if t.name == "silver_readings" else t), "does not offer"),
     (lambda m: edit_table(m, "station-readings", lambda t: dataclasses.replace(
@@ -280,6 +282,16 @@ def edit_grants(m: Model, product: str, grants: tuple[Grant, ...]) -> Model:
 def test_what_the_documents_leave_inconsistent_fails_closed(change: Any, message: str) -> None:
     with pytest.raises(ValueError, match=message):
         trino_rules.emit(change(loaded("good")))
+
+
+def test_a_partner_is_a_reader_by_its_grants_alone() -> None:
+    # svc.load-dashboard holds full_reader on daily-load: as a partner it compiles to the same rules
+    # and groups, so its kind gives it no right and takes none its grants give.
+    m = loaded("good")
+    partner = dataclasses.replace(m, principals=tuple(dataclasses.replace(p, kind="partner") if p.id == "svc.load-dashboard" else p
+                                                      for p in m.principals))
+    assert trino_rules.emit(partner) == trino_rules.emit(m)
+    assert "svc.load-dashboard" in trino_rules.emit(partner)[trino_rules.GROUPS]
 
 
 def test_a_policy_value_is_one_literal_and_a_name_one_identifier() -> None:

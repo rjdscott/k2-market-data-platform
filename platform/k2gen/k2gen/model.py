@@ -720,7 +720,9 @@ Backup = Literal["restore", "rebuild"]
 TimeMeaning = Literal["event", "publication", "valid", "known"]
 AsOf = Literal["valid", "known"]
 ConnectorKind = Literal["kafka", "public-api", "https-file", "s3-file", "sftp", "ftp"]
-PrincipalKind = Literal["person", "service"]
+# partner: another organisation's service (svc.*): its credential is never the platform's, and it holds
+# only the reader roles grants give it (checks.access, access.principal-collides).
+PrincipalKind = Literal["person", "service", "partner"]
 PolicyKind = Literal["delay", "mask", "rowScope"]
 Severity = Literal["error", "warning"]
 Ref = Literal["main", "audited"]

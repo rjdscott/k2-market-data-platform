@@ -63,7 +63,7 @@
       "pattern": "^[a-z][a-z0-9]*(-[a-z0-9]+)*\\.[a-z][a-z0-9]*(-[a-z0-9]+)*\\.[a-z][a-z0-9]*(_[a-z0-9]+)*$"
     },
     "principalId": {
-      "description": "A principal: p.<pseudonym> for a person, svc.<name> for a service, dbt_<fence> for a product's builder and pub_<fence> for its publisher (A8, A10).",
+      "description": "A principal: p.<pseudonym> for a person, svc.<name> for a service or a partner, dbt_<fence> for a product's builder and pub_<fence> for its publisher (A8, A10).",
       "type": "string",
       "pattern": "^((p|svc)\\.[a-z0-9]+(-[a-z0-9]+)*|(dbt|pub)_[a-z][a-z0-9]*(_[a-z0-9]+)*)$"
     },
@@ -724,13 +724,14 @@
             "required": ["id", "kind", "owner"],
             "properties": {
               "id": {"$ref": "#/$defs/principalId"},
-              "kind": {"description": "A person (p.*) or a service (svc.*, dbt_*, pub_*).", "enum": ["person", "service"]},
+              "kind": {"description": "A person (p.*), a service (svc.*, dbt_*, pub_*), or a partner (svc.*): a service of another organisation, whose credential the platform never holds and which holds only the reader roles grants give it.", "enum": ["person", "service", "partner"]},
               "owner": {"description": "The team answerable for the principal.", "$ref": "#/$defs/slug"},
               "description": {"description": "What the principal is for.", "$ref": "#/$defs/text"}
             },
             "allOf": [
               {"if": {"properties": {"kind": {"const": "person"}}}, "then": {"properties": {"id": {"pattern": "^p\\."}}}},
-              {"if": {"properties": {"kind": {"const": "service"}}}, "then": {"properties": {"id": {"pattern": "^(svc\\.|dbt_|pub_)"}}}}
+              {"if": {"properties": {"kind": {"const": "service"}}}, "then": {"properties": {"id": {"pattern": "^(svc\\.|dbt_|pub_)"}}}},
+              {"if": {"properties": {"kind": {"const": "partner"}}}, "then": {"properties": {"id": {"pattern": "^svc\\."}}}}
             ]
           }
         }
