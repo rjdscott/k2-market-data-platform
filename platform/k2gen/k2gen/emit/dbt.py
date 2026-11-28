@@ -43,7 +43,7 @@ from k2gen.model import Model, Product, Quality, Table
 
 ROOT = "compiled/dbt"
 # The frozen macros (A7), shipped as the repository has them: the one tested is the one compiled.
-COPIED_MACROS = ("k2_input.sql", "k2_results.sql")
+COPIED_MACROS = ("k2_as_of.sql", "k2_input.sql", "k2_results.sql")
 MACRO_DIR = k2.REPO / "dbt" / "macros"
 HEADER = "# Compiled by k2gen (platform/k2gen/k2gen/emit/dbt.py) from the release's documents. Never edit it: change the documents.\n"
 _RELATIONSHIP = re.compile(r"([^/]+)/([^/]+)/([^/]+)\.odcs\.yaml#/schema/([^/]+)/properties/([^/]+)")
