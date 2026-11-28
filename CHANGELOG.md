@@ -131,6 +131,7 @@ Found by the phase's reviews before any release:
 - An input a model reads but does not declare is refused (A1); a topic belongs to one product of its
   owning domain (A2); terms are checked upstream (A3); the role order names declared roles with no
   cycle (A6).
+- A grant to a partner over terms that say `redistribution: forbidden`, on the product or upstream, is refused (`docs.terms-forbid-redistribution`); the check read only whether terms were recorded.
 - A Kraken trade frame `silver_trade` cannot type (not JSON, no data array, a field missing or not of
   its type) no longer fails every later build at a NOT NULL column: it is kept whole, with its reason
   and bytes, in the owner-only `silver_trade_rejected`, its warn rule `rejected_frames_zero` degrades
