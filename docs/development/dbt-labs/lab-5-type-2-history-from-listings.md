@@ -152,8 +152,9 @@ bug:
   of on 5 January was already trading on 4 January. If the first version opened on 5 January, every
   earlier trade would match nothing: no error, only fewer rows. ADR-030's Outcome records exactly
   this: the first version of a security master had opened at the run that found it and had
-  silently emptied an as-of join, 36 of 7,651 trades surviving for one hour. `recorded_at` keeps the
-  honest fetch time beside it, so "we learned this late" is still in the data.
+  silently emptied an as-of join for one hour, almost no trade surviving it (the Outcome has the
+  counts). `recorded_at` keeps the honest fetch time beside it, so "we learned this late" is still
+  in the data.
 
 The unit test `venue_symbol_trade_before_first_fetch_resolves_through_1970` pins it, with a trade
 dated before any fetch.
@@ -198,9 +199,10 @@ in force at 11:00), listed. All three differ from the one before, so there are t
 | 2026-01-05 11:00:00 | 2026-01-05 12:00:00 | false | null |
 | 2026-01-05 12:00:00 | 9999-12-31 23:59:59 | true | 0.1 |
 
-(Worked from the unit test's rows, not run. The test states the same three rows.) A trade at 11:30
-finds the middle version and reads `is_listed = false`. The ordinary left join of a type-2 table,
-which would have returned nothing for the delisted hour, now returns the answer "not listed".
+(Worked from the unit test's rows. The test states the same three rows, and passes in step 7.) A
+trade at 11:30 finds the middle version and reads `is_listed = false`. The ordinary left join of a
+type-2 table, which would have returned nothing for the delisted hour, now returns the answer "not
+listed".
 
 Compare this with the test `instrument_changed_tick_size_closes_one_version_and_opens_another`: at
 12:00 only the websocket name changes (`XALP/USD`), a column `instrument` does not carry, so no
@@ -228,18 +230,28 @@ the wrong tool here, because the source keeps it.
 
 ### 7. Run it
 
-The unit tests need Trino, so they are **run at a merge point**:
+The unit tests need Trino, which a throwaway lake gives (Docker, a few minutes):
 
 ```bash
 make test-dbt SELECTOR=security_master
 ```
 
-The output is the shape of lab 2, step 5: a row per test (the ones whose `unique_id` contains
-`instrument_delisted_then_relisted` and `venue_symbol_trade_before_first_fetch_resolves_through_1970`,
-status `pass`) and `dbt-test: PASS`. It was not run for this lab, so check it at the merge point
-against this shape. The compile, which needs no Trino, you can run now, as in lab 4 with
+It builds `kraken_instruments`, `currency_master` and `security_master`, in that order, each with
+its tests. A run on 2026-11-28 printed these rows among security_master's (the ids are that run's
+own; the data is the synthetic fixtures'), and its last three lines:
+
+```text
+  "reference_data_build"."security_master__base"."dq_test_results" run_id=dbt-test/dbt-test-2129071-security_master: unit_test.k2.security_master__instrument.instrument_delisted_then_relisted | pass | 0 | reference_data_build.security_master__base.instrument | v0.0.0-ci.1-05109662dd45 | b70c2910-acb5-494b-868c-34081c631de2
+  "reference_data_build"."security_master__base"."dq_test_results" run_id=dbt-test/dbt-test-2129071-security_master: unit_test.k2.security_master__venue_symbol.venue_symbol_trade_before_first_fetch_resolves_through_1970 | pass | 0 | reference_data_build.security_master__base.venue_symbol | v0.0.0-ci.1-05109662dd45 | b70c2910-acb5-494b-868c-34081c631de2
+ok results: 54 row(s) in "reference_data_build"."security_master__base"."dq_test_results" under run_id dbt-test/dbt-test-2129071-security_master, one per test, statuses as dbt reported
+ok build: 3 compiled product(s) of v0.0.0-ci.1-05109662dd45 built with their tests on a throwaway lake, every result recorded
+dbt-test: PASS
+```
+
+Both tests this lab reads, the relisting in step 5 and the 1970 version in step 4, read `pass` with
+no failing row. The compile, which needs no Trino, you can run now, as in lab 4 with
 `--selector security_master`: it prints `Found 20 models, 4 seeds, 1 operation, 192 data tests,
-10 sources, 522 macros, 40 unit tests`, the counts of the whole tree.
+10 sources, 522 macros, 41 unit tests`, the counts of the whole tree.
 
 ## Exercise
 

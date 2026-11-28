@@ -25,10 +25,17 @@
 -- build; read only the venue's changes since the snapshot the last build read (an incremental read
 -- k2_input would resolve from the run record) when the soak's run times say so.
 {{ config(materialized='incremental') }}
-{#- `this` is none in a unit test without a `this` input; with one, the test overrides the reads. -#}
+{#- `this` is none in a unit test without a `this` input; with one, the test overrides the macros of
+    the guard and sets unit_test_highest_load_seq for the read: it cannot override run_query, which
+    dbt's unit test materialization itself calls to type the expected rows. No build sets that var
+    (the wrapper's --vars are k2_inputs, k2_run_id and k2_release), and | int keeps it a number. -#}
 {%- set numbered_after = 0 -%}
 {%- if execute and not is_incremental() and this is not none and should_full_refresh() and load_relation(this) is not none -%}
-  {%- set numbered_after = run_query('select coalesce(max(load_seq), 0) from ' ~ this).rows[0][0] | int -%}
+  {%- set highest = var('unit_test_highest_load_seq', none) -%}
+  {%- if highest is none -%}
+    {%- set highest = run_query('select coalesce(max(load_seq), 0) from ' ~ this).rows[0][0] -%}
+  {%- endif -%}
+  {%- set numbered_after = highest | int -%}
 {%- endif %}
 with venues as (
   -- one branch per venue input port; a new venue is a port and a union all here

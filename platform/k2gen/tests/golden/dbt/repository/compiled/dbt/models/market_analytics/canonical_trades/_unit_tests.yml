@@ -62,15 +62,19 @@ unit_tests:
       load_seq the table held before the build replaced it, 7 here, never from 1 again: each row is
       then past candles' watermark, at most 7, so candles' next build recomputes every window. The
       overrides stand for the live reads: the table exists, and its highest number before the
-      replace is 7 (the model reads it with run_query as dbt renders it, before the replace).
+      replace is 7, which the model reads with run_query as dbt renders it, before the replace. A
+      unit test cannot override run_query (dbt's unit test materialization calls it to type the
+      expected rows, and gets the stub), so the var stands for that one read; the live read is
+      scripts/verify/kafka-path.sh's group d.
     overrides:
       macros:
         is_incremental: false
         should_full_refresh: true
         load_relation: true
-        run_query: {rows: [[7]]}
+      vars:
+        unit_test_highest_load_seq: 7
     given:
-      - input: this  # the table before the replace, highest load_seq 7; only run_query reads it
+      - input: this  # the table before the replace, highest load_seq 7, so that `this` is not none
         format: sql
         rows: |
           select cast('kraken' as varchar) as venue, 0 as kafka_partition, cast(10 as bigint) as kafka_offset, 1 as trade_ordinal, cast(timestamp '2026-01-05 10:00:00 UTC' as timestamp(6) with time zone) as trade_ts, cast('i-aaa' as varchar) as instrument_id, cast('AAA/ZZZ' as varchar) as venue_symbol, cast(5 as bigint) as trade_id, cast('buy' as varchar) as side, cast(10 as decimal(38, 18)) as price, cast(1 as decimal(38, 18)) as quantity, false as is_duplicate, cast(7 as bigint) as load_seq

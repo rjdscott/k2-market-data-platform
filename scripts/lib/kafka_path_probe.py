@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """scripts/verify/kafka-path.sh's steps. Three run in the throwaway's Spark container on the
-release's own code, fed on stdin (`python3 - <command> /k2/releases/<id> ...`); `claim` runs on the
-host over what they printed.
+release's own code, fed on stdin (`python3 - <command> /k2/releases/<id> ...`); `rebuild` and
+`claim` run on the host, `claim` over what the others printed.
 
     facts   <release> <product>                 the topic, the landing, bronze and audit_checks as
                                                 JSON: offsets and counts, every snapshot's summary,
@@ -22,6 +22,9 @@ host over what they printed.
                                                 expires none of a lake minutes old). Its orphan step is
                                                 not run so: Iceberg's remove_orphan_files refuses an
                                                 older_than under 24 hours before now
+    rebuild <scenario> <rp dir> <release> <product>  on the host: scripts/rebuild.py's rebuild() against
+                                                this lake (rebuild_run says what is real and what is faked);
+                                                its JSON line
     claim   <name> <rp dir>                     one PASS or FAIL line (and INFO lines) for a claim
 Synthetic data only; never a key's value.
 """
@@ -31,7 +34,10 @@ from __future__ import annotations
 import json
 import os
 import signal
+import subprocess
 import sys
+from datetime import datetime, timezone
+from decimal import Decimal
 from pathlib import Path
 
 
@@ -196,6 +202,154 @@ def kill(when: str, release: str, argv: list[str]) -> int:
     else:
         kafka.stage = die
     return connector.main(argv)
+
+
+# --- group d: scripts/rebuild.py's own rebuild() and unlock(), on the host, against this lake ----
+
+REPO = Path(__file__).resolve().parents[2]
+# k2runs' connection on the lake's network: the release's own k2runs.connect as svc.operator, as
+# rebuild.main connects on the host; one JSON line in ([sql, params]) and one out per statement.
+HOLDS_CLIENT = """\
+import json, sys
+from datetime import datetime
+sys.path.insert(0, sys.argv[1])
+import k2runs
+conn = k2runs.connect(host="trino", port=8443, user="svc.operator", password_file="/run/k2-secrets/operator.password",
+                      ca="/run/k2-secrets/tls/ca.pem")
+for line in sys.stdin:
+    sql, params = json.loads(line)
+    try:
+        cur = conn.cursor()
+        cur.execute(sql, [datetime.fromisoformat(p["at"]) if isinstance(p, dict) else p for p in params])
+        print(json.dumps({"rows": cur.fetchall()}, default=str), flush=True)
+    except Exception as e:
+        print(json.dumps({"error": f"{type(e).__name__}: {e}"}), flush=True)
+"""
+HOLD_ROWS = ("SELECT kind, held_by, held_at, released_at, released_by "  # times as k2runs.held reads them
+             "FROM governance.run_records.holds WHERE product_id = ? ORDER BY held_at, released_at NULLS FIRST")
+
+
+class Holds:
+    """The DB-API surface k2runs uses (cursor, execute with ? parameters, fetchall), each statement
+    sent to HOLDS_CLIENT in the dbt-runner image on the lake's network: the throwaway publishes no
+    Trino port, so the host's rebuild.py reaches the real holds table through it."""
+
+    def __init__(self, argv: list[str]):
+        self.p = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+        self.rows: list = []
+
+    def cursor(self):
+        return self
+
+    def execute(self, sql: str, params=()) -> None:
+        self.p.stdin.write(json.dumps([sql, [{"at": v.isoformat()} if isinstance(v, datetime) else v for v in params]]) + "\n")
+        self.p.stdin.flush()
+        reply = json.loads(self.p.stdout.readline() or '{"error": "the holds client ended"}')
+        if "error" in reply:
+            raise RuntimeError(reply["error"])
+        self.rows = reply["rows"]
+
+    def fetchall(self) -> list:
+        return self.rows
+
+
+def rebuild_run(scenario: str, rp: Path, rid: str, product: str) -> dict:
+    """One `make rebuild` as scripts/rebuild.py's rebuild() runs it, on this lake (env P, NET, IMAGE,
+    STATE, S: run-path-lib.sh's). Real: the holds (svc.operator, the release's k2runs), bronze's
+    replace and the restage (Live's own docker exec into this lake's Spark container), and k2-dbt
+    build --full-refresh in the dbt-runner image. Faked, having no counterpart here: Airflow (a dict:
+    the DAG starts as the scenario says, and no task runs, so the drain finds none), and the
+    scheduler's oneshot.py, whose argv tests/test_rebuild.py proves: the build runs the image
+    straight, with run-path-lib.sh build's flags, BUILD_PY's command and the -rebuild name under this
+    lake's prefix. Scenarios: ct and kt, a rebuild of an unpaused DAG; fail, the same over an
+    operator's hold with the DAG paused before; locked, a rebuild lock left open (a killed rebuild),
+    then UNLOCK=1."""
+    sys.path.insert(0, str(REPO / "scripts"))
+    import rebuild as R
+    from hold import k2runs
+
+    env, by, now = os.environ, "kafka-path", datetime.now(timezone.utc)
+    p, state, secrets = env["P"], Path(env["STATE"]), Path(env["S"])
+    R.SPARK = f"{p}-spark-iceberg"
+    rel = state / "releases" / rid
+    dag = pipeline(str(rel), product)["dagId"]
+
+    def mount(src, dst):
+        return ["--mount", f"type=bind,source={src},target={dst},readonly"]
+
+    base = ["docker", "run", "--rm", "--label", f"k2.throwaway={p}", "--network", env["NET"], "--pull", "never", "--read-only",
+            "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--user", f"{os.getuid()}:{os.getgid()}"]
+    conn = Holds([*base, "-i", "--name", f"{p}-holds-{scenario}", "--memory", "256m", *mount(rel, f"/k2/releases/{rid}"),
+                  *mount(secrets / "principals/svc.operator.password", "/run/k2-secrets/operator.password"),
+                  *mount(secrets / "tls/ca.pem", "/run/k2-secrets/tls/ca.pem"),
+                  env["IMAGE"], "python", "-c", HOLDS_CLIENT, f"/k2/releases/{rid}/platform/platform/runs"])
+
+    class Throwaway(R.Live):
+        def __init__(self):
+            self.dags, self.log, self.during = {dag: scenario == "fail"}, [], []
+
+        def paused(self, dag):
+            return self.dags[dag]
+
+        def pause(self, dag):
+            self.log.append(f"pause {dag}")
+            self.dags[dag] = True
+
+        def unpause(self, dag):
+            self.log.append(f"unpause {dag}")
+            self.dags[dag] = False
+
+        def busy(self, dag):
+            return []
+
+        def running(self, name):
+            return super().running(name.replace("k2-", f"{p}-", 1))
+
+        def replace(self, release_path, statements):
+            super().replace(release_path, statements)  # then bronze and the landing as the replace left them
+            done = subprocess.run(["docker", "exec", "-i", R.SPARK, "python3", "-", "facts", release_path, product],
+                                  input=Path(__file__).read_text(), stdout=subprocess.PIPE, text=True)
+            (rp / f"facts-{scenario}-replaced.json").write_text(done.stdout.strip().splitlines()[-1] if done.stdout.strip() else "{}")
+
+        def build(self, release_path, dag, product, run):
+            b, k = pipeline(str(rel), product)["build"], json.loads((rel / "compiled/oneshots.json").read_text())["oneshots"]["dbt-runner"]
+            held = k2runs.held(conn, product)  # what the DAG's resolve task reads: it fails on anything but None
+            names = ("K2_TRINO_HOST", "K2_TRINO_INTERNAL_PORT", "K2_TRINO_USER", "K2_PUB_USER", "K2_RUNS_USER", "K2_CATALOG_URI", "K2_RELEASE")
+            argv = [*base, "--name", R.oneshot_name(dag).replace("k2-", f"{p}-", 1), "--tmpfs", "/tmp:rw,noexec,nosuid,size=64m",
+                    "--pids-limit", "256", "--cpus", k["cpus"], "--memory", k["memory"], *(x for n in names for x in ("-e", n)),
+                    *mount(rel, release_path), *mount(secrets / f"principals/{b['writer']}.password", "/run/k2-secrets/builder.password"),
+                    *mount(secrets / f"principals/{b['publisher']}.password", "/run/k2-secrets/publisher.password"),
+                    *mount(secrets / "principals/svc.runs.password", "/run/k2-secrets/runs.password"),
+                    *mount(secrets / "tls/ca.pem", "/run/k2-secrets/tls/ca.pem"),
+                    env["IMAGE"], "k2-dbt", "build", "--release", rid, "--product", product, "--run-id", run, "--full-refresh"]
+            done = subprocess.run(argv, env={**env, "K2_RELEASE": rid, "K2_TRINO_USER": b["writer"], "K2_PUB_USER": b["publisher"]},
+                                  stdout=subprocess.PIPE, text=True, errors="replace")
+            print(done.stdout, end="")
+            self.during.append({"held": held, "exit": done.returncode, "xcom": R.last_json(done.stdout)})
+            return done.returncode, R.last_json(done.stdout)
+
+    io = Throwaway()
+    if scenario == "fail":  # an operator's hold, as make hold writes it
+        k2runs.hold(conn, product, "kafka-path: an operator's hold across a rebuild", by)
+    if scenario == "locked":  # the lock a killed rebuild leaves
+        k2runs.hold(conn, product, f"make rebuild by {by}", R.BY, kind=R.LOCK)
+    out = {"run": R.run_id(dag, now), "dag": dag, "release": rid, "planted": k2runs.held(conn, product)}
+    try:
+        out["exit"] = R.rebuild(conn, rel, product, dag, by, io, now)
+    except R.Refused as e:  # refused before anything changed: rebuild.main's exit 2
+        print(f"rebuild: REFUSED: {e}", file=sys.stderr)
+        out["exit"] = 2
+    out |= {"airflow": io.log, "during": io.during, "open": k2runs.held(conn, product)}
+    if scenario == "locked":
+        out["unlock"] = R.unlock(conn, product, dag, by, io)
+        out["open_after_unlock"] = k2runs.held(conn, product)
+    if scenario == "fail":  # make unhold
+        k2runs.release(conn, product, by)
+    conn.execute(HOLD_ROWS, [product])
+    out["rows"] = conn.fetchall()
+    conn.p.stdin.close()
+    conn.p.wait()
+    return out
 
 
 # --- claims, on the host --------------------------------------------------------------------
@@ -686,7 +840,201 @@ def claim(name: str, rp: Path) -> bool:
         return say(6, "a topic trimmed before the product's first run loads, audits and publishes cleanly", bad,
                    f"log starts {earliest}; b1 landed {r.get('landed')} from them, staged {r.get('rows')}, accounting: "
                    f"{acc}; publish moved main; every offset from each log start once, bronze main = the trades")
+    if name.startswith("rebuild-"):
+        return rebuild_claim(name.removeprefix("rebuild-"), rp)
     raise SystemExit(f"kafka_path_probe.py: no claim {name}")
+
+
+# group d's claims: chain-<label>.json (run_path_probe.py chain-state, each table as its builder),
+# facts-<label>.json (facts above, kraken-trades), rebuild-<scenario>.out (rebuild_run's line)
+TRADE_KEY = ("venue", "kafka_partition", "kafka_offset", "trade_ordinal")
+WINDOW_KEY = ("venue", "instrument_id", "window_start")
+WIDTHS = ("1m", "5m", "1h", "1d")
+
+
+def keyed(rows: list, key: tuple, drop: tuple = ()) -> dict:
+    return {tuple(r[c] for c in key): {c: v for c, v in r.items() if c not in drop} for r in rows}
+
+
+def at(text: str) -> datetime:  # chain-state's timestamp in UTC (access_verify.norm's ISO 8601, or Trino's text)
+    return datetime.fromisoformat(text[:19].replace("T", " "))
+
+
+def window(ts: datetime, width: str) -> datetime:
+    return {"1m": ts.replace(second=0), "5m": ts.replace(minute=ts.minute - ts.minute % 5, second=0),
+            "1h": ts.replace(minute=0, second=0), "1d": ts.replace(hour=0, minute=0, second=0)}[width]
+
+
+def built(rp: Path, run: str, want: int = 0) -> list:
+    got = (rc(rp, f"{run}.build"), result(rp, f"{run}.build").get("exit"))
+    return [] if got == (str(want), want) else [f"{run} build exit {got[0]}, XCom exit {got[1]}, want {want}"]
+
+
+def lock_cycle(r: dict, product: str) -> list:
+    """A rebuild that placed its lock and ended: the lock open while the build ran, as `make rebuild`
+    placed it, then released by this rebuild (its release row); nothing open after."""
+    held = [d["held"] for d in r["during"]]
+    if len(held) != 1 or not held[0] or (held[0]["kind"], held[0]["held_by"]) != ("rebuild", "make rebuild"):
+        return [f"{product}: open during the build {held}, want the rebuild lock"]
+    rows = [x for x in r["rows"] if x[0] == "rebuild" and x[2] == held[0]["held_at"]]
+    bad = [] if [x[3] is None for x in rows] == [True, False] and rows[1][4] == "kafka-path" else [f"{product}: lock rows {rows}"]
+    return bad + ([f"{product}: open after {r['open']}"] if r["open"] else [])
+
+
+def rebuild_claim(name: str, rp: Path) -> bool:
+    def chain(label):
+        return load_json(rp, f"chain-{label}.json")
+
+    if name == "ct":  # d1
+        b, a, r = chain("d0"), chain("d1"), result(rp, "rebuild-ct")
+        old, new = keyed(b["canonical"]["rows"], TRADE_KEY), keyed(a["canonical"]["rows"], TRADE_KEY)
+        top = max(int(x["load_seq"]) for x in old.values())
+        seqs = [int(new[k]["load_seq"]) for k in sorted(new)]
+        bad = [] if r.get("exit") == 0 else [f"rebuild exit {r.get('exit')}"]
+        if len(a["canonical"]["rows"]) != len(b["canonical"]["rows"]) or set(new) != set(old):
+            bad.append(f"canonical {len(b['canonical']['rows'])} -> {len(a['canonical']['rows'])} rows, keys differ")
+        elif seqs != list(range(top + 1, top + 1 + len(seqs))):
+            bad.append(f"load_seq in key order {seqs}, the old maximum {top}")
+        elif any({c: v for c, v in new[k].items() if c != "load_seq"} != {c: v for c, v in old[k].items() if c != "load_seq"} for k in old):
+            bad.append("a column other than load_seq changed")
+        refs = (b["canonical"]["refs"], a["canonical"]["refs"])
+        if refs[1].get("audited") != refs[1].get("main") or refs[1].get("main") in (None, refs[0].get("main")):
+            bad.append(f"canonical refs {refs[0]} -> {refs[1]}")
+        return say(1, "through the wrapper, k2-dbt build --full-refresh renumbers canonical-trades above its old maximum",
+                   bad, f"run {r.get('run')} exit 0; {len(seqs)} rows, the same keys and columns; load_seq "
+                   f"{min(seqs, default=0)}..{max(seqs, default=0)} in key order, the old maximum {top}; main moved and "
+                   f"audited on it ({refs[0].get('main')} -> {refs[1].get('main')})")
+    if name == "candles":  # d2
+        b, ct, a = chain("d0"), chain("d1"), chain("d2")
+        top = max(int(x["load_seq"]) for x in ct["canonical"]["rows"])
+        trades = [x for x in ct["canonical"]["rows"] if not x["is_duplicate"]]
+        bad, info = built(rp, "ca-3"), []
+        for w in WIDTHS:
+            t = f"ohlcv_{w}"
+            before, after = keyed(b[t]["rows"], WINDOW_KEY, ("through_load_seq",)), keyed(a[t]["rows"], WINDOW_KEY, ("through_load_seq",))
+            mine = {}
+            for x in trades:  # this probe's own count and volume per window, over the renumbered rows
+                k = (x["venue"], x["instrument_id"], window(at(x["trade_ts"]), w))
+                n, v = mine.get(k, (0, Decimal(0)))
+                mine[k] = (n + 1, v + Decimal(x["quantity"]))
+            theirs = {(k[0], k[1], at(k[2])): (int(x["trade_count"]), Decimal(x["volume"])) for k, x in after.items()}
+            throughs = {int(x["through_load_seq"]) for x in a[t]["rows"]}
+            if after != before:
+                bad.append(f"{t}: {len(before)} -> {len(after)} rows, a value changed")
+            if theirs != mine:
+                bad.append(f"{t} (count, volume) {theirs}, the rows' own {mine}")
+            if throughs != {top}:
+                bad.append(f"{t} through_load_seq {sorted(throughs)}, canonical's maximum {top}")
+            info.append(f"{t}: {len(after)} window(s), {sum(n for n, _ in theirs.values())} trades, through_load_seq {sorted(throughs)}")
+        return say(2, "the next candles build recomputes every window from the renumbered rows: none skipped, none doubled",
+                   bad, f"ca-3 exit 0; every window of 1m, 5m, 1h and 1d rewritten (through_load_seq {top}, past the old "
+                        f"watermark), its values as before, count and volume this probe's own over {len(trades)} trades", info)
+    if name == "fail":  # d3
+        b, a, r = chain("d2"), chain("d3"), result(rp, "rebuild-fail")
+        err = (rp / "rebuild-fail.err").read_text()
+        builds = r.get("during", [])
+        bad = [] if r.get("exit") == 1 and "k2-dbt build --full-refresh exited" in err else [f"rebuild exit {r.get('exit')}: {err.strip()[-300:]}"]
+        if len(builds) != 1 or builds[0]["exit"] == 0 or builds[0]["xcom"].get("exit") in (None, 0):
+            bad.append(f"the build {builds}")
+        # the plant passes the unit tests, so the table was replaced and a data test failed on it
+        failed = [x.split(" FAIL ")[1].split()[1] for x in err.splitlines() if " FAIL " in x and " of " in x]
+        rolled = [x for x in err.splitlines() if x.startswith("k2-dbt: rollback ") and "canonical_trades__base.trades" in x]
+        if not failed or not all(f.startswith("k2_unique_key_canonical_trades__trades") for f in failed) or not rolled:
+            bad.append(f"failed nodes {failed}, rollback lines {rolled}: no data test failed after the replace")
+        refs = (b["canonical"]["refs"], a["canonical"]["refs"])
+        if refs[1].get("audited") != refs[0].get("audited") or refs[1].get("main") != refs[1].get("audited"):
+            bad.append(f"canonical refs {refs[0]} -> {refs[1]}")
+        if sorted(map(json.dumps, a["canonical"]["rows"])) != sorted(map(json.dumps, b["canonical"]["rows"])):
+            bad.append("canonical's rows changed")
+        planted, open_ = r.get("planted") or {}, r.get("open") or {}
+        if (planted.get("kind"), open_.get("kind"), open_.get("held_at")) != ("operator", "operator", planted.get("held_at")):
+            bad.append(f"the operator's hold {planted} -> {open_}")
+        lock = [d["held"] for d in builds if d["held"]]
+        rows = [x for x in r["rows"] if x[0] == "rebuild" and lock and x[2] == lock[0]["held_at"]]
+        if not lock or lock[0]["kind"] != "rebuild" or [x[3] is None for x in rows] != [True, False]:
+            bad.append(f"the lock {lock}, its rows {rows}")
+        if r.get("airflow"):
+            bad.append(f"Airflow {r['airflow']} on a DAG paused before")
+        return say(3, "a full refresh whose data test fails after the replace leaves the tag where it was; rebuild releases its own lock only",
+                   bad, f"exit 1 on release {r.get('release')}: the build exit "
+                        f"{builds[0]['exit'] if builds else '?'}, XCom {builds[0]['xcom'] if builds else '?'}; canonical's audited "
+                        f"{refs[1].get('audited')} unmoved, main back on it, every row as before; its lock released, the "
+                        "operator's hold still open after it, the DAG (paused before) never unpaused",
+                   [f"failed {', '.join(failed)}", *(x[:200] for x in rolled)])
+    if name == "locked":  # d4
+        r = result(rp, "rebuild-locked")
+        planted = r.get("planted") or {}
+        bad = [] if r.get("exit") == 2 else [f"rebuild exit {r.get('exit')}"]
+        if (planted.get("kind"), planted.get("held_by")) != ("rebuild", "make rebuild") or r.get("open") != planted:
+            bad.append(f"the open lock {planted} -> {r.get('open')}")
+        if r.get("airflow") or r.get("during"):
+            bad.append(f"it still acted: Airflow {r.get('airflow')}, builds {r.get('during')}")
+        if r.get("unlock") != 0 or r.get("open_after_unlock") is not None:
+            bad.append(f"UNLOCK=1 exit {r.get('unlock')}, open after {r.get('open_after_unlock')}")
+        return say(4, "a rebuild lock already open refuses the rebuild and is left open; UNLOCK=1 ends it", bad,
+                   "exit 2 before any pause or build, the lock as found; unlock() exit 0 with no -rebuild container running, "
+                   "nothing open after")
+    if name == "replace":  # d5
+        f, g = load_json(rp, "facts-d0.json"), load_json(rp, "facts-kt-replaced.json")
+        bad = [] if g.get("bronze") else ["no facts after the replace"]
+        if bad:
+            return say(5, "Spark's CREATE OR REPLACE TABLE leaves bronze with no main and no audit", bad, "")
+        gb, fb = g["bronze"], f["bronze"]
+        if gb["refs"]:
+            bad.append(f"bronze refs after the replace {gb['refs']}")
+        if not {s[0] for s in fb["snapshots"]} <= {s[0] for s in gb["snapshots"]}:
+            bad.append("a snapshot of bronze's history went")
+        if gb["columns"] != fb["columns"]:
+            bad.append(f"columns {gb['columns']}")
+        if (g["landing"]["refs"], g["landing"]["snapshots"]) != (f["landing"]["refs"], f["landing"]["snapshots"]):
+            bad.append("the landing changed")
+        return say(5, "Spark's CREATE OR REPLACE TABLE (no AS SELECT) leaves bronze with no main and no audit", bad,
+                   f"refs {fb['refs']} -> {{}}; its {len(fb['snapshots'])} old snapshots kept ({len(gb['snapshots'])} listed), "
+                   "its columns as before; the landing untouched: main's lineage is empty, so the stage starts at the "
+                   "landing's first offset")
+    if name == "restage":  # d6
+        f, g, r = load_json(rp, "facts-d0.json"), load_json(rp, "facts-d4.json"), result(rp, "rebuild-kt")
+        sb, sa = chain("d3"), chain("d4")
+        bad = [] if r.get("exit") == 0 else [f"rebuild exit {r.get('exit')}"]
+        if g["bronze"].get("main") != f["bronze"].get("main"):
+            bad.append(f"bronze main keys {len(f['bronze'].get('main', []))} -> {len(g['bronze'].get('main', []))}")
+        if g["bronze"]["rows"].get("main") != f["bronze"]["rows"].get("main"):
+            bad.append("a bronze row's envelope or payload differs")
+        checks = sorted((c[2], c[3]) for c in g["checks"] if c[0] == r.get("run"))
+        if checks != [("accounting", True), ("keys_unique", True), ("parses", True)]:
+            bad.append(f"the restage's audit_checks {checks}")
+        bad += through_is_landing(g)
+        if g["landing"]["snapshots"] != f["landing"]["snapshots"]:
+            bad.append("the landing gained a snapshot")
+        if sorted(map(json.dumps, sa["silver_trade"]["rows"])) != sorted(map(json.dumps, sb["silver_trade"]["rows"])):
+            bad.append(f"silver_trade {len(sb['silver_trade']['rows'])} -> {len(sa['silver_trade']['rows'])} rows, or a value changed")
+        refs = (sb["silver_trade"]["refs"], sa["silver_trade"]["refs"])
+        if refs[1].get("audited") != refs[1].get("main") or refs[1].get("main") == refs[0].get("main"):
+            bad.append(f"silver_trade refs {refs[0]} -> {refs[1]}")
+        acc = next((c[4] for c in g["checks"] if c[0] == r.get("run") and c[2] == "accounting"), "")
+        return say(6, "a Kafka product's restage from the whole landing gives bronze equal to before, audited", bad,
+                   f"run {r.get('run')} exit 0; bronze main {len(g['bronze'].get('main', []))} rows, the same keys, envelope and "
+                   f"payload; accounting: {acc}; through-offsets = landing ends, nothing re-landed; silver_trade rebuilt "
+                   f"(--full-refresh) to the same {len(sa['silver_trade']['rows'])} rows")
+    if name == "downstream":  # d7
+        b, a = chain("d3"), chain("d5")
+        moved = [t for t in ("canonical", *(f"ohlcv_{w}" for w in WIDTHS))
+                 if sorted(map(json.dumps, a[t]["rows"])) != sorted(map(json.dumps, b[t]["rows"]))]
+        bad = built(rp, "ct-4") + built(rp, "ca-4") + ([f"changed: {moved}"] if moved else [])
+        return say(7, "after a venue's rebuild canonical-trades and candles build and change nothing", bad,
+                   "ct-4 and ca-4 exit 0; canonical and every candle table row for row as before (load_seq included)")
+    if name == "holds":  # d8
+        bad = []
+        for scenario, product in (("ct", "market-analytics.canonical-trades"), ("kt", "market-capture.kraken-trades")):
+            r = result(rp, f"rebuild-{scenario}")
+            bad += lock_cycle(r, product)
+            if r.get("airflow") != [f"pause {r.get('dag')}", f"unpause {r.get('dag')}"]:
+                bad.append(f"{product}: Airflow {r.get('airflow')}")
+        return say(8, "a rebuild places its lock and releases it, and unpauses only the DAG it paused", bad,
+                   "canonical-trades and kraken-trades: the rebuild lock (held_by make rebuild) open while each build ran, "
+                   "where the DAG's resolve reads it, then its release row (released_by kafka-path), nothing open after; "
+                   "the DAG paused and unpaused by the rebuild (claims 3 and 4 hold the paused and the refused cases)")
+    raise SystemExit(f"kafka_path_probe.py: no claim rebuild-{name}")
 
 
 if __name__ == "__main__":
@@ -701,6 +1049,8 @@ if __name__ == "__main__":
         sys.exit(expire(args[0], args[1], int(args[2])))
     elif cmd == "kill":
         sys.exit(kill(args[0], args[1], args[2:]))
+    elif cmd == "rebuild":
+        print(json.dumps(rebuild_run(args[0], Path(args[1]), args[2], args[3]), default=str))
     elif cmd == "claim":
         sys.exit(0 if claim(args[0], Path(args[1])) else 1)
     else:
