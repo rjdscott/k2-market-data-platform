@@ -1,3 +1,5 @@
-# Owner-only: no table offers a role, so only the owning team and the platform read it. A grant
-# outside reference-data-team waits for the publisher's terms (ADR-055 part 5).
+# Owner-only: currency offers full_reader (so security-master's asset may offer it too) and nobody
+# holds it, so only the owning team and the platform read it. A grant outside reference-data-team
+# waits for the publisher's terms (ADR-055 part 5), which are not established (the product's
+# limitations).
 grants: []

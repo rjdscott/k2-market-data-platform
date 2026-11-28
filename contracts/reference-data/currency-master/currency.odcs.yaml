@@ -2,7 +2,7 @@ apiVersion: v3.2.0
 kind: DataContract
 id: reference-data.currency-master.currency
 name: currency
-version: 1.0.0
+version: 1.1.0
 domain: reference-data
 description:
   purpose: >-
@@ -37,6 +37,9 @@ schema:
         physicalType: boolean
         required: true
         description: True when the list marks the entry a fund, not a circulating currency.
+roles:
+  - role: full_reader  # offered so security-master's asset may offer it; held by nobody (grants.yaml)
+    access: read
 customProperties:
   - property: layer
     value: silver

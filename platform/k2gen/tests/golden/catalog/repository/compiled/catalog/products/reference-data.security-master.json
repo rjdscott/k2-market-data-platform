@@ -2,7 +2,7 @@
   "id": "reference-data.security-master",
   "name": "security-master",
   "domain": "reference-data",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "status": "active",
   "type": "sourceAligned",
   "owner": "reference-data-team",
@@ -36,7 +36,7 @@
       "testedRef": "audited",
       "contractFile": "documents/contracts/reference-data/security-master/asset.odcs.yaml",
       "layer": "gold",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "purpose": "One row per canonical asset code that a published instrument buys or is priced in, with its kind and when a listing first showed it. No history: an asset's code and kind do not change.",
       "columns": [
         {
@@ -71,7 +71,12 @@
           "description": "Every asset is fiat, stablecoin or crypto."
         }
       ],
-      "roles": [],
+      "roles": [
+        {
+          "role": "full_reader",
+          "inWords": "every row and column"
+        }
+      ],
       "readers": [],
       "dbtDocs": "dbt-docs/#!/model/model.k2.security_master__asset"
     },

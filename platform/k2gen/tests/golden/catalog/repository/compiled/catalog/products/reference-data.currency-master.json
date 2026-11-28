@@ -2,12 +2,12 @@
   "id": "reference-data.currency-master",
   "name": "currency-master",
   "domain": "reference-data",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "status": "active",
   "type": "sourceAligned",
   "owner": "reference-data-team",
   "purpose": "The currencies of ISO 4217, one row per alphabetic code with its numeric code, name, minor units and whether it is a fund, from the list SIX Group publishes as the standard's maintenance agency. The reference other products check currency codes against.",
-  "limitations": "The publisher's terms of reuse are not yet recorded here: the owner confirms them before any grant outside the owning team (k2gen check refuses such a grant while no terms are recorded). A code stays in currency once any landed list has held it; the list carries no withdrawal date the parser reads. A published code whose values change in a later list fails the bronze audit (values_unchanged), which holds every later file until someone looks.",
+  "limitations": "The publisher's terms of reuse are not established, so none is recorded. Read on 2026-11-28: SIX's data standards page (https://www.six-group.com/en/products-services/financial-information/market-reference-data/data-standards.html) says the code lists are made \"available online and free of charge\"; SIX's website terms of use (https://www.six-group.com/en/services/legal/terms-and-conditions/terms-of-use.html) restrict reproducing or reusing the site's content and its commercial use; no page read states a licence or a redistribution rule for the ISO 4217 lists themselves. currency offers full_reader and nobody holds it: while no terms property is recorded, k2gen check (docs.terms-missing) refuses a grant outside reference-data-team on this product and on every product that reads it through input ports, directly or through others (security-master, and through it kraken-trades, canonical-trades and candles), until the owner confirms the terms. A code stays in currency once any landed list has held it; the list carries no withdrawal date the parser reads. A published code whose values change in a later list fails the bronze audit (values_unchanged), which holds every later file until someone looks.",
   "usage": "Read reference_data.currency_master.currency; join on code. numeric_code is a string, since its leading zeros are part of it (008).",
   "issued": "2026-01-01T00:00:00Z",
   "periodicity": "0 5 * * 1",
@@ -83,7 +83,7 @@
       "testedRef": "audited",
       "contractFile": "documents/contracts/reference-data/currency-master/currency.odcs.yaml",
       "layer": "silver",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "purpose": "One row per ISO 4217 alphabetic currency code that any landed list has held, with its numeric code, name, minor units and fund flag.",
       "columns": [
         {
@@ -124,7 +124,12 @@
         }
       ],
       "retentionDays": null,
-      "roles": [],
+      "roles": [
+        {
+          "role": "full_reader",
+          "inWords": "every row and column"
+        }
+      ],
       "readers": [],
       "dbtDocs": "dbt-docs/#!/model/model.k2.currency_master__currency"
     }
