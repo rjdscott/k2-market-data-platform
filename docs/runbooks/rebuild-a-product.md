@@ -71,8 +71,8 @@ release, a table damaged by hand, or a rebuild table a restore recreated empty.
 4. **unlock**: the lock released only if step 1 placed it; the DAG unpaused only if step 1 paused it
    and no other hold is open.
 
-The run id is `<dag>/rebuild__<UTC start, ISO 8601>`; the restage's bronze commit, its `audit_checks`
-rows and the build's run records carry it.
+The run id is `<dag>/rebuild__<the UTC start, to the second>`; the restage's bronze commit, its
+`audit_checks` rows and the build's run records carry it.
 
 `canonical-trades` numbers the rows of a full refresh after the highest `load_seq` the table held
 (`contracts/market-analytics/canonical-trades/models/trades.sql`, its header), so `candles`' next
