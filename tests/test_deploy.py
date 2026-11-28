@@ -109,6 +109,8 @@ def inspect(c):
             "Config": {"Labels": {"com.docker.compose.project": "k2", "com.docker.compose.service": c["service"]}},
             "State": {"Status": c["status"], "Running": c["status"] == "running", "Restarting": False, "ExitCode": 0}}
 if A[:2] == ["ps", "-aq"]:
+    # compose's own containers only: a `docker run` of an image compose built carries its project label
+    if "label=com.docker.compose.config-hash" not in A: sys.exit("ps: no config-hash filter")
     print("\n".join(c["id"] for c in S["containers"])); sys.exit(0)
 if A[0] == "inspect":
     print(json.dumps([inspect(c) for c in S["containers"] if c["id"] in A[1:]])); sys.exit(0)
