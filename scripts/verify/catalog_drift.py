@@ -34,7 +34,7 @@ container (scripts/lib/throwaway-lake.sh py).
   <domain>_build.<fence>__base.<table>), so a tag moved by anyone but a recorded publish is named.
   drift() is given that reader by the dbt wrapper's reconcile (docker/dbt-runner/k2_dbt.py), which
   checks its own product's namespaces only (drift's `only`: a product running beside it is
-  mid-change for a moment); run without one, as the CLI is, each tag prints a SKIP line saying so,
+  mid-change for a moment), and the CLI's --runs gives one as svc.runs (runs_reader); run without one, each tag prints a SKIP line saying so,
   never a pass, and every namespace of the release is checked.
 
 --left-by names a release deployed or attempted since the one that is live (scripts/deploy.py's
@@ -467,6 +467,16 @@ def drift(uri: str, want: dict[str, Any], newest_audited: Callable[[str], int | 
     return found
 
 
+def runs_reader(password_file: str = "/run/k2-secrets/runs.password",
+                ca: str = "/run/k2-secrets/tls/ca.pem") -> Callable[[str], int | None]:
+    """--runs: newest_audited as svc.runs (k2runs, platform/runs beside scripts/ in the tools image),
+    on $K2_TRINO_HOST:$K2_TRINO_INTERNAL_PORT, so each tag is held to its run records (audit MED 19)."""
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "platform" / "runs"))
+    import k2runs
+    conn = k2runs.connect(user=os.environ.get("K2_RUNS_USER", "svc.runs"), password_file=password_file, ca=ca)
+    return lambda table: k2runs.newest_audited(conn, table)
+
+
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--release", required=True, type=Path, help="a compiled release directory (a pointer resolves once)")
@@ -474,11 +484,14 @@ def main(argv: list[str]) -> int:
                     f"(repeatable; default ${LEFT_ENV}, comma-separated)")
     ap.add_argument("--catalog", default=os.environ.get("K2_CATALOG_URI", CATALOG_URI), help="the catalog's REST root, .../catalog")
     ap.add_argument("--out", type=Path, help="write the JSON result here")
+    ap.add_argument("--runs", action="store_true", help="hold each audited tag to its newest audited run record, read as "
+                    "svc.runs ($K2_TRINO_HOST, $K2_TRINO_INTERNAL_PORT, /run/k2-secrets/runs.password); without it each tag is a SKIP line")
     a = ap.parse_args(argv)
     release = a.release.resolve()
     result: dict[str, Any] = {"release": release.name, "catalog": a.catalog, "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
     try:
-        found = drift(a.catalog, expected(release), left=None if a.left_by is None else [left_by(p.resolve()) for p in a.left_by])
+        found = drift(a.catalog, expected(release), newest_audited=runs_reader() if a.runs else None,
+                      left=None if a.left_by is None else [left_by(p.resolve()) for p in a.left_by])
     except Unreachable as e:
         print(f"catalog_drift: the catalog is unreachable at {a.catalog}: {e}", file=sys.stderr)
         found, result["error"] = {"differences": [], "pending": [], "skipped": [], "left": []}, f"unreachable: {e}"

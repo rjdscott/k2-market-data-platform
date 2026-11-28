@@ -28,6 +28,7 @@ echoing (so it lands in no shell history) and prints the entry to paste into
 TERMS. Nothing prints an existing term.
 """
 
+import codecs
 import getpass
 import hashlib
 import json
@@ -179,8 +180,8 @@ def seed_declared(tracked: dict[str, bytes], path: str) -> bool:
 
 
 def binary(head: bytes) -> bool:
-    try:
-        text = head.decode("utf-8")
+    try:  # incremental: a character the 64 KiB head cuts in two is text, not a binary byte
+        text = codecs.getincrementaldecoder("utf-8")().decode(head)
     except UnicodeDecodeError:
         return True
     return any(c < "\t" or "\r" < c < " " for c in text)
