@@ -1080,11 +1080,11 @@ sys.exit(f"fake docker: no answer for {A}")
     def test_preflight_refuses_while_a_principal_the_live_suite_logs_in_as_has_no_password_file(world: World) -> None:
         """svc.operator's rows run on live (its host-held login is the platform operator's), so its file is
         asked before anything moves, not failed by the live suite after the swap; a partner's rows are skipped
-        there (access_verify.OWNER_HELD), so its file is never asked."""
+        there (`kind: partner`, access_verify.partners), so its file is never asked."""
         principals = "contracts/access/principals.yaml"
         rows = ('  - {principal: svc.operator, sql: "SELECT 1", expect: ok}\n'
                 '  - {principal: svc.partner-dashboard, sql: "SELECT 1", expect: denied}\n')
-        declared = "".join(f"  - id: {x}\n    kind: service\n    owner: platform-team\n" for x in ("svc.operator", "svc.partner-dashboard"))
+        declared = "".join(f"  - id: {x}\n    kind: {k}\n    owner: platform-team\n" for x, k in (("svc.operator", "service"), ("svc.partner-dashboard", "partner")))
         world.live(world.release())
         r1 = world.release(over={EXPECT: (GOOD / EXPECT).read_bytes() + rows.encode(),
                                  principals: (GOOD / principals).read_bytes() + declared.encode()})

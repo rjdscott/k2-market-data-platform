@@ -111,6 +111,9 @@ each named below.
   drift.
 - `docs.terms-missing` holds a grant outside the owning team to terms on every product upstream, not
   only the product granted.
+- Principal kind `partner`, another organisation's service whose credential the platform never holds:
+  `svc.partner-dashboard` is one; it holds only the reader roles its grants give, a grant to it always
+  needs terms, the live access suite skips its rows by kind, and `make password TO_FILE=1` refuses it.
 - A delayed reader never sees a delivery or build counter.
 
 ### Fixed

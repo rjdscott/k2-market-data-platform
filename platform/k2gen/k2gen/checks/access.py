@@ -34,7 +34,9 @@ principal the platform's patterns match (`model.PIPELINE_PRINCIPALS`, `BUILD_CAT
 `READER_CATALOG_ALL`, `READER_NAMESPACE_OWNERS`, `RETENTION_PROPERTY_PRINCIPALS`, `REFS_READERS`):
 those hold writer rights, CALL or the statistics property (`access.grant-to-platform`). And no
 declared principal falls under a platform pattern by accident: `dbt_<x>` and `pub_<x>` match
-`dbt_.*` and `pub_.*`, so `<x>` must be a product's fence (`access.principal-collides`).
+`dbt_.*` and `pub_.*`, so `<x>` must be a product's fence, and a partner (`kind: partner`, another
+organisation's service) matches none of the platform's patterns, so it holds only the reader roles
+its grants give it (`access.principal-collides`).
 
 **Inheritance: "at least as strict".** For an output O, a role R that O offers, and each input I
 that O derives from (the contracts its output port lists in `inputContracts`, a sibling table of
@@ -173,7 +175,9 @@ def _platform(principal: str) -> bool:
 def check(docs: DocumentSet, previous: DocumentSet | None) -> list[Finding]:
     parsed = {p: model.parse(p, b) for p, b in docs.documents.items() if model.document_kind(p) in _KINDS}
     roles: dict[str, Any] = parsed.get(model.ROLES, {}).get("roles", {})
-    principals = [p["id"] for p in parsed.get(model.PRINCIPALS, {}).get("principals", [])]
+    declared = parsed.get(model.PRINCIPALS, {}).get("principals", [])
+    principals = [p["id"] for p in declared]
+    partners = {p["id"] for p in declared if p["kind"] == "partner"}
     rows: list[dict[str, Any]] = parsed.get(model.EXPECTATIONS, {}).get("expectations", [])
     products: dict[str, _Product] = {}
     for path, doc in parsed.items():
@@ -187,12 +191,12 @@ def check(docs: DocumentSet, previous: DocumentSet | None) -> list[Finding]:
             product.tables[path] = doc
         elif product and model.document_kind(path) == "grants":
             product.grants = list(doc.get("grants", []))
-    return [*_declarations(roles, principals, products), *_grants(roles, principals, products),
+    return [*_declarations(roles, principals, partners, products), *_grants(roles, principals, products),
             *_deprecated(products, previous), *_inheritance(roles, products, docs.documents),
             *_coverage(principals, products, rows)]
 
 
-def _declarations(roles: dict[str, Any], principals: list[str], products: dict[str, _Product]) -> list[Finding]:
+def _declarations(roles: dict[str, Any], principals: list[str], partners: set[str], products: dict[str, _Product]) -> list[Finding]:
     out = [_err("principal-duplicate", model.PRINCIPALS, f"principal {p} is declared {principals.count(p)} times; declare it once")
            for p in sorted({p for p in principals if principals.count(p) > 1})]
     out += _role_order(roles)
@@ -204,6 +208,12 @@ def _declarations(roles: dict[str, Any], principals: list[str], products: dict[s
                                 f"{p} matches the platform pattern {prefix}.*, which every {what} has (builder, publisher and "
                                 f"pipeline rights in Trino's rules), but no product has fence {p.removeprefix(prefix)}; "
                                 f"name a consumer p.<name> or svc.<name>"))
+    for p in sorted(partners):
+        if _platform(p):
+            out.append(_err("principal-collides", model.PRINCIPALS,
+                            f"{p} is a partner, and its id matches the platform's patterns in k2gen.model, which give writer "
+                            f"rights, CALL or the statistics property; a partner holds only the reader roles its grants give it, "
+                            f"so give it a svc.<name> of its own"))
     for product in products.values():
         for path, t in product.tables.items():
             columns = {c["name"] for c in _columns(t)}

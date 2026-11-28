@@ -684,3 +684,13 @@ that leaks: `public_reader` within `full_reader` would let an output offer data 
 take it off the platform over an input that offered it only inside. An internal role within
 `public_reader` is allowed: the output is held to that role's policy on the public input, and
 nothing leaves.
+
+2026-11-28, principal kind `partner` (owner's decision): `contracts/access/principals.yaml` may
+declare `kind: partner` (additive, `k2-v2.schema.json#/$defs/principals`, `model.PrincipalKind`),
+another organisation's service under a `svc.` id, whose credential the platform never holds.
+`svc.partner-dashboard` is one, its id kept. A partner's id matches none of the platform's patterns
+(`access.principal-collides`; `emit/trino_rules.py` refuses it too), so it holds only the reader
+roles its grants give; a grant to it is outside every team, so `docs.terms-missing` applies, upstream
+included; the live access suite skips its rows by kind (`access_verify.partners`), so deploy's
+preflight asks no password file for it; `make password TO_FILE=1` refuses it. The compiled rules and
+groups do not change: a partner is a reader by its grants, as a person is.
