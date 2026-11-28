@@ -6,11 +6,15 @@ profile `hot-gold` ([ADR-057](../adr/ADR-057-clickhouse-hot-tier-paused-during-p
 runs, and [pause-and-resume-a-serving-product.md](./pause-and-resume-a-serving-product.md) is how it is paused and started.
 The v3 lake ingest pipeline is retired and archived in
 [`legacy/v3-lake-ingest/`](../../legacy/v3-lake-ingest/) with its runbooks
-([ADR-056](../adr/ADR-056-unified-data-product-platform.md)): no live crypto data reaches the lake
-until [phase 004](../plans/2026-11-26-unified-product-platform/004-kraken-trades-instruments-security-master.md)
-of the unified platform plan, and the captures keep writing to Redpanda meanwhile. What the lake
-receives since [phase 002](../plans/2026-11-26-unified-product-platform/002-run-spine-through-ecb-fx.md)
-is the file products, one DAG each: the ISO 4217 currency list, the TARGET calendar and the ECB
+([ADR-056](../adr/ADR-056-unified-data-product-platform.md)). Crypto data reaches the lake again as
+products since [phase 004](../plans/2026-11-26-unified-product-platform/004-kraken-trades-instruments-security-master.md)
+of the unified platform plan, live as the release candidate `v3.0.0-alpha.6-rc.1` since 2026-11-28:
+`kraken-trades` lands Kraken's raw topic every five minutes, `kraken-instruments` fetches Kraken's
+public instrument list hourly, the security master is built from it, and `canonical-trades` and
+`candles` from the trades.
+Binance's and Coinbase's captures still write to Redpanda only. Since
+[phase 002](../plans/2026-11-26-unified-product-platform/002-run-spine-through-ecb-fx.md) the lake also
+receives the file products, one DAG each: the ISO 4217 currency list, the TARGET calendar and the ECB
 reference rates. Runbooks record
 *how*; ADRs record *why* (`../adr/`). Every Prometheus alert annotation points at one of
 these; start from the alert that fired, or from the "when to use" column below. Day-to-day
@@ -164,6 +168,10 @@ Then:
   [connector-failure.md](./connector-failure.md) for `fetch`,
   [file-source-audit-failed.md](./file-source-audit-failed.md) for `load` and `audit`; any other task
   → [airflow-scheduling.md](./airflow-scheduling.md)
+- **A Kafka product's DAG** (`kraken_trades`: `ProductRunFailed_<dag>`, or `AirflowTaskFailed` on
+  `load` or `audit`) → [accept-data-loss.md](./accept-data-loss.md) when `load` says `below the log
+  start`, [kafka-batch-blocked.md](./kafka-batch-blocked.md) when `audit` failed or `load` was refused
+  behind a failed batch; then [verify-a-kafka-product.md](./verify-a-kafka-product.md)
 - **Hot tier affected** (no trades arriving, ClickHouse down), only while the `hot-gold`
   profile runs: ClickHouse is paused (ADR-057), and a stopped one is the paused state, not an
   incident → [failure-recovery.md](./failure-recovery.md)
@@ -171,11 +179,16 @@ Then:
   [failure-recovery.md](./failure-recovery.md) §5 for MinIO; for either, `docker logs --tail 100
   k2-<service>` first
 
-Until phase 004 the lake receives no crypto data and the hot tier is paused, so **Redpanda holds
-the only copy** of what the captures record: 48 h or 2 GiB per partition on the `raw.*` topics, 7 days on
-`trades.*` and `book.*` ([`docker/redpanda/init.sh`](../../docker/redpanda/init.sh)). A capture or
-broker failure is therefore the one that loses data, and it goes first. When phase 004's first
-product runs it starts at the start of the log; nothing older is recovered.
+The hot tier is paused and only Kraken's raw topic is read into the lake, so for Binance and
+Coinbase **Redpanda holds the only copy** of what the captures record: 48 h or 2 GiB per partition on
+the `raw.*` topics, 7 days on `trades.*` and `book.*`
+([`docker/redpanda/init.sh`](../../docker/redpanda/init.sh)). A Kraken record is kept once
+`kraken-trades`' landing commits it (the landing is never expired,
+[ADR-063](../adr/ADR-063-kafka-product-landing-per-product-bronze-staged-by-offset.md)); one the broker
+deletes first, while the DAG is paused, held or failing for longer than the topic keeps it, is lost,
+and the next run refuses loudly ([accept-data-loss.md](./accept-data-loss.md)). A capture or broker
+failure is therefore the one that loses data, and it goes first. `kraken-trades`' first run started at
+the log start (`startFrom: earliest-retained`); nothing older is recovered.
 
 ## Escalation
 
@@ -184,7 +197,7 @@ product runs it starts at the start of the log; nothing older is recovered.
 | Recovery not achieved within the runbook's MTTR + 30 min | Escalate to the platform owner |
 | Root cause is a code bug | Open an issue, link the runbook section that failed |
 | More than 3 occurrences in 24 h | Stop restarting; find the cause |
-| Data loss suspected | Escalate immediately. With no crypto data in the lake and the hot tier paused there is no second store to reconcile against: bound the window from the capture metrics ([capture-sequence-gaps.md](./capture-sequence-gaps.md)) and record it, as the capture runbooks' "Record the gap" says, before taking any destructive action |
+| Data loss suspected | Escalate immediately. For Binance and Coinbase there is no second store to reconcile against (the hot tier paused, nothing in the lake); for Kraken, `make product-verify PRODUCT=market-capture/kraken-trades` says whether the lake holds every offset it read ([verify-a-kafka-product.md](./verify-a-kafka-product.md)). Bound the window from the capture metrics ([capture-sequence-gaps.md](./capture-sequence-gaps.md)) and record it, as the capture runbooks' "Record the gap" says, before taking any destructive action |
 
 ## Archived v2 Kotlin runbooks
 

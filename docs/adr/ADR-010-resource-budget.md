@@ -813,7 +813,7 @@ and spills past that to `/tmp`, and Python, the CSV it writes and the Iceberg, A
 extensions' code need the rest. At 256M the extensions alone leave nothing to work in. The figure is
 an engineering bound, not a measurement: the first live `make parity-silver` (W2-28) measures its
 peak (`docker stats`), and the limit moves if that peak passes 75% of 2G or the run is killed. On a
-throwaway lake (`bash scripts/verify/duckdb-landing.sh`, 2026-11-29) the largest cgroup `memory.peak` of a
+throwaway lake (`bash scripts/verify/duckdb-landing.sh`, 2026-11-28) the largest cgroup `memory.peak` of a
 parity run was 105 MiB over 1,189 landing rows: the fixed cost of Python, DuckDB and its extensions, not a
 sizing. No
 default-profile limit changes, so the gated peak and its headroom are unchanged; only the `tools`
