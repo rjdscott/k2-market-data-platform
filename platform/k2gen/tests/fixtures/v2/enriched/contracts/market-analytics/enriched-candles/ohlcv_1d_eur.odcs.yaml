@@ -1,0 +1,80 @@
+apiVersion: v3.2.0
+kind: DataContract
+id: market-analytics.enriched-candles.ohlcv_1d_eur
+name: ohlcv_1d_eur
+version: 1.0.0
+domain: market-analytics
+description:
+  purpose: A fixture only, one row per venue, instrument and UTC day, its close in euros.
+team:
+  name: analytics-team
+schema:
+  - id: ohlcv_1d_eur
+    name: ohlcv_1d_eur
+    physicalName: enriched_candles.ohlcv_1d_eur
+    physicalType: table
+    properties:
+      - name: venue
+        physicalType: varchar
+        transformSourceObjects: [market-analytics.candles.ohlcv_1d.venue]
+        required: true
+        primaryKey: true
+        primaryKeyPosition: 1
+        description: The venue the candle's trades happened on.
+      - name: instrument_id
+        physicalType: varchar
+        transformSourceObjects: [market-analytics.candles.ohlcv_1d.instrument_id]
+        required: true
+        primaryKey: true
+        primaryKeyPosition: 2
+        description: The instrument, as the security master named it at window_end.
+        relationships:
+          - type: foreignKey
+            to: reference-data/security-master/instrument.odcs.yaml#/schema/instrument/properties/instrument_id
+            customProperties:
+              - {property: asOf, value: valid}
+              - {property: asOfColumn, value: window_end}
+      - name: window_start
+        physicalType: timestamp(6) with time zone
+        transformSourceObjects: [market-analytics.candles.ohlcv_1d.window_start]
+        required: true
+        primaryKey: true
+        primaryKeyPosition: 3
+        description: The window's start, UTC midnight.
+      - name: window_end
+        physicalType: timestamp(6) with time zone
+        transformSourceObjects: [market-analytics.candles.ohlcv_1d.window_end]
+        required: true
+        description: The window's end, the next UTC midnight.
+      - name: quote_currency
+        physicalType: varchar
+        transformSourceObjects: [reference-data.security-master.instrument.quote_asset]
+        description: The instrument's quote asset, as an ISO 4217 code.
+        relationships:
+          - type: foreignKey
+            to: fx-reference/ecb-fx-rates/gold_eur_rates_daily.odcs.yaml#/schema/gold_eur_rates_daily/properties/currency
+      - name: close_eur
+        physicalType: decimal(38,18)
+        transformSourceObjects: [market-analytics.candles.ohlcv_1d.close, fx-reference.ecb-fx-rates.gold_eur_rates_daily.rate]
+        description: The close divided by the rate, null where no rate is known.
+      - name: rate_missing
+        physicalType: boolean
+        transformSourceObjects: [fx-reference.ecb-fx-rates.gold_eur_rates_daily.rate]
+        required: true
+        description: True where no rate for the quote currency was known at window_end.
+roles:
+  - role: full_reader
+    access: read
+  - role: delayed_reader
+    access: read
+customProperties:
+  - property: layer
+    value: gold
+  - property: build
+    value: dbt
+  - property: backup
+    value: rebuild
+  - property: policies
+    value:
+      delayed_reader:
+        delay: {column: window_end, minutes: 20}

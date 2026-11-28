@@ -255,6 +255,7 @@ import access_verify as av
 from k2gen import model
 good = Path("platform/k2gen/tests/fixtures/v2/good")
 docs = {p.relative_to(good).as_posix(): p.read_bytes() for p in sorted(good.rglob("*")) if p.is_file()}
+docs["contracts/access/principals.yaml"] += b"  - id: svc.partner-x\n    kind: partner\n    owner: insight-team\n"
 prov = model.Provenance("git", "v0.0.0-test", "0" * 40, "t <t@example.org>", "2026-11-27T00:00:00Z", model.set_sha256(docs),
                         tuple(model.DocumentProvenance(p, hashlib.sha256(d).hexdigest(), "0" * 40, None) for p, d in docs.items()))
 m = model.load(model.DocumentSet(docs, prov))
@@ -274,14 +275,14 @@ legs = {
     "the drift row": model.DriftExpectation("catalog", "clean"),
     "a storage-key row": model.StorageKeyExpectation("tools", "k2-landing", "read", "allowed"),
     "a service's REST row": model.DeniedExpectation("svc.api", "system.runtime.queries", ("sql", "rest")),
-    "a partner's statement": model.StatementExpectation("svc.partner-dashboard", "SELECT 1", "denied", {}),
+    "a partner's statement": model.StatementExpectation("svc.partner-x", "SELECT 1", "denied", {}),
     "the operator's statement": model.StatementExpectation("svc.operator", "SELECT 1", "ok", {}),
 }
 env = {"trino": "https://t:8443", "apiKeys": "/nonexistent"}
 print(json.dumps({"skips": {k: av.live_skip(e, m) for k, e in rows.items()},
                   "legs": {k: av.legs(e, m, "live", env) for k, e in legs.items()},
                   "release": {k: av.legs(legs[k], m, "release", env) for k in ("a person's statement", "a partner's statement")},
-                  "principals": sorted(av.live_principals(SimpleNamespace(products=m.products, expectations=tuple(legs.values()))))}))
+                  "principals": sorted(av.live_principals(SimpleNamespace(products=m.products, principals=m.principals, expectations=tuple(legs.values()))))}))
 """
 
 
@@ -303,10 +304,10 @@ def test_the_live_scope_runs_only_platform_held_passwords_on_the_canary():
     # A REST leg with no key file on live is a skip of that leg alone, naming the command; its SQL leg runs.
     (sql, _), (rest, why) = legs["a service's REST row"]
     assert (sql, rest) == ("sql", "rest") and legs["a service's REST row"][0][1] is None and "make api-key PRINCIPAL=svc.api" in why
-    # A partner's service holds its own credential, as a person does (av.OWNER_HELD): skipped live with the
-    # person's reason, and run at release time, where the throwaway lake makes every principal's password.
+    # A partner's service holds its own credential, as a person does: skipped live by its kind (av.partners),
+    # with the person's reason, and run at release time, where the throwaway lake makes every principal's password.
     # The operator's host-held login is the platform's: it runs live, so deploy's preflight asks its file.
-    assert legs["a partner's statement"] == [["row", "svc.partner-dashboard's password is its owner's, not the platform's; "
+    assert legs["a partner's statement"] == [["row", "svc.partner-x's password is its owner's, not the platform's; "
                                               "its row ran on the throwaway lake at release time"]]
     assert got["release"] == {"a person's statement": [["row", None]], "a partner's statement": [["row", None]]}
     assert legs["the operator's statement"] == [["row", None]]

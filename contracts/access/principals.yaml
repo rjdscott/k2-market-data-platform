@@ -70,12 +70,13 @@ principals:
     kind: person
     owner: platform-team
     description: A named analyst reader used by the phase 003 REST checks; holds full_reader on ECB gold.
-  # A partner's reader (plan 004), a service logging in to Trino over SQL; svc.api impersonates
-  # p.* alone, so it has no REST path. It holds no role until the owner records Kraken's terms
-  # (contracts/market-capture/kraken-trades/grants.yaml), so it reaches nothing. Deploy's preflight
-  # needs no password for it (scripts/deploy.py required_secrets); the operator makes one with
-  # make password PRINCIPAL=svc.partner-dashboard when the grant lands.
+  # A partner (plan 004): another organisation's service logging in to Trino over SQL. Its
+  # credential is the partner's, never the platform's, as a person's is: the live access suite skips
+  # its rows by kind, so deploy's preflight asks no password file for it (access_verify.partners), and
+  # make password refuses TO_FILE=1 for it. svc.api impersonates p.* alone, so it has no REST path.
+  # It holds no role until the owner records Kraken's terms (contracts/market-capture/kraken-trades/
+  # grants.yaml), so it reaches nothing; a grant to a partner always needs terms (docs.terms-missing).
   - id: svc.partner-dashboard
-    kind: service
+    kind: partner
     owner: platform-team
     description: A partner dashboard's Trino login, to hold delayed_reader on kraken-trades' silver_trade once the venue's terms are recorded.

@@ -21,7 +21,10 @@ trino/, api/, api-keys/ and principals/ back to mode 700, and each file it write
   (model.password_mount), and for a test principal, a person granted a role on the access
   canary and on no other product (access_verify.platform_held), whose password the platform
   holds so that `make access-verify LIVE=1` can run its rows. A person with a grant on any
-  other product is refused: their password is theirs, printed once.
+  other product is refused: their password is theirs, printed once. So is a partner (`kind:
+  partner`, access_verify.partners), whose id is a service's: the platform never holds its
+  credential, so the operator runs it without TO_FILE=1 and hands the password, printed once, to
+  the partner, as to a person (ADR-060 part 5).
 - `api-key`: `k2_` and a 32-byte random secret, printed once on stdout, which must be a
   terminal. With TO_FILE=1 it is instead written to api-keys/<id>.key, mode 600, and printed
   nowhere: the operator's copy of a reader's key, for the access suite's REST rows
@@ -148,9 +151,9 @@ def keep_modes(root: Path) -> None:
             os.chmod(d, 0o700)
 
 
-def known() -> tuple[set[str], set[str], set[str]]:
+def known() -> tuple[set[str], set[str], set[str], set[str]]:
     """(every known principal, those k2-api may act as, the test principals whose password the
-    platform holds), from the working tree's documents."""
+    platform holds, the partners, whose credential it never holds), from the working tree's documents."""
     documents: dict[str, bytes] = {}
     for root in model.DOCUMENT_ROOTS:
         base = model.REPO / root
@@ -165,8 +168,8 @@ def known() -> tuple[set[str], set[str], set[str]]:
     callers = set(json.loads(api.emit(m)[model.API_PRINCIPALS])["principals"])
     # The live suite's own rule for whose password the platform holds, so the two cannot differ.
     sys.path.insert(0, str(Path(__file__).resolve().parent))
-    from access_verify import platform_held
-    return ids, callers, platform_held(m)
+    from access_verify import partners, platform_held
+    return ids, callers, platform_held(m), partners(m)
 
 
 def directory(path: Path) -> Path:
@@ -417,7 +420,7 @@ def remove(root: Path, principal: str) -> None:
           + (f"removed {', '.join(removed)}" if removed else "nothing to remove") + f" under {root}", file=sys.stderr)
 
 
-def status(root: Path, ids: set[str], callers: set[str], held: set[str]) -> int:
+def status(root: Path, ids: set[str], callers: set[str], held: set[str], partners: set[str]) -> int:
     """The table and its STALE and MALFORMED lines; 1 when there is any of either."""
     db, keys_file = root / PASSWORD_DB, root / API_KEYS
     db_text = db.read_text() if db.exists() else ""
@@ -433,7 +436,7 @@ def status(root: Path, ids: set[str], callers: set[str], held: set[str]) -> int:
     unmatched = {p for p, f in key_files.items() if keys.get(hashlib.sha256(f.read_text().strip().encode()).hexdigest()) != p}
     print(f"{'principal':<28} {'password':<9} {'file':<5} {'api-key':<8} key-file")
     for p in sorted(ids):
-        has_file = (root / model.password_file(p)).exists() if not p.startswith("p.") or p in held else None
+        has_file = (root / model.password_file(p)).exists() if not (p.startswith("p.") or p in partners) or p in held else None
         print(f"{p:<28} {'yes' if p in with_password else 'no':<9} "
               f"{'-' if has_file is None else 'yes' if has_file else 'no':<5} "
               f"{('yes' if p in with_key else 'no') if p in callers else '-':<8} "
@@ -473,9 +476,9 @@ def main() -> None:
     args = parser.parse_args()
     root = secrets_root()
     keep_modes(root)
-    ids, callers, held = known()
+    ids, callers, held, partners = known()
     if args.action == "status":
-        sys.exit(status(root, ids, callers, held))
+        sys.exit(status(root, ids, callers, held, partners))
     if args.action == "remove":
         if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", args.principal):
             die(f"{args.principal or 'PRINCIPAL=<id>'}: not a principal id")
@@ -488,6 +491,11 @@ def main() -> None:
     if args.principal not in ids:
         die(f"{args.principal or 'PRINCIPAL=<id>'}: not a principal contracts/access/principals.yaml declares, "
             "nor a dbt or code product's builder or publisher")
+    if args.action == "password" and args.to_file and args.principal in partners:
+        die(f"{args.principal} is a partner (contracts/access/principals.yaml): the platform never holds a partner's "
+            f"credential, so TO_FILE=1 is refused; run make password PRINCIPAL={args.principal} in a terminal and hand "
+            "the password, printed once, to the partner for their own secret store, as a person's is "
+            "(docs/runbooks/create-or-rotate-a-principal.md section 1)")
     if args.action == "api-key" and args.principal not in callers:
         die(f"{args.principal}: k2-api never acts as it (compiled/api/principals.json), so it gets no key")
     if not args.to_file and not sys.stdout.isatty():

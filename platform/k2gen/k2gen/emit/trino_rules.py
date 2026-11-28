@@ -46,6 +46,9 @@ through re.escape (Trino matches a rule's regex against the whole name), so `t` 
 - model.REFS_READERS read exactly `<table>$refs` of each lake table, at its model.input_relation;
   a publisher reads its own bases' `$refs` too, through its views' guard.
 - svc.api may impersonate the declared `p.*` principals by exact name and nobody else.
+- A partner (`kind: partner`, another organisation's service) is a reader like a person: its rights
+  are its groups' alone, from its grants, and its password is never the platform's (none is
+  compiled for anyone). A partner whose id a platform rule names is a ValueError.
 - Session properties: catalog ones only for svc.platform (any) and the other pipeline principals
   (model.STATISTICS_PROPERTY only); system ones only for pipeline principals.
 - The release canary model.canary_user may execute a query and reach nothing, so `SELECT 1` as it
@@ -253,6 +256,9 @@ def emit(model: Model) -> dict[str, str]:
         reach(reader_catalog(d), OPERATOR, "read-only")
     reach(LAKE, OPERATOR, "read-only")
 
+    for x in model.principals:
+        if x.kind == "partner" and _NOT_A_READER.fullmatch(x.id):
+            raise ValueError(f"{x.id} is a partner and a platform principal; a partner holds only the reader roles its grants give it")
     for p in sorted(_live(model), key=lambda p: p.id):
         roles: dict[str, str] = {}
         for g in p.grants:

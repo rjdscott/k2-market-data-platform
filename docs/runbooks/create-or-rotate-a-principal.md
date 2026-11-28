@@ -180,7 +180,9 @@ login_file p.canary-full
 ```
 
 A consumer service outside the platform (say a dashboard, `svc.<name>`) takes section 1's form:
-its owner stores the printed password in their own secret store.
+its owner stores the printed password in their own secret store. Declared `kind: partner` (another
+organisation's service, `svc.partner-dashboard` today), it is refused `TO_FILE=1`, since the platform
+never holds a partner's credential.
 
 **Measured**, 2026-11-26: four service passwords made at once, by four concurrent runs, gave
 four well-formed lines, each the hash of the password its file holds. Later that day on

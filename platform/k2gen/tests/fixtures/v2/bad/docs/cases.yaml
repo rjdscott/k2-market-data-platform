@@ -157,9 +157,42 @@ cases:
     changes:  # a seed named as a dbt table of the product: both would be station_readings__silver_readings
       - {file: contracts/sensor-net/station-readings/product.odps.yaml, set: customProperties/4, value: {property: seeds, value: [{path: seeds/silver_readings.csv, synthetic: true}]}}
       - {file: contracts/sensor-net/station-readings/seeds/silver_readings.csv, text: "station_id\ns-1\n"}
+  # relationships (plan 005): gold_daily_load.station_id is a key into silver_readings.station_id
   - code: docs.reference-unresolved
+    changes:  # a key into a product the set does not have
+      - {file: contracts/ops-insight/daily-load/gold_daily_load.odcs.yaml, set: schema/0/properties/1/relationships/0/to, value: "sensor-net/station-logs/silver_readings.odcs.yaml#/schema/silver_readings/properties/station_id"}
+  - code: docs.relationship-retired
+    changes:  # plan 005's exit fixture: a reference to a retired product
+      - {file: contracts/sensor-net/station-readings/product.odps.yaml, set: status, value: retired}
+      - {file: contracts/sensor-net/station-readings/product.odps.yaml, set: customProperties/4, value: {property: lifecycleChange, value: {since: "2026-11-28", reason: Replaced by a made-up successor., decision: ADR-055}}}
+  - code: docs.relationship-column-unknown
     changes:
       - {file: contracts/ops-insight/daily-load/gold_daily_load.odcs.yaml, set: schema/0/properties/1/relationships/0/to, value: "sensor-net/station-readings/silver_readings.odcs.yaml#/schema/silver_readings/properties/station_code"}
+  - code: docs.relationship-column-unknown
+    changes:  # a table the product does not have
+      - {file: contracts/ops-insight/daily-load/gold_daily_load.odcs.yaml, set: schema/0/properties/1/relationships/0/to, value: "sensor-net/station-readings/gold_readings.odcs.yaml#/schema/gold_readings/properties/station_id"}
+  - code: docs.relationship-type-mismatch
+    changes:
+      - {file: contracts/ops-insight/daily-load/gold_daily_load.odcs.yaml, set: schema/0/properties/1/physicalType, value: bigint}
+  - code: docs.relationship-as-of-missing
+    changes:  # silver keeps history now; the key states no point in time
+      - {file: contracts/sensor-net/station-readings/silver_readings.odcs.yaml, set: schema/0/properties/5, value: {name: valid_from, physicalType: timestamp(6) with time zone, description: When this version of the station holds from.}}
+  - code: docs.relationship-as-of-missing
+    changes:  # the mode alone, no column
+      - {file: contracts/sensor-net/station-readings/silver_readings.odcs.yaml, set: schema/0/properties/5, value: {name: valid_from, physicalType: timestamp(6) with time zone, description: When this version of the station holds from.}}
+      - {file: contracts/ops-insight/daily-load/gold_daily_load.odcs.yaml, set: schema/0/properties/1/relationships/0/customProperties, value: [{property: asOf, value: valid}]}
+  - code: docs.relationship-as-of-column
+    changes:  # as of load_date, a date
+      - {file: contracts/sensor-net/station-readings/silver_readings.odcs.yaml, set: schema/0/properties/5, value: {name: valid_from, physicalType: timestamp(6) with time zone, description: When this version of the station holds from.}}
+      - {file: contracts/ops-insight/daily-load/gold_daily_load.odcs.yaml, set: schema/0/properties/1/relationships/0/customProperties, value: [{property: asOf, value: valid}, {property: asOfColumn, value: load_date}]}
+  - code: docs.relationship-as-of-column
+    changes:  # as of a column the referring table does not have
+      - {file: contracts/sensor-net/station-readings/silver_readings.odcs.yaml, set: schema/0/properties/5, value: {name: valid_from, physicalType: timestamp(6) with time zone, description: When this version of the station holds from.}}
+      - {file: contracts/ops-insight/daily-load/gold_daily_load.odcs.yaml, set: schema/0/properties/1/relationships/0/customProperties, value: [{property: asOf, value: known}, {property: asOfColumn, value: read_at}]}
+  - code: docs.relationship-as-of-unexpected
+    changes:  # silver keeps no history
+      - {file: contracts/ops-insight/daily-load/gold_daily_load.odcs.yaml, set: schema/0/properties/0/physicalType, value: timestamp(6) with time zone}
+      - {file: contracts/ops-insight/daily-load/gold_daily_load.odcs.yaml, set: schema/0/properties/1/relationships/0/customProperties, value: [{property: asOf, value: valid}, {property: asOfColumn, value: load_date}]}
   - code: docs.connector-mismatch
     changes:  # a connector table, no connector
       - {file: contracts/sensor-net/station-readings/product.odps.yaml, remove: customProperties/0}
@@ -193,6 +226,7 @@ cases:
       - {file: contracts/ops-insight/hot-load/gold_daily_load.odcs.yaml, set: id, value: ops-insight.hot-load.gold_daily_load}
       - {file: contracts/ops-insight/hot-load/gold_daily_load.odcs.yaml, set: customProperties/1/value, value: serving}
       - {file: contracts/ops-insight/hot-load/gold_daily_load.odcs.yaml, set: schema/0/physicalName, value: gold.gold_daily_load}
+      - {file: contracts/ops-insight/hot-load/gold_daily_load.odcs.yaml, remove: schema/0/properties/1/relationships}  # a key only an input port holds (docs.foreign-key-not-read)
   - code: docs.serving-only-not-paused
     changes:
       - {file: contracts/ops-insight/hot-load/product.odps.yaml, copy: contracts/ops-insight/daily-load/product.odps.yaml}
@@ -206,6 +240,7 @@ cases:
       - {file: contracts/ops-insight/hot-load/gold_daily_load.odcs.yaml, set: id, value: ops-insight.hot-load.gold_daily_load}
       - {file: contracts/ops-insight/hot-load/gold_daily_load.odcs.yaml, set: customProperties/1/value, value: serving}
       - {file: contracts/ops-insight/hot-load/gold_daily_load.odcs.yaml, set: schema/0/physicalName, value: gold.gold_daily_load}
+      - {file: contracts/ops-insight/hot-load/gold_daily_load.odcs.yaml, remove: schema/0/properties/1/relationships}  # a key only an input port holds (docs.foreign-key-not-read)
   # columns
   - code: docs.column-undescribed
     changes:
@@ -253,6 +288,15 @@ cases:
       - {file: contracts/sensor-net/station-readings/grants.yaml, set: grants, value: []}
       - {file: contracts/access/principals.yaml, set: principals/1/owner, value: sensor-team}  # p.analyst-delayed
       - {file: contracts/ops-insight/daily-load/grants.yaml, set: grants, value: [{principal: svc.load-dashboard, role: full_reader}, {principal: p.analyst-delayed, role: full_reader}]}
+  - code: docs.terms-missing
+    changes:  # a partner is outside every team, the one answering for it included: the within-team grant needs terms
+      - {file: contracts/ops-insight/daily-load/product.odps.yaml, remove: customProperties/1}
+      - {file: contracts/access/principals.yaml, set: principals/2/kind, value: partner}  # svc.load-dashboard, insight-team's
+  - code: docs.terms-missing
+    changes:  # and upstream: daily-load records terms, station-readings, which it reads, none (A3)
+      - {file: contracts/sensor-net/station-readings/product.odps.yaml, remove: customProperties/2}
+      - {file: contracts/sensor-net/station-readings/grants.yaml, set: grants, value: []}
+      - {file: contracts/access/principals.yaml, set: principals/2/kind, value: partner}
   - code: docs.retention-below-floor
     changes:  # daily-load reads silver_readings
       - {file: contracts/sensor-net/station-readings/silver_readings.odcs.yaml, set: customProperties/3/value, value: 3}
@@ -293,6 +337,7 @@ valid:
       - {file: contracts/ops-insight/hot-load/gold_daily_load.odcs.yaml, set: id, value: ops-insight.hot-load.gold_daily_load}
       - {file: contracts/ops-insight/hot-load/gold_daily_load.odcs.yaml, set: customProperties/1/value, value: serving}
       - {file: contracts/ops-insight/hot-load/gold_daily_load.odcs.yaml, set: schema/0/physicalName, value: gold.gold_daily_load}
+      - {file: contracts/ops-insight/hot-load/gold_daily_load.odcs.yaml, remove: schema/0/properties/1/relationships}  # a key only an input port holds (docs.foreign-key-not-read)
   - why: a grant within the owning team needs no terms
     changes:
       - {file: contracts/ops-insight/daily-load/product.odps.yaml, remove: customProperties/1}
@@ -307,6 +352,11 @@ valid:
       - {file: contracts/ops-insight/daily-load/product.odps.yaml, set: inputPorts/0/customProperties/2, value: {property: whenAbsent, value: empty}}
       - file: contracts/ops-insight/daily-load/models/gold_daily_load.sql
         text: "{{ config(materialized='incremental') }}\nselect station_id from {{ k2_input('station_readings', 'silver_readings') }}\n"
+  - why: a key into a table with history, joined as of a timestamp with time zone of the referring table
+    changes:
+      - {file: contracts/sensor-net/station-readings/silver_readings.odcs.yaml, set: schema/0/properties/5, value: {name: valid_from, physicalType: timestamp(6) with time zone, description: When this version of the station holds from.}}
+      - {file: contracts/ops-insight/daily-load/gold_daily_load.odcs.yaml, set: schema/0/properties/0/physicalType, value: timestamp(6) with time zone}
+      - {file: contracts/ops-insight/daily-load/gold_daily_load.odcs.yaml, set: schema/0/properties/1/relationships/0/customProperties, value: [{property: asOf, value: valid}, {property: asOfColumn, value: load_date}]}
   - why: whenAbsent emptyIntoTable accepts zero rows into a table model, stated on the port
     changes:
       - {file: contracts/ops-insight/daily-load/product.odps.yaml, set: inputPorts/0/customProperties/0/value, value: false}

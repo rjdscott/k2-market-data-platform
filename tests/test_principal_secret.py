@@ -137,6 +137,13 @@ def test_a_person_password_is_printed_once_and_only_its_bcrypt_is_kept(secrets: 
     assert checkout() == before and tracked_files_holding(secret) == ""
 
 
+def test_a_partner_password_is_printed_once_as_a_person_s_and_never_stored(secrets: Path) -> None:
+    code, out, err = run(secrets, "password", "PRINCIPAL=svc.partner-dashboard", tty=True)
+    assert code == 0, err
+    (secret,) = SECRET.findall(out)
+    assert list(lines(secrets)) == ["svc.partner-dashboard"] and not (secrets / "principals").exists()
+
+
 def test_a_service_password_goes_to_its_file_and_is_printed_nowhere(secrets: Path) -> None:
     code, out, err = run(secrets, "password", "PRINCIPAL=svc.runs", "TO_FILE=1")
     assert code == 0, err
@@ -293,6 +300,7 @@ ps.directory(d / 'trino' / 'password.db')
     (("api-key", "PRINCIPAL=svc.api"), "never acts as it"),
     (("api-key", "PRINCIPAL=dbt_access_canary"), "never acts as it"),
     (("password", "PRINCIPAL=p.canary-full"), "not a terminal"),
+    (("password", "PRINCIPAL=svc.partner-dashboard", "TO_FILE=1"), "never holds a partner's credential"),  # kind: partner
     (("api-key", "PRINCIPAL=p.canary-full"), "not a terminal"),
     (("principal-remove",), "PRINCIPAL=<id>"),
     (("principal-remove", "PRINCIPAL=../../x", "FORCE=1"), "not a principal id"),
@@ -373,9 +381,10 @@ def test_status_lists_names_and_never_a_hash(secrets: Path) -> None:
     (secrets / "principals/svc.old.password").write_text("x" * 43)
     code, out, err = run(secrets, "principals-status")
     assert code != 0, err  # a STALE line is a failure, not advice (the script exits 1, make 2)
-    rows = {f[0]: f[1:] for f in (line.split() for line in out.splitlines()) if f and f[0] in ("svc.runs", "svc.api", "p.canary-full")}
+    rows = {f[0]: f[1:] for f in (line.split() for line in out.splitlines()) if f and f[0] in ("svc.runs", "svc.api", "p.canary-full", "svc.partner-dashboard")}
     assert rows["svc.runs"] == ["yes", "yes", "-", "-"] and rows["svc.api"] == ["no", "no", "-", "-"]
     assert rows["p.canary-full"] == ["no", "no", "no", "no"]  # a test principal: its file column counts
+    assert rows["svc.partner-dashboard"] == ["no", "-", "-", "-"]  # a partner: no file, as a person
     assert "release canaries" in out and "k2_release_0123456789ab" in out
     stale = {line.split()[1]: line for line in out.splitlines() if line.startswith("STALE ")}
     assert sorted(stale) == ["dbt_gone", "p.gone", "svc.old"]
@@ -450,13 +459,14 @@ def test_a_test_principal_gets_a_password_file_and_a_person_with_a_real_grant_ne
     assert bcrypt_checks([(stored.read_text(), lines(secrets)["p.canary-full"])]) == [True]
     code, out, _ = run(secrets, "principals-status")
     assert re.search(r"^p\.canary-full +yes +yes +no +no$", out, re.M), out
-    # Who is a test principal: granted on the access canary and on no other product.
+    # Who is a test principal: granted on the access canary and on no other product, never a partner.
     decided = module("""
 sys.path.insert(0, 'scripts')
 from types import SimpleNamespace as N
 import access_verify as av
 g = lambda *who: [N(principal=w) for w in who]
-m = N(products=[N(id=av.CANARY_PRODUCT, grants=g('p.canary-only', 'p.mixed', 'svc.x')),
+m = N(principals=[N(id='svc.partner-y', kind='partner')],
+      products=[N(id=av.CANARY_PRODUCT, grants=g('p.canary-only', 'p.mixed', 'svc.x', 'svc.partner-y')),
                 N(id='market.trades', grants=g('p.mixed', 'p.real'))])
 held = av.platform_held(m)
 print(sorted(held))

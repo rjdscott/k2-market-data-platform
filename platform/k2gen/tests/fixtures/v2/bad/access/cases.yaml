@@ -19,6 +19,10 @@ cases:
     code: access.principal-collides
     changes:
       - {file: contracts/access/principals.yaml, append: principals, value: {id: dbt_shadow, kind: service, owner: insight-team}}
+  - name: a partner whose id is a platform service's, which the platform's rules give writer rights
+    code: access.principal-collides
+    changes:
+      - {file: contracts/access/principals.yaml, set: principals/3/kind, value: partner}  # svc.runs
   - name: a table offering a role roles.yaml does not declare
     code: access.role-undeclared
     changes:

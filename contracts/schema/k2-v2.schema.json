@@ -63,7 +63,7 @@
       "pattern": "^[a-z][a-z0-9]*(-[a-z0-9]+)*\\.[a-z][a-z0-9]*(-[a-z0-9]+)*\\.[a-z][a-z0-9]*(_[a-z0-9]+)*$"
     },
     "principalId": {
-      "description": "A principal: p.<pseudonym> for a person, svc.<name> for a service, dbt_<fence> for a product's builder and pub_<fence> for its publisher (A8, A10).",
+      "description": "A principal: p.<pseudonym> for a person, svc.<name> for a service or a partner, dbt_<fence> for a product's builder and pub_<fence> for its publisher (A8, A10).",
       "type": "string",
       "pattern": "^((p|svc)\\.[a-z0-9]+(-[a-z0-9]+)*|(dbt|pub)_[a-z][a-z0-9]*(_[a-z0-9]+)*)$"
     },
@@ -555,7 +555,7 @@
         "name": {"description": "The column's name.", "$ref": "#/$defs/identifier"},
         "physicalType": {"description": "The Trino type exactly as Trino's typeof spells it, from the types an Iceberg table holds: boolean, integer, bigint, real, double, decimal(p,s) with p 1 to 38, varchar, varbinary, date, time(6), timestamp(6), timestamp(6) with time zone, uuid, and one level of array(t) or map(k, v) (k2gen.model.PHYSICAL_TYPE; a scale above its precision is refused by k2gen.model.physical_type_problem, in S05).", "type": "string", "pattern": "^(?:boolean|integer|bigint|real|double|decimal\\((?:[1-9]|[12][0-9]|3[0-8]),(?:[0-9]|[12][0-9]|3[0-8])\\)|varchar|varbinary|date|time\\(6\\)|timestamp\\(6\\)|timestamp\\(6\\) with time zone|uuid|array\\((?:boolean|integer|bigint|real|double|decimal\\((?:[1-9]|[12][0-9]|3[0-8]),(?:[0-9]|[12][0-9]|3[0-8])\\)|varchar|varbinary|date|time\\(6\\)|timestamp\\(6\\)|timestamp\\(6\\) with time zone|uuid)\\)|map\\((?:boolean|integer|bigint|real|double|decimal\\((?:[1-9]|[12][0-9]|3[0-8]),(?:[0-9]|[12][0-9]|3[0-8])\\)|varchar|varbinary|date|time\\(6\\)|timestamp\\(6\\)|timestamp\\(6\\) with time zone|uuid), (?:boolean|integer|bigint|real|double|decimal\\((?:[1-9]|[12][0-9]|3[0-8]),(?:[0-9]|[12][0-9]|3[0-8])\\)|varchar|varbinary|date|time\\(6\\)|timestamp\\(6\\)|timestamp\\(6\\) with time zone|uuid)\\))$"},
         "relationships": {
-          "description": "Keys of another product's table this column refers to.",
+          "description": "Keys of another product's table this column refers to; the table is a declared input port of this product, and one with valid_from requires asOf (phase-001-interfaces.md, step I-6).",
           "type": "array",
           "items": {
             "type": "object",
@@ -584,9 +584,10 @@
       "description": "One K2 custom property of a relationship.",
       "type": "object",
       "required": ["property", "value"],
-      "properties": {"property": {"description": "The property's name.", "enum": ["asOf"]}},
+      "properties": {"property": {"description": "The property's name.", "enum": ["asOf", "asOfColumn"]}},
       "allOf": [
-        {"if": {"properties": {"property": {"const": "asOf"}}}, "then": {"properties": {"value": {"description": "When the target keeps history: join on its valid time or its knowledge time.", "enum": ["valid", "known"]}}}}
+        {"if": {"properties": {"property": {"const": "asOf"}}}, "then": {"properties": {"value": {"description": "When the target keeps history: join on its valid time or its knowledge time, the mode of the model's k2_as_of for it (dbt/macros/k2_as_of.sql).", "enum": ["valid", "known"]}}}},
+        {"if": {"properties": {"property": {"const": "asOfColumn"}}}, "then": {"properties": {"value": {"description": "With asOf: the referring table's timestamp(6) with time zone column the join is as of (docs.relationship-as-of-column).", "$ref": "#/$defs/identifier"}}}}
       ]
     },
     "contractProperty": {
@@ -724,13 +725,14 @@
             "required": ["id", "kind", "owner"],
             "properties": {
               "id": {"$ref": "#/$defs/principalId"},
-              "kind": {"description": "A person (p.*) or a service (svc.*, dbt_*, pub_*).", "enum": ["person", "service"]},
+              "kind": {"description": "A person (p.*), a service (svc.*, dbt_*, pub_*), or a partner (svc.*): a service of another organisation, whose credential the platform never holds and which holds only the reader roles grants give it.", "enum": ["person", "service", "partner"]},
               "owner": {"description": "The team answerable for the principal.", "$ref": "#/$defs/slug"},
               "description": {"description": "What the principal is for.", "$ref": "#/$defs/text"}
             },
             "allOf": [
               {"if": {"properties": {"kind": {"const": "person"}}}, "then": {"properties": {"id": {"pattern": "^p\\."}}}},
-              {"if": {"properties": {"kind": {"const": "service"}}}, "then": {"properties": {"id": {"pattern": "^(svc\\.|dbt_|pub_)"}}}}
+              {"if": {"properties": {"kind": {"const": "service"}}}, "then": {"properties": {"id": {"pattern": "^(svc\\.|dbt_|pub_)"}}}},
+              {"if": {"properties": {"kind": {"const": "partner"}}}, "then": {"properties": {"id": {"pattern": "^svc\\."}}}}
             ]
           }
         }
