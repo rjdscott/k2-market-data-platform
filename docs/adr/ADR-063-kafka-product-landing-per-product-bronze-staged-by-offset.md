@@ -1,18 +1,17 @@
 # ADR-063: A Kafka product: a landing per product that holds every record, bronze staged by offset with the decoded envelope
 
-**Status:** Proposed
+**Status:** Accepted
 **Date:** 2026-11-28
 **Author:** Platform
 **Category:** Ingestion / Storage
-**Decided by:** proposed for the owner's acceptance. Two of its parts are the owner's already: the
-Kafka landing is never expired (2026-11-28, plan 004's option (a)), and the review findings that moved
-the filter from the landing to bronze staging and keyed staging by offset were accepted by the owner
-the same day ([build breakdown](../research/2026-11-28-phases-004-005-build-breakdown.md), "Review of
-2026-11-28").
-**Would narrow:** [ADR-021](ADR-021-raw-first-archive-and-lineage.md) (Proposed), its shared archive
+**Decided by:** the owner, accepted 2026-11-28. The owner had already decided that the Kafka landing is
+never expired (2026-11-28, plan 004's option (a)); the rest was proposed after an independent review of
+the build plan moved the filter from the landing to bronze staging and keyed staging by offset
+([build breakdown](../research/2026-11-28-phases-004-005-build-breakdown.md), "Review of 2026-11-28").
+**Narrows:** [ADR-021](ADR-021-raw-first-archive-and-lineage.md) (Proposed), its shared archive
 `raw.messages`, for the lake; and [ADR-056](ADR-056-unified-data-product-platform.md)'s line that a
-product "lands what its filter keeps and counts the rest". Both bodies stay as written; their status
-lines change only if this one is accepted.
+product "lands what its filter keeps and counts the rest". Both bodies stay as written: ADR-021 is still
+Proposed, and ADR-056 carries an Outcome line pointing here.
 **Keeps:** [ADR-022](ADR-022-exactly-once-via-snapshot-offsets.md) (exactly-once resume from the
 snapshot summary) and [ADR-047](ADR-047-ingest-batch-audit-after-publish.md) (the landing commits first
 and is never blocked by an audit).

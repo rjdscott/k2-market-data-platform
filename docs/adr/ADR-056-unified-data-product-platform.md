@@ -474,3 +474,5 @@ metadata table, so a read fails unless the base is an Iceberg table carrying the
 could have replaced its base with a view that readers were served untested. The shape, the reason and the
 cost are in [ADR-061](ADR-061-readers-see-dbt-outputs-through-a-view-over-the-tested-tag.md)'s Outcome of
 this date; every other definer view stays forbidden.
+
+**2026-11-28, a Kafka product lands every record.** The sentence above that a product "lands what its filter keeps and counts the rest" is narrowed by [ADR-063](ADR-063-kafka-product-landing-per-product-bronze-staged-by-offset.md), accepted by the owner on 2026-11-28: a Kafka product's landing holds every record of the range it read, and its filter is applied when bronze is staged, because the landing's frozen columns and the offset accounting need as many rows as offsets. Provenance: `scripts/verify/kafka-path.sh`, groups a, b and c on a throwaway lake.
