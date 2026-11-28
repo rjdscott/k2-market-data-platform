@@ -9,12 +9,17 @@ Why: [ADR-063](../adr/ADR-063-kafka-product-landing-per-product-bronze-staged-by
 The file products' version of this page is [file-source-audit-failed.md](./file-source-audit-failed.md),
 whose `lake_sql` helper ("Reading the lake: who may, and how") every command here uses.
 
-> **From the release that carries phase 004 (`v3.0.0-alpha.6`, not yet tagged or deployed).** A
-> corrupt frame failing `parses`, `main` unmoved, is proven on a throwaway lake (`bash
+> **Phase 004, live as `v3.0.0-alpha.6-rc.1` since 2026-11-28; nothing here has run on the live
+> stack.** A corrupt frame failing `parses`, `main` unmoved, is proven on a throwaway lake (`bash
 > scripts/verify/kafka-path.sh <release dir> a`, claim 9, group a `10 PASS, 0 FAIL` on 2026-11-28).
-> Claims a11 (an unaudited batch healed by the next run) and a12 (a failed batch never reset, the next
-> load refused naming the check and the statement) were added by later review fixes and **their run is
-> pending**. Nothing here has run on a stack. Every message quoted is the code's own text.
+> Sections 1 and 2 were induced end to end on `kraken-trades` on a throwaway lake on 2026-11-28 by `bash
+> scripts/chaos/bronze-failed-then-repaired.sh <release dir>` (`bronze-failed: 4 PASS, 0 FAIL in 316
+> s`): a frame of a schema id not yet registered fails `parses`, the next run lands its records and is
+> refused naming the failed batch, bronze unmoved; the schema registered and the clearing statement run
+> as the Spark key, the next run restages both frames, publishes, and silver takes both trades once. It
+> clears through its own Spark helper (`scripts/lib/run_path_spark.py clear`), not this page's `lake_sql`,
+> and runs no Airflow. Claim a11 (section 3) was added by a later review fix; no PASS line of its run is
+> recorded. Every message quoted is the code's own text.
 
 **Run every command from the repo root with `set -a && . ./.env && set +a` loaded.** The example is
 `market-capture/kraken-trades`: DAG `kraken_trades`, landing `lake.kraken_trades.landing`, bronze
@@ -23,8 +28,8 @@ whose `lake_sql` helper ("Reading the lake: who may, and how") every command her
 
 | # | Failure | MTTR target | Measured |
 |---|---------|-------------|----------|
-| 1 | `audit` failed a check | < 30 min to a decision | not yet measured: plan 004's `scripts/chaos/bronze-failed-then-repaired.sh` will induce it |
-| 2 | Clear the blocked batch | < 15 min after section 1 | not yet measured |
+| 1 | `audit` failed a check | < 30 min to a decision | induced on a throwaway lake, 2026-11-28: `bash scripts/chaos/bronze-failed-then-repaired.sh <release dir>`, `bronze-failed: 4 PASS, 0 FAIL in 316 s` for the script, the chain's first cycle included; the decision is the operator's and is not timed; live: not yet |
+| 2 | Clear the blocked batch | < 15 min after section 1 | the same script's claim 4, not timed apart; live: not yet |
 | 3 | An interrupted batch (no action) | the next run | not yet measured on a stack |
 
 ---
@@ -80,7 +85,10 @@ Decide, as in [file-source-audit-failed.md](./file-source-audit-failed.md) secti
   fix it through a release if it is code, then clear the batch (section 2); the next run restages the
   range and audits it again.
 
-**Measured**, not yet measured.
+**Measured**, induced on a throwaway lake, 2026-11-28 (`bronze-failed-then-repaired.sh` claim 4):
+`parses` failed naming the unregistered id with exit 3, bronze `main` and silver unmoved; the next run's
+stage refused with exit 2 naming the failed batch while its records landed. Not timed apart; live: not
+yet.
 
 ---
 
@@ -110,7 +118,10 @@ lake.kraken_trades.landing`, then `load: <rows> rows staged on audit of lake.kra
 from lake.kraken_trades.landing snapshot <id>, <skipped> skipped, snapshot <id>`, an audit ending
 `passed`, and `publish: main <old> -> <new>, batch kraken_trades/<run>`.
 
-**Measured**, not yet measured.
+**Measured**, on a throwaway lake, 2026-11-28 (`bronze-failed-then-repaired.sh` claim 4): the clearing
+statement reset `audit` to `main` as the Spark key, and the next run restaged both batches' frames,
+passed every check, published, and built silver with both trades once. Not timed apart; no Airflow, so
+the pause, unpause and trigger above have not run; live: not yet.
 
 ---
 
@@ -143,6 +154,8 @@ None yet: nothing here has run against a stack.
 
 ---
 
-**Last verified:** section 1's `parses` failure with `main` unmoved on a throwaway lake on 2026-11-28
-(`kafka-path.sh` group a, claim 9). Pending their run: claims a11 (section 3) and a12 (section 1's
-refusal text and the clearing statement). Not yet on any stack: every command in sections 1 and 2.
+**Last verified:** sections 1 and 2 end to end on `kraken-trades` on a throwaway lake on 2026-11-28
+(`bash scripts/chaos/bronze-failed-then-repaired.sh <release dir>`, `bronze-failed: 4 PASS, 0 FAIL in 316
+s`), and section 1's `parses` failure with `main` unmoved the same day (`kafka-path.sh` group a, claim
+9). No PASS line recorded: claim a11 (section 3). Not yet on the live stack: every command in sections 1
+and 2.
