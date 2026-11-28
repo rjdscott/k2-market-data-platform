@@ -5,7 +5,8 @@ from Redpanda) and rebuilt ClickHouse from the lake. It was archived on 2026-11-
 ingest pipeline it operated, and is kept unchanged at
 [`legacy/v3-lake-ingest/docs/runbooks/lake-recovery.md`](../../legacy/v3-lake-ingest/docs/runbooks/lake-recovery.md);
 its alerts were removed and its commands read tables, DAGs and scripts that no longer exist, so do
-not follow it against this stack. What replaces it is the backup, restore and rebuild-from-empty
-runbook, with `make rebuild` and `make restore`, in [phase
+not follow it against this stack. What replaces it is [lake-backup-and-restore.md](./lake-backup-and-restore.md)
+section 3 (`make restore`, `make restore-drill`) and [rebuild-a-product.md](./rebuild-a-product.md)
+(`make rebuild`), from [phase
 004](../plans/2026-11-26-unified-product-platform/004-kraken-trades-instruments-security-master.md)
 of the unified platform plan ([ADR-056](../adr/ADR-056-unified-data-product-platform.md)).

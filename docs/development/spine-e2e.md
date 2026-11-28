@@ -54,7 +54,12 @@ with its sha256), then runs the fetch's own parse, which runs the release's pars
 audits. It needs real local images, never the manifest's placeholders: Spark's image as the
 compose file pins it, and `dbt-runner` built from the tree. The same machinery
 (`scripts/lib/run-path-lib.sh`) runs plan 002's `fx-idempotent.sh`, `fx-bad-file.sh`,
-`dbt-failing-test.sh` and `trino-stop-mid-build.sh`, each on a lake of its own.
+`dbt-failing-test.sh` and `trino-stop-mid-build.sh`, plan 004's six Kafka product chaos scripts
+([`scripts/chaos/README.md`](../../scripts/chaos/README.md#the-kafka-product-scripts-plan-004)), and
+the phase 004 proofs `kafka-path.sh` (groups a to d, group d being `make rebuild`), `restore-path.sh`
+(`make restore-drill`) and `duckdb-landing.sh` (DuckDB in `tools` and the two parity checks), each on a
+lake of its own and none of them a stage here ([testing.md](./testing.md), "Proofs on throwaway
+containers", says what each proves and its recorded result).
 
 Times, each from one recorded run, 2026-11-27, `make spine-e2e`: the fast rehearsal 416 s, then
 605 to 615 s after Spark joined the rehearsal's stack; a full run 1085 s. The first recorded run,

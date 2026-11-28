@@ -14,9 +14,10 @@ layouts and commands, without notice. `3.0.0` is reserved for the release gate t
 ## [Unreleased]
 
 Phase 004 of the unified product platform plan, "Kraken trades, instruments and the security master",
-as built on branch `phase/004-005-kraken-and-enriched`. **Nothing here is deployed**: no release carries
-it yet, and the stack runs `3.0.0-alpha.5.1`. Its proofs so far are unit suites and throwaway lakes,
-each named below.
+as merged to `main` in pull request #257 and live as the release candidate `3.0.0-alpha.6-rc.1` since
+2026-11-28, in its 48-hour soak; then its exit branch `feat/phase-004-exit` (rebuild, restore, verify,
+parity and the chaos scripts), which no release carries yet. Each entry says what proves it: a unit
+suite, a throwaway lake, or the live stack.
 
 ### Decided
 
@@ -104,6 +105,39 @@ each named below.
 - ADR-063, runbooks for onboarding a Kafka product and a public-API product, holding a product,
   accepting data loss and a blocked Kafka batch; architecture chapter 23, as target text.
 
+From the exit branch, in no release yet:
+
+- `make product-verify PRODUCT=<domain/name>` (`scripts/product_verify.py`): a Kafka product proved
+  read-only from snapshot summaries, refs and run records, in a `tools` one-shot as `svc.catalog`:
+  every landing commit's spans whole and abutting, bronze's staged plus skipped equal to each range,
+  bronze level with the landing, each output's `audited` tag its newest run record's. Run on the live
+  stack against rc.1: every check PASS.
+- `make rebuild PRODUCT=<domain/name> [UNLOCK=1]` (`scripts/rebuild.py`) under a rebuild hold: the
+  DAG paused and drained, a Kafka product's bronze replaced from its release DDL and restaged from its
+  landing as one batch, then `k2-dbt build --full-refresh` (new); the hold and the pause undone only
+  where it placed them. Proven on a throwaway lake (`scripts/verify/kafka-path.sh <release dir> d`, `8
+  PASS, 0 FAIL`, 2026-11-28).
+- `make restore` and `make restore-drill CONFIRM=<live release id>` (`scripts/restore.py`), generated
+  from the live backup set: every DAG paused and drained, every product held, the catalog database
+  replayed only when it is lost, restore tables registered or re-pointed, landings put back, rebuild
+  tables not whole recreated empty, the drift check against the run records, then the products left
+  for rebuild kept held in order. They write with a new restore storage key (get, put and list, no
+  delete; `K2_RESTORE_S3_*`, `make engine-keys`). Proven on a throwaway lake
+  (`scripts/verify/restore-path.sh <release dir>`, `19 PASS, 0 FAIL in 661 s`, the drill's restore
+  32.0 s, 2026-11-28).
+- `make parity-silver PRODUCT=market-capture/kraken-trades` and `make parity-ohlcv`, re-pinned on
+  Kraken: DuckDB recomputes `silver_trade` from the landing's bytes, and every candle timeframe from
+  canonical-trades, at the snapshots one build's run records name, and compares every column. DuckDB
+  1.4.4 and its `httpfs`, `avro` and `iceberg` extensions are baked into the `tools` image. Proven on a
+  throwaway lake (`scripts/verify/duckdb-landing.sh <release dir>`, `7 PASS, 0 FAIL in 546 s`,
+  2026-11-28).
+- Plan 004's six chaos scripts on throwaway lakes (`scripts/chaos/`): `kafka-connector-kill.sh`,
+  `kafka-below-log-start.sh`, `unknown-symbol.sh`, `bronze-failed-then-repaired.sh`,
+  `venue-test-fails.sh`, `pause-input.sh`, each with its recorded result in `scripts/chaos/README.md`
+  (2026-11-28, each `0 FAIL`).
+- Runbooks: rebuild a product, verify a Kafka product; the restore and the drill in the backup runbook's
+  section 3; dbt labs 4 (`UNNEST WITH ORDINALITY` and window flags) and 5 (type-2 history from listings).
+
 ### Changed
 
 - Deploy never unpauses a held product's DAG, names the DAGs a release adds and never pauses or
@@ -118,6 +152,9 @@ each named below.
   `svc.partner-dashboard` is one; it holds only the reader roles its grants give, a grant to it always
   needs terms, the live access suite skips its rows by kind, and `make password TO_FILE=1` refuses it.
 - A delayed reader never sees a delivery or build counter.
+- From the exit branch: the `tools` one-shot is 1 CPU / 2G (was 0.25 CPU / 256M), for DuckDB, behind
+  its profile (ADR-010's Outcome); `make chaos` says the lake faults run apart, each on a throwaway
+  lake; `make parity-ohlcv` is no longer a SKIP.
 
 ### Fixed
 
@@ -138,23 +175,51 @@ Found by the phase's reviews before any release:
   the build and the rest publishes; and a quality rule's dbt test now carries the rule's name, so
   `warned` and `dq_test_results` say `unresolved_rows_zero`, not dbt's argument-made id.
 
+Found on the exit branch, none of them yet in a release:
+
+- A full refresh of `canonical-trades` numbered `load_seq` from 1 again, so candles' next build would
+  never read a row at or below its stored watermark; it now numbers after the highest `load_seq` the
+  table held, and candles' next build recomputes every window (D5).
+- `make release-verify` took a throwaway lake's Spark container, a `docker run` of the image compose
+  built, for the live `spark-iceberg` and failed while a throwaway ran; it now reads only the containers
+  compose created.
+- The compiled `tools` one-shot kept 0.25 CPU / 256M after compose's `tools` service moved to 1 CPU / 2G;
+  the emitter now follows compose.
+- The restore, before any live run, from the exit branch's review: the drill checks every refusal, says
+  what it destroys and needs `CONFIRM` before any damage (R1); the catalog database counts as lost only
+  on a definite answer from Postgres (R2); a product with a table registered, re-pointed or recreated,
+  and every product downstream, stays held until `make rebuild` passes, upstream first (R3); every DAG is
+  drained and a rebuild lock refuses (R4); only the DAGs the restore paused are unpaused, none after a
+  catalog replay that then stopped (R5); a table is whole only with every manifest and data file of
+  `main` and its tag (R6); the restore key reaches only the two phases that write (R7); the rebuild says
+  bronze reads no row until its restage publishes (R8).
+
 ### Known and open
 
-- Not deployed: no live deploy, no first run on the stack, no `make hold` or `make unhold` against a
-  stack, no accept-data-loss run through Airflow, no deploy rehearsal with a second platform table.
-- `scripts/verify/kafka-path.sh` claims a11, a12 and b6 and `scripts/verify/dbt-patterns.sh`'s fixed
-  and added claims are pending their rerun (its last run printed `10 PASS, 1 FAIL`); the widened
-  `run-path.sh` (the chain with rows) is in progress.
+- Deployed as `3.0.0-alpha.6-rc.1` on 2026-11-28, the first runs of its five products' DAGs green; the
+  48-hour soak runs on it since 2026-11-28 11:21 UTC. Not yet run on a stack: `make hold` and `make
+  unhold`, an accept-data-loss run through Airflow.
+- Not yet run on the live stack, each proven on a throwaway lake only: `make restore`, `make
+  restore-drill`, `make rebuild`, `make parity-silver`, `make parity-ohlcv`. rc.1 carries none of
+  them: its lake-init makes no restore user, its dbt runner has no `--full-refresh`, its `tools` image no
+  DuckDB.
+- `make engine-keys` must run before the first deploy of a release with the restore key: its compose
+  file refuses lake-init without `K2_RESTORE_S3_*`, and that deploy's lake-init makes the MinIO user.
+  The drill checks only that the key is set, not that MinIO accepts it.
+- A restore after the loss of the host is not proven: the restore uses the `LAKEKEEPER_ENCRYPTION_KEY`
+  the running Lakekeeper already holds.
+- `make rebuild` restages a Kafka product's whole landing in one Spark batch, unmeasured at live size,
+  and bronze reads no row until that restage publishes; the landing is never expired, by the owner's
+  decision, so it only grows. Nothing rebuilds a file product's bronze from its landing.
+- `scripts/verify/kafka-path.sh` claims a11, a12 and b6 were added by the review fixes; merge `95e12a0`
+  records groups a, b and c green after them, and no PASS line of that run is kept.
+  `scripts/verify/dbt-patterns.sh`'s fixed and added claims are pending their rerun (its last run
+  printed `10 PASS, 1 FAIL`).
 - Kraken's terms of reuse are not recorded, so no grant on any phase 004 product: `svc.partner-dashboard`
   holds no role, and the delayed role on the new tables is unexercised until a grant.
 - A product's `degraded` and `partial` states are not alertable in Prometheus (no series carries them);
   they show on the catalog page only. The catalog page does not show holds.
-- `make product-verify`, `make rebuild`, `make restore`, `make restore-drill`, `make parity-silver`, the
-  re-pinned `make parity-ohlcv`, the restore drill and plan 004's chaos scripts are not built yet.
-- The 48-hour soak has not started, so the chain's run times and the landing's growth on disk are not
-  measured.
-- dbt labs 4 (`UNNEST WITH ORDINALITY` and window flags) and 5 (type-2 history from listings) are not
-  written.
+- The soak has not ended, so the chain's run times and the landing's growth on disk are not published.
 
 ## [3.0.0-alpha.5.1] - 2026-11-27
 
