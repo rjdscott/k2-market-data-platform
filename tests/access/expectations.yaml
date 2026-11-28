@@ -131,7 +131,7 @@ expectations:
   - {principal: p.canary-full, table: reference_data.calendars.target_days, denied: true}  # reader view: nobody holds a role
   - {principal: p.canary-full, table: reference_data.calendars__base.target_days, denied: true}  # base (ADR-061)
   - {principal: p.canary-full, table: reference_data.calendars__base.target_closing_days, denied: true}  # the seed's table in the base
-  - {principal: p.canary-full, table: reference_data.currency_master.currency, denied: true}  # reader view, no role offered
+  - {principal: p.canary-full, table: reference_data.currency_master.currency, denied: true}  # reader view: full_reader offered, nobody holds it
   - {principal: p.canary-full, table: reference_data.currency_master__base.currency, denied: true}  # base (ADR-061)
   - {principal: p.canary-full, table: lake.currency_master.bronze_currencies, denied: true}  # bronze, which offers no role
   - {principal: p.canary-full, table: lake.currency_master.landing_files, denied: true}  # the product's landing

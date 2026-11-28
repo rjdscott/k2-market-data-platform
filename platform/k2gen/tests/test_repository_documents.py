@@ -80,3 +80,22 @@ def test_a_grant_outside_the_team_needs_terms_upstream_too() -> None:
                      "market-capture.kraken-instruments", "reference-data.currency-master"):
         assert upstream in found[1].message, upstream
     assert "calendars" not in found[1].message
+
+
+@pytest.mark.parametrize("product, upstream", [("currency-master", ()), ("security-master", ("reference-data.currency-master",))])
+def test_an_outside_grant_on_the_currency_master_or_what_reads_it_is_refused(product: str, upstream: tuple[str, ...]) -> None:
+    """currency and asset offer full_reader with nobody holding it. SIX's terms for the ISO 4217
+    lists are not established, so the currency master records no terms property, and a grant
+    outside reference-data-team on it, or on the security master that reads it, fails."""
+    import yaml
+
+    from k2gen import checks
+
+    documents = dict(repository_set().documents)
+    grants = f"contracts/reference-data/{product}/grants.yaml"
+    documents[grants] = yaml.safe_dump({"grants": [{"principal": "p.analyst-a", "role": "full_reader"}]}).encode()
+    found = [f for f in checks.docs.check(DocumentSet(documents, repository_set().provenance), None) if f.code == "docs.terms-missing"]
+    assert found and {f.path for f in found} == {grants}, found
+    assert "record the source's terms in the product's terms property" in found[0].message
+    for u in upstream:
+        assert u in found[-1].message, u
