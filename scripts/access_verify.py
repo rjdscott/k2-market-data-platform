@@ -199,12 +199,14 @@ def connect(env_file: Path | None) -> tuple[Trino, dict[str, Any]]:
 # image nor the throwaway lake's carries an S3 client, and the request runs in this process, so a key
 # is read from its variable and sent in a header, never on a command line, printed or in a result.
 
-def sigv4(method: str, host: str, path: str, query: str, amz_date: str, pair: tuple[str, str]) -> dict[str, str]:
-    """The signed headers of a bodiless request (AWS Signature V4, region us-east-1: MinIO with no
-    region set takes any). `path` and `query` are already in canonical form."""
-    headers = {"host": host, "x-amz-content-sha256": EMPTY_SHA256, "x-amz-date": amz_date}
+def sigv4(method: str, host: str, path: str, query: str, amz_date: str, pair: tuple[str, str],
+          payload: str = EMPTY_SHA256) -> dict[str, str]:
+    """The signed headers of a request (AWS Signature V4, region us-east-1: MinIO with no region set
+    takes any); bodiless unless `payload` is the body's sha256 (scripts/restore.py's PUT). `path` and
+    `query` are already in canonical form."""
+    headers = {"host": host, "x-amz-content-sha256": payload, "x-amz-date": amz_date}
     names = ";".join(headers)
-    canonical = "\n".join([method, path, query, *(f"{k}:{v}" for k, v in headers.items()), "", names, EMPTY_SHA256])
+    canonical = "\n".join([method, path, query, *(f"{k}:{v}" for k, v in headers.items()), "", names, payload])
     scope = f"{amz_date[:8]}/us-east-1/s3/aws4_request"
     key = f"AWS4{pair[1]}".encode()
     for part in scope.split("/"):
