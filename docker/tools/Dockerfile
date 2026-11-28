@@ -5,8 +5,9 @@
 # from the repository root as context, and tagged tools:<image id 12> (manifest.schema.json).
 #
 # Holds: a shell, Python 3.12, git, k2gen installed from platform/k2gen/uv.lock with the files it
-# reads from the tree beside it (model.REPO: contracts/schema, platform/runs, dbt/macros), and
-# k2tools.py, whose `sql` is the minimal Trino client. No Trino CLI: it needs a JVM.
+# reads from the tree beside it (model.REPO: contracts/schema, platform/runs, dbt/macros),
+# k2tools.py, whose `sql` is the minimal Trino client, and DuckDB with its Iceberg extensions for the
+# parity checks (below). No Trino CLI: it needs a JVM.
 # python 3.12.16 is the newest 3.12 patch on 2026-11-27; uv 0.13.10 is the one the Airflow image
 # pins. git is Debian bookworm's own build: a security update that replaces it fails this build
 # loudly at the pin, and the pin is moved in the same change.
@@ -36,6 +37,24 @@ RUN UV_PYTHON_DOWNLOADS=never uv pip install --python=/opt/k2/venv/bin/python --
       lz4==4.4.5 orjson==3.13.0 zstandard==0.25.0 python-dateutil==4.0.0 tzdata==2026.6 pytz==2026.6 tzlocal==5.4.5 \
     && uv pip check --python=/opt/k2/venv/bin/python \
     && /opt/k2/venv/bin/python -c "import trino, requests; assert trino.__version__ == '0.340.0'"
+# DuckDB, for make parity-silver and make parity-ohlcv (W0-11, W1-18; scripts/parity_silver.py): the wheel
+# at 1.4.4, the version the repository's tests pin, no dependencies (pytz above renders its timestamps),
+# and the three extensions its Iceberg reads load, installed here: an extension fetched at run time is
+# a network call this image must not make, so the scripts connect with autoinstall off and
+# /opt/k2/duckdb the only extension directory. A core extension is built for each DuckDB release and
+# served at extensions.duckdb.org/v1.4.4/<platform>/, so the wheel's pin names the extension build; each
+# file is held to its sha256 besides (linux_amd64, the one platform this host builds: another fails
+# here), so a build republished at that path fails this one loudly, and the pin moves in the same
+# change. avro is iceberg's own dependency (it reads the manifests), loaded by it from that directory.
+RUN UV_PYTHON_DOWNLOADS=never uv pip install --python=/opt/k2/venv/bin/python --no-cache --no-deps --only-binary=:all: \
+      duckdb==1.4.4 \
+    && /opt/k2/venv/bin/python -c "import duckdb; c = duckdb.connect(config={'extension_directory': '/opt/k2/duckdb'}); [c.install_extension(e) for e in ('httpfs', 'avro', 'iceberg')]" \
+    && printf '%s  %s\n' \
+      27e37153f25a2c177725ed8e8bdda9592cd9369e03bb0e4b341a605745d1a897 avro.duckdb_extension \
+      ff726450b5374caaf9ffd9ef8fd9ec40df19b514117f079de3611326432a6646 httpfs.duckdb_extension \
+      4c3897422d44060012a1df00342a5be587dc42baf7b26e51346a8bfbc95aab6c iceberg.duckdb_extension \
+      | (cd /opt/k2/duckdb/v1.4.4/linux_amd64 && sha256sum --check --strict -) \
+    && /opt/k2/venv/bin/python -c "import duckdb; c = duckdb.connect(config={'extension_directory': '/opt/k2/duckdb', 'autoinstall_known_extensions': False}); c.execute('LOAD httpfs'); c.execute('LOAD iceberg'); assert duckdb.__version__ == '1.4.4'"
 COPY docker/tools/k2tools.py /opt/k2/bin/k2tools
 # /site: the k2-site volume's mount point, mode 1777 as k2-api's /srv/k2-site, so the volume's root
 # is the same whichever image mounts it first, empty (docker copies the mount point's mode in).
