@@ -341,3 +341,28 @@ tested snapshot (`docker/dbt-runner/k2_dbt.py`, `compact` and `compaction_guard`
 `docker/dbt-runner/test_k2_dbt.py`; `scripts/verify/dbt-patterns.sh` claim 12 (compaction to zero
 delete files, a reconcile that changes nothing, an INSERT after the optimize refused) is written and
 its run pending.
+
+## Outcome (2026-11-28, phase 004: the publish waits after narrowing a view)
+
+The open observation of 2026-11-27 came back: in the full deploy rehearsal of 2026-11-28 one of 22
+reader polls failed during the marker's schema change with `INVALID_VIEW: ... Column 'currency' cannot
+be resolved`, which was this ADR's revisit trigger. The cause that fits is in the design, not in the
+order of its statements. Part 5's invariant holds for the catalog's state at every instant, but a
+reader's query reads two objects at two instants: the view's definition, then its base at the tag. A
+query that read the view before it was narrowed and loaded the base after the tag commit selects a
+column the new snapshot no longer holds. The narrow and the commit were consecutive calls, a few
+milliseconds apart, so the window was as long as a query's own gap between the two reads. The catalog
+has no commit that spans a view and a table, so the window cannot be closed, only made far longer than
+that gap: the publish now waits `VIEW_SETTLE_S` (2 s, `docker/dbt-runner/k2_dbt.py`) after it narrows
+any view and before the tag commit, and the marker's own publish does the same. The failure stays what
+it was, an error and never a wrong or untested row, and it needs a schema change to an output that
+already has readers.
+
+Measured after the change: `scripts/verify/tested-data-marker.sh` run ten times on one throwaway lake
+(a scratch release of the phase 004 branch), 20 publishes, 551 polls at 50 ms, 0 errors. That is
+evidence for the cause, not proof of it: before the change the error appeared about once in several
+runs.
+
+**Revisit when** `INVALID_VIEW` appears in a reader's poll again with the wait in place: the cause
+above is then wrong or incomplete, and a reader's query slower than the wait between its two reads is
+the first thing to measure.
