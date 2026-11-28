@@ -695,6 +695,15 @@ included; the live access suite skips its rows by kind (`access_verify.partners`
 preflight asks no password file for it; `make password TO_FILE=1` refuses it. The compiled rules and
 groups do not change: a partner is a reader by its grants, as a person is.
 
+2026-11-28, the terms' value read: `docs.terms-forbid-redistribution` refuses a grant to a partner
+when the product's terms, or those of any product upstream of it through input ports, say
+`redistribution: forbidden`; a recorded `forbidden` holds on an upstream product the terms rule
+exempts too. A partner passes the data on to another organisation, which `forbidden` excludes
+(`k2-v2.schema.json`, `terms.redistribution`: "whether the data may be passed on beyond the
+platform's readers"). A grant to another team of the organisation keeps the data among the
+platform's readers, so `forbidden` does not refuse it; the owner may decide otherwise. No product of
+the repository records `forbidden`, so the compiled rules and groups do not change.
+
 ## Point in time, 2026-11-28 (phases 004 and 005, step I-6)
 
 Frozen as the owner decided on 2026-11-28, before phase 005 builds; step W3-1 built the macro in

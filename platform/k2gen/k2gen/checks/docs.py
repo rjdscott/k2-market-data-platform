@@ -38,7 +38,11 @@ schema-valid documents. Then, each rule a code in CODES:
   review: a derived product passes its inputs' data on). An upstream product is exempt only when
   everything it holds was written on the platform: no connector, no input port, every table built
   by dbt (from seeds, which the schema records synthetic, or from SQL alone), as the calendars
-  product is; a table another product reads keeps at least the retention floor;
+  product is. A grant to a partner passes the data on to another organisation, which terms saying
+  `redistribution: forbidden` refuse: on the product or any product upstream of it, an exempt one
+  included. A grant to another team of the organisation keeps the data among the platform's readers
+  (k2-v2.schema.json, terms.redistribution), so forbidden does not refuse it;
+- a table another product reads keeps at least the retention floor;
 - an incremental dbt table's key holds every partition source column (A7; experiment (a) of
   docs/research/2026-11-26-release-spine-spikes.md);
 - an input port read empty when absent (`whenAbsent: empty`) only in a product whose every dbt model
@@ -105,6 +109,7 @@ CODES = (
     "docs.bronze-key-missing",
     "docs.lineage-column-missing",
     "docs.terms-missing",
+    "docs.terms-forbid-redistribution",
     "docs.retention-below-floor",
     "docs.incremental-key-misses-partition",
     "docs.empty-input-into-table",
@@ -330,6 +335,8 @@ def _product(d: _Dir, domains: dict[str, Any], owners: dict[str, Any], tables: d
         yield _finding("docs.serving-only-not-paused", path, "$.status: every table is build serving, so the product has no lake table and nothing runs it; a serving-only product is valid only paused (ADR-057), so set status paused with its lifecycleChange, or give a table a lake build")
 
     lacking = [model.product_id(u.domain, u.name) for u in upstream if "terms" not in _props(u.product) and not _platform_written(u)]
+    # a recorded forbidden holds on every product, an exempt upstream one included: never loosened
+    forbidding = [model.product_id(u.domain, u.name) for u in [d, *upstream] if _props(u.product).get("terms", {}).get("redistribution") == "forbidden"]
     for i, grant in enumerate(d.grants["grants"] if d.grants is not None else []):
         who = owners.get(grant["principal"])  # an undeclared principal is the access check's
         if who is None or (who["owner"] == team and who["kind"] != "partner"):
@@ -340,6 +347,10 @@ def _product(d: _Dir, domains: dict[str, Any], owners: dict[str, Any], tables: d
             yield _finding("docs.terms-missing", d.at("grants.yaml"), f"$.grants[{i}]: {grant['principal']} {outside}; record the source's terms in the product's terms property before a grant outside the owning team (ADR-055 part 5)")
         if lacking:
             yield _finding("docs.terms-missing", d.at("grants.yaml"), f"$.grants[{i}]: {grant['principal']} {outside}, and reads through it the data of {', '.join(lacking)}, upstream through input ports, which record no terms; each records its source's terms before a grant outside the owning team downstream of it (ADR-055 part 5)")
+        if who["kind"] == "partner" and forbidding:
+            unsaid = ([] if "terms" in props else [model.product_id(d.domain, d.name)]) + lacking
+            none = f", and {', '.join(unsaid)} record no terms" if unsaid else ""
+            yield _finding("docs.terms-forbid-redistribution", d.at("grants.yaml"), f"$.grants[{i}]: {grant['role']} to {grant['principal']}, a partner, passes the data on to another organisation, and the terms of {', '.join(forbidding)} say redistribution: forbidden{none}; a partner is granted only over a product whose terms, and those of every product upstream of it through input ports, say redistribution: allowed (ADR-055 part 5)")
 
     # ponytail: any model of the product, not only those calling k2_input on the port: an ephemeral
     # or view between them passes the zero rows on. Name the readers when a product needs one exempt.

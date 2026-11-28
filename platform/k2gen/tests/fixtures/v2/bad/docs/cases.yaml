@@ -293,9 +293,18 @@ cases:
       - {file: contracts/ops-insight/daily-load/product.odps.yaml, remove: customProperties/1}
       - {file: contracts/access/principals.yaml, set: principals/2/kind, value: partner}  # svc.load-dashboard, insight-team's
   - code: docs.terms-missing
+    also: [docs.terms-forbid-redistribution]  # daily-load's own terms say forbidden, to a partner
     changes:  # and upstream: daily-load records terms, station-readings, which it reads, none (A3)
       - {file: contracts/sensor-net/station-readings/product.odps.yaml, remove: customProperties/2}
       - {file: contracts/sensor-net/station-readings/grants.yaml, set: grants, value: []}
+      - {file: contracts/access/principals.yaml, set: principals/2/kind, value: partner}
+  - code: docs.terms-forbid-redistribution
+    changes:  # a partner over daily-load, whose own terms say forbidden
+      - {file: contracts/access/principals.yaml, set: principals/2/kind, value: partner}  # svc.load-dashboard
+  - code: docs.terms-forbid-redistribution
+    changes:  # a partner over daily-load, allowed, which reads station-readings, forbidden
+      - {file: contracts/ops-insight/daily-load/product.odps.yaml, set: customProperties/1/value/redistribution, value: allowed}
+      - {file: contracts/sensor-net/station-readings/product.odps.yaml, set: customProperties/2/value/redistribution, value: forbidden}
       - {file: contracts/access/principals.yaml, set: principals/2/kind, value: partner}
   - code: docs.retention-below-floor
     changes:  # daily-load reads silver_readings
@@ -341,6 +350,13 @@ valid:
   - why: a grant within the owning team needs no terms
     changes:
       - {file: contracts/ops-insight/daily-load/product.odps.yaml, remove: customProperties/1}
+  - why: a partner over a product whose terms, and its upstream's, say allowed
+    changes:
+      - {file: contracts/ops-insight/daily-load/product.odps.yaml, set: customProperties/1/value/redistribution, value: allowed}
+      - {file: contracts/access/principals.yaml, set: principals/2/kind, value: partner}
+  - why: forbidden keeps the data among the platform's readers, and another team's analysts are readers of it
+    changes:  # station-readings grants insight-team's analysts
+      - {file: contracts/sensor-net/station-readings/product.odps.yaml, set: customProperties/2/value/redistribution, value: forbidden}
   - why: a model's own unique_key that holds the partition column, and a bucket transform of a key column
     changes:
       - file: contracts/sensor-net/station-readings/models/silver_readings.sql
